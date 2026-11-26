@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { committedMutationFixture } from '../../testing/fixtures/file-mutation'
+import { buildFileMutationResultFromReceiptV1 } from '../../tools/results/filesystem'
 import { classifyActionOutput, hashActionInput } from '../action-outcomes'
 
 test('unbacked application cannot confirm an action or an effect', () => {
@@ -28,6 +29,41 @@ test('canonical observed mutation confirms exact paths and forward evidence', ()
     receiptIds: ['fixture-receipt'],
     forward: [{ outcome: 'applied' }],
   })
+})
+
+test('lost commit acknowledgement is uncertain but retains confirmed effect paths', () => {
+  const { authorityReceipt: receipt } = committedMutationFixture([
+    { path: 'a.ts', content: 'after' },
+    { path: 'b.ts', content: 'after' },
+  ])
+  const mutation = buildFileMutationResultFromReceiptV1({
+    ...receipt!,
+    transactionId: 'tx-1',
+    status: 'acknowledgement_pending',
+    actions: receipt!.actions.map((action) => ({
+      ...action, status: 'forward_verified',
+    })),
+  })
+  const value = JSON.parse(JSON.stringify(mutation))
+  expect(classifyActionOutput('edit_transaction', [{ type: 'json', value }]))
+    .toMatchObject({
+      outcome: 'uncertain',
+      cause: { code: 'recovery_required' },
+      effect: {
+        status: 'partial',
+        confirmedPaths: ['a.ts', 'b.ts'],
+        receiptIds: [receipt!.receiptId],
+        forward: receipt!.actions.map((action) => ({
+          actionId: action.actionId, ...action.forward,
+        })),
+      },
+    })
+  delete value.authorityReceipt
+  expect(classifyActionOutput('edit_transaction', [{ type: 'json', value }]))
+    .toMatchObject({
+      outcome: 'uncertain',
+      effect: { status: 'unobserved', confirmedPaths: [] },
+    })
 })
 
 test('input identity is stable across key order and distinguishes values', () => {

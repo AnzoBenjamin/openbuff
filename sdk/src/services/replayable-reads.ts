@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { closeSync, createReadStream, lstatSync, openSync } from 'node:fs'
+import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -13,6 +13,7 @@ import {
   READ_PLAN_TEMPLATE_ID,
   verifyReadPlanPrefix,
   type ReadPlanOrigin,
+  type RetainedReadPlanBatch,
 } from '@codebuff/agent-runtime/util/read-plan-replay'
 import {
   captureValueSha256,
@@ -22,6 +23,7 @@ import {
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { JournalWriter } from '@codebuff/common/types/contracts/agent-runtime'
 import type { OpenbuffClientOptions, RunOptions } from '../run'
+import { requirePrivateReplayJournalPath } from './private-replay-journal'
 
 export type ReplayableReadJournal = CreatedRunJournal &
   Required<Pick<JournalWriter, 'appendDurable'>>
@@ -34,64 +36,6 @@ export type ReplayableReadsOptions = {
 }
 
 const privateJournals = new WeakSet<ReplayableReadJournal>()
-
-function requirePrivateJournalPath(file: string, uid: number): void {
-  const parent = path.dirname(file)
-  const ancestors: string[] = []
-  for (let directory = parent; ; directory = path.dirname(directory)) {
-    ancestors.push(directory)
-    if (directory === path.dirname(directory)) break
-  }
-  // The private directory must not be replaceable by a different user via an
-  // ancestor. Root-owned sticky directories such as /tmp are allowed.
-  for (const directory of ancestors.reverse()) {
-    const info = lstatSync(directory, { throwIfNoEntry: false })
-    if (directory === parent) {
-      if (
-        !info?.isDirectory() ||
-        info.uid !== uid ||
-        (info.mode & 0o077) !== 0
-      ) {
-        throw new Error(
-          'Read replay requires an existing owner-only private directory for its journal.',
-        )
-      }
-    } else if (
-      !info?.isDirectory() ||
-      (info.uid !== uid && info.uid !== 0) ||
-      ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0)
-    ) {
-      throw new Error(
-        'Read replay requires trusted ancestors for its journal directory.',
-      )
-    }
-  }
-
-  const checkFile = (name: string, optional: boolean) => {
-    const info = lstatSync(name, { throwIfNoEntry: false })
-    if (!info && optional) return
-    if (
-      !info?.isFile() ||
-      info.uid !== uid ||
-      info.nlink !== 1 ||
-      (info.mode & 0o077) !== 0
-    ) {
-      throw new Error(
-        'Read replay requires regular, owner-only files for its database and SQLite sidecars.',
-      )
-    }
-  }
-  for (const suffix of ['-journal', '-wal', '-shm'])
-    checkFile(file + suffix, true)
-  try {
-    // Do not rely on the host umask or make a public DB private after SQLite
-    // has already opened it. Concurrent openers validate the existing file.
-    closeSync(openSync(file, 'wx', 0o600))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-  }
-  checkFile(file, false)
-}
 
 /** The journal can retain file contents; use a host-controlled 0700 directory. */
 export function openReplayableReadJournal(file: string): ReplayableReadJournal {
@@ -107,8 +51,11 @@ export function openReplayableReadJournal(file: string): ReplayableReadJournal {
     )
   }
   const resolved = path.resolve(file)
-  requirePrivateJournalPath(resolved, uid)
-  const journal = createRunJournal({ path: resolved }) as ReplayableReadJournal
+  requirePrivateReplayJournalPath(resolved, uid)
+  const journal = createRunJournal({
+    path: resolved,
+    readPlanDurability: true,
+  }) as ReplayableReadJournal
   privateJournals.add(journal)
   return journal
 }
@@ -130,19 +77,44 @@ export function takeReadPlanExecution(
   return value
 }
 
-// The serialized adapter has no external dependencies or live state inputs
-// that determine its next yield. Only the literal plan chooses future reads.
-// Keep known results as data; never call a tool for a retained batch.
+// The built-in recipe closes over no host dependencies. Reconstruct the live
+// iterator by driving the same steps from the beginning with recorded replies;
+// only the first unrecorded yield and those after it can reach tool dispatch.
 const recipe: NonNullable<AgentDefinition['handleSteps']> = function* ({
   agentState,
   params,
 }) {
-  const reads = [...(params!.retainedReads as unknown[])]
-  for (const paths of params!.remaining as string[][]) {
-    const result = yield { toolName: 'read_files', input: { paths } }
-    reads.push(result.toolResult)
+  type ReadCall = { toolName: 'read_files'; input: { paths: string[] } }
+  function* readBatches(
+    batches: string[][],
+  ): Generator<ReadCall, { reads: unknown[] }, unknown> {
+    const reads: unknown[] = []
+    for (const paths of batches)
+      reads.push(yield { toolName: 'read_files', input: { paths } })
+    return { reads }
   }
-  agentState.output = { reads }
+  const iterator = readBatches(params!.batches as string[][])
+  let step = iterator.next()
+  for (const retained of params!.retainedReads as RetainedReadPlanBatch[]) {
+    if (
+      step.done ||
+      step.value.toolName !== 'read_files' ||
+      step.value.input.paths.length !== retained.paths.length ||
+      step.value.input.paths.some(
+        (entry, index) => entry !== retained.paths[index],
+      )
+    ) {
+      throw new Error(
+        'The read-plan iterator diverged from the retained prefix.',
+      )
+    }
+    step = iterator.next(retained.result)
+  }
+  while (!step.done) {
+    const result = yield step.value
+    step = iterator.next(result.toolResult)
+  }
+  agentState.output = step.value
 }
 
 const safeClientOptions = new Set([
@@ -295,8 +267,8 @@ export async function prepareReplayableReads(
     agent,
     prompt: 'Execute the immutable project read plan.',
     params: {
+      batches,
       retainedReads: resumed?.results ?? [],
-      remaining: batches.slice(resumed?.results.length ?? 0),
     },
     signal,
     cwd: root,

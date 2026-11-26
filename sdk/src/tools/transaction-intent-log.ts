@@ -1,8 +1,8 @@
 /**
  * Workspace-scoped, owner-only write-ahead log for sequential file groups.
  * A durable begin records exact pre-images and expected after-state before
- * effects. A matching pre-image is already safe; only a contained matching
- * postimage can be restored. Legacy, foreign and unreadable state stays pending.
+ * effects. A matching pre-image needs no write. Restoring a changed path
+ * requires an exact, physically attested broker receipt, not just matching bytes.
  *
  * Appends and trims are serialized. Active and unresolved intents cannot be
  * evicted. Before-images contain private source bytes: keep the state directory
@@ -24,12 +24,22 @@ import {
 import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
+import { captureHostMutationBroker } from '../services/host-filesystem'
+import {
+  isTransactionActionId,
+  type TransactionActionCorrelation,
+  type TransactionMutationEvidence,
+  type TransactionStageProof,
+} from '../services/transaction-mutation-proof'
 import type {
   CodebuffFileSystem,
   CodebuffTransactionParentIdentity,
 } from '@codebuff/common/types/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
-import { observeTransactionPath } from './transaction-path-identity'
+import {
+  observeTransactionPath,
+  verifyTransactionParent,
+} from './transaction-path-identity'
 
 export const TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS = 100
 export const TRANSACTION_INTENT_LOG_MAX_BYTES = 8 * 1024 * 1024
@@ -164,6 +174,9 @@ type TransactionDispatchEvent = {
   transactionId: string
   /** Highest staged path index authorized to enter the sequential commit loop. */
   through: number
+  /** Absent together on legacy dispatches: those carry no ownership proof. */
+  from?: number
+  actionId?: string
 }
 
 type TransactionIntentEvent =
@@ -184,6 +197,7 @@ export type RecoveredInterruptedTransaction = {
   entries: TransactionIntentEntry[]
   startedAt: string
   dispatchedThrough?: number
+  actions?: TransactionActionCorrelation[]
   recovery?: { unresolved: number[]; unowned: number[] }
 }
 
@@ -342,7 +356,12 @@ function isIntentEvent(value: unknown): value is TransactionIntentEvent {
   if (record.kind === 'tx_dispatch') {
     return (
       isNonEmptyString(record.transactionId) &&
-      isRecoveryIndexList([record.through])
+      isRecoveryIndexList([record.through]) &&
+      ((record.from === undefined && record.actionId === undefined) ||
+        (isTransactionActionId(record.actionId) &&
+          isRecoveryIndexList([record.from]) &&
+          Number(record.through) - Number(record.from) >= 0 &&
+          Number(record.through) - Number(record.from) <= 1))
     )
   }
   if (record.kind === 'tx_recovery_required') {
@@ -374,6 +393,30 @@ function groupTransactionEvents(
     else groups.set(event.transactionId, [event])
   }
   return groups
+}
+
+function correlatedActions(
+  group: readonly TransactionIntentEvent[],
+  entryCount: number,
+): TransactionActionCorrelation[] | undefined {
+  const actions: TransactionActionCorrelation[] = []
+  const ids = new Set<string>()
+  let next = 0
+  for (const event of group) {
+    if (event.kind !== 'tx_dispatch') continue
+    const { transactionId, actionId, from, through } = event
+    if (
+      !actionId ||
+      from !== next ||
+      through >= entryCount ||
+      ids.has(actionId)
+    )
+      return undefined
+    ids.add(actionId)
+    actions.push({ transactionId, actionId, from, through })
+    next = through + 1
+  }
+  return actions
 }
 
 function measuredBytes(groups: readonly TransactionIntentEvent[][]): number {
@@ -689,6 +732,7 @@ export type TransactionIntentLog = {
   authorizeDispatch?(
     transactionId: string,
     through: number,
+    correlation?: TransactionActionCorrelation,
   ): Promise<IntentOutcome>
   markRecoveryRequired?(
     transactionId: string,
@@ -699,6 +743,7 @@ export type TransactionIntentLog = {
   recoverInterruptedTransactions(): Promise<RecoveryOutcome>
   revertTransaction(
     transactionId: string,
+    /** Legacy callback; arbitrary adapter writes cannot perform durable recovery. */
     revert: (
       path: string,
       beforeBytes: string | null,
@@ -710,6 +755,7 @@ export type TransactionIntentLog = {
       path: string,
       entry: TransactionIntentEntry,
     ) => Promise<string | null | TransactionCurrentState>,
+    workspace?: { cwd: string; fs: CodebuffFileSystem },
   ): Promise<RevertTransactionOutcome>
 }
 
@@ -1005,14 +1051,10 @@ export function createTransactionIntentLog(params: {
           }
           if (event.kind === 'tx_dispatch') {
             const begin = previous[0]
-            const lastDispatch = previous.findLast(
-              (value) => value.kind === 'tx_dispatch',
-            )
             if (
               begin?.kind !== 'tx_begin' ||
               !begin.inFlight ||
-              event.through >= begin.entries.length ||
-              event.through <= (lastDispatch?.through ?? -1) ||
+              !correlatedActions([...previous, event], begin.entries.length) ||
               (previous.at(-1)?.kind !== 'tx_begin' &&
                 previous.at(-1)?.kind !== 'tx_dispatch')
             ) {
@@ -1221,13 +1263,26 @@ export function createTransactionIntentLog(params: {
   const authorizeDispatch = (
     transactionId: string,
     through: number,
+    correlation?: TransactionActionCorrelation,
   ): Promise<IntentOutcome> =>
-    isRecoveryIndexList([through]) &&
+    correlation?.transactionId === transactionId &&
+    correlation.through === through &&
+    isTransactionActionId(correlation.actionId) &&
+    isRecoveryIndexList([correlation.from, through]) &&
+    through >= correlation.from &&
+    through <= correlation.from + 1 &&
     activeCoordinators.get(filePath)?.has(transactionId)
-      ? appendEvent({ kind: 'tx_dispatch', transactionId, through })
+      ? appendEvent({
+          kind: 'tx_dispatch',
+          transactionId,
+          through,
+          from: correlation.from,
+          actionId: correlation.actionId,
+        })
       : Promise.resolve({
           ok: false,
-          error: 'Dispatch has no active coordinator',
+          error:
+            'Dispatch has no active coordinator or valid action correlation',
         })
 
   const markRecoveryRequired = (
@@ -1290,6 +1345,7 @@ export function createTransactionIntentLog(params: {
                 dispatchedThrough:
                   group.findLast((value) => value.kind === 'tx_dispatch')
                     ?.through ?? -1,
+                actions: correlatedActions(group, begin.entries.length),
               }
             : {}),
           ...(marker?.kind === 'tx_recovery_required'
@@ -1314,8 +1370,9 @@ export function createTransactionIntentLog(params: {
 
   const revertTransaction: TransactionIntentLog['revertTransaction'] = async (
     transactionId,
-    revert,
+    _revert,
     readCurrent,
+    workspace,
   ) => {
     try {
       return await withIntentLogLock<RevertTransactionOutcome>(
@@ -1364,13 +1421,10 @@ export function createTransactionIntentLog(params: {
               after: stateMatches(state, entry.afterHash, entry.afterMode),
             }
           }
-          const owned: number[] = []
+          const owned = new Map<number, TransactionStageProof>()
           const unresolved: number[] = []
           const unowned = transaction.recovery?.unowned ?? []
-          const isOwnedIndex = (index: number) =>
-            !unowned.includes(index) &&
-            (transaction.dispatchedThrough === undefined ||
-              index <= transaction.dispatchedThrough)
+          const broker = workspace && captureHostMutationBroker(workspace.fs)
           let firstError: string | undefined
           let allAfter = true
           const ownedEntries: readonly OwnedIntentEntry[] = entries
@@ -1378,9 +1432,46 @@ export function createTransactionIntentLog(params: {
             try {
               const match = await classify(entry)
               allAfter &&= match.after
-              if (match.before) continue
-              if (match.after && isOwnedIndex(index)) {
-                owned.push(index)
+              const correlation = transaction.actions?.find(
+                ({ from, through }) => index >= from && index <= through,
+              )
+              // A same-byte update need not be undone if it is already at its
+              // preimage, but cannot attest a recovered commit without a receipt.
+              if (match.before && (!match.after || transaction.recovery))
+                continue
+              if (
+                workspace &&
+                broker &&
+                match.after &&
+                correlation &&
+                !unowned.includes(index)
+              ) {
+                const proof = {
+                  evidence: {
+                    correlation,
+                    stages: entries.slice(
+                      correlation.from,
+                      correlation.through + 1,
+                    ),
+                  },
+                  index,
+                  fullPath: await verifyTransactionParent(
+                    workspace.cwd,
+                    workspace.fs,
+                    entry.path,
+                    entry.parent!,
+                  ),
+                }
+                try {
+                  await broker.verifyTransactionStage(proof)
+                  owned.set(index, proof)
+                  continue
+                } catch (error) {
+                  if (!match.before) throw error
+                }
+              }
+              if (match.before) {
+                allAfter = false
                 continue
               }
               firstError ??= `Foreign or unowned transaction state at ${entry.path}.`
@@ -1395,46 +1486,44 @@ export function createTransactionIntentLog(params: {
           if (
             !transaction.recovery &&
             allAfter &&
-            owned.length > 0 &&
-            (transaction.dispatchedThrough === undefined ||
-              transaction.dispatchedThrough === entries.length - 1)
+            broker &&
+            owned.size === entries.length &&
+            transaction.dispatchedThrough === entries.length - 1
           ) {
-            const commit = await appendEvent({
-              kind: 'tx_commit',
-              transactionId,
-              committedAt: now(),
-              recovered: true,
-            })
+            const commit = await broker.withVerifiedTransactionCommit(
+              [...owned.values()],
+              () =>
+                appendEvent({
+                  kind: 'tx_commit',
+                  transactionId,
+                  committedAt: now(),
+                  recovered: true,
+                }),
+            )
             return commit.ok
               ? { ok: true, status: 'recovered_committed', revertedPaths: 0 }
               : recoveryRequired(commit.error, paths)
           }
-          if ((owned.length || unresolved.length) && !transaction.recovery) {
+          if ((owned.size || unresolved.length) && !transaction.recovery) {
             const marker = await markRecoveryRequired(
               transactionId,
-              [...owned, ...unresolved].sort((a, b) => a - b),
+              [...owned.keys(), ...unresolved].sort((a, b) => a - b),
               unowned,
             )
             if (!marker.ok) return recoveryRequired(marker.error, paths)
           }
 
           let revertedPaths = 0
-          for (const index of owned.toReversed()) {
+          for (const [index, proof] of [...owned].toReversed()) {
             const entry = ownedEntries[index]!
             try {
-              const match = await classify(entry)
-              if (match.before) continue
-              if (!match.after)
-                throw new Error(
-                  `Transaction target changed during recovery: ${entry.path}`,
-                )
-              const changed = await revert(
-                entry.path,
-                entry.beforeBytes ?? null,
-                entry.beforeMode,
+              revertedPaths += await restoreOwnedTransactionPath(
+                workspace!.cwd,
+                workspace!.fs,
                 entry,
+                proof.evidence,
+                index,
               )
-              if (changed !== false) revertedPaths += 1
             } catch (error) {
               firstError ??= errorText(error)
               unresolved.push(index)
@@ -1454,16 +1543,26 @@ export function createTransactionIntentLog(params: {
               revertedPaths,
             )
           }
-          const aborted = await abortTransaction(
-            transactionId,
-            'reverted or already at pre-image',
-          )
+          const acknowledgeAbort = () =>
+            abortTransaction(transactionId, 'reverted or already at pre-image')
+          const aborted = broker
+            ? await broker
+                .withVerifiedTransactionAbort(
+                  transactionId,
+                  entries,
+                  acknowledgeAbort,
+                )
+                .catch((error: unknown) => ({
+                  ok: false as const,
+                  error: errorText(error),
+                }))
+            : await acknowledgeAbort()
           return aborted.ok
             ? {
                 ok: true,
                 status: 'reverted',
                 revertedPaths,
-                ownedPaths: owned.map((index) => paths[index]!),
+                ownedPaths: [...owned.keys()].map((index) => paths[index]!),
               }
             : recoveryRequired(aborted.error, paths, revertedPaths)
         },
@@ -1590,44 +1689,35 @@ export async function restoreOwnedTransactionPath(
   cwd: string,
   fs: CodebuffFileSystem,
   entry: TransactionIntentEntry,
-): Promise<boolean> {
-  const { parent, afterHash, beforeHash, beforeBytes, beforeMode } = entry
+  evidence: TransactionMutationEvidence | undefined,
+  index: number,
+): Promise<number> {
+  const { parent, afterHash, beforeHash, beforeMode } = entry
   if (!parent || afterHash === undefined || !validateOwnership([entry])) {
     throw new Error('Missing transaction recovery guard.')
   }
   const observe = () => observeTransactionPath(cwd, fs, entry.path, parent)
   const live = await observe()
-  if (stateMatches(live, beforeHash, beforeMode)) return false
+  if (stateMatches(live, beforeHash, beforeMode)) return 0
   if (!stateMatches(live, afterHash, entry.afterMode)) {
     throw new Error(
       `Transaction path changed before restoration: ${entry.path}.`,
     )
   }
-  const guard = { parent, expectedMode: entry.afterMode }
-  const restored =
-    beforeBytes === undefined
-      ? afterHash === null
-        ? null
-        : await fs.conditionalDelete?.(live.fullPath, {
-            expectedHash: afterHash,
-            recovery: guard,
-          })
-      : await fs.conditionalCommit?.(live.fullPath, beforeBytes, {
-          expectedHash: afterHash,
-          recovery: {
-            ...guard,
-            ...(beforeMode === undefined ? {} : { mode: beforeMode }),
-          },
-        })
-  if (
-    !restored?.applied ||
-    !stateMatches(await observe(), beforeHash, beforeMode)
-  ) {
+  const broker = captureHostMutationBroker(fs)
+  if (!broker || !evidence)
+    throw new Error(`Missing broker receipt proof for ${entry.path}.`)
+  const restored = await broker.restoreTransactionStage({
+    evidence,
+    index,
+    fullPath: live.fullPath,
+  })
+  if (!restored || !stateMatches(await observe(), beforeHash, beforeMode)) {
     throw new Error(
       `Conditional restoration could not verify the pre-image of ${entry.path}.`,
     )
   }
-  return true
+  return restored
 }
 
 /** Conditional, retryable recovery of workspace-scoped intents. */
@@ -1683,11 +1773,11 @@ export async function recoverAndRevertInterruptedTransactions(params: {
   for (const transaction of recovery.transactions) {
     const outcome = await intentLog.revertTransaction(
       transaction.transactionId,
-      async (_entryPath, _beforeBytes, _beforeMode, entry) => {
-        if (!entry) throw new Error('Missing transaction recovery entry.')
-        return restoreOwnedTransactionPath(cwd, fs, entry)
+      async () => {
+        throw new Error('Durable recovery requires broker authority.')
       },
       observe,
+      { cwd, fs },
     )
     report.revertedPaths += outcome.revertedPaths
     if (outcome.ok) {

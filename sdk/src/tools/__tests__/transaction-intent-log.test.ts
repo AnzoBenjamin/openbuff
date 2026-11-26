@@ -19,9 +19,22 @@ import { dirname, join, resolve } from 'node:path'
 import { open, utimes, type FileHandle } from 'node:fs/promises'
 
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
-import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
+import { createHostReadPolicy } from '@codebuff/common/util/project-path-containment'
+import { bindHostFileSystem } from '../../services/host-filesystem'
+import {
+  WORKSPACE_MUTATION_AUTHORITY,
+  WorkspaceMutationBroker,
+} from '../../services/workspace-mutation-broker'
+import { changeFiles } from '../change-file'
 import { createNodeFileSystem } from '../node-filesystem'
-import { WorkspaceMutationBroker } from '../../services/workspace-mutation-broker'
 
 import {
   TRANSACTION_INTENT_LOG_MAX_ENTRIES_PER_TRANSACTION,
@@ -75,25 +88,83 @@ function diskIntent(
   }
 }
 
-const brokerFileSystem = async () =>
-  createNodeFileSystem({
-    mutationBroker: await WorkspaceMutationBroker.create({
-      cwd: projectDir,
-      stateDir,
-    }),
+const brokerFileSystem = async () => {
+  const broker = await WorkspaceMutationBroker.create({
+    cwd: projectDir,
+    stateDir,
   })
+  return { broker, fs: createNodeFileSystem({ mutationBroker: broker }) }
+}
 
-const mockIntent = (
-  path: string,
-  before: string | null,
+function physicalIdentity(file: string) {
+  const { dev, ino, ctimeNs, birthtimeNs, mode } = statSync(file, { bigint: true })
+  return { dev, ino, ctimeNs, birthtimeNs, mode }
+}
+
+// Leave a real dispatched action committed in the broker, but no terminal
+// intent marker or dispatch of the remaining stages. The kill fixture below
+// separately exercises interruption of the full changeFiles coordinator.
+async function dispatchFirstBrokerAction(
+  log: ReturnType<typeof createTransactionIntentLog>,
+  transactionId: string,
+  entries: [TransactionIntentEntry, ...TransactionIntentEntry[]],
   after: string | null,
-): TransactionIntentEntry => ({
-  ...intent(path, before, after),
-  parent: { canonicalPath: projectDir, dev: '0', ino: '0' },
-})
-
-const mockProjectFs = (files: Record<string, string>) =>
-  createMockFs({ files, directories: { [projectDir]: [] } })
+  { keepActive = false } = {},
+) {
+  const { broker, fs } = await brokerFileSystem()
+  expect(
+    await log.beginTransaction({
+      transactionId,
+      operationId: `op-${transactionId}`,
+      callId: `call-${transactionId}`,
+      entries,
+      inFlight: true,
+    }),
+  ).toEqual({ ok: true })
+  let committed = false
+  try {
+    const correlation = {
+      transactionId,
+      actionId: crypto.randomUUID(),
+      from: 0,
+      through: 0,
+    }
+    expect(await log.authorizeDispatch!(transactionId, 0, correlation)).toEqual({
+      ok: true,
+    })
+    const [stage] = entries
+    const evidence = { correlation, stages: [stage] }
+    const target = join(projectDir, stage.path)
+    const result =
+      after === null
+        ? await broker.conditionalDelete(
+            target,
+            stage.beforeHash!,
+            undefined,
+            evidence,
+          )
+        : await broker.conditionalCommit(
+            target,
+            after,
+            stage.beforeHash,
+            undefined,
+            evidence,
+          )
+    expect(result.applied).toBe(true)
+    expect(await broker.listReceipts()).toMatchObject([
+      {
+        receiptId: correlation.actionId,
+        path: stage.path,
+        correlation,
+        state: 'committed',
+      },
+    ])
+    committed = true
+    return { broker, fs }
+  } finally {
+    if (!keepActive || !committed) log.releaseTransaction!(transactionId)
+  }
+}
 
 const begin = (
   log: ReturnType<typeof createTransactionIntentLog>,
@@ -163,10 +234,68 @@ describe('transaction intent log round-trips', () => {
   })
 })
 
+describe('transaction intent log broker admission', () => {
+  test.each(['unbrokered Node', 'virtual CAS'] as const)(
+    '%s refuses a configured durable group before intent admission or workspace effects',
+    async (adapter) => {
+      const fs =
+        adapter === 'unbrokered Node'
+          ? createNodeFileSystem()
+          : Object.assign(createMockFs({ directories: { [projectDir]: [] } }), {
+              mutationAuthority: WORKSPACE_MUTATION_AUTHORITY,
+            })
+      const intentLog = createTransactionIntentLog({ stateDir })
+      const parameters = ['a.txt', 'b.txt'].map((path) => ({
+        type: 'file',
+        path,
+        content: `new ${path}`,
+        expectedHash: null,
+      }))
+      const create = spyOn(fs, 'createFileExclusive')
+      try {
+        const refused = await changeFiles({
+          cwd: projectDir,
+          fs,
+          intentLog,
+          parameters,
+        })
+        expect(refused[0]?.type === 'json' ? refused[0].value : null).toMatchObject({
+          outcome: 'not_applied',
+          errors: [expect.objectContaining({ message: expect.stringMatching(/broker/i) })],
+        })
+        expect(create).not.toHaveBeenCalled()
+        expect(existsSync(intentLog.filePath)).toBe(false)
+        for (const { path } of parameters) {
+          await expect(fs.readFile(join(projectDir, path))).rejects.toMatchObject({
+            code: 'ENOENT',
+          })
+        }
+
+        // Both adapters can actually create the files; only a configured
+        // durable group requires host-verified broker authority.
+        const volatile = await changeFiles({ cwd: projectDir, fs, parameters })
+        expect(volatile[0]?.type === 'json' ? volatile[0].value : null).toMatchObject({
+          outcome: 'applied',
+        })
+        expect(create).toHaveBeenCalledTimes(2)
+        for (const { path, content } of parameters) {
+          expect(await fs.readFile(join(projectDir, path), 'utf8')).toBe(content)
+        }
+      } finally {
+        create.mockRestore()
+      }
+    },
+  )
+})
+
 describe('transaction intent log crash simulation', () => {
-  test.each([0, 1, 2, 3, 4])(
-    'recovers a killed coordinator after %i actual group commits',
-    async (boundary) => {
+  test.each([
+    [0, 'none'], [1, 'none'], [2, 'none'], [3, 'none'], [4, 'none'],
+    [0, 'foreign-update'], [2, 'foreign-delete'], [3, 'foreign-move'],
+    [1, 'replaced-postimage'], [1, 'lookalike'], [4, 'recreated-move-source'],
+  ] as const)(
+    'recovers a killed coordinator after %i actual group commits (%s)',
+    async (boundary, control) => {
       if (process.platform === 'win32') return
       const initial = {
         'first.txt': 'before\r\n',
@@ -175,6 +304,7 @@ describe('transaction intent log crash simulation', () => {
       }
       for (const [file, content] of Object.entries(initial))
         writeFileSync(join(projectDir, file), content)
+      chmodSync(join(projectDir, 'first.txt'), 0o640)
       chmodSync(join(projectDir, 'delete.txt'), 0o751)
       const src = resolve(import.meta.dir, '..', '..')
       const intentModule = join(src, 'tools', 'transaction-intent-log.ts')
@@ -187,8 +317,9 @@ describe('transaction intent log crash simulation', () => {
       import { WorkspaceMutationBroker } from ${JSON.stringify(join(src, 'services', 'workspace-mutation-broker.ts'))}
       import { createTransactionIntentLogForWorkspace } from ${JSON.stringify(intentModule)}
       import { getContentHash } from ${JSON.stringify(resolve(src, '../../common/src/util/content-hash.ts'))}
-      const [cwd, stateDir, rawBoundary] = process.argv.slice(2)
+      const [cwd, stateDir, rawBoundary, control] = process.argv.slice(2)
       const boundary = Number(rawBoundary)
+      const beforeBroker = control.startsWith('foreign-')
       const stop = async () => {
         const keepAlive = setInterval(() => {}, 1000)
         try {
@@ -201,7 +332,13 @@ describe('transaction intent log crash simulation', () => {
       const begin = log.beginTransaction
       log.beginTransaction = async (params) => {
         const result = await begin(params)
-        if (result.ok && boundary === 0) await stop()
+        if (result.ok && boundary === 0 && !beforeBroker) await stop()
+        return result
+      }
+      const authorize = log.authorizeDispatch
+      log.authorizeDispatch = async (...args) => {
+        const result = await authorize(...args)
+        if (result.ok && beforeBroker && [0, 1, 2, 4][reached] === args[1] && reached === boundary) await stop()
         return result
       }
       let reached = 0
@@ -210,7 +347,7 @@ describe('transaction intent log crash simulation', () => {
         fs[kind] = async (...args) => {
           const result = await operation(...args)
           if (kind !== 'createFileExclusive' && !result.applied) throw new Error('Expected commit did not land: ' + kind)
-          if (++reached === boundary) await stop()
+          if (++reached === boundary && !beforeBroker) await stop()
           return result
         }
       }
@@ -227,10 +364,12 @@ describe('transaction intent log crash simulation', () => {
         [
           process.execPath,
           '--no-env-file',
+          '--no-install',
           helper,
           projectDir,
           stateDir,
           String(boundary),
+          control,
         ],
         {
           env: { PATH: '/usr/bin:/bin' },
@@ -283,9 +422,10 @@ describe('transaction intent log crash simulation', () => {
                   recovered?: boolean
                 },
             )
+        const dispatchCount = boundary + (control.startsWith('foreign-') ? 1 : 0)
         expect(events().map((event) => event.kind)).toEqual([
           'tx_begin',
-          ...Array<string>(boundary).fill('tx_dispatch'),
+          ...Array<string>(dispatchCount).fill('tx_dispatch'),
         ])
         expect(events()[0]?.entries).toEqual([
           expect.objectContaining({
@@ -319,7 +459,7 @@ describe('transaction intent log crash simulation', () => {
           events()
             .slice(1)
             .map((event) => event.through),
-        ).toEqual([0, 1, 2, 4].slice(0, boundary))
+        ).toEqual([0, 1, 2, 4].slice(0, dispatchCount))
         const live = await log.recoverInterruptedTransactions()
         expect(live.ok ? live.liveTransactionIds : []).toHaveLength(1)
         child.kill('SIGKILL')
@@ -329,7 +469,30 @@ describe('transaction intent log crash simulation', () => {
           cwd: projectDir,
           stateDir,
         })
-        const fs = createNodeFileSystem({ mutationBroker: broker })
+        const source = createNodeFileSystem({ mutationBroker: broker })
+        const fs = bindHostFileSystem(
+          control === 'lookalike' ? Object.create(source) : source,
+          createHostReadPolicy(projectDir, [], (value) => value),
+        )
+        const first = join(projectDir, 'first.txt')
+        if (control === 'foreign-update' || control === 'replaced-postimage') {
+          expect(readFileSync(first, 'utf8')).toBe(
+            boundary === 0 ? initial['first.txt'] : 'after\n',
+          )
+          const oldIdentity = statSync(first, { bigint: true }).ino
+          const foreign = join(projectDir, 'foreign.txt')
+          writeFileSync(foreign, 'after\n')
+          chmodSync(foreign, 0o640)
+          renameSync(foreign, first)
+          expect(statSync(first, { bigint: true }).ino).not.toBe(oldIdentity)
+        }
+        if (control === 'foreign-delete') unlinkSync(join(projectDir, 'delete.txt'))
+        if (control === 'foreign-move')
+          renameSync(join(projectDir, 'move.txt'), join(projectDir, 'moved.txt'))
+        if (control === 'recreated-move-source')
+          writeFileSync(join(projectDir, 'move.txt'), initial['move.txt'])
+        const forwardReceipts = await broker.listReceipts()
+        expect(forwardReceipts).toHaveLength(boundary)
         const runRecovery = () =>
           recoverAndRevertInterruptedTransactions({
             intentLog: createTransactionIntentLogForWorkspace({
@@ -340,6 +503,35 @@ describe('transaction intent log crash simulation', () => {
             fs,
           })
         const outcome = await runRecovery()
+        if (control !== 'none') {
+          const recreated = control === 'recreated-move-source'
+          const priorOwned = recreated ? 3 : control.startsWith('foreign-') ? boundary : 0
+          expect(outcome).toMatchObject({
+            ok: false,
+            status: 'recovery_required',
+            revertedPaths: priorOwned,
+            recoveredCommittedTransactions: 0,
+          })
+          expect(readFileSync(first, 'utf8')).toBe(priorOwned ? initial['first.txt'] : 'after\n')
+          expect(existsSync(join(projectDir, 'created.txt'))).toBe(false)
+          expect(existsSync(join(projectDir, 'delete.txt'))).toBe(control !== 'foreign-delete')
+          expect(existsSync(join(projectDir, 'move.txt'))).toBe(control !== 'foreign-move')
+          if (control === 'foreign-move' || recreated)
+            expect(readFileSync(join(projectDir, 'moved.txt'), 'utf8')).toBe(initial['move.txt'])
+          expect(events().some(({ kind }) => kind === 'tx_commit' || kind === 'tx_abort')).toBe(false)
+          const retry = await runRecovery()
+          expect(retry).toMatchObject({
+            ok: false, status: 'recovery_required', revertedPaths: 0, recoveredCommittedTransactions: 0,
+          })
+          if (process.env.OPENBUFF_CAPTURE_B07_BOUNDARIES === '1') {
+            console.log('B07_FOREIGN ' + JSON.stringify({
+              boundary, control, signal: child.signalCode, outcome, retry,
+              forwardReceiptIds: forwardReceipts.map(({ receiptId }) => receiptId),
+              transitions: events().map(({ kind, through }) => ({ kind, through })),
+            }))
+          }
+          return
+        }
         if (boundary < 4) {
           expect(outcome).toMatchObject({
             ok: true,
@@ -434,10 +626,12 @@ describe('transaction intent log crash simulation', () => {
     },
     10_000,
   )
-  test('a partial commit restores exact bytes and leaves the never-created path alone', async () => {
+  test('an unbrokered matching update is left untouched until the exact preimage is restored', async () => {
     const target = join(projectDir, 'updated.ts')
+    const neverCreated = join(projectDir, 'created-by-tx.ts')
     const log = createTransactionIntentLog({ stateDir })
-    const fs = await brokerFileSystem()
+    const { broker, fs } = await brokerFileSystem()
+    writeFileSync(target, 'original\r\n')
     expect(
       (
         await begin(log, 'tx-crash', [
@@ -447,34 +641,50 @@ describe('transaction intent log crash simulation', () => {
       ).ok,
     ).toBe(true)
     writeFileSync(target, 'applied\n')
-
-    const newLog = createTransactionIntentLog({ stateDir })
-    expect(
-      await recoverAndRevertInterruptedTransactions({
-        intentLog: newLog,
+    const foreignIdentity = physicalIdentity(target)
+    const recover = () =>
+      recoverAndRevertInterruptedTransactions({
+        intentLog: createTransactionIntentLog({ stateDir }),
         cwd: projectDir,
         fs,
-      }),
-    ).toMatchObject({
+      })
+    expect(await recover()).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      transactionIds: ['tx-crash'],
+      revertedPaths: 0,
+      recoveredCommittedTransactions: 0,
+    })
+    expect(readFileSync(target, 'utf8')).toBe('applied\n')
+    expect(physicalIdentity(target)).toEqual(foreignIdentity)
+    expect(existsSync(neverCreated)).toBe(false)
+    expect(await log.recoverInterruptedTransactions()).toMatchObject({
+      ok: true,
+      transactions: [{ transactionId: 'tx-crash' }],
+    })
+
+    // Operator repair returns the workspace to the exact preimage. Recovery
+    // records that the intent is settled; it does not write either path.
+    writeFileSync(target, 'original\r\n')
+    const repairedIdentity = physicalIdentity(target)
+    expect(await recover()).toMatchObject({
       ok: true,
       revertedTransactions: 1,
-      revertedPaths: 1,
+      revertedPaths: 0,
+      recoveredCommittedTransactions: 0,
     })
     expect(readFileSync(target, 'utf8')).toBe('original\r\n')
-    expect(existsSync(join(projectDir, 'created-by-tx.ts'))).toBe(false)
-    expect(
-      await recoverAndRevertInterruptedTransactions({
-        intentLog: newLog,
-        cwd: projectDir,
-        fs,
-      }),
-    ).toMatchObject({
+    expect(physicalIdentity(target)).toEqual(repairedIdentity)
+    expect(existsSync(neverCreated)).toBe(false)
+    expect(await broker.listReceipts()).toEqual([])
+    expect(await log.recoverInterruptedTransactions()).toMatchObject({
       ok: true,
-      revertedTransactions: 0,
+      transactions: [],
     })
   })
 
-  test('recovery removes only the exact postimage of a creation', async () => {
+  test('an unbrokered matching creation remains recovery-required without removing the file', async () => {
+    const target = join(projectDir, 'created.ts')
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
@@ -484,43 +694,52 @@ describe('transaction intent log crash simulation', () => {
         ])
       ).ok,
     ).toBe(true)
-    writeFileSync(join(projectDir, 'created.ts'), 'created')
-    const fs = await brokerFileSystem()
-    expect(
-      await recoverAndRevertInterruptedTransactions({
+    writeFileSync(target, 'created')
+    const identity = physicalIdentity(target)
+    const { broker, fs } = await brokerFileSystem()
+    const recover = () =>
+      recoverAndRevertInterruptedTransactions({
         intentLog: log,
         cwd: projectDir,
         fs,
-      }),
-    ).toMatchObject({
-      ok: true,
-      revertedTransactions: 1,
-      revertedPaths: 1,
+      })
+    expect(await recover()).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      transactionIds: ['tx-cancel'],
+      revertedPaths: 0,
+      recoveredCommittedTransactions: 0,
     })
-    expect(existsSync(join(projectDir, 'created.ts'))).toBe(false)
+    expect(readFileSync(target, 'utf8')).toBe('created')
+    expect(physicalIdentity(target)).toEqual(identity)
     expect(existsSync(join(projectDir, 'gone.ts'))).toBe(false)
+    expect(await broker.listReceipts()).toEqual([])
   })
 
   test.skipIf(process.platform === 'win32')(
-    'replaced or missing parents block recovery; retry uses the original parent',
+    'missing and replaced parents block recovery until the original parent and broker postimage return',
     async () => {
       const parent = join(projectDir, 'dir')
       const held = join(projectDir, 'original-parent')
       const outside = join(stateDir, 'outside')
+      const target = join(parent, 'file.ts')
+      const outsideTarget = join(outside, 'file.ts')
       mkdirSync(parent)
       mkdirSync(outside)
-      writeFileSync(join(outside, 'file.ts'), 'applied')
-      const fs = await brokerFileSystem()
+      writeFileSync(target, 'original')
+      writeFileSync(outsideTarget, 'applied')
+      const outsideIdentity = physicalIdentity(outsideTarget)
       const log = createTransactionIntentLog({ stateDir })
-      expect(
-        (
-          await begin(log, 'tx-parent', [
-            diskIntent('dir/file.ts', 'original', 'applied'),
-            diskIntent('pending.ts', null, 'pending'),
-          ])
-        ).ok,
-      ).toBe(true)
-      writeFileSync(join(parent, 'file.ts'), 'applied')
+      const { broker, fs } = await dispatchFirstBrokerAction(
+        log,
+        'tx-parent',
+        [
+          diskIntent('dir/file.ts', 'original', 'applied'),
+          diskIntent('pending.ts', null, 'pending'),
+        ],
+        'applied',
+      )
+      const originalPostimage = physicalIdentity(target)
       renameSync(parent, held)
       const recover = () =>
         recoverAndRevertInterruptedTransactions({
@@ -528,81 +747,156 @@ describe('transaction intent log crash simulation', () => {
           cwd: projectDir,
           fs,
         })
-      expect(await recover()).toMatchObject({
+      const blocked = {
         ok: false,
         status: 'recovery_required',
-      })
+        transactionIds: ['tx-parent'],
+        revertedPaths: 0,
+      }
+      expect(await recover()).toMatchObject(blocked)
       expect(existsSync(parent)).toBe(false)
       symlinkSync(outside, parent, 'dir')
-      expect(await recover()).toMatchObject({
-        ok: false,
-        status: 'recovery_required',
-      })
-      expect(readFileSync(join(outside, 'file.ts'), 'utf8')).toBe('applied')
+      expect(await recover()).toMatchObject(blocked)
+      expect(readFileSync(outsideTarget, 'utf8')).toBe('applied')
+      expect(physicalIdentity(outsideTarget)).toEqual(outsideIdentity)
       unlinkSync(parent)
       mkdirSync(parent)
-      writeFileSync(join(parent, 'file.ts'), 'applied')
+      writeFileSync(target, 'applied')
+      const replacement = physicalIdentity(target)
       expect(await recover()).toMatchObject({
-        ok: false,
-        status: 'recovery_required',
+        ...blocked,
+        error: expect.stringContaining('replaced parent'),
       })
-      expect(readFileSync(join(parent, 'file.ts'), 'utf8')).toBe('applied')
+      expect(readFileSync(target, 'utf8')).toBe('applied')
+      expect(physicalIdentity(target)).toEqual(replacement)
+      expect(await broker.listReceipts()).toHaveLength(1)
+
+      // Restore the original directory with its untouched broker postimage,
+      // not a newly written file with equal bytes.
       rmSync(parent, { recursive: true })
       renameSync(held, parent)
+      expect(physicalIdentity(target)).toEqual(originalPostimage)
       expect(await recover()).toMatchObject({
         ok: true,
         revertedTransactions: 1,
         revertedPaths: 1,
       })
-      expect(readFileSync(join(parent, 'file.ts'), 'utf8')).toBe('original')
-      expect(readFileSync(join(outside, 'file.ts'), 'utf8')).toBe('applied')
+      expect(readFileSync(target, 'utf8')).toBe('original')
+      expect(readFileSync(outsideTarget, 'utf8')).toBe('applied')
+      expect(physicalIdentity(outsideTarget)).toEqual(outsideIdentity)
+      expect(existsSync(join(projectDir, 'pending.ts'))).toBe(false)
     },
   )
 
-  test('read and conditional-write faults leave the intent pending for a fresh retry', async () => {
-    const log = createTransactionIntentLog({ stateDir })
-    const target = join(projectDir, 'target.txt')
-    expect(
-      (
-        await begin(log, 'faults', [
-          diskIntent('target.txt', 'before', 'after'),
+  test.each(['read', 'write', 'fsync'] as const)(
+    'a recovery %s fault leaves the real broker postimage pending for retry',
+    async (fault) => {
+      const log = createTransactionIntentLog({ stateDir })
+      const target = join(projectDir, 'target.txt')
+      writeFileSync(target, 'before\r\n')
+      const { broker, fs } = await dispatchFirstBrokerAction(
+        log,
+        'faults',
+        [
+          diskIntent('target.txt', 'before\r\n', 'after\n'),
           diskIntent('future.txt', null, 'future'),
-        ])
-      ).ok,
-    ).toBe(true)
-    writeFileSync(target, 'after')
-    const fs = await brokerFileSystem()
-    const readFile = fs.readFile
-    const conditionalCommit = fs.conditionalCommit
-    fs.readFile = (async () => {
-      throw new Error('read failed')
-    }) as typeof fs.readFile
-    const recover = () =>
-      recoverAndRevertInterruptedTransactions({
-        intentLog: createTransactionIntentLog({ stateDir }),
-        cwd: projectDir,
-        fs,
+        ],
+        'after\n',
+      )
+      const postimage = physicalIdentity(target)
+      const recover = () =>
+        recoverAndRevertInterruptedTransactions({
+          intentLog: createTransactionIntentLog({ stateDir }),
+          cwd: projectDir,
+          fs,
+        })
+      const failure = Object.assign(
+        new Error(`injected recovery ${fault} fault`),
+        { code: 'EIO' },
+      )
+      let injected = 0
+      const probe = await open(join(stateDir, '.recovery-fault-probe'), 'w')
+      const handleProto = Object.getPrototypeOf(probe) as FileHandle
+      await probe.close()
+      const { writeFile, sync } = handleProto
+      const failOnWorkspaceStaging = async (handle: FileHandle) => {
+        // Only fault the actual inverse staging file, never broker/intent
+        // metadata, locks or directory fsyncs.
+        const name = readdirSync(projectDir).find((entry) =>
+          /^\.openbuff-mutation-.*\.tmp$/.test(entry),
+        )
+        if (!name) return
+        const stage = statSync(join(projectDir, name), { bigint: true })
+        const opened = await handle.stat({ bigint: true })
+        if (opened.dev === stage.dev && opened.ino === stage.ino) {
+          injected++
+          throw failure
+        }
+      }
+      const injection =
+        fault === 'read'
+          ? spyOn(fs, 'readFile').mockImplementationOnce(async (file) => {
+              expect(String(file)).toBe(target)
+              injected++
+              throw failure
+            })
+          : fault === 'write'
+            ? spyOn(handleProto, 'writeFile').mockImplementation(
+                async function (
+                  this: FileHandle,
+                  ...args: Parameters<FileHandle['writeFile']>
+                ) {
+                  await failOnWorkspaceStaging(this)
+                  await writeFile.apply(this, args)
+                },
+              )
+            : spyOn(handleProto, 'sync').mockImplementation(async function (
+                this: FileHandle,
+              ) {
+                await failOnWorkspaceStaging(this)
+                await sync.call(this)
+              })
+      try {
+        expect(await recover()).toMatchObject({
+          ok: false,
+          status: 'recovery_required',
+          error: expect.stringContaining(
+            fault === 'read' ? failure.message : 'failed (EIO)',
+          ),
+          transactionIds: ['faults'],
+          revertedPaths: 0,
+        })
+      } finally {
+        injection.mockRestore()
+      }
+      expect(injected).toBe(1)
+      expect(readFileSync(target, 'utf8')).toBe('after\n')
+      expect(physicalIdentity(target)).toEqual(postimage)
+      expect(readdirSync(projectDir)).toEqual(['target.txt'])
+      expect(await log.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [{ transactionId: 'faults' }],
       })
-    expect(await recover()).toMatchObject({
-      ok: false,
-      error: 'read failed',
-      transactionIds: ['faults'],
-    })
-    expect(readFileSync(target, 'utf8')).toBe('after')
-    fs.readFile = readFile
-    fs.conditionalCommit = async () => {
-      throw new Error('write failed')
-    }
-    expect(await recover()).toMatchObject({
-      ok: false,
-      error: 'write failed',
-      transactionIds: ['faults'],
-    })
-    expect(readFileSync(target, 'utf8')).toBe('after')
-    fs.conditionalCommit = conditionalCommit
-    expect(await recover()).toMatchObject({ ok: true, revertedPaths: 1 })
-    expect(readFileSync(target, 'utf8')).toBe('before')
-  })
+      const receipts = await broker.listReceipts()
+      expect(receipts.map(({ state, errorCode }) => [state, errorCode])).toEqual(
+        fault === 'read'
+          ? [['committed', undefined]]
+          : [['committed', undefined], ['failed', 'EIO']],
+      )
+
+      expect(await recover()).toMatchObject({
+        ok: true,
+        revertedTransactions: 1,
+        revertedPaths: 1,
+      })
+      expect(readFileSync(target, 'utf8')).toBe('before\r\n')
+      expect(readdirSync(projectDir)).toEqual(['target.txt'])
+      expect(await log.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [],
+      })
+    },
+  )
 
   test('revertPathToPreImage deletes only when the file still exists', async () => {
     const fs = createMockFs({ files: { [join(projectDir, 'live.ts')]: 'x' } })
@@ -685,7 +979,7 @@ describe('transaction intent log crash simulation', () => {
     const recovery = await recoverAndRevertInterruptedTransactions({
       intentLog: log,
       cwd: projectDir,
-      fs: await brokerFileSystem(),
+      fs: (await brokerFileSystem()).fs,
     })
     expect(recovery).toMatchObject({ ok: false, status: 'recovery_required' })
     expect(readFileSync(victimPath, 'utf8')).toBe('original outside bytes')
@@ -697,74 +991,148 @@ describe('transaction intent log crash simulation', () => {
 })
 
 describe('transaction intent log lossless recovery (lost tx_commit)', () => {
-  test('a tx_commit append that fails after the bytes were committed does NOT revert the committed content', async () => {
+  test('a lost tx_commit append after real broker commits is reconciled without touching the files', async () => {
     const log = createTransactionIntentLog({
       stateDir,
       lockTimeoutMs: 50,
       commitRetryDelayMs: 5,
     })
-    expect(
-      (
-        await log.beginTransaction({
-          transactionId: 'tx-lost-commit',
-          operationId: 'op-lost',
-          callId: 'call-lost',
-          entries: [
-            diskIntent(
-              'updated.ts',
-              'original\n',
-              'committed by the crashed run',
-            ),
-          ],
-        })
-      ).ok,
-    ).toBe(true)
-    // The files were committed; then the tx_commit append hits a transient
-    // lock failure: a LIVE holder (this process, with its own published
-    // instance token) holds the lock past every bounded retry.
-    const token = readFileSync(
-      `${log.filePath}.live-${process.pid}`,
-      'utf8',
-    ).trim()
-    writeFileSync(`${log.filePath}.lock`, `${process.pid} ${token}\n`, 'utf8')
-    const committed = await log.commitTransaction('tx-lost-commit')
-    expect(committed.ok).toBe(false)
-    if (!committed.ok) {
-      expect(committed.error).toContain('timed out')
+    const { broker, fs } = await brokerFileSystem()
+    const target = join(projectDir, 'updated.ts')
+    const created = join(projectDir, 'created.ts')
+    writeFileSync(target, 'original\r\n')
+    const commitTransaction = log.commitTransaction
+    let acknowledgement:
+      | Awaited<ReturnType<typeof commitTransaction>>
+      | undefined
+    log.commitTransaction = async (id) => {
+      // Compete for the real intent-log lock only after both broker actions
+      // have landed. The live holder survives every bounded append retry.
+      const token = readFileSync(
+        `${log.filePath}.live-${process.pid}`,
+        'utf8',
+      ).trim()
+      const lockPath = `${log.filePath}.lock`
+      writeFileSync(lockPath, `${process.pid} ${token}\n`, { flag: 'wx' })
+      try {
+        return (acknowledgement = await commitTransaction(id))
+      } finally {
+        unlinkSync(lockPath)
+      }
     }
-    // Release the simulated holder so recovery can append its terminal marker.
-    unlinkSync(`${log.filePath}.lock`)
-
-    // Only exact after-state can resolve a lost commit acknowledgement.
-    writeFileSync(
-      join(projectDir, 'updated.ts'),
-      'committed by the crashed run',
-    )
-    const fs = await brokerFileSystem()
-    const recovery = await recoverAndRevertInterruptedTransactions({
-      intentLog: log,
+    const result = await changeFiles({
       cwd: projectDir,
       fs,
+      intentLog: log,
+      capabilityIssuer: { projectId: projectDir, runId: 'lost-ack' },
+      parameters: [
+        {
+          type: 'file',
+          path: 'updated.ts',
+          content: 'committed\n',
+          expectedHash: getContentHash('original\r\n'),
+        },
+        {
+          type: 'file',
+          path: 'created.ts',
+          content: 'created\n',
+          expectedHash: null,
+        },
+      ],
     })
-    expect(recovery).toMatchObject({
+    expect(acknowledgement).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('timed out'),
+    })
+    const pending = await log.recoverInterruptedTransactions()
+    if (!pending.ok) throw new Error(pending.error)
+    expect(pending.transactions).toHaveLength(1)
+    const transaction = pending.transactions[0]!
+    expect(transaction.recovery).toBeUndefined()
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    expect(mutation).toMatchObject({
+      outcome: 'unconfirmed',
+      errors: [expect.objectContaining({ code: 'recovery_required' })],
+      authorityReceipt: {
+        status: 'acknowledgement_pending',
+        transactionId: transaction.transactionId,
+        actions: [
+          { status: 'forward_verified' },
+          { status: 'forward_verified' },
+        ],
+      },
+      freshCapabilities: [],
+    })
+    expect(
+      getConfirmedAppliedActionsV1(mutation).map(({ action, path, afterHash }) => ({
+        action, path, afterHash,
+      })),
+    ).toEqual([
+      { action: 'update', path: 'updated.ts', afterHash: getExactContentHash('committed\n') },
+      { action: 'create', path: 'created.ts', afterHash: getExactContentHash('created\n') },
+    ])
+    for (const action of mutation.actions) {
+      expect(action.outcome).toBe('applied')
+      expect(action.forward).toEqual({
+        outcome: 'applied',
+        afterHashes: { [action.path]: action.afterHash },
+      })
+      expect(action.rollback).toBeUndefined()
+      expect(action.editAnchor).toBeUndefined()
+      expect(action.afterContent).toBeUndefined()
+    }
+    expect(readFileSync(target, 'utf8')).toBe('committed\n')
+    expect(readFileSync(created, 'utf8')).toBe('created\n')
+    const receipts = await broker.listReceipts()
+    expect(transaction.actions).toHaveLength(2)
+    expect(receipts).toMatchObject([
+      {
+        path: 'updated.ts',
+        action: 'commit',
+        state: 'committed',
+        correlation: transaction.actions![0],
+      },
+      {
+        path: 'created.ts',
+        action: 'create',
+        state: 'committed',
+        correlation: transaction.actions![1],
+      },
+    ])
+    const commitMarkers = () =>
+      readFileSync(log.filePath, 'utf8')
+        .split('\n')
+        .filter((line) => line.includes('"kind":"tx_commit"'))
+    expect(commitMarkers()).toEqual([])
+    const postimages = [target, created].map(physicalIdentity)
+    const reopened = await brokerFileSystem()
+    const recover = () =>
+      recoverAndRevertInterruptedTransactions({
+        intentLog: createTransactionIntentLog({ stateDir }),
+        cwd: projectDir,
+        fs: reopened.fs,
+      })
+    expect(await recover()).toMatchObject({
       ok: true,
       revertedTransactions: 0,
+      revertedPaths: 0,
       recoveredCommittedTransactions: 1,
     })
-    expect(await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8')).toBe(
-      'committed by the crashed run',
-    )
-    expect(readFileSync(log.filePath, 'utf8')).toContain('"recovered":true')
-    const second = await recoverAndRevertInterruptedTransactions({
-      intentLog: log,
-      cwd: projectDir,
-      fs,
-    })
-    expect(second).toMatchObject({
+    expect(readFileSync(target, 'utf8')).toBe('committed\n')
+    expect(readFileSync(created, 'utf8')).toBe('created\n')
+    expect([target, created].map(physicalIdentity)).toEqual(postimages)
+    expect(await reopened.broker.listReceipts()).toEqual(receipts)
+    expect(await recover()).toMatchObject({
       ok: true,
       revertedTransactions: 0,
+      revertedPaths: 0,
       recoveredCommittedTransactions: 0,
     })
+    expect(commitMarkers().map((line) => JSON.parse(line))).toMatchObject([
+      { transactionId: transaction.transactionId, recovered: true },
+    ])
   })
 
   test('a transient lock failure retries the tx_commit append and lands exactly one commit marker', async () => {
@@ -801,7 +1169,7 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
     expect(recovery.ok ? recovery.transactions : []).toEqual([])
   })
 
-  test('modern expected-after proof resolves a fully applied transaction as recovered_committed without reverting', async () => {
+  test('matching every expected postimage cannot acknowledge a commit without broker receipts', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
@@ -820,49 +1188,55 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
       async (entryPath) => (entryPath === 'a.ts' ? 'new a' : 'created'),
     )
     expect(outcome).toMatchObject({
-      ok: true,
-      status: 'recovered_committed',
+      ok: false,
+      status: 'recovery_required',
+      unresolvedPaths: ['a.ts', 'created.ts'],
       revertedPaths: 0,
     })
     expect(revertCalls).toEqual([])
-    const recovery = await log.recoverInterruptedTransactions()
-    expect(recovery.ok ? recovery.transactions : []).toEqual([])
+    expect(await log.recoverInterruptedTransactions()).toMatchObject({
+      ok: true,
+      transactions: [{ transactionId: 'tx-recovered-commit' }],
+    })
+    expect(readFileSync(log.filePath, 'utf8')).not.toContain('"kind":"tx_commit"')
   })
 
-  test('foreign divergence remains untouched and recovery-required until exact after-state is restored', async () => {
+  test('foreign divergence and rewritten postimage bytes both remain recovery-required', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
-      (await begin(log, 'tx-foreign', [intent('a.ts', 'old', 'owned')])).ok,
+      (await begin(log, 'tx-foreign', [intent('a.ts', 'old\r\n', 'after')])).ok,
     ).toBe(true)
     const reverted: string[] = []
-    const first = await log.revertTransaction(
-      'tx-foreign',
-      async (entryPath) => reverted.push(entryPath),
-      async () => 'foreign',
-    )
-    expect(first).toMatchObject({
-      ok: false,
-      status: 'recovery_required',
-      unresolvedPaths: ['a.ts'],
+    const recover = (current: string) =>
+      log.revertTransaction(
+        'tx-foreign',
+        async (entryPath) => reverted.push(entryPath),
+        async () => current,
+      )
+    // Neither the expected postimage nor newline-normalized preimage is a
+    // substitute for proof of ownership or the exact original bytes.
+    for (const content of ['foreign', 'after', 'old\n']) {
+      expect(await recover(content)).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+        unresolvedPaths: ['a.ts'],
+        revertedPaths: 0,
+      })
+      expect(await log.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [{ transactionId: 'tx-foreign' }],
+      })
+    }
+    expect(await recover('old\r\n')).toMatchObject({
+      ok: true,
+      status: 'reverted',
+      revertedPaths: 0,
+      ownedPaths: [],
     })
     expect(reverted).toEqual([])
-    const pending = await log.recoverInterruptedTransactions()
-    expect(
-      pending.ok
-        ? pending.transactions.map((entry) => entry.transactionId)
-        : [],
-    ).toContain('tx-foreign')
-
-    const second = await log.revertTransaction(
-      'tx-foreign',
-      async (entryPath) => reverted.push(entryPath),
-      async () => 'owned',
-    )
-    expect(second).toMatchObject({ ok: true, status: 'reverted' })
-    expect(reverted).toEqual(['a.ts'])
   })
 
-  test('modern half-applied recovery reverts only exact transaction-owned after-state', async () => {
+  test('an untouched path does not authorize restoration of an unbrokered matching peer', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
@@ -881,12 +1255,12 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
       async (entryPath) => (entryPath === 'applied.ts' ? 'new a' : 'same'),
     )
     expect(outcome).toMatchObject({
-      ok: true,
-      status: 'reverted',
-      revertedPaths: 1,
-      ownedPaths: ['applied.ts'],
+      ok: false,
+      status: 'recovery_required',
+      unresolvedPaths: ['applied.ts'],
+      revertedPaths: 0,
     })
-    expect(reverted).toEqual([['applied.ts', 'old a']])
+    expect(reverted).toEqual([])
   })
 
   test('legacy entries without expected after-state preserve explicit uncertainty and never mutate', async () => {
@@ -931,58 +1305,80 @@ describe('transaction intent log durability', () => {
     ).toEqual(['still-active', 'third'])
   })
 
-  test('same-process ownership blocks recovery, and an exact but undispatched postimage stays foreign', async () => {
+  test('same-process ownership defers recovery, then only the brokered path can be reverted', async () => {
     const log = createTransactionIntentLog({ stateDir })
-    const entries = [
-      mockIntent('a', 'before A', 'after A'),
-      mockIntent('b', 'before B', 'after B'),
-    ]
-    expect(
-      (
-        await log.beginTransaction({
-          transactionId: 'active',
-          operationId: 'op',
-          callId: 'call',
-          entries,
-          inFlight: true,
-        })
-      ).ok,
-    ).toBe(true)
-    expect((await log.authorizeDispatch?.('active', 0))?.ok).toBe(true)
     const fresh = createTransactionIntentLog({ stateDir })
-    const content = { a: 'after A', b: 'after B' }
-    const revert = async (file: string, before: string | null) => {
-      content[file as keyof typeof content] = before!
-    }
-    const read = async (file: string) => content[file as keyof typeof content]
+    const a = join(projectDir, 'a')
+    const b = join(projectDir, 'b')
+    writeFileSync(a, 'before A')
+    writeFileSync(b, 'before B')
+    const { broker, fs } = await dispatchFirstBrokerAction(
+      log,
+      'active',
+      [
+        diskIntent('a', 'before A', 'after A'),
+        diskIntent('b', 'before B', 'after B'),
+      ],
+      'after A',
+      { keepActive: true },
+    )
+    const recover = () =>
+      recoverAndRevertInterruptedTransactions({
+        intentLog: fresh,
+        cwd: projectDir,
+        fs,
+      })
     try {
-      expect(
-        await fresh.revertTransaction('active', revert, read),
-      ).toMatchObject({
+      writeFileSync(b, 'after B') // No dispatch or broker receipt for b.
+      expect(await fresh.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [],
+        liveTransactionIds: ['active'],
+      })
+      expect(await recover()).toMatchObject({
         ok: false,
         status: 'recovery_required',
+        transactionIds: ['active'],
         revertedPaths: 0,
       })
-      expect(content).toEqual({ a: 'after A', b: 'after B' })
+      expect(readFileSync(a, 'utf8')).toBe('after A')
+      expect(readFileSync(b, 'utf8')).toBe('after B')
     } finally {
-      log.releaseTransaction?.('active')
+      log.releaseTransaction!('active')
     }
-    expect(await fresh.revertTransaction('active', revert, read)).toMatchObject(
-      {
-        ok: false,
-        status: 'recovery_required',
-        unresolvedPaths: ['b'],
-        revertedPaths: 1,
-      },
-    )
-    expect(content).toEqual({ a: 'before A', b: 'after B' })
-    expect(await fresh.revertTransaction('active', revert, read)).toMatchObject(
-      { ok: false, unresolvedPaths: ['b'], revertedPaths: 0 },
-    )
-    content.b = 'before B'
-    expect(await fresh.revertTransaction('active', revert, read)).toMatchObject(
-      { ok: true, status: 'reverted', revertedPaths: 0 },
-    )
+    const foreign = physicalIdentity(b)
+    expect(await recover()).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      transactionIds: ['active'],
+      revertedPaths: 1,
+    })
+    expect(await fresh.recoverInterruptedTransactions()).toMatchObject({
+      ok: true,
+      transactions: [
+        { transactionId: 'active', recovery: { unresolved: [1] } },
+      ],
+    })
+    expect(readFileSync(a, 'utf8')).toBe('before A')
+    expect(readFileSync(b, 'utf8')).toBe('after B')
+    expect(physicalIdentity(b)).toEqual(foreign)
+    expect(await recover()).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      transactionIds: ['active'],
+      revertedPaths: 0,
+    })
+    const receipts = await broker.listReceipts()
+    expect(receipts).toHaveLength(2) // Both forward and inverse on a.
+    writeFileSync(b, 'before B')
+    const repaired = physicalIdentity(b)
+    expect(await recover()).toMatchObject({
+      ok: true,
+      revertedTransactions: 1,
+      revertedPaths: 0,
+    })
+    expect(physicalIdentity(b)).toEqual(repaired)
+    expect(await broker.listReceipts()).toEqual(receipts)
   })
   test('the 101st transaction drops the oldest finished one', async () => {
     const log = createTransactionIntentLog({ stateDir })
@@ -1152,44 +1548,6 @@ describe('transaction intent log durability', () => {
       throw new Error('must never be called')
     })
     expect(outcome).toMatchObject({ ok: true, status: 'already_resolved' })
-  })
-
-  test('revertTransaction keeps failed restoration recovery-required for a later retry', async () => {
-    const log = createTransactionIntentLog({ stateDir })
-    expect(
-      (
-        await log.beginTransaction({
-          transactionId: 'tx-fail',
-          operationId: 'op-fail',
-          callId: 'call-fail',
-          entries: [
-            intent('a.ts', null, 'created'),
-            intent('b.ts', null, 'not yet created'),
-          ],
-        })
-      ).ok,
-    ).toBe(true)
-
-    const outcome = await log.revertTransaction(
-      'tx-fail',
-      async () => {
-        throw new Error('disk exploded')
-      },
-      async (file) => (file === 'a.ts' ? 'created' : null),
-    )
-    expect(outcome).toMatchObject({
-      ok: false,
-      status: 'recovery_required',
-      error: 'disk exploded',
-      revertedPaths: 0,
-      unresolvedPaths: ['a.ts'],
-    })
-    const recovery = await log.recoverInterruptedTransactions()
-    expect(
-      recovery.ok
-        ? recovery.transactions.map((entry) => entry.transactionId)
-        : [],
-    ).toContain('tx-fail')
   })
 
   test('per-transaction entry cap is enforced with a structured outcome', async () => {
@@ -1499,13 +1857,7 @@ describe('transaction intent log concurrent appenders', () => {
 })
 
 describe('transaction intent log recovery liveness guard', () => {
-  test('a half-applied transaction owned by a LIVE sibling process is not reverted', async () => {
-    // A second openbuff process sharing this state dir mid multi-file commit:
-    // its tx_commit has not been appended yet, so the transaction looks
-    // half-applied, but its owner is a live process OTHER than this one.
-    // (This test process cannot stand in for the sibling: a transaction whose
-    // ownerPid is process.pid is this process's OWN half-applied work, which
-    // its own recovery pass still reverts.)
+  test('a LIVE sibling owner defers recovery of its unfinished intent', async () => {
     const sibling = spawn(
       process.execPath,
       ['-e', 'setInterval(() => {}, 1_000)'],
@@ -1515,97 +1867,82 @@ describe('transaction intent log recovery liveness guard', () => {
       throw new Error('could not spawn a liveness probe process')
     }
     try {
-      const log = createTransactionIntentLog({
-        stateDir,
-        ownerPid: sibling.pid,
-      })
-      expect((await begin(log, 'tx-sibling-live')).ok).toBe(true)
-
-      const fs = createMockFs({
-        files: {
-          [join(projectDir, 'a.ts')]: 'committed by the live sibling',
-        },
-      })
+      const log = createTransactionIntentLog({ stateDir, ownerPid: sibling.pid })
+      const target = join(projectDir, 'a.ts')
+      expect(
+        (await begin(log, 'tx-sibling-live', [diskIntent('a.ts', 'before', 'after')])).ok,
+      ).toBe(true)
+      writeFileSync(target, 'after')
+      const identity = physicalIdentity(target)
+      const fs = createNodeFileSystem()
       const recovery = await recoverAndRevertInterruptedTransactions({
         intentLog: log,
         cwd: projectDir,
         fs,
       })
-      // Liveness guard: nothing is reverted while the foreign owner is alive.
       expect(recovery).toMatchObject({
         ok: false,
         status: 'recovery_required',
+        error: 'A live coordinator owns an unfinished transaction.',
         revertedTransactions: 0,
+        revertedPaths: 0,
         transactionIds: ['tx-sibling-live'],
       })
-      expect(await fs.readFile(join(projectDir, 'a.ts'), 'utf-8')).toBe(
-        'committed by the live sibling',
-      )
-      // The live-owned transaction stays pending (skipped, not aborted), so a
-      // later recovery pass can still act on it once the owner dies.
-      const pending = await log.recoverInterruptedTransactions()
-      expect(pending.ok ? pending.transactions : []).toEqual([])
+      expect(readFileSync(target, 'utf8')).toBe('after')
+      expect(physicalIdentity(target)).toEqual(identity)
+      expect(await log.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [],
+        liveTransactionIds: ['tx-sibling-live'],
+      })
     } finally {
       sibling.kill()
     }
   })
 
-  test('a half-applied transaction owned by a DEAD process is reverted', async () => {
+  test('a DEAD owner is no longer deferred but cannot authorize an unbrokered postimage', async () => {
     const exited = spawnSync(process.execPath, ['-e', 'process.exit(0)'])
-    if (exited.pid === undefined) {
-      throw new Error('could not spawn a liveness probe process')
+    if (exited.pid === undefined || exited.status !== 0) {
+      throw new Error('could not spawn and reap a liveness probe process')
     }
     const log = createTransactionIntentLog({ stateDir, ownerPid: exited.pid })
+    const target = join(projectDir, 'updated.ts')
+    const untouched = join(projectDir, 'untouched.ts')
     expect(
       (
-        await log.beginTransaction({
-          transactionId: 'tx-sibling-dead',
-          operationId: 'op-dead',
-          callId: 'call-dead',
-          entries: [
-            mockIntent(
-              'updated.ts',
-              'original\n',
-              'committed by the dead sibling',
-            ),
-            mockIntent('untouched.ts', 'same', 'future'),
-          ],
-        })
+        await begin(log, 'tx-sibling-dead', [
+          diskIntent('updated.ts', 'original\n', 'unbrokered after'),
+          diskIntent('untouched.ts', 'same', 'future'),
+        ])
       ).ok,
     ).toBe(true)
-
-    const fs = mockProjectFs({
-      [join(projectDir, 'updated.ts')]: 'committed by the dead sibling',
-      [join(projectDir, 'untouched.ts')]: 'same',
+    writeFileSync(target, 'unbrokered after')
+    writeFileSync(untouched, 'same')
+    const identities = [target, untouched].map(physicalIdentity)
+    expect(await log.recoverInterruptedTransactions()).toEqual({
+      ok: true,
+      transactions: [expect.objectContaining({ transactionId: 'tx-sibling-dead' })],
     })
     const recovery = await recoverAndRevertInterruptedTransactions({
       intentLog: log,
       cwd: projectDir,
-      fs,
+      fs: createNodeFileSystem(),
     })
-    // The owner is gone, so the half-applied transaction is reverted from its
-    // durable pre-image exactly like a crashed process: only the diverged
-    // path is restored, the matching one is left untouched.
     expect(recovery).toMatchObject({
-      ok: true,
-      revertedTransactions: 1,
-      revertedPaths: 1,
+      ok: false,
+      status: 'recovery_required',
+      error: 'Foreign or unowned transaction state at updated.ts.',
+      transactionIds: ['tx-sibling-dead'],
+      revertedTransactions: 0,
+      revertedPaths: 0,
       recoveredCommittedTransactions: 0,
     })
-    expect(await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8')).toBe(
-      'original\n',
-    )
-    expect(await fs.readFile(join(projectDir, 'untouched.ts'), 'utf-8')).toBe(
-      'same',
-    )
+    expect(readFileSync(target, 'utf8')).toBe('unbrokered after')
+    expect(readFileSync(untouched, 'utf8')).toBe('same')
+    expect([target, untouched].map(physicalIdentity)).toEqual(identities)
   })
 
-  test('a RECYCLED pid with a different instance token no longer defers the revert', async () => {
-    // The dead writer's tx_begin recorded a pid that a DIFFERENT process now
-    // occupies: the token file next to the log carries the new occupant's
-    // instance token, which cannot match the dead writer's recorded token —
-    // with a bare pid liveness check this half-applied transaction would be
-    // deferred forever (pid reuse swallowing startup recovery).
+  test('a RECYCLED pid with a different instance token no longer defers recovery', async () => {
     const sibling = spawn(
       process.execPath,
       ['-e', 'setInterval(() => {}, 1_000)'],
@@ -1615,56 +1952,49 @@ describe('transaction intent log recovery liveness guard', () => {
       throw new Error('could not spawn a liveness probe process')
     }
     try {
-      const log = createTransactionIntentLog({
-        stateDir,
-        ownerPid: sibling.pid,
-      })
+      const log = createTransactionIntentLog({ stateDir, ownerPid: sibling.pid })
+      const freshLog = createTransactionIntentLog({ stateDir })
+      const target = join(projectDir, 'updated.ts')
       expect(
         (
-          await log.beginTransaction({
-            transactionId: 'tx-recycled-pid',
-            operationId: 'op-recycled',
-            callId: 'call-recycled',
-            entries: [
-              mockIntent(
-                'updated.ts',
-                'original\n',
-                'committed by the dead writer',
-              ),
-              mockIntent('untouched.ts', 'same', 'future'),
-            ],
-          })
+          await begin(log, 'tx-recycled-pid', [
+            diskIntent('updated.ts', 'original\n', 'unbrokered after'),
+          ])
         ).ok,
       ).toBe(true)
-      // The recycled pid's NEW occupant published its own token over the
-      // dead writer's recorded one.
+      writeFileSync(target, 'unbrokered after')
+      const identity = physicalIdentity(target)
+      expect(await freshLog.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [],
+        liveTransactionIds: ['tx-recycled-pid'],
+      })
+      // The PID is still live, but the token now belongs to a new occupant.
       writeFileSync(
         `${log.filePath}.live-${sibling.pid}`,
         'token-of-the-new-occupant\n',
         'utf8',
       )
-
-      const freshLog = createTransactionIntentLog({ stateDir })
-      const fs = mockProjectFs({
-        [join(projectDir, 'updated.ts')]: 'committed by the dead writer',
-        [join(projectDir, 'untouched.ts')]: 'same',
+      process.kill(sibling.pid, 0)
+      expect(await freshLog.recoverInterruptedTransactions()).toEqual({
+        ok: true,
+        transactions: [expect.objectContaining({ transactionId: 'tx-recycled-pid' })],
       })
       const recovery = await recoverAndRevertInterruptedTransactions({
         intentLog: freshLog,
         cwd: projectDir,
-        fs,
+        fs: createNodeFileSystem(),
       })
-      // The pid is alive but it is NOT the original writer: revert instead
-      // of deferring forever.
       expect(recovery).toMatchObject({
-        ok: true,
-        revertedTransactions: 1,
-        revertedPaths: 1,
+        ok: false,
+        status: 'recovery_required',
+        error: 'Foreign or unowned transaction state at updated.ts.',
+        transactionIds: ['tx-recycled-pid'],
+        revertedPaths: 0,
         recoveredCommittedTransactions: 0,
       })
-      expect(await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8')).toBe(
-        'original\n',
-      )
+      expect(readFileSync(target, 'utf8')).toBe('unbrokered after')
+      expect(physicalIdentity(target)).toEqual(identity)
     } finally {
       sibling.kill()
     }
@@ -1680,49 +2010,43 @@ describe('transaction intent log recovery liveness guard', () => {
       throw new Error('could not spawn a liveness probe process')
     }
     try {
-      const log = createTransactionIntentLog({
-        stateDir,
-        ownerPid: sibling.pid,
-      })
+      const log = createTransactionIntentLog({ stateDir, ownerPid: sibling.pid })
       expect(
         (
           await log.beginTransaction({
             transactionId: 'tx-missing-token',
             operationId: 'op-missing',
             callId: 'call-missing',
-            entries: [
-              mockIntent('a.ts', null, 'half-applied'),
-              mockIntent('kept.ts', 'kept content', 'future'),
-            ],
+            entries: [diskIntent('a.ts', null, 'half-applied')],
             inFlight: true,
           })
         ).ok,
       ).toBe(true)
       log.releaseTransaction?.('tx-missing-token')
       unlinkSync(`${log.filePath}.live-${sibling.pid}`)
-
-      const fs = mockProjectFs({
-        [join(projectDir, 'a.ts')]: 'half-applied',
-        [join(projectDir, 'kept.ts')]: 'kept content',
-      })
+      const target = join(projectDir, 'a.ts')
+      writeFileSync(target, 'half-applied')
+      const identity = physicalIdentity(target)
       const freshLog = createTransactionIntentLog({ stateDir })
+      expect(await freshLog.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [],
+        liveTransactionIds: ['tx-missing-token'],
+      })
       const recovery = await recoverAndRevertInterruptedTransactions({
         intentLog: freshLog,
         cwd: projectDir,
-        fs,
+        fs: createNodeFileSystem(),
       })
       expect(recovery).toMatchObject({
         ok: false,
         status: 'recovery_required',
+        error: 'A live coordinator owns an unfinished transaction.',
         revertedPaths: 0,
         transactionIds: ['tx-missing-token'],
       })
-      expect(await fs.readFile(join(projectDir, 'a.ts'), 'utf8')).toBe(
-        'half-applied',
-      )
-      expect(await fs.readFile(join(projectDir, 'kept.ts'), 'utf8')).toBe(
-        'kept content',
-      )
+      expect(readFileSync(target, 'utf8')).toBe('half-applied')
+      expect(physicalIdentity(target)).toEqual(identity)
     } finally {
       sibling.kill()
     }
@@ -1788,18 +2112,25 @@ describe('transaction intent log recovery liveness guard', () => {
 
 describe('transaction intent log pre-image file mode', () => {
   test.skipIf(process.platform === 'win32')(
-    'crash restoration recreates a deleted file with its recorded mode',
+    'crash restoration recreates a broker-deleted file with its recorded mode',
     async () => {
-      const fs = await brokerFileSystem()
+      const target = join(projectDir, 'app.sh')
+      writeFileSync(target, 'old\r\n')
+      chmodSync(target, 0o751)
       const log = createTransactionIntentLog({ stateDir })
-      expect(
-        (
-          await begin(log, 'tx-mode', [
-            { ...diskIntent('app.sh', 'old\r\n', null), beforeMode: 0o751 },
-            diskIntent('future.txt', null, 'not yet created'),
-          ])
-        ).ok,
-      ).toBe(true)
+      const { broker, fs } = await dispatchFirstBrokerAction(
+        log,
+        'tx-mode',
+        [
+          { ...diskIntent('app.sh', 'old\r\n', null), beforeMode: 0o751 },
+          diskIntent('future.txt', null, 'not yet created'),
+        ],
+        null,
+      )
+      expect(existsSync(target)).toBe(false)
+      expect(await broker.listReceipts()).toMatchObject([
+        { action: 'delete', beforeMode: 0o751, deleteTombstoneVerified: true },
+      ])
       const report = await recoverAndRevertInterruptedTransactions({
         intentLog: log,
         cwd: projectDir,
@@ -1810,43 +2141,52 @@ describe('transaction intent log pre-image file mode', () => {
         revertedTransactions: 1,
         revertedPaths: 1,
       })
-      const target = join(projectDir, 'app.sh')
       expect(readFileSync(target, 'utf8')).toBe('old\r\n')
       expect(statSync(target).mode & 0o777).toBe(0o751)
       expect(existsSync(join(projectDir, 'future.txt'))).toBe(false)
     },
   )
 
-  test('a postimage with a foreign mode does not prove ownership', async () => {
-    const log = createTransactionIntentLog({ stateDir })
-    expect(
-      (
-        await begin(log, 'tx-mode-conflict', [
+  test.skipIf(process.platform === 'win32')(
+    'matching bytes with a foreign mode do not prove ownership even with a broker receipt',
+    async () => {
+      const log = createTransactionIntentLog({ stateDir })
+      const target = join(projectDir, 'plain.txt')
+      writeFileSync(target, 'before')
+      chmodSync(target, 0o644)
+      const { broker, fs } = await dispatchFirstBrokerAction(
+        log,
+        'tx-mode-conflict',
+        [
           {
-            ...intent('plain.txt', 'before', 'after'),
+            ...diskIntent('plain.txt', 'before', 'after'),
             beforeMode: 0o644,
             afterMode: 0o644,
           },
-        ])
-      ).ok,
-    ).toBe(true)
-    const reversed: string[] = []
-    expect(
-      await log.revertTransaction(
-        'tx-mode-conflict',
-        async (file) => reversed.push(file),
-        async () => ({
-          hash: getExactContentHash('after'),
-          mode: 0o755,
+          diskIntent('future.txt', null, 'future'),
+        ],
+        'after',
+      )
+      expect(statSync(target).mode & 0o777).toBe(0o644)
+      chmodSync(target, 0o755)
+      const foreign = physicalIdentity(target)
+      expect(
+        await recoverAndRevertInterruptedTransactions({
+          intentLog: log,
+          cwd: projectDir,
+          fs,
         }),
-      ),
-    ).toMatchObject({
-      ok: false,
-      status: 'recovery_required',
-      unresolvedPaths: ['plain.txt'],
-    })
-    expect(reversed).toEqual([])
-  })
+      ).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+        transactionIds: ['tx-mode-conflict'],
+        revertedPaths: 0,
+      })
+      expect(readFileSync(target, 'utf8')).toBe('after')
+      expect(physicalIdentity(target)).toEqual(foreign)
+      expect(await broker.listReceipts()).toHaveLength(1)
+    },
+  )
 
   test('the log and its identity artifacts are written owner-only (0o600)', async () => {
     const log = createTransactionIntentLog({ stateDir })

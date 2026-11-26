@@ -37,8 +37,20 @@ async function worker(outputRoot: string) {
     'retained-partial-forward',
     'successful-edit',
   ]) {
-    const before = { '/repo/a.txt': 'a-before\n', '/repo/b.txt': 'b-before\n' }
-    const source = createMockFs({ files: before })
+    // The SDK bootstrap may inspect a real cwd even for a virtual adapter.
+    // Keep the fault injection and all mutations on the virtual adapter.
+    const workspace = path.join(outputRoot, mode, 'workspace')
+    fs.mkdirSync(workspace, { recursive: true, mode: 0o700 })
+    const fileA = path.join(workspace, 'a.txt')
+    const fileB = path.join(workspace, 'b.txt')
+    const before: Record<string, string> = {
+      [fileA]: 'a-before\n',
+      [fileB]: 'b-before\n',
+    }
+    const source = createMockFs({
+      files: before,
+      directories: { [workspace]: ['a.txt', 'b.txt'] },
+    })
     const baseCommit = source.conditionalCommit!.bind(source)
     const adapterReturns: unknown[] = []
     let calls = 0
@@ -46,16 +58,16 @@ async function worker(outputRoot: string) {
       calls++
       let result: Awaited<ReturnType<typeof baseCommit>>
       if (mode === 'rejected-then-recovered' && calls === 1) {
-        await source.writeFile('/repo/a.txt', 'foreign\r\n')
+        await source.writeFile(fileA, 'foreign\r\n')
         result = {
           applied: false,
           actualHash: getExactContentHash('foreign\r\n'),
         }
       } else if (
         (mode === 'thrown-partial' || mode === 'retained-partial-forward') &&
-        String(file) === '/repo/b.txt'
+        String(file) === fileB
       ) {
-        await source.writeFile('/repo/b.txt', 'partial\n')
+        await source.writeFile(fileB, 'partial\n')
         if (String(data) === 'b-after\n') {
           adapterReturns.push({
             path: String(file),
@@ -134,18 +146,33 @@ async function worker(outputRoot: string) {
             oldString:
               mode === 'rejected-then-recovered' && index === 1
                 ? 'foreign\r\n'
-                : before[('/repo/' + edit.path) as keyof typeof before],
+                : before[path.join(workspace, edit.path)],
             newString: edit.content,
           },
         ],
       })),
     )
-    const harness = path.join(outputRoot, mode, 'harness')
+    // Deliberately select no state directory for the virtual adapter. This
+    // fixture tests honest non-durable forward observations; B07 exercises
+    // durable restart separately and requires a physical broker.
     const client = new OpenbuffClient({
-      cwd: '/repo',
+      cwd: workspace,
       fsSource: source,
       projectFiles: {},
-      harnessStateDir: harness,
+      hostConfiguration: {
+        environment: {
+          PATH: '/usr/bin:/bin',
+          OPENBUFF_PROCESS_SUPERVISION: '0',
+          OPENBUFF_TELEMETRY: '0',
+        },
+        platform: process.platform,
+        invocationCwd: workspace,
+        projectRoot: workspace,
+        home: { kind: 'none' },
+        globals: { kind: 'disabled' },
+        selection: { kind: 'none' },
+        trust: { ancestorConfig: false, projectReadableRoots: false },
+      },
       onFilesystemMutation: (event) => observers.push(event),
     })
     const result = await client.run({
@@ -231,7 +258,7 @@ async function worker(outputRoot: string) {
         'Refused edit became confirmed or recovery disappeared',
       )
       insist(
-        observers.length === 1 && after['/repo/a.txt'] === 'recovered\r\n',
+        observers.length === 1 && after[fileA] === 'recovered\r\n',
         'Refused edit incorrectly reached observers',
       )
       insist(
@@ -243,7 +270,7 @@ async function worker(outputRoot: string) {
       insist(
         projections[0]!.confirmed.length === 0 &&
           observers.length === 0 &&
-          after['/repo/b.txt'] === 'partial\n',
+          after[fileB] === 'partial\n',
         'Uncertain partial effect became confirmed',
       )
     } else if (mode === 'retained-partial-forward') {
@@ -254,15 +281,14 @@ async function worker(outputRoot: string) {
         'Genuine surviving forward effect was lost or uncertain work promoted',
       )
       insist(
-        after['/repo/a.txt'] === 'a-after\n' &&
-          after['/repo/b.txt'] === 'partial\n',
+        after[fileA] === 'a-after\n' && after[fileB] === 'partial\n',
         'Partial bytes changed unexpectedly',
       )
     } else
       insist(
         projections[0]!.confirmed.length === 1 &&
           observers.length === 1 &&
-          after['/repo/a.txt'] === 'a-after\n',
+          after[fileA] === 'a-after\n',
         'Successful conditional edit failed',
       )
     records.push({

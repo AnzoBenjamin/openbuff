@@ -12,6 +12,10 @@ import tempfile
 
 BASE = Path(__file__).resolve().parent
 EXPECTED_MANIFEST = 'f007ac73599e36dcb494171d010d5b91cff946ecd61f545fa0a2e85644654d52'
+SNAPSHOTS = {
+    'historical': (BASE, EXPECTED_MANIFEST),
+    'r10': (BASE / 'r10', '9d6178302cfc649669b4da20d636fe06291d37349bba588dad6387d21f6c0fc6'),
+}
 CHUNK_SIZE = 1024 * 1024
 
 
@@ -41,9 +45,10 @@ def target_path(destination, name):
     return target
 
 
-def restore(destination=None, include_context=False, check=False):
-    manifest_path = BASE / 'manifest.json'
-    if sha(manifest_path) != EXPECTED_MANIFEST:
+def restore(destination=None, include_context=False, check=False, snapshot='historical'):
+    base, expected_manifest = SNAPSHOTS[snapshot]
+    manifest_path = base / 'manifest.json'
+    if sha(manifest_path) != expected_manifest:
         raise ValueError('Archive manifest differs from the sealed inventory')
     manifest = json.loads(manifest_path.read_text())
     if manifest['schemaVersion'] != 1:
@@ -93,7 +98,7 @@ def restore(destination=None, include_context=False, check=False):
                 name = relative_path(part['path'])
                 if len(name.parts) != 1:
                     raise ValueError('Archive parts must be adjacent to the manifest')
-                source = BASE / part['path']
+                source = base / part['path']
                 if source.is_symlink() or source.stat().st_size != part['bytes'] or sha(source) != part['sha256']:
                     raise ValueError(f'Archive part differs: {part["path"]}')
                 with source.open('rb') as stream:
@@ -141,8 +146,9 @@ def restore(destination=None, include_context=False, check=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--snapshot', choices=SNAPSHOTS, default='historical', help='Choose the sealed evidence snapshot')
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--include-context', action='store_true')
     parser.add_argument('--check', action='store_true', help='Verify the complete archive without restoring files')
     options = parser.parse_args()
-    print(json.dumps(restore(options.destination, options.include_context, options.check)))
+    print(json.dumps(restore(options.destination, options.include_context, options.check, options.snapshot)))

@@ -20,7 +20,11 @@ import type {
   CodebuffTextReadOptions,
   CodebuffRangeReadResult,
 } from '@codebuff/common/types/filesystem'
-import type { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
+import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
+import {
+  transactionForward,
+  type TransactionForwardOptions,
+} from '../services/transaction-mutation-proof'
 import type { PathLike } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 
@@ -46,19 +50,56 @@ export type NodeTextReadInstrumentation = {
   open?: (filePath: PathLike, flags: 'r') => Promise<NodeTextReadHandle>
 }
 
-type ProjectReadView = Pick<CodebuffFileSystem, 'readFile' | 'readdir' | 'stat' | 'realpath' |
-  'readRange' | 'readTextRange' | 'readTextFile' | 'streamDirectory'>
+type ProjectReadView = Pick<
+  CodebuffFileSystem,
+  | 'readFile'
+  | 'readdir'
+  | 'stat'
+  | 'realpath'
+  | 'readRange'
+  | 'readTextRange'
+  | 'readTextFile'
+  | 'streamDirectory'
+>
 type ProjectReadFactory = (policy: HostReadPolicy) => ProjectReadView
-const nodeProjectReadFactories = new WeakMap<CodebuffFileSystem, {
-  methods: readonly unknown[]; factory: ProjectReadFactory
-}>()
-const projectReadMembers = ['readFile', 'readdir', 'stat', 'realpath', 'readRange', 'readTextRange', 'readTextFile', 'streamDirectory'] as const
+const nodeProjectReadFactories = new WeakMap<
+  CodebuffFileSystem,
+  {
+    methods: readonly unknown[]
+    factory: ProjectReadFactory
+  }
+>()
+const projectReadMembers = [
+  'readFile',
+  'readdir',
+  'stat',
+  'realpath',
+  'readRange',
+  'readTextRange',
+  'readTextFile',
+  'streamDirectory',
+] as const
 
 /** Exact Node adapters only: copied/decorated capability claims are not trusted. */
-export function captureNodeProjectReadFactory(source: CodebuffFileSystem): ProjectReadFactory | undefined {
+export function captureNodeProjectReadFactory(
+  source: CodebuffFileSystem,
+): ProjectReadFactory | undefined {
   const registered = nodeProjectReadFactories.get(source)
-  return registered && projectReadMembers.every((key, index) => source[key] === registered.methods[index])
-    ? registered.factory : undefined
+  return registered &&
+    projectReadMembers.every(
+      (key, index) => source[key] === registered.methods[index],
+    )
+    ? registered.factory
+    : undefined
+}
+
+const nodeMutationBrokers = new WeakMap<
+  CodebuffFileSystem,
+  WorkspaceMutationBroker
+>()
+
+export function captureNodeMutationBroker(source: CodebuffFileSystem) {
+  return nodeMutationBrokers.get(source)
 }
 
 export type NodeFileSystemOptions = {
@@ -120,32 +161,39 @@ export function createNodeFileSystem(
           conditionalCommit: (
             filePath: PathLike,
             data: CodebuffFileContent,
-            commitOptions: CodebuffConditionalCommitOptions,
+            commitOptions: CodebuffConditionalCommitOptions &
+              TransactionForwardOptions,
           ) =>
             mutationBroker.conditionalCommit(
               filePath,
               data,
               commitOptions.expectedHash,
               commitOptions.recovery,
+              commitOptions[transactionForward],
             ),
           conditionalDelete: (
             filePath: PathLike,
-            deleteOptions: CodebuffConditionalDeleteOptions,
+            deleteOptions: CodebuffConditionalDeleteOptions &
+              TransactionForwardOptions,
           ) =>
             mutationBroker.conditionalDelete(
               filePath,
               deleteOptions.expectedHash,
               deleteOptions.recovery,
+              deleteOptions[transactionForward],
             ),
           conditionalMove: (
             source: PathLike,
             destination: PathLike,
-            moveOptions: { expectedSourceHash: string },
+            moveOptions: {
+              expectedSourceHash: string
+            } & TransactionForwardOptions,
           ) =>
             mutationBroker.conditionalMove(
               source,
               destination,
               moveOptions.expectedSourceHash,
+              moveOptions[transactionForward],
             ),
         }
       : {}),
@@ -165,9 +213,14 @@ export function createNodeFileSystem(
     createFileExclusive: async (
       filePath: PathLike,
       data: CodebuffFileContent,
+      createOptions?: TransactionForwardOptions,
     ) => {
       if (mutationBroker) {
-        const result = await mutationBroker.createExclusive(filePath, data)
+        const result = await mutationBroker.createExclusive(
+          filePath,
+          data,
+          createOptions?.[transactionForward],
+        )
         if (!result.applied) {
           const error = new Error(`File already exists: ${String(filePath)}`)
           Object.assign(error, { code: 'EEXIST' })
@@ -181,54 +234,119 @@ export function createNodeFileSystem(
       nodeFs.rename(source, destination),
     setMode: (filePath: PathLike, mode: number) => nodeFs.chmod(filePath, mode),
   }) as CodebuffFileSystem
+  if (WorkspaceMutationBroker.isRegistered(mutationBroker))
+    nodeMutationBrokers.set(adapter, mutationBroker)
   const observe = options.textReadInstrumentation?.observe
   // A custom open seam may describe another view. It cannot silently be
   // replaced with raw host reads when an actor opts into strict containment.
-  if (!options.textReadInstrumentation?.open) nodeProjectReadFactories.set(adapter, {
-    methods: projectReadMembers.map(key => adapter[key]),
-    factory: policy => createProjectReadView(policy, observe),
-  })
+  if (!options.textReadInstrumentation?.open)
+    nodeProjectReadFactories.set(adapter, {
+      methods: projectReadMembers.map((key) => adapter[key]),
+      factory: (policy) => createProjectReadView(policy, observe),
+    })
   return adapter
 }
 
-function createProjectReadView(policy: HostReadPolicy, observe?: NodeTextReadInstrumentation['observe']): ProjectReadView {
-  const open = (filePath: PathLike) => openGuardedProjectTextHandle(policy, filePath) as Promise<NodeTextReadHandle>
+function createProjectReadView(
+  policy: HostReadPolicy,
+  observe?: NodeTextReadInstrumentation['observe'],
+): ProjectReadView {
+  const open = (filePath: PathLike) =>
+    openGuardedProjectTextHandle(
+      policy,
+      filePath,
+    ) as Promise<NodeTextReadHandle>
   const readFile = (async (filePath: PathLike, options?: any) => {
-    if (options && typeof options === 'object' && options.flag !== undefined && options.flag !== 'r') return projectReadUnavailable()
+    if (
+      options &&
+      typeof options === 'object' &&
+      options.flag !== undefined &&
+      options.flag !== 'r'
+    )
+      return projectReadUnavailable()
     const target = await openGuardedProjectTarget(policy, filePath)
     try {
       await target.validate()
       const result = await target.handle.readFile(options)
       await target.validate()
       return result
-    } finally { await target.close() }
+    } finally {
+      await target.close()
+    }
   }) as CodebuffFileSystem['readFile']
   const readdir = (async (filePath: PathLike, options?: any) => {
-    if (options?.recursive || (options?.withFileTypes && options?.encoding === 'buffer')) return projectReadUnavailable()
+    if (
+      options?.recursive ||
+      (options?.withFileTypes && options?.encoding === 'buffer')
+    )
+      return projectReadUnavailable()
     const entries = []
-    for await (const entry of await guardedProjectDirectory(policy, filePath)) entries.push(entry)
+    for await (const entry of await guardedProjectDirectory(policy, filePath))
+      entries.push(entry)
     if (options?.withFileTypes) return entries
     const encoding = typeof options === 'string' ? options : options?.encoding
-    return entries.map(entry => encoding === 'buffer' ? Buffer.from(entry.name) : entry.name)
+    return entries.map((entry) =>
+      encoding === 'buffer' ? Buffer.from(entry.name) : entry.name,
+    )
   }) as CodebuffFileSystem['readdir']
   return {
     readFile,
     readdir,
     stat: (async (filePath: PathLike, options?: any) => {
       const target = await openGuardedProjectTarget(policy, filePath, 'either')
-      try { return await target.handle.stat(options) } finally { await target.close() }
+      try {
+        return await target.handle.stat(options)
+      } finally {
+        await target.close()
+      }
     }) as CodebuffFileSystem['stat'],
     realpath: (async (filePath: PathLike, options?: any) => {
       const target = await openGuardedProjectTarget(policy, filePath, 'either')
-      try { return options === 'buffer' || options?.encoding === 'buffer' ? Buffer.from(target.path) : target.path }
-      finally { await target.close() }
+      try {
+        return options === 'buffer' || options?.encoding === 'buffer'
+          ? Buffer.from(target.path)
+          : target.path
+      } finally {
+        await target.close()
+      }
     }) as CodebuffFileSystem['realpath'],
-    readRange: (filePath, start, endExclusive) => readNodeRange(filePath, start, endExclusive, open),
-    readTextRange: Object.assign((filePath: PathLike, startLine: number, endLine: number, maxBytes: number, options?: CodebuffTextReadOptions) =>
-      readNodeTextRange(filePath, startLine, endLine, maxBytes, options, { observe, open }), { readFileView: readFile }),
-    readTextFile: Object.assign((filePath: PathLike, maxBytes: number, options?: CodebuffTextReadOptions) =>
-      readNodeTextRange(filePath, 1, Number.MAX_SAFE_INTEGER, maxBytes, options, { observe, open }, true), { readFileView: readFile }),
-    streamDirectory: Object.assign((filePath: PathLike) => guardedProjectDirectory(policy, filePath), { readdirView: readdir }),
+    readRange: (filePath, start, endExclusive) =>
+      readNodeRange(filePath, start, endExclusive, open),
+    readTextRange: Object.assign(
+      (
+        filePath: PathLike,
+        startLine: number,
+        endLine: number,
+        maxBytes: number,
+        options?: CodebuffTextReadOptions,
+      ) =>
+        readNodeTextRange(filePath, startLine, endLine, maxBytes, options, {
+          observe,
+          open,
+        }),
+      { readFileView: readFile },
+    ),
+    readTextFile: Object.assign(
+      (
+        filePath: PathLike,
+        maxBytes: number,
+        options?: CodebuffTextReadOptions,
+      ) =>
+        readNodeTextRange(
+          filePath,
+          1,
+          Number.MAX_SAFE_INTEGER,
+          maxBytes,
+          options,
+          { observe, open },
+          true,
+        ),
+      { readFileView: readFile },
+    ),
+    streamDirectory: Object.assign(
+      (filePath: PathLike) => guardedProjectDirectory(policy, filePath),
+      { readdirView: readdir },
+    ),
   }
 }
 

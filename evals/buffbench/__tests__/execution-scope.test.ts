@@ -48,6 +48,12 @@ async function waitForFile(file: string): Promise<void> {
   }
 }
 
+async function waitUntil(horizonMs: number): Promise<void> {
+  // Timer wakeups can be early; observe only after the declared monotonic horizon.
+  while (performance.now() < horizonMs)
+    await Bun.sleep(Math.max(1, Math.ceil(horizonMs - performance.now())))
+}
+
 function physical(pid: number) {
   try {
     const parsed = parseProcStat(readFileSync(`/proc/${pid}/stat`, 'utf8'))
@@ -83,6 +89,7 @@ async function runControl(
     abortAfterReady?: boolean
     quota?: number
     runtime?: 'node' | 'bun'
+    markerHorizonMs?: number
   },
 ) {
   const root = mkdtempSync(join(tmpdir(), `b20-evaluator-${mode}-`))
@@ -155,6 +162,25 @@ async function runControl(
         : {}),
       lateMarkerExists: existsSync(join(root, 'late-marker')),
     }
+    let markerHorizon:
+      | {
+          targetMs: number
+          observedAtMs: number
+          lateMarkerExists: boolean
+          descendant?: ReturnType<typeof physical>
+        }
+      | undefined
+    if (options.markerHorizonMs !== undefined) {
+      const targetMs = launchObservedAtMs + options.markerHorizonMs
+      await waitUntil(targetMs)
+      const descendantPid = ready?.descendantPid
+      markerHorizon = {
+        targetMs,
+        observedAtMs: performance.now(),
+        lateMarkerExists: existsSync(join(root, 'late-marker')),
+        ...(descendantPid ? { descendant: physical(descendantPid) } : {}),
+      }
+    }
     const receipt = {
       fixture: {
         mode,
@@ -184,6 +210,7 @@ async function runControl(
       capture: captured.outputCapture,
       processCleanup,
       oracle,
+      markerHorizon,
     }
     // Persist the failing or passing observation BEFORE fallback teardown.
     save(
@@ -210,6 +237,13 @@ async function runControl(
     expect(oracle.leader.living).toBe(false)
     if (oracle.descendant) expect(oracle.descendant.living).toBe(false)
     expect(oracle.lateMarkerExists).toBe(false)
+    if (markerHorizon) {
+      expect(markerHorizon.observedAtMs).toBeGreaterThanOrEqual(
+        markerHorizon.targetMs,
+      )
+      expect(markerHorizon.lateMarkerExists).toBe(false)
+      expect(markerHorizon.descendant?.living).toBe(false)
+    }
     expect(captured.outputCapture.complete).toBe(true)
     if (durationMs !== undefined) {
       expect(processCleanup.originalDeadline.kind).toBe('finite')
@@ -319,6 +353,75 @@ describe.skipIf(process.platform !== 'linux')(
         ),
       ).toBe(true)
     })
+
+    test('scope cleanup prevents a delayed marker, while killing only the leader does not', async () => {
+      const horizonMs = 950
+      const positive = await runControl('early-leader', {
+        abortAfterReady: true,
+        markerHorizonMs: horizonMs,
+      })
+      expect(positive.receipt.markerHorizon?.lateMarkerExists).toBe(false)
+      expect(positive.processCleanup.trigger).toBe('owner-cancel')
+
+      const root = mkdtempSync(join(tmpdir(), 'b20-evaluator-bare-leader-'))
+      const leader = spawn(
+        nodeExecutable,
+        [fixturePath, 'early-leader', root, 'redirected'],
+        {
+          cwd: root,
+          env: {},
+          stdio: 'ignore',
+        },
+      )
+      const closed = new Promise<number | null>((resolve, reject) => {
+        leader.once('error', reject)
+        leader.once('close', resolve)
+      })
+      let descendant: ReturnType<typeof parseProcStat>['identity'] | undefined
+      try {
+        await waitForFile(join(root, 'ready.json'))
+        const ready = JSON.parse(
+          readFileSync(join(root, 'ready.json'), 'utf8'),
+        ) as Ready
+        expect(ready.leaderPid).toBe(leader.pid!)
+        descendant = parseProcStat(ready.descendantStat!).identity
+        const before = physical(descendant.pid)
+        const targetMs = performance.now() + horizonMs
+        expect(before.living).toBe(true)
+        expect(before.identity).toEqual(descendant)
+        expect(leader.kill('SIGTERM')).toBe(true)
+        expect(await closed).toBe(0)
+        await waitUntil(targetMs)
+        const observedAtMs = performance.now()
+        const after = physical(descendant.pid)
+        const marker = readFileSync(join(root, 'late-marker'), 'utf8')
+        save('bare-leader-delayed-marker-negative', {
+          ready,
+          before,
+          after,
+          targetMs,
+          observedAtMs,
+          marker,
+        })
+        expect(observedAtMs).toBeGreaterThanOrEqual(targetMs)
+        expect(after.identity).toEqual(descendant)
+        expect(after.living).toBe(true)
+        expect(marker).toBe('descendant survived')
+      } finally {
+        if (descendant) {
+          const live = physical(descendant.pid)
+          if (
+            live.living &&
+            JSON.stringify(live.identity) === JSON.stringify(descendant)
+          )
+            process.kill(descendant.pid, 'SIGKILL')
+        }
+        if (leader.exitCode === null && leader.signalCode === null)
+          leader.kill('SIGKILL')
+        await closed.catch(() => {})
+        rmSync(root, { recursive: true, force: true })
+      }
+    }, 8_000)
 
     test.each(['redirected', 'inherited'] as const)(
       'normal leader exit reconciles its %s descendant',

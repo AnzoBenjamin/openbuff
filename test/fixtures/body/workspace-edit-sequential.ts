@@ -69,6 +69,9 @@ const tests = [
   'sdk/src/__tests__/lsp-multiplexer.test.ts',
   'packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts',
   'sdk/src/__tests__/mutation-capabilities.test.ts',
+  'sdk/src/__tests__/workspace-mutation-broker.test.ts',
+  'sdk/src/__tests__/change-file.test.ts',
+  'sdk/src/__tests__/run-mutation-dispatch.test.ts',
   'sdk/src/tools/__tests__/transaction-intent-log.test.ts',
 ]
 const inputs = [
@@ -77,6 +80,9 @@ const inputs = [
   'test/fixtures/body/workspace-edit-sequential.ts',
   ...tests,
   'sdk/src/__tests__/lsp-execution-fixture.ts',
+  'sdk/src/__tests__/sdk-callback-fixture.ts',
+  'sdk/src/client.ts',
+  'sdk/src/run.ts',
   'sdk/src/services/language-intelligence.ts',
   'sdk/src/services/lsp-multiplexer.ts',
   'sdk/src/services/semantic-workspace-text.ts',
@@ -87,6 +93,9 @@ const inputs = [
   'sdk/src/tools/node-filesystem.ts',
   'sdk/src/services/workspace-mutation-broker.ts',
   'sdk/src/services/workspace-mutation-recovery.ts',
+  'sdk/src/services/transaction-mutation-proof.ts',
+  'sdk/src/services/host-filesystem.ts',
+  'sdk/src/tools/filesystem-authority.ts',
   'common/src/tools/params/tool/rename-symbol.ts',
   'common/src/tools/params/tool/code-action.ts',
   'common/src/tools/params/tool/extract-symbol.ts',
@@ -169,45 +178,148 @@ function capture<T>(prefix: string): T[] {
 type FileHashes = Record<string, string | null>
 const semantic = capture<{
   mode: string
-  outcome: string
-  requested: unknown[]
+  mutationOutcome: string
+  requested: Array<{ kind: string; editCount?: number }>
   actions: Array<{ status: string }>
   preApplicationHashes: FileHashes
   postApplicationHashes: FileHashes
   liveHashes: FileHashes
+  consumerOracle?: { exitCode: number; output: string; stderr: string }
   recovery?: {
     blocked: { status: string }
-    repaired: { ok: boolean; revertedPaths: number }
+    sameBytes: { status: string; revertedPaths: number }
+    repaired: {
+      ok: boolean
+      revertedPaths: number
+      revertedTransactions: number
+    }
   }
 }>('B06_SEMANTIC')
-assert.equal(semantic.length, 4)
-const byMode = new Map(semantic.map((row) => [row.mode, row]))
+assert.deepEqual(semantic.map(({ mode }) => mode).sort(), [
+  'committed', 'consumer-failure', 'foreign-midcommit', 'occupied-create', 'stale',
+])
+const joinedSemantic = semantic.map((row) => {
+  // A receipt only attests the applied wire edits. The separately executed
+  // consumer must also observe the exact intended result for this fixture.
+  const oracle = row.consumerOracle
+  const consumerValidation = !oracle ? 'not_run'
+    : oracle.exitCode === 0 &&
+      oracle.output === '{"consumed":42,"helper":true,"moved":2}' &&
+      oracle.stderr === '' ? 'passed' : 'failed'
+  const completeIntentSuccess =
+    row.mutationOutcome === 'applied' &&
+    row.actions.length === 5 &&
+    row.actions.every(({ status }) => status === 'committed') &&
+    consumerValidation === 'passed'
+  return { ...row, consumerValidation, completeIntentSuccess }
+})
+const byMode = new Map(joinedSemantic.map((row) => [row.mode, row]))
 const committed = byMode.get('committed')!
-assert.equal(committed.outcome, 'applied')
-assert.equal(
-  committed.requested.length,
-  6,
-  'CreateFile and its text edit must both be requested',
-)
+const consumerFailure = byMode.get('consumer-failure')!
+for (const applied of [committed, consumerFailure]) {
+  assert.equal(applied.mutationOutcome, 'applied')
+  assert.deepEqual(applied.requested.map(({ kind }) => kind), [
+    'text', 'create', 'text', 'text', 'rename', 'delete',
+  ])
+  assert.deepEqual(
+    applied.actions.map(({ status }) => status),
+    Array(5).fill('committed'),
+  )
+}
+assert.equal(committed.requested[3]?.editCount, 2)
+assert.equal(committed.consumerValidation, 'passed')
+assert.equal(consumerFailure.requested[3]?.editCount, 1)
+assert.equal(consumerFailure.consumerOracle?.exitCode, 1)
+assert.equal(consumerFailure.consumerOracle?.output, '')
+assert.match(consumerFailure.consumerOracle?.stderr ?? '', /ReferenceError: value is not defined/)
+assert.equal(consumerFailure.consumerValidation, 'failed')
 assert.deepEqual(
-  committed.actions.map((action) => action.status),
-  Array(5).fill('committed'),
+  joinedSemantic.filter(({ completeIntentSuccess }) => completeIntentSuccess).map(({ mode }) => mode),
+  ['committed'],
 )
 for (const mode of ['stale', 'occupied-create']) {
   const refused = byMode.get(mode)!
-  assert.equal(refused.outcome, 'not_applied')
+  assert.equal(refused.mutationOutcome, 'not_applied')
+  assert.equal(refused.consumerValidation, 'not_run')
   assert.deepEqual(refused.postApplicationHashes, refused.preApplicationHashes)
 }
 const interrupted = byMode.get('foreign-midcommit')!
-assert.equal(interrupted.outcome, 'rollback_incomplete')
+assert.equal(interrupted.mutationOutcome, 'rollback_incomplete')
+assert.equal(interrupted.consumerValidation, 'not_run')
 assert.equal(
   interrupted.postApplicationHashes['definition.ts'],
   'sha256:' + digest('foreign source\n'),
 )
 assert.equal(interrupted.recovery?.blocked.status, 'recovery_required')
-assert.equal(interrupted.recovery?.repaired.ok, true)
-assert.equal(interrupted.recovery?.repaired.revertedPaths, 1)
+assert.equal(interrupted.recovery?.sameBytes.status, 'recovery_required')
+assert.equal(interrupted.recovery?.sameBytes.revertedPaths, 0)
+assert.deepEqual(interrupted.recovery?.repaired, {
+  ok: true,
+  revertedPaths: 0,
+  revertedTransactions: 1,
+  recoveredCommittedTransactions: 0,
+})
 assert.deepEqual(interrupted.liveHashes, interrupted.preApplicationHashes)
+
+const emptyMembers = capture<{
+  mode: string
+  form: string
+  output: { applied?: boolean; errorMessage: string }
+  secondarySyncVersions: number[]
+  wireReplyHash: string
+  capturedHashes: string[]
+  beforeHashes: string[]
+  afterHashes: string[]
+  commitAttempts: number
+  brokerStates: string[]
+  intentLogExists: boolean
+}>('B06_EMPTY_MEMBER')
+assert.deepEqual(emptyMembers.map(({ form, mode }) => `${form}/${mode}`).sort(), [
+  'changes/raw-drift', 'documentChanges/fresh', 'documentChanges/raw-drift', 'documentChanges/resynchronized',
+])
+for (const row of emptyMembers) {
+  assert.match(row.wireReplyHash, /^sha256:[a-f0-9]{64}$/)
+  assert.notEqual(row.output.applied, true)
+  assert.match(row.output.errorMessage, /empty text edit lists are unsupported/)
+  assert.deepEqual(row.secondarySyncVersions, row.mode === 'resynchronized' ? [1, 2] : [1])
+  assert.equal(row.beforeHashes[0], row.capturedHashes[0])
+  if (row.mode === 'raw-drift') assert.notEqual(row.beforeHashes[1], row.capturedHashes[1])
+  else assert.equal(row.beforeHashes[1], row.capturedHashes[1])
+  assert.deepEqual(row.afterHashes, row.beforeHashes)
+  assert.equal(row.commitAttempts, 0)
+  assert.deepEqual(row.brokerStates, [])
+  assert.equal(row.intentLogExists, false)
+}
+
+const multiplicity = capture<{
+  mode: string
+  observed: string[]
+  commitAttempts: number
+  beforeHashes: string[]
+  afterHashes: string[]
+  brokerStates: string[]
+}>('B06_MULTIPLICITY')
+assert.equal(multiplicity.length, 5)
+const acceptedMultiplicity = new Map([
+  ['duplicate insertions', 'xyxza'],
+  ['insertions before replacement', 'xxrenamed'],
+])
+assert.equal(new Set(multiplicity.map(({ mode }) => mode)).size, 5)
+for (const row of multiplicity) {
+  const expected = acceptedMultiplicity.get(row.mode)
+  if (expected) {
+    assert.deepEqual(row.observed, [
+      'const renamed = 1\r\n',
+      `const ${expected} = 2\r\n`,
+    ])
+    assert.equal(row.commitAttempts, 2)
+    assert.deepEqual(row.brokerStates, ['committed', 'committed'])
+  } else {
+    assert.deepEqual(row.afterHashes, row.beforeHashes)
+    assert.equal(row.commitAttempts, 0)
+    assert.deepEqual(row.brokerStates, [])
+  }
+}
 
 const actions = capture<{
   mode: string
@@ -274,12 +386,82 @@ assert.deepEqual(
   [0, 1, 2, 3, 0],
 )
 assert.equal(crashes.at(-1)?.outcome.recoveredCommittedTransactions, 1)
+const conflicts = capture<{
+  control: string
+  signal: string
+  outcome: { status: string; revertedPaths: number }
+  retry: { status: string; revertedPaths: number }
+  forwardReceiptIds: string[]
+  transitions: Array<{ kind: string }>
+}>('B07_FOREIGN')
+const expectedConflicts = new Map([
+  ['foreign-update', [0, 0]],
+  ['foreign-delete', [2, 2]],
+  ['foreign-move', [3, 3]],
+  ['replaced-postimage', [1, 0]],
+  ['lookalike', [1, 0]],
+  ['recreated-move-source', [4, 3]],
+])
+assert.equal(conflicts.length, expectedConflicts.size)
+assert.equal(
+  new Set(conflicts.map(({ control }) => control)).size,
+  expectedConflicts.size,
+)
+for (const row of conflicts) {
+  assert.equal(row.signal, 'SIGKILL')
+  assert.equal(row.outcome.status, 'recovery_required')
+  assert.equal(row.retry.status, 'recovery_required')
+  assert.equal(row.retry.revertedPaths, 0)
+  assert.deepEqual(
+    [row.forwardReceiptIds.length, row.outcome.revertedPaths],
+    expectedConflicts.get(row.control),
+  )
+  assert(
+    !row.transitions.some(
+      ({ kind }) => kind === 'tx_abort' || kind === 'tx_commit',
+    ),
+  )
+}
 
+const lockedCrashes = capture<{
+  signal: string
+  beforeOperatorAction: string
+  pending: { state: string; correlation: { actionId: string } }
+  afterOperatorAction: {
+    ok: boolean
+    revertedPaths: number
+    revertedTransactions: number
+  }
+  retry: { ok: boolean; revertedPaths: number }
+  receipts: Array<{ receiptId: string; state: string }>
+}>('B07_LOCKED_CRASH')
+if (process.platform === 'linux') {
+  assert.equal(lockedCrashes.length, 1)
+  const locked = lockedCrashes[0]!
+  assert.equal(locked.signal, 'SIGKILL')
+  assert.equal(locked.beforeOperatorAction, 'recovery_required')
+  assert.equal(locked.pending.state, 'prepared')
+  assert.equal(locked.afterOperatorAction.ok, true)
+  assert.equal(locked.afterOperatorAction.revertedPaths, 1)
+  assert.equal(locked.afterOperatorAction.revertedTransactions, 1)
+  assert.equal(locked.retry.ok, true)
+  assert.equal(locked.retry.revertedPaths, 0)
+  assert.equal(
+    locked.receipts.find(
+      ({ receiptId }) => receiptId === locked.pending.correlation.actionId,
+    )?.state,
+    'recovered_committed',
+  )
+}
 writeJson('observations.json', {
-  semantic,
+  semantic: joinedSemantic,
+  emptyMembers,
+  multiplicity,
   actions,
   utf8,
   b07CoordinatorCrashControls: crashes,
+  b07UnownedCrashControls: conflicts,
+  b07OwnedInBrokerCrash: lockedCrashes,
 })
 writeJson('receipt.json', {
   schemaVersion: 1,
@@ -304,6 +486,6 @@ writeJson('receipt.json', {
     ].map((name) => [name, fileHash(path.join(evidence, name))]),
   ),
   scope:
-    'Framed offline LSP replies, real local workspace broker, and B07 killed-coordinator controls. This is not independent acceptance, an installed/remote LSP matrix, or a full source-closure receipt.',
+    'Framed offline LSP replies, real local workspace broker, separate local consumer execution, and B07 crash/capacity/SDK dispatch controls. Mutation applied is not consumer-validated success. This is not independent acceptance, an installed/remote LSP matrix, or a full source-closure receipt.',
 })
 console.log(`B06 local observations verified: ${evidence}`)

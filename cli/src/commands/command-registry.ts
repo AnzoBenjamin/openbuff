@@ -82,7 +82,10 @@ import {
   runTurnBisection,
 } from '../utils/turn-snapshots'
 import { getAttachTarget } from '../utils/codebuff-client'
-import { cancelAllBashCommands } from '../utils/bash-command-controller'
+import {
+  cancelAllBashCommands,
+  hasActiveBashCommands,
+} from '../utils/bash-command-controller'
 import { withTimeout } from '../utils/terminal-color-detection'
 import {
   capturePendingAttachments,
@@ -119,6 +122,14 @@ export type RouterParams = {
   isChainInProgressRef: React.MutableRefObject<boolean>
   isStreaming: boolean
   streamMessageIdRef: React.MutableRefObject<string | null>
+  /** Read turn ownership and backlog without waiting for the next render. */
+  getPromptTurnState?: () => 'busy' | 'backlog' | 'idle'
+  pauseQueue?: () => void
+  /** Composer snapshot and ownership before a prompt-producing route clears it. */
+  submittedDraft?: InputValue
+  isSubmittedDraftCurrent?: () => boolean
+  restoreComposerDraft?: (draft: InputValue, attachments: PendingAttachment[]) => void
+  parkRejectedPrompt?: RouterParams['addToQueue']
   addToQueue: (
     message: string,
     attachments: PendingAttachment[],
@@ -302,6 +313,17 @@ const exitWithAnalyticsFlush = (
   })
 }
 
+function getPromptTurnState(params: RouterParams): 'busy' | 'backlog' | 'idle' {
+  return (
+    params.getPromptTurnState?.() ??
+    (params.isStreaming ||
+    params.streamMessageIdRef.current ||
+    params.isChainInProgressRef.current
+      ? 'busy'
+      : 'idle')
+  )
+}
+
 export const sendPromptCommand = async (
   params: RouterParams,
   prompt: string,
@@ -330,33 +352,54 @@ export const sendPromptCommand = async (
   const capturedAttachments = params.preserveInputValue
     ? []
     : capturePendingAttachments()
-  const restoreRejectedInput = () => {
-    if (params.preserveInputValue) return
-    restorePendingAttachments(capturedAttachments)
-    params.setInputValue({
+  const composerAfterCapture = useChatStore.getState().pendingAttachments
+  const restoreRejectedInput = (
+    refusal: Exclude<PromptAdmissionResult, { status: 'accepted' }>,
+    allowPark: boolean,
+  ) => {
+    // A replaced conversation must not recover a delayed submission.
+    if (params.preserveInputValue || refusal.reason === 'superseded-owner') return
+    const draft = params.submittedDraft ?? {
       text: params.inputValue,
       cursorPosition: params.inputValue.length,
       lastEditDueToNav: false,
-    })
+    }
+    if (
+      params.isSubmittedDraftCurrent?.() !== false &&
+      composerAfterCapture.length === 0 &&
+      useChatStore.getState().pendingAttachments === composerAfterCapture
+    ) {
+      if (params.restoreComposerDraft) {
+        params.restoreComposerDraft(draft, capturedAttachments)
+      } else {
+        params.setInputValue(draft)
+        restorePendingAttachments(capturedAttachments)
+      }
+    } else if (
+      allowPark &&
+      !postUserMessage &&
+      (refusal.status === 'not-started' || refusal.retryable) &&
+      (prompt.trim() || capturedAttachments.length)
+    ) {
+      // Queue the complete payload, but do not accept/auto-retry it or replay
+      // a command that also requires local transcript effects.
+      params.parkRejectedPrompt?.(prompt, capturedAttachments, mode)
+    }
   }
 
-  // Guarded submit: never start a second concurrent turn while a stream or
-  // chain is active. Queue insertion is itself accepted admission; a later
-  // queue dispatch gets a separate started/rejected/not-started outcome.
-  if (
-    params.isStreaming ||
-    params.streamMessageIdRef.current ||
-    params.isChainInProgressRef.current
-  ) {
+  // A live turn or an open backlog gets priority; a parked backlog is not
+  // permission to retry refused work. Queue insertion is distinct from start.
+  if (getPromptTurnState(params) !== 'idle') {
     try {
       params.addToQueue(prompt, capturedAttachments, mode)
     } catch (error) {
-      restoreRejectedInput()
-      return {
+      const refusal = {
         status: 'rejected',
         reason: error instanceof Error ? error.message : String(error),
         retryable: true,
-      }
+      } as const
+      restoreRejectedInput(refusal, false)
+      return refusal
     }
     try {
       params.onPromptAccepted?.()
@@ -373,8 +416,9 @@ export const sendPromptCommand = async (
     return { status: 'accepted', disposition: 'queued' }
   }
 
+  let result: PromptAdmissionResult
   try {
-    const result = await params.sendMessage({
+    result = await params.sendMessage({
       content: prompt,
       agentMode: mode,
       ...(postUserMessage ? { postUserMessage } : {}),
@@ -383,17 +427,16 @@ export const sendPromptCommand = async (
         ? { onAccepted: params.onPromptAccepted }
         : {}),
     })
-    if (result.status !== 'accepted') restoreRejectedInput()
-    setTimeout(() => params.scrollToLatest(), 0)
-    return result
   } catch (error) {
-    restoreRejectedInput()
-    return {
+    result = {
       status: 'rejected',
       reason: error instanceof Error ? error.message : String(error),
       retryable: true,
     }
   }
+  if (result.status !== 'accepted') restoreRejectedInput(result, true)
+  setTimeout(() => params.scrollToLatest(), 0)
+  return result
 }
 
 const appendLocalMessage = (params: RouterParams, body: string) => {
@@ -657,7 +700,7 @@ const setPlanUse = (input: string): string => {
   return `Active session set to ${slug} (${resolved.sessionDir}).`
 }
 
-const ALL_COMMANDS: CommandDefinition[] = [
+const COMMAND_HANDLER_BINDINGS: CommandDefinition[] = [
   defineCommandWithArgs({
     name: 'permissions',
     handler: (params, args) => {
@@ -922,11 +965,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       // The bisection RUN is the only mutating path: same busy-check as
       // /undo-turn and /restore, plus isTurnBisectionRunning so a second
       // bisection can never interleave checkout rewrites.
-      if (
-        params.isStreaming ||
-        params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current
-      ) {
+      if (getPromptTurnState(params) === 'busy') {
         appendLocalMessage(
           params,
           '/bisect-turn: a turn is in progress - wait for it to finish, then run /bisect-turn again.',
@@ -950,11 +989,34 @@ const ALL_COMMANDS: CommandDefinition[] = [
         target.replace(/(^|\s)--keep-best(\s|$)/g, ' ').trim() || 'bun test'
       void (async () => {
         const snapshots = await listTurnSnapshots()
+        // Snapshot discovery awaits Git; a prompt can claim the chain during
+        // that gap. Recheck the shared live owner immediately at the mutation
+        // boundary, then let runTurnBisection claim its lock synchronously.
+        if (
+          // Some callers capture an older render of `isStreaming`; use the
+          // synchronous owners at the actual checkout admission boundary.
+          params.getPromptTurnState?.() === 'busy' ||
+          params.streamMessageIdRef.current ||
+          params.isChainInProgressRef.current ||
+          useChatStore.getState().isChainInProgress
+        ) {
+          return {
+            status: 'error',
+            message: 'a turn is in progress - wait for it to finish, then run /bisect-turn again.',
+          } as const
+        }
+        if (hasActiveBashCommands()) {
+          return {
+            status: 'error',
+            message: 'a shell command is in progress - wait for it to finish before starting a bisection.',
+          } as const
+        }
+        const running = runTurnBisection({ command, keepBestState })
         appendLocalMessage(
           params,
           `/bisect-turn: bisecting ${snapshots.length} snapshots with '${command}'${keepBestState ? ' (--keep-best: stays at the last passing snapshot on success)' : ''} - the tracked working tree is temporarily rewritten during each probe (HEAD, the real index, and untracked files are untouched) and restored to the newest snapshot afterward.`,
         )
-        return runTurnBisection({ command, keepBestState })
+        return running
       })()
         .then((outcome) => {
           switch (outcome.status) {
@@ -1023,26 +1085,29 @@ const ALL_COMMANDS: CommandDefinition[] = [
     producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       const trimmedArgs = args.trim()
+      const turnState = getPromptTurnState(params)
+      if (trimmedArgs && turnState === 'busy') {
+        const reason =
+          'Wait for the current turn to settle before starting a new chat with a prompt.'
+        params.setMessages((prev) => [...prev, getSystemMessage(reason)])
+        return { status: 'not-started', reason }
+      }
 
-      // Snapshot the current conversation so it can be restored with /undo.
+      // Bare /new can reset an active turn, but must not admit older queued
+      // work into the new conversation as that turn settles.
+      if (turnState !== 'idle') params.pauseQueue?.()
       useChatStore.getState().pushMessageSnapshot()
-
-      // Clear the conversation
       params.setMessages(() => [])
       params.clearMessages()
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
       params.stopStreaming()
 
-      // If user provided a message, send it as the first message in the new chat
       if (trimmedArgs) {
-        // Re-enable queue processing so the message can be sent
-        params.setCanProcessQueue(true)
+        if (!params.pauseQueue) params.setCanProcessQueue(true)
         return sendPromptCommand(params, trimmedArgs)
-      } else {
-        // Only disable queue if we're not sending a message
-        params.setCanProcessQueue(false)
       }
+      if (!params.pauseQueue) params.setCanProcessQueue(false)
       return undefined
     },
   }),
@@ -1668,18 +1733,32 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
 ]
 
-export const COMMAND_REGISTRY: CommandDefinition[] = ALL_COMMANDS.map(
-  (command) => {
-    // Static discovery metadata owns aliases for router, menu and local help.
-    // Insertion-only general-agent retains its hidden direct route.
-    const metadata = SLASH_COMMANDS.find(
-      (item) => item.id === command.name && !item.insertText,
-    )
-    return metadata
-      ? { ...command, aliases: [...(metadata.aliases ?? [])] }
-      : command
-  },
-)
+// Register names, ordering and aliases from the same metadata consumed by
+// inline completion, the palette and help. Handler bindings do not create an
+// executable route by themselves. The two intentionally hidden routes have
+// no discoverable metadata and are admitted explicitly below.
+const HIDDEN_COMMAND_ROUTES = new Set(['general-agent', 'publish'])
+function bindCommandRegistry(): CommandDefinition[] {
+  const bindings = new Map<string, CommandDefinition>()
+  for (const handler of COMMAND_HANDLER_BINDINGS) {
+    if (bindings.has(handler.name)) throw new Error(`Duplicate command handler: ${handler.name}`)
+    bindings.set(handler.name, handler)
+  }
+  const registry = SLASH_COMMANDS.flatMap((metadata) => {
+    if (metadata.insertText) return []
+    const handler = bindings.get(metadata.id)
+    if (!handler) throw new Error(`Missing command handler: ${metadata.id}`)
+    bindings.delete(metadata.id)
+    return [{ ...handler, name: metadata.id, aliases: [...(metadata.aliases ?? [])] }]
+  })
+  for (const [id, handler] of bindings) {
+    if (!HIDDEN_COMMAND_ROUTES.has(id)) throw new Error(`Command handler lacks discoverable metadata: ${id}`)
+    registry.push(handler)
+  }
+  return registry
+}
+
+export const COMMAND_REGISTRY = bindCommandRegistry()
 
 export function findCommand(cmd: string): CommandDefinition | undefined {
   const lowerCmd = cmd.toLowerCase()

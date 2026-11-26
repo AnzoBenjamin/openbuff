@@ -8,11 +8,13 @@ type InputWriter = (
 export function createRevisionBoundInputWriter(
   write: InputWriter,
   revision: () => number,
-): InputWriter {
+): InputWriter & { isCurrent: () => boolean } {
   let ownedRevision = revision()
-  return (value) => {
-    if (revision() !== ownedRevision) return
+  const isCurrent = () => revision() === ownedRevision
+  const writeIfCurrent: InputWriter = (value) => {
+    if (!isCurrent()) return
     write(value)
     ownedRevision = revision()
   }
+  return Object.assign(writeIfCurrent, { isCurrent })
 }

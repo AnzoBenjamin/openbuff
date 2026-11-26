@@ -1084,7 +1084,7 @@ describe('createLspMultiplexer', () => {
     ] }, 'repeated semantic path'],
     ['numeric version on a created document', { documentChanges: [
       { kind: 'create', uri: 'file:///proj/new.ts' },
-      { textDocument: { uri: 'file:///proj/new.ts', version: 1 }, edits: [] },
+      { textDocument: { uri: 'file:///proj/new.ts', version: 1 }, edits: [b06Edit] },
     ] }, 'created document does not have a pre-request version'],
   ] as const)('B06 refuses a whole framed plan containing %s', async (_label, reply, message) => {
     const peer = makePeer(request => request.method === 'textDocument/rename'
@@ -1171,6 +1171,168 @@ describe('createLspMultiplexer', () => {
     }
   })
 
+  test.each([
+    ['duplicate replacement', ['replace', 'replace'], null],
+    ['duplicate deletion', ['delete', 'delete'], null],
+    ['duplicate insertions', ['x', 'y', 'x', 'z'], 'xyxza'],
+    ['insertions before replacement', ['x', 'x', 'replace'], 'xxrenamed'],
+    ['insertion after replacement at the same start', ['replace', 'x'], null],
+  ] as const)('B06 wire edit multiplicity: %s', async (mode, sequence, expected) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b06-edits-'))
+    const cwd = path.join(fs.realpathSync(tmp), 'project')
+    const files = ['a.ts', 'b.ts'].map((name) => path.join(cwd, name))
+    const original = ['const a = 1\r\n', 'const a = 2\r\n']
+    const edit = (end: number, newText: string) => ({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: end } },
+      newText,
+    })
+    const rename = edit(7, 'renamed')
+    const edits = [[rename], sequence.map((text) =>
+      text === 'replace' ? rename : text === 'delete' ? edit(7, '') : edit(6, text),
+    )]
+    const documentChanges = files.map((file, index) => ({
+      textDocument: { uri: pathToFileURL(file).href, version: 1 },
+      edits: edits[index]!,
+    }))
+    const peer = makePeer((request) => {
+      if (request.method === 'textDocument/prepareRename') {
+        return { jsonrpc: '2.0', id: request.id, result: rename.range }
+      }
+      if (request.method === 'textDocument/rename') {
+        return { jsonrpc: '2.0', id: request.id, result: { documentChanges } }
+      }
+      return defaultBehavior(request)
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child, rootResolver: () => cwd })
+    try {
+      fs.mkdirSync(cwd)
+      for (const [index, file] of files.entries()) {
+        fs.writeFileSync(file, original[index]!)
+        await mux.syncFile({ filePath: file, version: 1, text: original[index]! })
+      }
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir: path.join(tmp, 'state') })
+      const host = createNodeFileSystem({ mutationBroker: broker })
+      const commit = host.conditionalCommit!
+      let commitAttempts = 0
+      host.conditionalCommit = (...args) => {
+        commitAttempts++
+        return commit(...args)
+      }
+      const service = createLanguageIntelligence({ cwd, fs: host, multiplexer: mux })
+      const result = await renameSymbol(service, { path: 'a.ts', line: 1, character: 6, new_name: 'renamed' }, { cwd, fs: host })
+      if (expected !== null) {
+        expect(result.mutation?.outcome).toBe('applied')
+      } else {
+        expect(result.output[0]?.value).toMatchObject({ errorMessage: expect.stringContaining('edit ranges overlap') })
+        expect(result.mutation).toBeUndefined()
+      }
+      const observed = files.map((file) => fs.readFileSync(file, 'utf8'))
+      const receipts = await broker.listReceipts()
+      expect(observed).toEqual(expected === null ? original : ['const renamed = 1\r\n', `const ${expected} = 2\r\n`])
+      expect(commitAttempts).toBe(expected === null ? 0 : 2)
+      expect(receipts.map(({ state }) => state)).toEqual(expected === null ? [] : ['committed', 'committed'])
+      if (process.env.OPENBUFF_CAPTURE_B06_SEMANTICS === '1') {
+        console.log('B06_MULTIPLICITY ' + JSON.stringify({
+          mode, sequence, observed, commitAttempts,
+          beforeHashes: original.map(getExactContentHash),
+          afterHashes: observed.map(getExactContentHash),
+          brokerStates: receipts.map(({ state }) => state),
+        }))
+      }
+    } finally {
+      await mux.dispose()
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test.each([
+    ['fresh', 'documentChanges'],
+    ['resynchronized', 'documentChanges'],
+    ['raw-drift', 'documentChanges'],
+    ['raw-drift', 'changes'],
+  ] as const)('B06 refuses an empty secondary edit: %s (%s)', async (mode, form) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b06-empty-'))
+    const cwd = path.join(fs.realpathSync(tmp), 'project')
+    const stateDir = path.join(tmp, 'state')
+    const files = ['a.ts', 'b.ts'].map((name) => path.join(cwd, name))
+    const [primary, secondary] = files.map((file) => pathToFileURL(file).href)
+    const original = ['const a = 1\r\n', 'const b = 2\r\n']
+    const range = { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } }
+    const edit = { range, newText: 'renamed' }
+    const workspaceEdit = form === 'documentChanges'
+      ? { documentChanges: [
+        { textDocument: { uri: primary, version: 1 }, edits: [edit] },
+        { textDocument: { uri: secondary, version: 1 }, edits: [] },
+      ] }
+      : { changes: { [primary!]: [edit], [secondary!]: [] } }
+    const peer = makeRawPeer((request) => {
+      if (request.method === 'textDocument/prepareRename') {
+        return { jsonrpc: '2.0', id: request.id, result: range }
+      }
+      return request.method === 'textDocument/rename' ? null : defaultBehavior(request)
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child, rootResolver: () => cwd })
+    try {
+      fs.mkdirSync(cwd)
+      for (const [index, file] of files.entries()) {
+        fs.writeFileSync(file, original[index]!)
+        await mux.syncFile({ filePath: file, version: 1, text: original[index]! })
+      }
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+      const host = createNodeFileSystem({ mutationBroker: broker })
+      const intentLog = createTransactionIntentLogForWorkspace({ cwd, stateDir })
+      const commit = host.conditionalCommit!
+      let commitAttempts = 0
+      host.conditionalCommit = (...args) => {
+        commitAttempts++
+        return commit(...args)
+      }
+      const service = createLanguageIntelligence({ cwd, fs: host, multiplexer: mux })
+      const application = renameSymbol(service, { path: 'a.ts', line: 1, character: 6, new_name: 'renamed' }, { cwd, fs: host, intentLog })
+      await waitUntilSent(peer, 'textDocument/rename')
+      if (mode === 'resynchronized') {
+        // A new server version, but identical disk bytes.
+        await mux.syncFile({ filePath: files[1]!, version: 2, text: original[1]! })
+      } else if (mode === 'raw-drift') {
+        // A raw-only disk change, with no newer server version.
+        fs.writeFileSync(files[1]!, original[1]!.replace('\r\n', '\n'))
+      }
+      const frames = peer.received.map((body) => JSON.parse(body))
+      const request = frames.find(({ method }) => method === 'textDocument/rename')
+      const secondarySyncVersions = frames.filter(({ method, params }) =>
+        ['textDocument/didOpen', 'textDocument/didChange'].includes(method) && params.textDocument.uri === secondary,
+      ).map(({ params }) => params.textDocument.version)
+      expect(secondarySyncVersions).toEqual(mode === 'resynchronized' ? [1, 2] : [1])
+      const live = () => files.map((file) => fs.readFileSync(file, 'utf8'))
+      const beforeReply = live()
+      expect(beforeReply).toEqual([original[0], mode === 'raw-drift' ? 'const b = 2\n' : original[1]])
+      const wireReply = JSON.stringify({ jsonrpc: '2.0', id: request.id, result: workspaceEdit })
+      peer.emitRaw(frame(wireReply))
+      const result = await application
+      const output = result.output[0]?.value
+      const brokerStates = (await broker.listReceipts()).map(({ state }) => state)
+      const intentLogExists = fs.existsSync(intentLog.filePath)
+      expect((output as { errorMessage?: string } | undefined)?.errorMessage).toContain('empty text edit lists are unsupported')
+      expect(result.mutation).toBeUndefined()
+      expect(live()).toEqual(beforeReply)
+      expect(commitAttempts).toBe(0)
+      expect(brokerStates).toEqual([])
+      expect(intentLogExists).toBe(false)
+      if (process.env.OPENBUFF_CAPTURE_B06_SEMANTICS === '1') {
+        console.log('B06_EMPTY_MEMBER ' + JSON.stringify({
+          mode, form, output, secondarySyncVersions, commitAttempts, brokerStates, intentLogExists,
+          wireReplyHash: getExactContentHash(wireReply),
+          capturedHashes: original.map(getExactContentHash),
+          beforeHashes: beforeReply.map(getExactContentHash),
+          afterHashes: live().map(getExactContentHash),
+        }))
+      }
+    } finally {
+      await mux.dispose()
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
   test('B06 refuses an encoding not negotiated by the semantic lane before dispatch', async () => {
     const peer = makePeer(request => request.method === 'initialize'
       ? { jsonrpc: '2.0', id: request.id, result: { capabilities: { positionEncoding: 'utf-32' } } }
@@ -1183,18 +1345,31 @@ describe('createLspMultiplexer', () => {
     } finally { await mux.dispose() }
   })
 
-  test.each(['committed', 'stale', 'occupied-create', 'foreign-midcommit'] as const)('B06 producer-to-broker rename result: %s', async mode => {
+  test.each(['committed', 'consumer-failure', 'stale', 'occupied-create', 'foreign-midcommit'] as const)('B06 producer-to-broker rename result: %s', async mode => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b06-broker-'))
     const cwd = path.join(fs.realpathSync(tmp), 'project')
     const stateDir = path.join(tmp, 'state')
     fs.mkdirSync(cwd)
     const paths = ['definition.ts', 'consumer.ts', 'move-from.ts', 'obsolete.ts'].map(name => path.join(cwd, name))
-    const original = ['export const value = 1\r\n', 'import { value } from "./definition"\r\n', 'export const moved = 2\n', 'obsolete\n']
+    const original = [
+      'export const value = 1\r\n',
+      'import { value } from "./definition"\r\nexport const consumed = value + 41\r\n',
+      'export const moved = 2\n',
+      'obsolete\n',
+    ]
     const created = path.join(cwd, 'helper.ts')
     const moved = path.join(cwd, 'moved.ts')
     const edits = paths.slice(0, 2).map((file, index) => ({
       textDocument: { uri: pathToFileURL(file).href, version: index + 5 },
-      edits: [{ range: { start: { line: 0, character: original[index]!.indexOf('value') }, end: { line: 0, character: original[index]!.indexOf('value') + 5 } }, newText: 'renamed' }],
+      edits: original[index]!.split('\r\n').flatMap((text, line) => {
+        // The negative oracle gets a valid but incomplete rename from the wire.
+        if (mode === 'consumer-failure' && index === 1 && line === 1) return []
+        const character = text.indexOf('value')
+        return character < 0 ? [] : [{
+          range: { start: { line, character }, end: { line, character: character + 5 } },
+          newText: 'renamed',
+        }]
+      }),
     }))
     const peer = makeRawPeer(request => request.method === 'textDocument/prepareRename'
       ? { jsonrpc: '2.0', id: request.id, result: edits[0]!.edits[0]!.range }
@@ -1241,6 +1416,7 @@ describe('createLspMultiplexer', () => {
       const result = await application
       const postApplicationHashes = capture ? currentHashes() : undefined
       let recovery: unknown
+      let consumerOracle: { exitCode: number; output: string; stderr: string } | undefined
       if (mode === 'foreign-midcommit') {
         expect(result.output[0]?.value).toMatchObject({ applied: false })
         expect(result.mutation?.outcome).toBe('rollback_incomplete')
@@ -1253,12 +1429,17 @@ describe('createLspMultiplexer', () => {
         expect(paths.map(file => fs.readFileSync(file, 'utf8'))).toEqual(['foreign source\n', ...original.slice(1)])
         expect(fs.existsSync(created)).toBe(false)
         expect(fs.existsSync(moved)).toBe(false)
+        // Rewriting the would-be postimage does not reacquire broker ownership.
         fs.writeFileSync(paths[0]!, original[0]!.replace('value', 'renamed'))
+        const sameBytes = await recover()
+        expect(sameBytes).toMatchObject({ ok: false, status: 'recovery_required', revertedPaths: 0 })
+        // The operator can restore their own preimage; recovery then needs no write.
+        fs.writeFileSync(paths[0]!, original[0]!)
         const repaired = await recover()
-        expect(repaired).toMatchObject({ ok: true, revertedPaths: 1 })
-        recovery = { blocked, repaired }
+        expect(repaired).toMatchObject({ ok: true, revertedPaths: 0, revertedTransactions: 1 })
+        recovery = { blocked, sameBytes, repaired }
         expect(paths.map(file => fs.readFileSync(file, 'utf8'))).toEqual(original)
-      } else if (mode !== 'committed') {
+      } else if (mode === 'stale' || mode === 'occupied-create') {
         expect(result.mutation?.outcome).toBe('not_applied')
         expect(result.mutation?.errors[0]?.code).toBe(mode === 'stale' ? 'stale_state' : 'already_exists')
         expect(await broker.listReceipts()).toEqual([])
@@ -1268,25 +1449,45 @@ describe('createLspMultiplexer', () => {
         if (mode === 'occupied-create') expect(fs.readFileSync(created, 'utf8')).toBe('occupied\n')
         else expect(fs.existsSync(created)).toBe(false)
       } else {
+        expect(result.output[0]?.value).toMatchObject({ applied: true })
         expect(result.mutation?.outcome).toBe('applied')
         expect(result.mutation?.authorityReceipt?.transactionId).toStartWith('tx-')
         expect((await broker.listReceipts()).map(receipt => [receipt.action, receipt.state])).toEqual([
           ['commit', 'committed'], ['create', 'committed'], ['commit', 'committed'], ['move', 'committed'], ['delete', 'committed'],
         ])
-        expect(paths.slice(0, 2).map(file => fs.readFileSync(file, 'utf8'))).toEqual(original.slice(0, 2).map(text => text.replace('value', 'renamed')))
+        expect(paths.slice(0, 2).map(file => fs.readFileSync(file, 'utf8'))).toEqual([
+          original[0]!.replace('value', 'renamed'),
+          mode === 'consumer-failure' ? original[1]!.replace('value', 'renamed') : original[1]!.replaceAll('value', 'renamed'),
+        ])
         expect(fs.readFileSync(created, 'utf8')).toBe('export const helper = true\n')
         expect(fs.readFileSync(moved, 'utf8')).toBe(original[2]!)
         expect(paths.slice(2).map(file => fs.existsSync(file))).toEqual([false, false])
+        const oracle = Bun.spawnSync([
+          process.execPath, '--no-env-file', '--no-install', '-e',
+          'import { consumed } from "./consumer.ts"; import { helper } from "./helper.ts"; import { moved } from "./moved.ts"; console.log(JSON.stringify({ consumed, helper, moved }));',
+        ], { cwd, env: {}, timeout: 5_000 })
+        consumerOracle = {
+          exitCode: oracle.exitCode,
+          output: oracle.stdout.toString().trim(),
+          stderr: oracle.stderr.toString().trim(),
+        }
+        if (mode === 'consumer-failure') {
+          expect(consumerOracle.exitCode).toBe(1)
+          expect(consumerOracle.output).toBe('')
+          expect(consumerOracle.stderr).toContain('ReferenceError: value is not defined')
+        } else {
+          expect(consumerOracle).toEqual({ exitCode: 0, output: '{"consumed":42,"helper":true,"moved":2}', stderr: '' })
+        }
       }
       if (capture) {
         const receipt = result.mutation?.authorityReceipt
         console.log('B06_SEMANTIC ' + JSON.stringify({
-          mode, outcome: result.mutation?.outcome,
+          mode, mutationOutcome: result.mutation?.outcome,
           errors: result.mutation?.errors.map(error => error.code),
           transactionId: receipt?.transactionId,
           wireReplyHash: getExactContentHash(wireReply),
-          requested: documentChanges.map(change => change?.textDocument ? { kind: 'text', ...change.textDocument } : { kind: change?.kind, uri: change?.uri, oldUri: change?.oldUri, newUri: change?.newUri }),
-          preApplicationHashes, postApplicationHashes, recovery,
+          requested: documentChanges.map(change => change?.textDocument ? { kind: 'text', ...change.textDocument, editCount: change.edits.length } : { kind: change?.kind, uri: change?.uri, oldUri: change?.oldUri, newUri: change?.newUri }),
+          preApplicationHashes, postApplicationHashes, recovery, consumerOracle,
           actions: receipt?.actions.map(({ action, path, destinationPath, beforeHash, afterHash, status, forward }) => ({ action, path, destinationPath, beforeHash, afterHash, status, forward })),
           liveHashes: currentHashes(),
         }))

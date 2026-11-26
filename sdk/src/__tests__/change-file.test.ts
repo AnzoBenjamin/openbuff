@@ -1,8 +1,17 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { open, type FileHandle } from 'node:fs/promises'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
@@ -18,8 +27,13 @@ import {
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { PathLike } from 'node:fs'
 
+import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
 import { changeFile, changeFiles } from '../tools/change-file'
-import { createTransactionIntentLogForWorkspace } from '../tools/transaction-intent-log'
+import { createNodeFileSystem } from '../tools/node-filesystem'
+import {
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+} from '../tools/transaction-intent-log'
 
 const capabilityIssuer = {
   projectId: '/repo',
@@ -33,6 +47,52 @@ function returnRawBytes(fs: CodebuffFileSystem): void {
     return encoding ? content : Buffer.from(content)
   }) as CodebuffFileSystem['readFile']
 }
+
+async function createBrokeredTransactionFixture(files: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), 'openbuff-change-file-tx-'))
+  const close = () => rmSync(root, { recursive: true, force: true })
+  try {
+    const cwd = join(realpathSync(root), 'project')
+    const stateDir = join(realpathSync(root), 'state')
+    mkdirSync(cwd)
+    mkdirSync(stateDir)
+    for (const [path, content] of Object.entries(files)) {
+      const target = join(cwd, path)
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, content)
+    }
+    const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+    const fs = createNodeFileSystem({ mutationBroker: broker })
+    const intentLog = createTransactionIntentLogForWorkspace({ cwd, stateDir })
+    return { broker, cwd, fs, intentLog, stateDir, close }
+  } catch (error) {
+    close()
+    throw error
+  }
+}
+
+const patchPreimages = {
+  'src/one.ts': 'const one = 1\n',
+  'src/two.ts': 'const two = 1\n',
+}
+const patchChanges = [
+  {
+    type: 'patch',
+    path: 'src/one.ts',
+    content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+  },
+  {
+    type: 'patch',
+    path: 'src/two.ts',
+    content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+  },
+]
+
+const intentEvents = (filePath: string) =>
+  readFileSync(filePath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
 
 describe('changeFile', () => {
   test('returns a canonical authority-backed result for string replacements', async () => {
@@ -1161,34 +1221,15 @@ describe('changeFile', () => {
   })
 
   test('records durable begin/commit intents and stamps the transactionId on the receipt', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-wiring-'))
+    const { broker, cwd, fs, intentLog, close } =
+      await createBrokeredTransactionFixture(patchPreimages)
     try {
-      const intentLog = createTransactionIntentLogForWorkspace({
-        stateDir,
-        cwd: '/repo',
-      })
-      const fs = createMockFs({
-        directories: { '/repo/src': [] },
-        files: {
-          '/repo/src/one.ts': 'const one = 1\n',
-          '/repo/src/two.ts': 'const two = 1\n',
-        },
-      })
-
+      const beforeModes = patchChanges.map(
+        ({ path }) => statSync(join(cwd, path)).mode & 0o7777,
+      )
       const result = await changeFiles({
-        parameters: [
-          {
-            type: 'patch',
-            path: 'src/one.ts',
-            content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
-          },
-          {
-            type: 'patch',
-            path: 'src/two.ts',
-            content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
-          },
-        ],
-        cwd: '/repo',
+        parameters: patchChanges,
+        cwd,
         fs,
         intentLog,
       })
@@ -1201,10 +1242,7 @@ describe('changeFile', () => {
       expect(stampedId).toBeDefined()
       expect(stampedId).toBe(`tx-${mutation.operationId}`)
 
-      const events = readFileSync(intentLog.filePath, 'utf8')
-        .split('\n')
-        .filter((line) => line.trim() !== '')
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      const events = intentEvents(intentLog.filePath)
       expect(events.map((event) => event.kind)).toEqual([
         'tx_begin',
         'tx_dispatch',
@@ -1230,67 +1268,59 @@ describe('changeFile', () => {
           path: 'src/one.ts',
           beforeHash: getExactContentHash('const one = 1\n'),
           beforeBytes: 'const one = 1\n',
-          ...(process.platform === 'win32' ? {} : { beforeMode: 0o644 }),
+          ...(process.platform === 'win32' ? {} : { beforeMode: beforeModes[0] }),
           afterHash: getExactContentHash('const one = 2\n'),
         },
         {
           path: 'src/two.ts',
           beforeHash: getExactContentHash('const two = 1\n'),
           beforeBytes: 'const two = 1\n',
-          ...(process.platform === 'win32' ? {} : { beforeMode: 0o644 }),
+          ...(process.platform === 'win32' ? {} : { beforeMode: beforeModes[1] }),
           afterHash: getExactContentHash('const two = 2\n'),
         },
       ])
       expect(events[3]).toMatchObject({ transactionId: stampedId })
+      expect(await broker.listReceipts()).toMatchObject(
+        patchChanges.map(({ path }, index) => ({
+          path,
+          action: 'commit',
+          state: 'committed',
+          receiptId: events[index + 1]?.actionId,
+          correlation: {
+            transactionId: stampedId,
+            actionId: events[index + 1]?.actionId,
+            from: index,
+            through: index,
+          },
+        })),
+      )
+      expect(await fs.readFile(join(cwd, 'src/one.ts'), 'utf8')).toBe(
+        'const one = 2\n',
+      )
+      expect(await fs.readFile(join(cwd, 'src/two.ts'), 'utf8')).toBe(
+        'const two = 2\n',
+      )
     } finally {
-      rmSync(stateDir, { recursive: true, force: true })
+      close()
     }
   })
 
   test('records a durable abort after a rolled-back multi-file commit', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-wiring-'))
+    const { broker, cwd, fs, intentLog, close } =
+      await createBrokeredTransactionFixture(patchPreimages)
     try {
-      const intentLog = createTransactionIntentLogForWorkspace({
-        stateDir,
-        cwd: '/repo',
-      })
-      const files: Record<string, string> = {
-        '/repo/src/one.ts': 'const one = 1\n',
-        '/repo/src/two.ts': 'const two = 1\n',
+      const commit = fs.conditionalCommit!
+      let injected = 0
+      fs.conditionalCommit = async (file, bytes, options) => {
+        if (String(file) === join(cwd, 'src/two.ts')) {
+          injected++
+          throw new Error('disk full')
+        }
+        return commit(file, bytes, options)
       }
-      let failedWrite = false
-      const fs = createMockFs({
-        directories: { '/repo/src': [] },
-        files,
-        readFileImpl: async (path) => {
-          const content = files[path]
-          if (content === undefined)
-            throw Object.assign(new Error('not found'), { code: 'ENOENT' })
-          return content
-        },
-        writeFileImpl: async (path, content) => {
-          if (path === '/repo/src/two.ts' && !failedWrite) {
-            failedWrite = true
-            throw new Error('disk full')
-          }
-          files[path] = content
-        },
-      })
-
       const result = await changeFiles({
-        parameters: [
-          {
-            type: 'patch',
-            path: 'src/one.ts',
-            content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
-          },
-          {
-            type: 'patch',
-            path: 'src/two.ts',
-            content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
-          },
-        ],
-        cwd: '/repo',
+        parameters: patchChanges,
+        cwd,
         fs,
         intentLog,
       })
@@ -1298,20 +1328,36 @@ describe('changeFile', () => {
       const mutation = fileMutationResultV1Schema.parse(
         result[0]?.type === 'json' ? result[0].value : null,
       )
+      expect(injected).toBe(1)
       expect(mutation.outcome).toBe('unconfirmed')
+      expect(mutation.errors[0]).toMatchObject({
+        code: 'io_error',
+        message: 'disk full',
+      })
       expect(mutation.actions.map((action) => action.outcome)).toEqual([
         'rolled_back',
         'unconfirmed',
       ])
       expect(mutation.authorityReceipt?.status).toBe('rolled_back')
-      expect(mutation.authorityReceipt?.transactionId).toBeDefined()
-      // The in-memory rollback already restored the files.
-      expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
+      const transactionId = mutation.authorityReceipt?.transactionId
+      expect(transactionId).toBeDefined()
+      for (const [path, preimage] of Object.entries(patchPreimages)) {
+        expect(await fs.readFile(join(cwd, path), 'utf8')).toBe(preimage)
+      }
+      expect(await broker.listReceipts()).toMatchObject([
+        {
+          path: 'src/one.ts',
+          state: 'committed',
+          correlation: { transactionId },
+        },
+        {
+          path: 'src/one.ts',
+          state: 'committed',
+          afterHash: getExactContentHash(patchPreimages['src/one.ts']),
+        },
+      ])
 
-      const events = readFileSync(intentLog.filePath, 'utf8')
-        .split('\n')
-        .filter((line) => line.trim() !== '')
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      const events = intentEvents(intentLog.filePath)
       expect(events.map((event) => event.kind)).toEqual([
         'tx_begin',
         'tx_dispatch',
@@ -1319,11 +1365,103 @@ describe('changeFile', () => {
         'tx_recovery_required',
         'tx_abort',
       ])
-      expect(events[4]).toMatchObject({
-        transactionId: mutation.authorityReceipt?.transactionId,
-      })
+      expect(events[4]).toMatchObject({ transactionId })
     } finally {
-      rmSync(stateDir, { recursive: true, force: true })
+      close()
+    }
+  })
+
+  test('a broker-backed group stops at a same-byte forward reply without a matching broker receipt', async () => {
+    const { broker, cwd, fs, intentLog, close } =
+      await createBrokeredTransactionFixture({
+        'a.txt': 'before A\n',
+        'b.txt': 'before B\r\n',
+        'c.txt': 'before C\n',
+      })
+    try {
+      const a = join(cwd, 'a.txt')
+      const b = join(cwd, 'b.txt')
+      const c = join(cwd, 'c.txt')
+      const commit = fs.conditionalCommit!
+      const attempts: string[] = []
+      fs.conditionalCommit = async (file, bytes, options) => {
+        attempts.push(String(file))
+        if (String(file) === b) {
+          // The real adapter is registered, but this action bypasses its
+          // broker. The expected bytes and an applied reply cannot prove it.
+          writeFileSync(b, 'after B\n')
+          return { applied: true }
+        }
+        return commit(file, bytes, options)
+      }
+      const output = await changeFiles({
+        cwd,
+        fs,
+        intentLog,
+        parameters: [
+          {
+            type: 'file',
+            path: 'a.txt',
+            content: 'after A\n',
+            expectedHash: getContentHash('before A\n'),
+          },
+          {
+            type: 'file',
+            path: 'b.txt',
+            content: 'after B\n',
+            expectedHash: getContentHash('before B\r\n'),
+          },
+          {
+            type: 'file',
+            path: 'c.txt',
+            content: 'after C\n',
+            expectedHash: getContentHash('before C\n'),
+          },
+        ],
+      })
+      const mutation = fileMutationResultV1Schema.parse(
+        output[0]?.type === 'json' ? output[0].value : null,
+      )
+      expect(mutation.outcome).toBe('rollback_incomplete')
+      const transactionId = mutation.authorityReceipt?.transactionId
+      expect(transactionId).toBeDefined()
+      expect(
+        mutation.authorityReceipt?.actions.map(({ status }) => status),
+      ).toEqual(['rolled_back', 'rollback_failed', 'not_started'])
+      expect(mutation.actions[1]?.forward?.outcome).toBe('unconfirmed')
+      expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+      expect(attempts).toEqual([a, b])
+      expect([a, b, c].map((file) => readFileSync(file, 'utf8'))).toEqual([
+        'before A\n',
+        'after B\n',
+        'before C\n',
+      ])
+      expect(intentEvents(intentLog.filePath).map(({ kind }) => kind)).toEqual([
+        'tx_begin',
+        'tx_dispatch',
+        'tx_dispatch',
+        'tx_recovery_required',
+      ])
+      const receipts = await broker.listReceipts()
+      expect(receipts.map(({ path }) => path)).toEqual(['a.txt', 'a.txt'])
+      const recover = () =>
+        recoverAndRevertInterruptedTransactions({ cwd, fs, intentLog })
+      expect(await recover()).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+        transactionIds: [transactionId],
+        revertedPaths: 0,
+      })
+      expect(readFileSync(b, 'utf8')).toBe('after B\n')
+      writeFileSync(b, 'before B\r\n')
+      expect(await recover()).toMatchObject({
+        ok: true,
+        revertedTransactions: 1,
+        revertedPaths: 0,
+      })
+      expect(await broker.listReceipts()).toEqual(receipts)
+    } finally {
+      close()
     }
   })
 
@@ -1364,175 +1502,134 @@ describe('changeFile', () => {
   })
 
   test('refuses a multi-file commit when durable intent admission fails', async () => {
-    const failingIntentLog = {
-      filePath: '/nonexistent/intents.jsonl',
-      beginTransaction: async () => ({ ok: false, error: 'disk exploded' }),
-      commitTransaction: async () => ({ ok: false, error: 'disk exploded' }),
-      abortTransaction: async () => ({ ok: false, error: 'disk exploded' }),
-      recoverInterruptedTransactions: async () => ({
-        ok: false as const,
-        error: 'disk exploded',
-      }),
-      revertTransaction: async () => ({
-        ok: false as const,
-        status: 'recovery_required' as const,
-        error: 'disk exploded',
-        unresolvedPaths: [],
-        revertedPaths: 0,
-      }),
+    const { broker, cwd, fs, intentLog, close } =
+      await createBrokeredTransactionFixture(patchPreimages)
+    const admission = spyOn(intentLog, 'beginTransaction').mockResolvedValue({
+      ok: false,
+      error: 'disk exploded',
+    })
+    try {
+      const result = await changeFiles({
+        parameters: patchChanges,
+        cwd,
+        fs,
+        intentLog,
+      })
+      const mutation = fileMutationResultV1Schema.parse(
+        result[0]?.type === 'json' ? result[0].value : null,
+      )
+      expect(admission).toHaveBeenCalledTimes(1)
+      expect(mutation).toMatchObject({
+        outcome: 'not_applied',
+        errors: [
+          expect.objectContaining({
+            code: 'io_error',
+            message: expect.stringContaining('disk exploded'),
+          }),
+        ],
+      })
+      expect(mutation.authorityReceipt?.transactionId).toBeUndefined()
+      expect(await broker.listReceipts()).toEqual([])
+      for (const [path, preimage] of Object.entries(patchPreimages)) {
+        expect(await fs.readFile(join(cwd, path), 'utf8')).toBe(preimage)
+      }
+    } finally {
+      admission.mockRestore()
+      close()
     }
-    const fs = createMockFs({
-      directories: { '/repo/src': [] },
-      files: {
-        '/repo/src/one.ts': 'const one = 1\n',
-        '/repo/src/two.ts': 'const two = 1\n',
-      },
-    })
-
-    const result = await changeFiles({
-      parameters: [
-        {
-          type: 'patch',
-          path: 'src/one.ts',
-          content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
-        },
-        {
-          type: 'patch',
-          path: 'src/two.ts',
-          content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
-        },
-      ],
-      cwd: '/repo',
-      fs,
-      intentLog: failingIntentLog,
-    })
-
-    const mutation = fileMutationResultV1Schema.parse(
-      result[0]?.type === 'json' ? result[0].value : null,
-    )
-    expect(mutation).toMatchObject({
-      outcome: 'not_applied',
-      errors: [
-        expect.objectContaining({
-          code: 'io_error',
-          message: expect.stringContaining('disk exploded'),
-        }),
-      ],
-    })
-    expect(mutation.authorityReceipt?.transactionId).toBeUndefined()
-    expect(await fs.readFile('/repo/src/one.ts', 'utf-8')).toBe(
-      'const one = 1\n',
-    )
-    expect(await fs.readFile('/repo/src/two.ts', 'utf-8')).toBe(
-      'const two = 1\n',
-    )
   })
 
   test.each(['log', 'directory'] as const)(
     'refuses before file effects when the intent %s fsync fails',
     async (syncTarget) => {
       if (syncTarget === 'directory' && process.platform !== 'linux') return
-      const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-sync-fault-'))
-      const log = createTransactionIntentLogForWorkspace({
-        stateDir,
-        cwd: '/repo',
-      })
-      const probe = await open(join(stateDir, 'probe'), 'w')
-      const prototype = Object.getPrototypeOf(probe) as FileHandle
-      const sync = prototype.sync
-      await probe.close()
-      let injected = 0
-      const save = spyOn(prototype, 'sync').mockImplementation(async function (
-        this: FileHandle,
-      ) {
-        const info = await this.stat()
-        if (
-          (syncTarget === 'directory' && info.isDirectory()) ||
-          (syncTarget === 'log' && existsSync(log.filePath))
-        ) {
-          injected++
-          throw new Error('intent fsync fault')
-        }
-        await sync.call(this)
-      })
+      const { broker, cwd, fs, intentLog, stateDir, close } =
+        await createBrokeredTransactionFixture(patchPreimages)
+      const syncPath = syncTarget === 'directory' ? stateDir : intentLog.filePath
       try {
-        const fs = createMockFs({
-          directories: { '/repo': [] },
-          files: { '/repo/one.txt': 'before', '/repo/two.txt': 'before' },
+        const probe = await open(join(stateDir, 'probe'), 'w')
+        const prototype = Object.getPrototypeOf(probe) as FileHandle
+        const sync = prototype.sync
+        await probe.close()
+        let injected = 0
+        const save = spyOn(prototype, 'sync').mockImplementation(async function (
+          this: FileHandle,
+        ) {
+          if (existsSync(syncPath)) {
+            const expected = statSync(syncPath, { bigint: true })
+            const actual = await this.stat({ bigint: true })
+            if (actual.dev === expected.dev && actual.ino === expected.ino) {
+              injected++
+              throw new Error('intent fsync fault')
+            }
+          }
+          await sync.call(this)
         })
-        const parameters = ['one.txt', 'two.txt'].map((path) => ({
-          type: 'file',
-          path,
-          content: 'after',
-          expectedHash: getContentHash('before'),
-        }))
-        const result = await changeFiles({
-          parameters,
-          cwd: '/repo',
-          fs,
-          intentLog: log,
-        })
-        expect(injected).toBeGreaterThan(0)
-        expect(
-          result[0]?.type === 'json' ? result[0].value : null,
-        ).toMatchObject({
-          outcome: 'not_applied',
-          errors: [
-            expect.objectContaining({
-              code: 'io_error',
-              message: expect.stringContaining('intent fsync fault'),
-            }),
-          ],
-        })
-        expect(await fs.readFile('/repo/one.txt', 'utf8')).toBe('before')
-        expect(await fs.readFile('/repo/two.txt', 'utf8')).toBe('before')
+        try {
+          const result = await changeFiles({
+            parameters: patchChanges,
+            cwd,
+            fs,
+            intentLog,
+          })
+          expect(injected).toBeGreaterThan(0)
+          expect(
+            result[0]?.type === 'json' ? result[0].value : null,
+          ).toMatchObject({
+            outcome: 'not_applied',
+            errors: [
+              expect.objectContaining({
+                code: 'io_error',
+                message: expect.stringContaining('intent fsync fault'),
+              }),
+            ],
+          })
+          expect(await broker.listReceipts()).toEqual([])
+          for (const [path, preimage] of Object.entries(patchPreimages)) {
+            expect(await fs.readFile(join(cwd, path), 'utf8')).toBe(preimage)
+          }
+        } finally {
+          save.mockRestore()
+        }
       } finally {
-        save.mockRestore()
-        rmSync(stateDir, { recursive: true, force: true })
+        close()
       }
     },
   )
 
   test('refuses an otherwise valid group with more than 8 MiB of pre-images before any file effects', async () => {
-    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-capacity-'))
+    const before = 'é'.repeat((9 * 1024 * 1024) / 4)
+    const paths = ['one.txt', 'two.txt']
+    const { broker, cwd, fs, intentLog, close } =
+      await createBrokeredTransactionFixture({
+        'one.txt': before,
+        'two.txt': before,
+      })
     try {
-      const intentLog = createTransactionIntentLogForWorkspace({
-        stateDir,
-        cwd: '/repo',
-      })
-      const before = 'é'.repeat((9 * 1024 * 1024) / 4)
-      const fs = createMockFs({
-        directories: { '/repo': [] },
-        files: { '/repo/one.txt': before, '/repo/two.txt': before },
-      })
-      const changes = ['one.txt', 'two.txt'].map((path) => ({
+      const changes = paths.map((path) => ({
         type: 'file',
         path,
         content: 'after',
         expectedHash: getContentHash(before),
       }))
-      const result = await changeFiles({
-        parameters: changes,
-        cwd: '/repo',
-        fs,
-        intentLog,
+      const result = await changeFiles({ parameters: changes, cwd, fs, intentLog })
+      expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+        outcome: 'not_applied',
+        errors: [
+          expect.objectContaining({
+            code: 'resource_limit',
+            recovery: 'split_transaction',
+            message: expect.stringContaining('intent-log cap'),
+          }),
+        ],
       })
-      expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject(
-        {
-          outcome: 'not_applied',
-          errors: [
-            expect.objectContaining({
-              code: 'resource_limit',
-              recovery: 'split_transaction',
-            }),
-          ],
-        },
-      )
-      expect(await fs.readFile('/repo/one.txt', 'utf8')).toBe(before)
-      expect(await fs.readFile('/repo/two.txt', 'utf8')).toBe(before)
+      for (const path of paths) {
+        expect(await fs.readFile(join(cwd, path), 'utf8')).toBe(before)
+      }
       expect(existsSync(intentLog.filePath)).toBe(false)
+      expect(await broker.listReceipts()).toEqual([])
     } finally {
-      rmSync(stateDir, { recursive: true, force: true })
+      close()
     }
   })
 

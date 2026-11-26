@@ -10,10 +10,7 @@ import { createEventHandlerState } from '../utils/create-event-handler-state'
 import { createRunConfig } from '../utils/create-run-config'
 import { loadAgentDefinitions } from '../utils/local-agent-registry'
 import { logger } from '../utils/logger'
-import {
-  getPromptAttachmentBlockReason,
-  restorePendingAttachments,
-} from '../utils/pending-attachments'
+import { getPromptAttachmentBlockReason } from '../utils/pending-attachments'
 import { getOpenbuffProviderReadiness } from '../utils/openbuff-provider'
 import {
   clearCheckpoint,
@@ -36,12 +33,14 @@ import {
   handleRunCompletion,
   handleRunError,
   prepareUserMessage as prepareUserMessageHelper,
+  PromptPreparationBlocked,
   resetEarlyReturnState,
   setupStreamingContext,
 } from './helpers/send-message'
 import { whenRegistriesReady } from '../services/deferred-registries'
 import { hydrateContextArchiveSnapshots } from '../services/memory-v2/context-archive-sync'
 import { yieldToEventLoop } from '../utils/yield-to-event-loop'
+import { isTurnBisectionRunning } from '../utils/turn-snapshots'
 
 import type { ElapsedTimeTracker } from './use-elapsed-time'
 import type { StreamStatus } from './use-message-queue'
@@ -491,10 +490,11 @@ export const useSendMessage = ({
   function clearMessages(runState: RunState | null = null) {
     activeRunOwnerRef.current = null
     abortControllerRef.current?.abort()
-    const stillCancelling = sdkExecutionRef.current !== null
-    updateChainInProgress(stillCancelling)
-    setStreamStatus('idle')
+    const stillCancelling =
+      sdkExecutionRef.current !== null && snapshotCompletionRef.current === null
+    setStreamStatus(stillCancelling ? 'cancelling' : 'idle')
     setCanProcessQueue(!stillCancelling && !isQueuePausedRef?.current)
+    updateChainInProgress(stillCancelling)
     restoreAbortRef.current?.abort()
     restoreBlockedRef.current = false
     if (
@@ -525,8 +525,10 @@ export const useSendMessage = ({
       content: string
       agentMode: AgentMode
       postUserMessage?: (prev: ChatMessage[]) => ChatMessage[]
-      attachments?: PendingAttachment[]
-      isCurrent?: () => boolean
+      attachments: PendingAttachment[]
+      consumeComposerAttachments: boolean
+      isCurrent: () => boolean
+      beforeCommit: () => void
     }) => {
       // Access store fresh each call so setters bind to the live store instance.
       const {
@@ -550,13 +552,31 @@ export const useSendMessage = ({
   )
 
   const sendMessage = useCallback<SendMessageFn>(
-    async ({
-      content,
-      agentMode,
-      postUserMessage,
-      attachments,
-      onAccepted,
-    }) => {
+    async (
+      { content, agentMode, postUserMessage, attachments, onAccepted },
+      queuedAdmission,
+    ) => {
+      const removedFromQueue = {
+        status: 'not-started',
+        reason: 'queued-item-removed',
+      } as const
+      if (queuedAdmission?.isPending() === false) return removedFromQueue
+      if (isTurnBisectionRunning()) {
+        return { status: 'not-started', reason: 'bisection-active' }
+      }
+      if (
+        activeRunOwnerRef.current !== null ||
+        isChainInProgressRef.current ||
+        (sdkExecutionRef.current !== null &&
+          snapshotCompletionRef.current === null)
+      ) {
+        return { status: 'not-started', reason: 'turn-in-progress' }
+      }
+      // A direct caller owns only the composer revision it submitted. An
+      // explicit capture (queue or action) never reads from the composer.
+      const attachmentCandidates = [
+        ...(attachments ?? useChatStore.getState().pendingAttachments),
+      ]
       // Read setters fresh from the live store on each invocation so they always
       // bind to the current store instance (see note above about store recreation).
       const {
@@ -572,11 +592,11 @@ export const useSendMessage = ({
       // This ensures the router can detect that we're busy and queue subsequent messages.
       // Set the ref directly first to guarantee immediate visibility to other code paths,
       // then call updateChainInProgress to also update React state for re-renders.
-      isChainInProgressRef.current = true
-      updateChainInProgress(true)
-      setCanProcessQueue(false)
       const { isCurrentRunOwner, isCurrentRunActive, releaseRunOwner } =
         createRunOwnership(activeRunOwnerRef)
+      isChainInProgressRef.current = true
+      setCanProcessQueue(false)
+      updateChainInProgress(true)
 
       if (agentMode !== 'PLAN') {
         setHasReceivedPlanResponse(false)
@@ -600,31 +620,41 @@ export const useSendMessage = ({
       let bashContextForPrompt: string | undefined
       let finalContent: string
 
+      const releaseUnstartedAdmission = (allowQueue = true) => {
+        if (!isCurrentRunOwner()) return
+        releaseRunOwner()
+        resetEarlyReturnState({
+          setCanProcessQueue: (can) => setCanProcessQueue(allowQueue && can),
+          updateChainInProgress,
+          isQueuePausedRef,
+        })
+      }
+      let queuedAdmissionCommitted = false
+      const checkPendingAdmission = (): PromptAdmissionResult | undefined => {
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        if (!queuedAdmissionCommitted && queuedAdmission?.isPending() === false) {
+          releaseUnstartedAdmission()
+          return removedFromQueue
+        }
+        return undefined
+      }
       const rejectAdmission = (
         reason: string,
         visibleMessage: string,
       ): PromptAdmissionResult => {
-        if (isCurrentRunOwner()) {
-          setMessages((prev) => [
-            ...prev,
-            createErrorChatMessage(visibleMessage),
-          ])
-          resetEarlyReturnState({
-            setCanProcessQueue,
-            updateChainInProgress,
-            isProcessingQueueRef,
-            isQueuePausedRef,
-          })
-          releaseRunOwner()
-        }
+        const blocked = checkPendingAdmission()
+        if (blocked) return blocked
+        setMessages((prev) => [...prev, createErrorChatMessage(visibleMessage)])
+        releaseUnstartedAdmission()
         return { status: 'rejected', reason, retryable: true }
       }
 
       try {
         await restorePromiseRef.current
       } catch (error) {
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        const blocked = checkPendingAdmission()
+        if (blocked) return blocked
         logger.error(
           { error },
           '[send-message] Session restore failed before admission',
@@ -634,44 +664,29 @@ export const useSendMessage = ({
           '⚠️ Unable to restore the conversation before sending. Please retry.',
         )
       }
-      if (!isCurrentRunOwner())
-        return { status: 'not-started', reason: 'superseded-owner' }
+      let blocked = checkPendingAdmission()
+      if (blocked) return blocked
       if (restoreBlockedRef.current) {
-        resetEarlyReturnState({
-          setCanProcessQueue: () => setCanProcessQueue(false),
-          updateChainInProgress,
-          isProcessingQueueRef,
-          isQueuePausedRef,
-        })
-        releaseRunOwner()
+        releaseUnstartedAdmission(false)
         return { status: 'not-started', reason: 'restore-blocked' }
       }
       await snapshotCompletionRef.current
-      if (!isCurrentRunOwner())
-        return { status: 'not-started', reason: 'superseded-owner' }
+      blocked = checkPendingAdmission()
+      if (blocked) return blocked
 
-      const attachmentCandidates =
-        attachments ?? useChatStore.getState().pendingAttachments
-      const attachmentBlock =
-        getPromptAttachmentBlockReason(attachmentCandidates)
+      const attachmentBlock = getPromptAttachmentBlockReason(attachmentCandidates)
       if (attachmentBlock) {
-        resetEarlyReturnState({
-          setCanProcessQueue,
-          updateChainInProgress,
-          isProcessingQueueRef,
-          isQueuePausedRef,
-        })
-        releaseRunOwner()
+        releaseUnstartedAdmission()
         return { status: 'not-started', reason: attachmentBlock }
       }
 
       try {
         await whenRegistriesReady()
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        blocked = checkPendingAdmission()
+        if (blocked) return blocked
         const validationResult = await onBeforeMessageSend()
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        blocked = checkPendingAdmission()
+        if (blocked) return blocked
         if (!validationResult.success) {
           const reason =
             validationResult.errors.map((error) => error.message).join('; ') ||
@@ -686,8 +701,8 @@ export const useSendMessage = ({
           )
         }
       } catch (error) {
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        blocked = checkPendingAdmission()
+        if (blocked) return blocked
         logger.error(
           { error },
           '[send-message] Validation before message send failed with exception',
@@ -696,8 +711,6 @@ export const useSendMessage = ({
         // supersede this failed attempt; the stale attempt must not clear the
         // newer owner's occupancy.
         await yieldToEventLoop()
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
         return rejectAdmission(
           error instanceof Error ? error.message : String(error),
           '⚠️ Agent validation failed unexpectedly. Please try again.',
@@ -708,16 +721,16 @@ export const useSendMessage = ({
       try {
         client = await getCodebuffClient()
       } catch (error) {
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        blocked = checkPendingAdmission()
+        if (blocked) return blocked
         logger.error({ error }, '[send-message] SDK client factory failed')
         return rejectAdmission(
           error instanceof Error ? error.message : String(error),
           '⚠️ Unable to initialize the provider client. Check provider configuration and retry.',
         )
       }
-      if (!isCurrentRunOwner())
-        return { status: 'not-started', reason: 'superseded-owner' }
+      blocked = checkPendingAdmission()
+      if (blocked) return blocked
       if (!client) {
         return rejectAdmission(
           'No provider client is available.',
@@ -741,8 +754,8 @@ export const useSendMessage = ({
           )
         }
       } catch (error) {
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        blocked = checkPendingAdmission()
+        if (blocked) return blocked
         logger.error({ error }, '[send-message] Provider readiness failed')
         return rejectAdmission(
           error instanceof Error ? error.message : String(error),
@@ -750,15 +763,27 @@ export const useSendMessage = ({
         )
       }
 
-      const admittedAttachments =
-        attachments ?? useChatStore.getState().drainPendingAttachments()
+      const assertNoBisection = () => {
+        if (isTurnBisectionRunning())
+          throw new PromptPreparationBlocked('bisection-active')
+      }
       try {
+        assertNoBisection()
         const prepared = await prepareUserMessage({
           content,
           agentMode,
           postUserMessage,
-          attachments: admittedAttachments,
+          attachments: attachmentCandidates,
+          consumeComposerAttachments: attachments === undefined,
           isCurrent: isCurrentRunOwner,
+          beforeCommit: () => {
+            assertNoBisection()
+            if (queuedAdmission) {
+              if (!queuedAdmission.tryCommit())
+                throw new PromptPreparationBlocked(removedFromQueue.reason)
+              queuedAdmissionCommitted = true
+            }
+          },
         })
         if (!isCurrentRunOwner())
           return { status: 'not-started', reason: 'superseded-owner' }
@@ -767,14 +792,25 @@ export const useSendMessage = ({
         bashContextForPrompt = prepared.bashContextForPrompt
         finalContent = prepared.finalContent
       } catch (error) {
-        if (!isCurrentRunOwner())
-          return { status: 'not-started', reason: 'superseded-owner' }
+        blocked = checkPendingAdmission()
+        if (blocked) return blocked
+        if (error instanceof PromptPreparationBlocked) {
+          if (error.message === removedFromQueue.reason) {
+            releaseUnstartedAdmission()
+            return removedFromQueue
+          }
+          const message =
+            error.message === 'bisection-active'
+              ? 'A turn bisection is active. Stop it before sending another prompt.'
+              : error.message
+          setMessages((prev) => [...prev, createErrorChatMessage(message)])
+          releaseUnstartedAdmission()
+          return { status: 'not-started', reason: error.message }
+        }
         logger.error(
           { error },
           '[send-message] prepareUserMessage failed with exception',
         )
-        if (attachments === undefined)
-          restorePendingAttachments(admittedAttachments)
         return rejectAdmission(
           error instanceof Error ? error.message : String(error),
           '⚠️ Failed to prepare message. Please try again.',
@@ -826,6 +862,17 @@ export const useSendMessage = ({
       // WITHOUT journaling — a journaling outage can never break a user turn.
       let runJournal: ReturnType<typeof openRunJournalForRun> = undefined
       let executionToken: symbol | undefined
+      const releaseExecutionOccupancy = () => {
+        if (!isCurrentRunOwner()) return
+        if (executionToken && sdkExecutionRef.current === executionToken)
+          sdkExecutionRef.current = null
+        if (abortControllerRef.current === abortController)
+          abortControllerRef.current = null
+        releaseRunOwner()
+        // Publish idle only after dropping every owner that can refuse the
+        // next send. Store observers can submit synchronously on this edge.
+        updateChainInProgress(false)
+      }
 
       // Admission is now settled. Execution continues on its own lifecycle
       // promise so router/queue callers can distinguish acceptance from run
@@ -977,7 +1024,7 @@ export const useSendMessage = ({
             wasAbortedByUser: abortController.signal.aborted,
             setStreamStatus,
             setCanProcessQueue,
-            updateChainInProgress,
+            updateChainInProgress: releaseExecutionOccupancy,
             setHasReceivedPlanResponse,
             resumeQueue,
             isProcessingQueueRef,
@@ -1000,7 +1047,7 @@ export const useSendMessage = ({
               setIsRetrying,
               setStreamStatus,
               setCanProcessQueue,
-              updateChainInProgress,
+              updateChainInProgress: releaseExecutionOccupancy,
               isProcessingQueueRef,
               isQueuePausedRef,
             })
@@ -1010,7 +1057,7 @@ export const useSendMessage = ({
               finalizeQueueState({
                 setStreamStatus,
                 setCanProcessQueue,
-                updateChainInProgress,
+                updateChainInProgress: releaseExecutionOccupancy,
                 isProcessingQueueRef,
                 isQueuePausedRef,
                 resumeQueue,
@@ -1018,32 +1065,26 @@ export const useSendMessage = ({
             }
           }
         } finally {
-          const abandoned = !isCurrentRunOwner()
-          if (isCurrentRunOwner()) {
-            if (isChainInProgressRef.current) {
-              logger.warn(
-                {},
-                '[send-message] Chain still in progress after try/catch, forcing reset',
-              )
-              updateChainInProgress(false)
-              setStreamStatus('idle')
-              setCanProcessQueue(!isQueuePausedRef?.current)
-            }
-            // Safety net: ensure lock is always released even if handleRunCompletion/handleRunError
-            // didn't run (e.g., due to unexpected early return). Redundant releases are safe (idempotent).
-            if (isProcessingQueueRef) {
-              isProcessingQueueRef.current = false
-            }
-          }
-          releaseRunOwner()
           updater.dispose()
+          if (isCurrentRunOwner()) {
+            // Unexpected early return: settle this owner without touching
+            // another attempt's queue admission or abort controller.
+            finalizeQueueState({
+              setStreamStatus,
+              setCanProcessQueue,
+              updateChainInProgress: releaseExecutionOccupancy,
+              isQueuePausedRef,
+              isProcessingQueueRef,
+            })
+          }
           if (executionToken && sdkExecutionRef.current === executionToken) {
             sdkExecutionRef.current = null
-            if (abandoned && activeRunOwnerRef.current === null) {
-              updateChainInProgress(false)
+            if (abortControllerRef.current === abortController)
+              abortControllerRef.current = null
+            if (activeRunOwnerRef.current === null) {
               setStreamStatus('idle')
               setCanProcessQueue(!isQueuePausedRef?.current)
-              if (isProcessingQueueRef) isProcessingQueueRef.current = false
+              updateChainInProgress(false)
             }
           }
           if (runJournal) {
@@ -1069,6 +1110,7 @@ export const useSendMessage = ({
       return { status: 'accepted', disposition: 'started', completion }
     },
     [
+      abortControllerRef,
       addActiveSubagent,
       agentId,
       inputRef,

@@ -61,6 +61,7 @@ import {
   unverifiedRunReplayRefusal,
 } from './util/run-journal'
 import type { RunResumeReport } from './util/run-journal'
+import { snapshotReplayValue } from './util/recorded-replay-prefix'
 import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
@@ -986,6 +987,54 @@ export const runAgentStep = async (
       model,
     )
     const usageCallbacksBeforeRequest = cacheUsageCallbackCount
+    // Candidate generation used to leave no request/response rows. Keep the
+    // opt-in programmatic tape diagnostic only, but record this missing model
+    // boundary as well as the normalized reply subsequently offered to next().
+    const journal = params.journalWriter
+    const candidateRunId = agentState.runId
+    const observeCandidate = async (
+      eventType: 'llm_request' | 'llm_response',
+      payload: Record<string, unknown>,
+    ): Promise<boolean> => {
+      if (
+        !candidateRunId ||
+        !journal?.captureProgrammaticReplay ||
+        !journal.appendDurable
+      )
+        return false
+      try {
+        // This opt-in observer retains bounded exact values or no row. Never
+        // replace an oversized or unavailable request/result with a fake one.
+        const { value } = snapshotReplayValue(
+          {
+            ...payload,
+            source: 'generate_n',
+            replayPermitted: false,
+          },
+          64 * 1024,
+        )
+        await journal.appendDurable(candidateRunId, {
+          eventType,
+          stepNumber: params.stepNumber ?? 0,
+          correlation: agentStepId,
+          payload: value,
+        })
+        return true
+      } catch (error) {
+        logger.debug({ error }, 'Candidate model observation unavailable')
+        return false
+      }
+    }
+    const candidateRequestRecorded =
+      journal?.captureProgrammaticReplay === true &&
+      (await observeCandidate('llm_request', {
+        ...(model ? { model } : {}),
+        n: params.n,
+        // This is the runtime request basis, not the final wire body after
+        // provider routing/packing, which can have its own diagnostics.
+        input: { system, messages: agentState.messageHistory },
+      }))
+    params.signal.throwIfAborted()
     const result = await promptAiSdk({
       ...params,
       messages: agentState.messageHistory,
@@ -1062,6 +1111,13 @@ export const runAgentStep = async (
       nResponses = [responsesString]
     }
 
+    if (candidateRequestRecorded) {
+      await observeCandidate('llm_response', {
+        n: params.n,
+        fullResponse: responsesString,
+        nResponses,
+      })
+    }
     const candidateAgentState: AgentState = {
       ...agentState,
       stepsRemaining:
@@ -1799,7 +1855,10 @@ export async function loopAgentSteps(
         intents: initialAgentState.backgroundAgentJobs,
       })
       if (!isRunResumeReportClean(report)) {
-        logger.warn({ resumeReport: report }, 'Previous work remains in the journal; no automatic replay was performed')
+        logger.warn(
+          { resumeReport: report },
+          'Previous work remains in the journal; no automatic replay was performed',
+        )
       }
     } catch {
       // A new turn does not depend on that prior journal or its logger.

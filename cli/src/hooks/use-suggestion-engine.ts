@@ -184,7 +184,7 @@ export type MatchedSlashCommand = Prettify<
     >
 >
 
-const filterSlashCommands = (
+export const filterSlashCommands = (
   commands: SlashCommand[],
   query: string,
 ): MatchedSlashCommand[] => {
@@ -269,6 +269,28 @@ const filterSlashCommands = (
         }),
       })
     }
+  }
+
+  // Fuzzy fallback for noncontiguous queries such as `plu` → `plan-use`.
+  // Keep prefix/substring matches ahead of fuzzy ones and retain the canonical
+  // command metadata, including usage hints, when a hidden alias matched.
+  const fuzzy = commands
+    .flatMap((command) => {
+      if (seen.has(command.id)) return []
+      let score = Infinity
+      for (const name of [command.id, ...(command.aliases ?? [])]) {
+        const match = fuzzyMatch(name, normalized)
+        if (match) score = Math.min(score, match.score)
+      }
+      return Number.isFinite(score) ? [{ command, score }] : []
+    })
+    .sort((left, right) => left.score - right.score)
+  for (const { command } of fuzzy) {
+    const highlight = fuzzyMatch(command.label, normalized)
+    pushUnique(matches, {
+      ...command,
+      ...(highlight && { labelHighlightIndices: highlight.indices }),
+    })
   }
 
   return matches

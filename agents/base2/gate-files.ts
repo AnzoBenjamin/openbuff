@@ -17,9 +17,10 @@
  * operationId/receiptId, and one applied action with a string path). It does
  * NOT mirror this module's schema-level finalHashes/commit-status
  * correlation, action hash consistency, or per-index actionId correlation.
- * The accepted-outcome set (`applied` | `partial` | `rollback_incomplete`)
- * and the authorityReceipt id match are the parts that must stay identical;
- * the parity test's canonical fixtures enforce that.
+ * The base2 review gate includes receipt-backed forward effects when the
+ * acknowledgement is pending. The editor's own completion check continues
+ * to require a committed receipt. The inline copies are otherwise kept in
+ * parity with the canonical fixtures.
  *
  * A fourth copy lives in `packages/agent-runtime/src/tools/tool-executor.ts`.
  * It cannot import from here without coupling the runtime to agent
@@ -49,7 +50,7 @@ export function isFileChangingTool(toolName: string): boolean {
 }
 
 /**
- * Returns true for tool-result records that represent a successful edit.
+ * Returns true for tool-result records that prove a retained edit effect.
  *
  * Only canonical authority-backed mutation results with at least one applied
  * action count. Legacy diffs, prose, attempted inputs, and changedFiles arrays

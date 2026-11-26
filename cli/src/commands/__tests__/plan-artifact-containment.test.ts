@@ -6,6 +6,7 @@ import path from 'node:path'
 import { setProjectRoot } from '../../project-files'
 import {
   getActivePlanSessionSlug,
+  MAX_ARTIFACT_BYTES,
   listPlanSessions,
   listPlanSessionsAsync,
   readBoundedArtifact,
@@ -42,6 +43,54 @@ afterEach(() => {
 })
 
 describe('physical plan artifact boundaries', () => {
+  test('pages a contained UTF-8 artifact and records the actual opened target', async () => {
+    const target = path.join(session, 'PLAN.md')
+    const prefix = 'x'.repeat(MAX_ARTIFACT_BYTES - 1)
+    const tail = '😀\n最終ページ\n'
+    fs.writeFileSync(target, prefix + tail, 'utf8')
+    const targets: string[] = []
+    const open = fs.promises.open
+    const spy = spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await open(...args)
+      if (String(args[0]).endsWith('/PLAN.md'))
+        targets.push(fs.readlinkSync(`/proc/self/fd/${handle.fd}`))
+      return handle
+    }) as typeof fs.promises.open)
+    try {
+      const bounded = await readBoundedArtifact(target)
+      const first = await readPlanArtifactPage('safe', 'PLAN.md', 1)
+      const second = await readPlanArtifactPage('safe', 'PLAN.md', 2)
+      expect(targets).toEqual([target, target, target])
+      expect(bounded).toEqual({
+        text: prefix,
+        bytesRead: MAX_ARTIFACT_BYTES,
+        totalBytes: Buffer.byteLength(prefix + tail),
+        truncated: true,
+      })
+      expect(first).toContain('Page 1/2')
+      expect(first).toContain(prefix)
+      expect(second).toContain('Page 2/2')
+      expect(second).toContain(`captured bytes ${MAX_ARTIFACT_BYTES - 1}–`)
+      expect(second).toContain(tail)
+      expect(first + second).not.toContain('\uFFFD')
+      console.log(
+        JSON.stringify({
+          b11: 'contained-utf8-paging',
+          openedTargets: targets,
+          prefixBytes: bounded.bytesRead,
+          artifactBytes: bounded.totalBytes,
+          truncated: bounded.truncated,
+          pages: 2,
+          retainedBoundaryCharacter: true,
+        }),
+      )
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   for (const name of ['PLAN.md', 'credentials.json']) {
     test(`prefix/page/resume refuse an artifact symlink to outside ${name}`, async () => {
       const target = path.join(session, 'PLAN.md')
@@ -232,6 +281,16 @@ describe('physical plan artifact boundaries', () => {
       expect(rows.partial).toBe(true)
       expect(rows.skipped).toBe(1)
     }
+    console.log(
+      JSON.stringify({
+        b11: 'partial-catalog',
+        observations: [asyncRows, syncRows].map((rows) => ({
+          retained: rows.map((row) => row.slug),
+          partial: rows.partial,
+          skipped: rows.skipped,
+        })),
+      }),
+    )
   })
 
   test('one unreadable catalog row retains valid sessions and discloses partial coverage', async () => {

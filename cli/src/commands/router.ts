@@ -106,14 +106,21 @@ export async function runBashCommand(command: string) {
   // The after-state is covered by the next turn's snapshot. Failures surface through
   // logTurnSnapshotFailure (finding b): one latched warning per distinct
   // error — never silent, never spammy.
-  await turnSnapshots
+  // An owned overlapping capture is different from a bounded timeout on
+  // our own capture. A command must not mutate the tree ahead of the other
+  // snapshot's git add -u and attribute its bytes to that earlier turn.
+  const snapshot = await turnSnapshots
     .capturePreDispatchSnapshot({ label: 'shell' })
-    .then((outcome) => turnSnapshots.logTurnSnapshotFailure(outcome, 'shell'))
     .catch(() => undefined)
+  if (snapshot) turnSnapshots.logTurnSnapshotFailure(snapshot, 'shell')
 
   return Promise.resolve()
-    .then(() =>
-      createConfiguredDirectHostExecution({
+    .then(() => {
+      if (snapshot && (snapshot.status === 'skipped' || snapshot.status === 'error') && snapshot.dispatchBlocked) {
+        const cause = snapshot.status === 'skipped' ? snapshot.reason : snapshot.message
+        throw new Error(`Shell command not dispatched: ${cause}`)
+      }
+      return createConfiguredDirectHostExecution({
         cwd: commandCwd,
         projectRoot: getProjectRoot(),
         mode: 'user',
@@ -121,8 +128,8 @@ export async function runBashCommand(command: string) {
         env: commandEnv,
         inheritEnv: false,
         signal: abortController.signal,
-      }),
-    )
+      })
+    })
     .then(async (host) => {
       if (!host.ok) throw new Error(host.cause)
       let result: Awaited<ReturnType<typeof runTerminalCommand>> | undefined
@@ -359,12 +366,23 @@ export async function routeUserPrompt(
   if (params.preserveInputValue) {
     params = { ...params, setInputValue: () => {} }
   } else {
+    const draft = useChatStore.getState()
+    const setInputValue = createRevisionBoundInputWriter(
+      params.setInputValue,
+      () => useChatStore.getState().inputRevision,
+    )
     params = {
       ...params,
-      setInputValue: createRevisionBoundInputWriter(
-        params.setInputValue,
-        () => useChatStore.getState().inputRevision,
-      ),
+      submittedDraft:
+        draft.inputValue === params.inputValue
+          ? {
+              text: draft.inputValue,
+              cursorPosition: draft.cursorPosition,
+              lastEditDueToNav: draft.lastEditDueToNav,
+            }
+          : undefined,
+      setInputValue,
+      isSubmittedDraftCurrent: setInputValue.isCurrent,
     }
   }
   const {
@@ -557,9 +575,7 @@ export async function routeUserPrompt(
     const commandDef = findCommand(parsedCommand.command)
     if (commandDef) {
       if (commandDef.producesPrompt(parsedCommand.args)) {
-        const attachmentBlock = getPromptAttachmentBlockReason(
-          useChatStore.getState().pendingAttachments,
-        )
+        const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
         if (attachmentBlock) {
           showClipboardMessage(attachmentBlock, { durationMs: 3000 })
           return { status: 'not-started', reason: attachmentBlock }
@@ -611,9 +627,7 @@ export async function routeUserPrompt(
     return
   }
 
-  const attachmentBlock = getPromptAttachmentBlockReason(
-    useChatStore.getState().pendingAttachments,
-  )
+  const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
   if (attachmentBlock) {
     showClipboardMessage(attachmentBlock, { durationMs: 3000 })
     return { status: 'not-started', reason: attachmentBlock }

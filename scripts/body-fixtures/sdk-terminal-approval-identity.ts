@@ -183,7 +183,6 @@ for (const fixture of [
   })
   const elapsedMs = performance.now() - started
   const trace = existsSync(tracePath) ? readFileSync(tracePath, 'utf8') : ''
-  const output = JSON.stringify(result.output)
   const records = existsSync(harnessStateDir)
     ? readdirSync(harnessStateDir, { recursive: true })
         .filter(
@@ -222,12 +221,15 @@ for (const fixture of [
   )
   if ('cancel' in fixture && fixture.cancel)
     assert.equal(result.runOutcome?.termination, 'cancelled')
-  else
-    assert.equal(
-      output.includes('permissionDenied'),
-      !fixture.allowed || ('repeat' in fixture && fixture.repeat),
-      fixture.name,
-    )
+  else {
+    const expectDenied = !fixture.allowed || Boolean('repeat' in fixture && fixture.repeat)
+    const refused = (result.actionOutcomes ?? []).filter(action => action.toolName === 'run_terminal_command' && action.outcome === 'refused')
+    assert.equal(refused.length, expectDenied ? 1 : 0, fixture.name + ': authoritative refused action count')
+    for (const action of refused) {
+      assert.equal(action.cause?.code, 'execution_denied', fixture.name + ': typed execution refusal')
+      assert.equal(action.effect?.status, 'unobserved', fixture.name + ': refusal cannot claim performed action')
+    }
+  }
   assert.equal(
     trace.length > 0,
     fixture.allowed,

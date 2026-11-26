@@ -26,6 +26,7 @@ import {
   readFilesResultV1Schema,
   reconcileFileMutationResultV1,
 } from '../filesystem'
+import type { CommitReceiptV1 } from '../filesystem'
 
 describe('structured filesystem results', () => {
   it('builds invariant-preserving read_files summaries', () => {
@@ -599,6 +600,49 @@ const portableReceipt = {
     },
   ],
   finalHashes: { 'src/a.ts': 'sha256:after' },
+}
+
+const pendingAcknowledgementReceipt: CommitReceiptV1 = {
+  ...portableReceipt,
+  transactionId: 'transaction-1',
+  status: 'acknowledgement_pending',
+  actions: [
+    {
+      ...portableReceipt.actions[0]!,
+      status: 'forward_verified',
+      forward: { outcome: 'applied', afterHashes: { 'src/a.ts': 'sha256:after' } },
+    },
+    {
+      actionId: 'action-2',
+      index: 1,
+      action: 'move',
+      path: 'src/b.ts',
+      destinationPath: 'src/moved.ts',
+      status: 'forward_verified',
+      beforeHash: 'sha256:move',
+      afterHash: 'sha256:move',
+      forward: {
+        outcome: 'applied',
+        afterHashes: { 'src/b.ts': null, 'src/moved.ts': 'sha256:move' },
+      },
+    },
+    {
+      actionId: 'action-3',
+      index: 2,
+      action: 'delete',
+      path: 'src/deleted.ts',
+      status: 'forward_verified',
+      beforeHash: 'sha256:delete',
+      afterHash: null,
+      forward: { outcome: 'applied', afterHashes: { 'src/deleted.ts': null } },
+    },
+  ],
+  finalHashes: {
+    'src/a.ts': 'sha256:after',
+    'src/b.ts': null,
+    'src/moved.ts': 'sha256:move',
+    'src/deleted.ts': null,
+  },
 }
 
 describe('tool lifecycle contracts', () => {
@@ -1403,6 +1447,90 @@ describe('mutation receipts and reconciliation', () => {
         afterHashes: { 'src/a.ts': 'sha256:after' },
       },
     })
+  })
+
+  it('[B03/B07] keeps verified actions without confirming the transaction or exposing edit authority', () => {
+    const receipt = pendingAcknowledgementReceipt
+    const mutation = buildFileMutationResultFromReceiptV1(
+      receipt, [], [], new Map([[0, 'not exposed']]),
+    )
+    expect(mutation.outcome).toBe('unconfirmed')
+    expect(mutation.actions.map((action) => action.outcome)).toEqual([
+      'applied', 'applied', 'applied',
+    ])
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual(mutation.actions)
+    expect(mutation.errors[0]?.code).toBe('recovery_required')
+    expect(mutation.freshCapabilities).toEqual([])
+    for (const action of mutation.actions) {
+      expect(action.afterContent).toBeUndefined()
+      expect(action.editAnchor).toBeUndefined()
+      expect(action.rollback).toBeUndefined()
+    }
+
+    const lifecycle = {
+      kind: 'tool_lifecycle', version: 1, callId: receipt.callId,
+      sequence: 2, state: 'failed',
+    } as const
+    const reconciled = reconcileFileMutationResultV1({
+      lifecycle, operationId: receipt.operationId, handlerResult: mutation, receipt,
+    })
+    expect(reconciled.mutation).toEqual(mutation)
+    const unbacked = reconcileFileMutationResultV1({
+      lifecycle, operationId: receipt.operationId, handlerResult: mutation,
+    })
+    expect(unbacked.mutation.outcome).toBe('unconfirmed')
+    expect(getConfirmedAppliedActionsV1(unbacked.mutation)).toEqual([])
+
+    for (const invalid of [
+      { ...mutation, outcome: 'applied' },
+      { ...mutation, authorityReceipt: undefined },
+      { ...mutation, actions: mutation.actions.map((action) => ({
+        ...action, rollback: { attempted: true, succeeded: false },
+      })) },
+      { ...mutation, actions: mutation.actions.map((action) => ({
+        ...action, outcome: 'unconfirmed',
+      })) },
+    ]) {
+      expect(fileMutationResultV1Schema.safeParse(invalid).success).toBe(false)
+    }
+  })
+
+  it('[B03/B07] requires independent forward proof and final observations for surviving effects', () => {
+    const receipt = pendingAcknowledgementReceipt
+    for (const invalid of [
+      { ...receipt, transactionId: undefined },
+      { ...receipt, status: 'failed' },
+      { ...receipt, actions: [] },
+      { ...receipt, actions: [{ ...receipt.actions[0]!, forward: undefined }] },
+      { ...receipt, actions: [{ ...receipt.actions[0]!, status: 'committed' }] },
+    ]) {
+      expect(commitReceiptV1Schema.safeParse(invalid).success).toBe(false)
+    }
+    const diverged = buildFileMutationResultFromReceiptV1({
+      ...receipt,
+      actions: [
+        receipt.actions[0]!,
+        { ...receipt.actions[1]!, afterHash: 'sha256:foreign' },
+        receipt.actions[2]!,
+      ],
+      // The move destination diverged and the delete observation is missing.
+      finalHashes: { 'src/a.ts': 'sha256:after', 'src/b.ts': null, 'src/moved.ts': 'sha256:foreign' },
+    })
+    expect(diverged.outcome).toBe('unconfirmed')
+    expect(diverged.actions.map((action) => action.outcome)).toEqual([
+      'applied', 'unconfirmed', 'unconfirmed',
+    ])
+    expect(diverged.actions.map((action) => action.forward)).toEqual(
+      receipt.actions.map((action) => action.forward),
+    )
+    expect(getConfirmedAppliedActionsV1(diverged).map((action) => action.path))
+      .toEqual(['src/a.ts'])
+    const sourceReoccupied = buildFileMutationResultFromReceiptV1({
+      ...receipt,
+      finalHashes: { ...receipt.finalHashes, 'src/b.ts': 'sha256:foreign' },
+    })
+    expect(getConfirmedAppliedActionsV1(sourceReoccupied).map((action) => action.path))
+      .toEqual(['src/a.ts', 'src/deleted.ts'])
   })
 
   it('[B03] ignores forged applied handler outcomes when the receipt lacks forward authority', () => {

@@ -15,9 +15,14 @@ export type ReadPlanOrigin = {
   userInputId: string
 }
 
+export type RetainedReadPlanBatch = {
+  paths: string[]
+  result: ToolResultOutput[]
+}
+
 export type VerifiedReadPlanPrefix = {
   origin: ReadPlanOrigin
-  results: ToolResultOutput[][]
+  results: RetainedReadPlanBatch[]
 }
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -35,6 +40,7 @@ export function verifyReadPlanPrefix(
   const header = first?.payload
   if (
     first?.eventType !== 'read_plan_basis' ||
+    first.stepNumber !== 0 ||
     !record(header) ||
     header.version !== 1 ||
     !identifier(header.agentId) ||
@@ -59,7 +65,7 @@ export function verifyReadPlanPrefix(
     agentId: header.agentId,
     userInputId: header.userInputId,
   }
-  const results: ToolResultOutput[][] = []
+  const results: RetainedReadPlanBatch[] = []
   const seenAttempts = new Set<string>()
   const seenCalls = new Set<string>()
   let pending:
@@ -133,7 +139,10 @@ export function verifyReadPlanPrefix(
           'A retained read is not a complete result for the selected batch.',
         )
       }
-      results.push([{ type: 'json', value: parsed.data }])
+      results.push({
+        paths: parsed.data.results.map((item) => item.path),
+        result: [{ type: 'json', value: parsed.data }],
+      })
       pending = undefined
       continue
     }

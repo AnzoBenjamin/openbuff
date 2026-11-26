@@ -333,6 +333,8 @@ export const fileMutationResultV1Schema = z
       })
     }
 
+    const acknowledgementPending =
+      value.authorityReceipt?.status === 'acknowledgement_pending'
     const outcomes = value.actions.map((action) => action.outcome)
     const applied = outcomes.filter((outcome) => outcome === 'applied').length
     const rollbackIncomplete = outcomes.filter(
@@ -357,7 +359,9 @@ export const fileMutationResultV1Schema = z
         !value.actions.some(
           (action) => action.rollback?.attempted && !action.rollback.succeeded,
         )) ||
+      (acknowledgementPending && value.outcome !== 'unconfirmed') ||
       (value.outcome === 'unconfirmed' &&
+        !acknowledgementPending &&
         (outcomes.some(
           (outcome) =>
             outcome !== 'unconfirmed' &&
@@ -459,11 +463,20 @@ export const fileMutationResultV1Schema = z
               receiptAction.forward,
               action.forward,
             ) ||
-            (action.outcome === 'applied' &&
-              !receiptActionHasRetainedForwardEffect(
-                receiptAction,
-                value.authorityReceipt!,
-              ))
+            (acknowledgementPending
+              ? action.rollback !== undefined ||
+                action.outcome !==
+                  (receiptActionHasRetainedForwardEffect(
+                    receiptAction,
+                    value.authorityReceipt!,
+                  )
+                    ? 'applied'
+                    : 'unconfirmed')
+              : action.outcome === 'applied' &&
+                !receiptActionHasRetainedForwardEffect(
+                  receiptAction,
+                  value.authorityReceipt!,
+                ))
           )
         }))
     ) {
@@ -480,6 +493,7 @@ export const commitActionStatusV1Schema = z.enum([
   'failed',
   'rolled_back',
   'rollback_failed',
+  'forward_verified',
 ])
 
 export const commitActionReceiptV1Schema = z
@@ -523,6 +537,16 @@ export const commitActionReceiptV1Schema = z
         })
       }
     }
+    if (
+      value.status === 'forward_verified' &&
+      !hasVerifiedForwardHashes(value)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'verified forward actions require applied postimages for every action path',
+      })
+    }
   })
 
 export const commitReceiptStatusV1Schema = z.enum([
@@ -531,6 +555,7 @@ export const commitReceiptStatusV1Schema = z.enum([
   'failed',
   'rolled_back',
   'rollback_incomplete',
+  'acknowledgement_pending',
 ])
 
 export const commitReceiptV1Schema = z
@@ -580,6 +605,11 @@ export const commitReceiptV1Schema = z
 
     const statuses = value.actions.map((action) => action.status)
     const invalid =
+      (value.status === 'acknowledgement_pending'
+        ? !value.transactionId ||
+          statuses.length === 0 ||
+          statuses.some((status) => status !== 'forward_verified')
+        : statuses.includes('forward_verified')) ||
       (value.status === 'not_started' &&
         statuses.some(
           (status) => status !== 'not_started' && status !== 'failed',
@@ -1215,22 +1245,25 @@ export function fileCapabilityAuthorizesV1(
 export function getConfirmedAppliedActionsV1(
   result: FileMutationResultV1,
 ): FileMutationActionV1[] {
-  if (!result.authorityReceipt) return []
+  const receipt = result.authorityReceipt
   if (
-    result.authorityReceipt.operationId !== result.operationId ||
-    result.authorityReceipt.receiptId !== result.receiptId ||
-    result.authorityReceipt.authorityTier !== result.authorityTier
+    !receipt ||
+    receipt.operationId !== result.operationId ||
+    receipt.receiptId !== result.receiptId ||
+    receipt.authorityTier !== result.authorityTier
   )
     return []
   if (
-    result.outcome !== 'applied' &&
-    result.outcome !== 'partial' &&
-    result.outcome !== 'rollback_incomplete'
+    receipt.status === 'acknowledgement_pending'
+      ? result.outcome !== 'unconfirmed' || !receipt.transactionId
+      : result.outcome !== 'applied' &&
+        result.outcome !== 'partial' &&
+        result.outcome !== 'rollback_incomplete'
   ) {
     return []
   }
   return result.actions.filter((action) => {
-    const receiptAction = result.authorityReceipt!.actions[action.index]
+    const receiptAction = receipt.actions[action.index]
     return (
       action.outcome === 'applied' &&
       receiptAction !== undefined &&
@@ -1242,10 +1275,7 @@ export function getConfirmedAppliedActionsV1(
       receiptAction.beforeHash === action.beforeHash &&
       receiptAction.afterHash === action.afterHash &&
       mutationForwardEvidenceMatches(receiptAction.forward, action.forward) &&
-      receiptActionHasRetainedForwardEffect(
-        receiptAction,
-        result.authorityReceipt!,
-      )
+      receiptActionHasRetainedForwardEffect(receiptAction, receipt)
     )
   })
 }
@@ -1266,11 +1296,38 @@ function mutationForwardEvidenceMatches(
   )
 }
 
+function hasVerifiedForwardHashes(action: CommitActionReceiptV1): boolean {
+  const forward = action.forward
+  if (forward?.outcome !== 'applied') return false
+  const hashes = forward.afterHashes
+  if (action.action === 'move') {
+    return (
+      action.destinationPath !== undefined &&
+      Object.keys(hashes).length === 2 &&
+      Object.hasOwn(hashes, action.path) &&
+      hashes[action.path] === null &&
+      Object.hasOwn(hashes, action.destinationPath) &&
+      typeof hashes[action.destinationPath] === 'string'
+    )
+  }
+  return (
+    Object.keys(hashes).length === 1 &&
+    Object.hasOwn(hashes, action.path) &&
+    (action.action === 'delete'
+      ? hashes[action.path] === null
+      : typeof hashes[action.path] === 'string')
+  )
+}
+
 function receiptActionHasRetainedForwardEffect(
   action: CommitActionReceiptV1,
   receipt: CommitReceiptV1,
 ): boolean {
-  if (action.status !== 'committed' && action.status !== 'rollback_failed')
+  if (
+    receipt.status === 'acknowledgement_pending'
+      ? action.status !== 'forward_verified' || !hasVerifiedForwardHashes(action)
+      : action.status !== 'committed' && action.status !== 'rollback_failed'
+  )
     return false
   const hashes =
     action.forward?.outcome === 'applied'
@@ -1287,7 +1344,8 @@ function receiptActionHasRetainedForwardEffect(
     (action.action !== 'move' || hashes[action.path] === null) &&
     Object.entries(hashes).every(
       ([path, hash]) =>
-        path in receipt.finalHashes && receipt.finalHashes[path] === hash,
+        Object.hasOwn(receipt.finalHashes, path) &&
+        receipt.finalHashes[path] === hash,
     )
   )
 }
@@ -1300,7 +1358,11 @@ function mutationActionFromReceipt(
 ): FileMutationActionV1 {
   let outcome: FileMutationActionV1['outcome']
   const receiptStatus = receipt.status
-  if (action.status === 'committed') {
+  if (action.status === 'forward_verified') {
+    outcome = receiptActionHasRetainedForwardEffect(action, receipt)
+      ? 'applied'
+      : 'unconfirmed'
+  } else if (action.status === 'committed') {
     outcome = 'applied'
   } else if (action.status === 'rolled_back') {
     outcome = 'rolled_back'
@@ -1381,21 +1443,23 @@ export function buildFileMutationResultFromReceiptV1(
     ),
   )
   const outcome: FileMutationOutcomeV1 =
-    validatedReceipt.status === 'committed'
-      ? 'applied'
-      : validatedReceipt.status === 'not_started'
-        ? 'not_applied'
-        : validatedReceipt.status === 'rolled_back'
-          ? actions.some((action) => action.outcome === 'unconfirmed')
-            ? 'unconfirmed'
-            : 'rolled_back'
-          : validatedReceipt.status === 'rollback_incomplete'
-            ? 'rollback_incomplete'
-            : actions.some((action) => action.outcome === 'applied')
-              ? 'partial'
-              : actions.every((action) => action.outcome === 'not_applied')
-                ? 'not_applied'
-                : 'unconfirmed'
+    validatedReceipt.status === 'acknowledgement_pending'
+      ? 'unconfirmed'
+      : validatedReceipt.status === 'committed'
+        ? 'applied'
+        : validatedReceipt.status === 'not_started'
+          ? 'not_applied'
+          : validatedReceipt.status === 'rolled_back'
+            ? actions.some((action) => action.outcome === 'unconfirmed')
+              ? 'unconfirmed'
+              : 'rolled_back'
+            : validatedReceipt.status === 'rollback_incomplete'
+              ? 'rollback_incomplete'
+              : actions.some((action) => action.outcome === 'applied')
+                ? 'partial'
+                : actions.every((action) => action.outcome === 'not_applied')
+                  ? 'not_applied'
+                  : 'unconfirmed'
 
   return fileMutationResultV1Schema.parse({
     kind: 'file_mutation_result',
@@ -1413,6 +1477,16 @@ export function buildFileMutationResultFromReceiptV1(
       : {}),
     authorityReceipt: validatedReceipt,
     errors: [
+      ...(validatedReceipt.status === 'acknowledgement_pending' &&
+      !additionalErrors.some((error) => error.code === 'recovery_required')
+        ? [
+            contractError(
+              'recovery_required',
+              'The durable transaction acknowledgement must be reconciled.',
+              { retryable: false, recovery: 'inspect_rollback' },
+            ),
+          ]
+        : []),
       ...validatedReceipt.actions.flatMap((action) =>
         action.error ? [action.error] : [],
       ),

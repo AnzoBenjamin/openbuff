@@ -212,7 +212,36 @@ try {
         },
       },
     )
-    assert.ok(result, 'headless must receive an actual SDK result')
+    if (name === 'pre_cancel') {
+      // Headless now refuses a pre-aborted request before opening a session
+      // or calling the SDK. Verify that boundary and independently exercise
+      // an actual pre-aborted SDK call for the downstream outcome consumer.
+      assert.equal(exitCode, 1)
+      assert.equal(
+        result,
+        undefined,
+        'headless dispatched a pre-aborted request',
+      )
+      assert.deepEqual(journal.runIds(), [])
+      assert.equal(stdout.length, 1)
+      const headless = JSON.parse(stdout[0]!)
+      assert.equal(headless.type, 'error')
+      assert.equal(headless.runOutcome?.termination, 'cancelled')
+      assert.equal(headless.runOutcome?.cause?.code, 'run_cancelled')
+      assert.equal(headless.taskAcceptance?.status, 'unknown')
+      try {
+        result = await realRun({
+          agent: agent.id,
+          prompt: 'fixed local body outcome control',
+          params: { name },
+          signal: controller.signal,
+          journalWriter: journal,
+        })
+      } finally {
+        await journal.close()
+      }
+    }
+    assert.ok(result, 'fixture must receive an actual SDK result')
     writeFileSync(
       path.join(root, 'result-before-oracle.json'),
       JSON.stringify(

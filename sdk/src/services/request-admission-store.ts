@@ -16,7 +16,9 @@ import type {
 import type { ModelPricing } from '../impl/cost-accounting'
 
 export const USD_MICROS_PER_CENT = 1_000_000
-const STORE_SCHEMA_VERSION = 1
+const SNAPSHOT_SCHEMA_VERSION = 1 // Public snapshot shape is unchanged.
+const LEGACY_RECORD_SCHEMA_VERSION = 1
+const RECORD_SCHEMA_VERSION = 2
 const MAX_ATTEMPTS = 10_000
 const MAX_RECORD_BYTES = 8 * 1024 * 1024
 const LOCK_TIMEOUT_MS = 5_000
@@ -24,6 +26,51 @@ const LOCK_STALE_MS = 30_000
 const LOCK_WAIT_MS = 10
 const lockWaitArray = new Int32Array(new SharedArrayBuffer(4))
 let tempSequence = 0
+// Shared by all store instances in this process. The durable marker is the
+// cross-process boundary; this set still refuses after a complete I/O outage.
+const refusedAuthorities = new Set<string>()
+const stopPath = (recordPath: string) => `${recordPath}.reconciliation-required`
+
+function reconciliationBlocked(recordPath: string): boolean {
+  if (refusedAuthorities.has(recordPath)) return true
+  try {
+    fs.lstatSync(stopPath(recordPath))
+    return true // Even a torn marker is conservative refusal evidence.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function retainReconciliationRefusal(recordPath: string, attemptId: string) {
+  refusedAuthorities.add(recordPath)
+  let fd: number
+  try {
+    fd = fs.openSync(stopPath(recordPath), 'wx', 0o600)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return
+    throw error
+  }
+  try {
+    fs.writeFileSync(
+      fd,
+      JSON.stringify({
+        version: 1,
+        attemptId,
+        reason: 'overrun-reconciliation-unavailable',
+      }) + '\n',
+    )
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+  const dir = fs.openSync(path.dirname(recordPath), 'r')
+  try {
+    fs.fsyncSync(dir)
+  } finally {
+    fs.closeSync(dir)
+  }
+}
 
 const finiteNonNegative = z.number().finite().nonnegative()
 const safeNonNegativeInteger = z
@@ -102,9 +149,12 @@ const attemptSchema = z
   })
   .strict()
 
-const snapshotSchema = z
+const recordSchema = z
   .object({
-    schemaVersion: z.literal(STORE_SCHEMA_VERSION),
+    schemaVersion: z.union([
+      z.literal(LEGACY_RECORD_SCHEMA_VERSION),
+      z.literal(RECORD_SCHEMA_VERSION),
+    ]),
     authorityId: z.string().min(1).max(4_096),
     policy: spendingPolicySchema,
     policyHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -350,6 +400,8 @@ function withRecordLock<T>(recordPath: string, operation: () => T): T {
   }
 }
 
+const legacySnapshots = new WeakSet<RequestAdmissionSnapshot>()
+
 function readSnapshot(
   recordPath: string,
   expectedAuthorityId?: string,
@@ -366,39 +418,40 @@ function readSnapshot(
       `Request admission record is corrupt: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
-  const result = snapshotSchema.safeParse(parsed)
+  const result = recordSchema.safeParse(parsed)
   if (!result.success)
     throw new Error(
       `Request admission record is invalid: ${result.error.message}`,
     )
-  if (result.data.policyHash !== policyHash(result.data.policy))
+  const { schemaVersion, ...persisted } = result.data
+  if (persisted.policyHash !== policyHash(persisted.policy))
     throw new Error('Request admission record policy hash is invalid')
   if (
     expectedAuthorityId !== undefined &&
-    result.data.authorityId !== expectedAuthorityId
+    persisted.authorityId !== expectedAuthorityId
   )
     throw new Error('Request admission record authority identity is invalid')
   const expectedCap =
-    result.data.policy.mode === 'uncapped'
+    persisted.policy.mode === 'uncapped'
       ? undefined
-      : capCentsToUsdMicros(result.data.policy.capCents)
-  if (result.data.capUsdMicros !== expectedCap)
+      : capCentsToUsdMicros(persisted.policy.capCents)
+  if (persisted.capUsdMicros !== expectedCap)
     throw new Error('Request admission record cap is inconsistent')
 
   const attemptIds = new Set<string>()
-  for (const attempt of result.data.attempts) {
+  for (const attempt of persisted.attempts) {
     if (attemptIds.has(attempt.attemptId))
       throw new Error('Request admission record has duplicate attempt IDs')
     attemptIds.add(attempt.attemptId)
     if (
-      result.data.policy.mode === 'strict-capped' &&
+      persisted.policy.mode === 'strict-capped' &&
       attempt.basis.kind !== 'strict-bound'
     )
       throw new Error('Strict admission record contains an estimated attempt')
     if (
-      result.data.policy.mode === 'estimated-capped' &&
+      persisted.policy.mode === 'estimated-capped' &&
       (attempt.basis.kind !== 'estimated-reservation' ||
-        attempt.basis.estimatorId !== result.data.policy.estimator.id)
+        attempt.basis.estimatorId !== persisted.policy.estimator.id)
     )
       throw new Error('Estimated admission record has inconsistent provenance')
     if (
@@ -423,41 +476,40 @@ function readSnapshot(
     )
       throw new Error('Reconciled admission attempt is internally inconsistent')
   }
-  const held = checkedSum(
-    result.data.attempts
-      .filter(
-        (attempt) =>
-          attempt.state === 'reserve-active' ||
-          attempt.state === 'held-inactive',
-      )
-      .map((attempt) => attempt.reservationUsdMicros),
+  const snapshot = recalculate(
+    { ...persisted, schemaVersion: SNAPSHOT_SCHEMA_VERSION },
+    persisted.updatedAt,
   )
-  const reconciled = checkedSum(
-    result.data.attempts
-      .filter((attempt) => attempt.state === 'reconciled')
-      .map((attempt) => attempt.costUsdMicros ?? 0),
-  )
-  const active = result.data.attempts.filter(
-    (attempt) => attempt.state === 'reserve-active',
-  ).length
-  const exhausted =
-    expectedCap !== undefined && checkedSum([held, reconciled]) >= expectedCap
+  // Validate legacy bytes under the old aggregate-only rule, but use the
+  // per-attempt rule for every read and decision, even before upgrade on write.
+  const expectedPersistedExhausted =
+    schemaVersion === LEGACY_RECORD_SCHEMA_VERSION
+      ? expectedCap !== undefined &&
+        snapshot.heldUsdMicros + snapshot.reconciledUsdMicros >= expectedCap
+      : snapshot.exhausted
   if (
-    result.data.heldUsdMicros !== held ||
-    result.data.reconciledUsdMicros !== reconciled ||
-    result.data.activeAttempts !== active ||
-    result.data.exhausted !== exhausted ||
-    result.data.degraded !== (result.data.policy.mode === 'estimated-capped')
+    persisted.heldUsdMicros !== snapshot.heldUsdMicros ||
+    persisted.reconciledUsdMicros !== snapshot.reconciledUsdMicros ||
+    persisted.activeAttempts !== snapshot.activeAttempts ||
+    persisted.exhausted !== expectedPersistedExhausted ||
+    persisted.degraded !== snapshot.degraded
   )
     throw new Error('Request admission record aggregates are inconsistent')
-  return result.data
+  if (schemaVersion === LEGACY_RECORD_SCHEMA_VERSION)
+    legacySnapshots.add(snapshot)
+  return snapshot
 }
 
 function writeSnapshotAtomic(
   recordPath: string,
   snapshot: RequestAdmissionSnapshot,
 ): void {
-  const parsed = snapshotSchema.parse(snapshot)
+  // Old readers must reject upgraded records instead of applying the old
+  // aggregate-only rule. The public snapshot and checkpoint reference are unchanged.
+  const parsed = recordSchema.parse({
+    ...snapshot,
+    schemaVersion: RECORD_SCHEMA_VERSION,
+  })
   const content = `${JSON.stringify(parsed, null, 2)}\n`
   if (Buffer.byteLength(content) > MAX_RECORD_BYTES)
     throw new Error('Request admission record exceeds its storage bound')
@@ -503,6 +555,17 @@ function checkedSum(values: readonly number[]): number {
   return total
 }
 
+function hasReservationOverrun(
+  attempts: readonly RequestAdmissionAttempt[],
+): boolean {
+  return attempts.some(
+    (attempt) =>
+      attempt.state === 'reconciled' &&
+      attempt.costUsdMicros !== undefined &&
+      attempt.costUsdMicros > attempt.reservationUsdMicros,
+  )
+}
+
 function recalculate(
   snapshot: RequestAdmissionSnapshot,
   now: number,
@@ -530,8 +593,12 @@ function recalculate(
     heldUsdMicros,
     reconciledUsdMicros,
     activeAttempts,
+    // An overrun invalidates the reservation even if other attempts underspend.
+    // Keep the authority exhausted for new admission as long as its receipt exists.
     exhausted:
-      snapshot.capUsdMicros !== undefined && total >= snapshot.capUsdMicros,
+      snapshot.capUsdMicros !== undefined &&
+      (total >= snapshot.capUsdMicros ||
+        hasReservationOverrun(snapshot.attempts)),
     degraded: snapshot.policy.mode === 'estimated-capped',
     updatedAt: now,
   }
@@ -541,6 +608,7 @@ export function createRequestAdmissionStore(params: {
   directory: string
   clock?: { now(): number }
 }): RequestAdmissionStore {
+  const directory = path.resolve(params.directory)
   const now = () => params.clock?.now() ?? new Date().getTime()
   const transact = <T>(
     authorityId: string,
@@ -548,12 +616,35 @@ export function createRequestAdmissionStore(params: {
       snapshot: RequestAdmissionSnapshot
       result: T
     },
+    onPersistenceFailure?: (
+      recordPath: string,
+      current: RequestAdmissionSnapshot | undefined,
+    ) => void,
   ): T => {
-    const recordPath = requestAdmissionRecordPath(params.directory, authorityId)
+    const recordPath = requestAdmissionRecordPath(directory, authorityId)
     return withRecordLock(recordPath, () => {
-      const next = operation(readSnapshot(recordPath, authorityId))
-      writeSnapshotAtomic(recordPath, next.snapshot)
-      return next.result
+      const current = readSnapshot(recordPath, authorityId)
+      try {
+        const next = operation(current)
+        if (
+          next.snapshot !== current ||
+          (current && legacySnapshots.has(current))
+        )
+          writeSnapshotAtomic(recordPath, next.snapshot)
+        return next.result
+      } catch (error) {
+        if (onPersistenceFailure) {
+          try {
+            onPersistenceFailure(recordPath, current)
+          } catch (markerError) {
+            throw new AggregateError(
+              [error, markerError],
+              'Request admission reconciliation and durable refusal persistence failed',
+            )
+          }
+        }
+        throw error
+      }
     })
   }
   const mutate = (
@@ -561,11 +652,19 @@ export function createRequestAdmissionStore(params: {
     operation: (
       current: RequestAdmissionSnapshot | undefined,
     ) => RequestAdmissionSnapshot,
+    onPersistenceFailure?: (
+      recordPath: string,
+      current: RequestAdmissionSnapshot | undefined,
+    ) => void,
   ): RequestAdmissionSnapshot =>
-    transact(authorityId, (current) => {
-      const snapshot = operation(current)
-      return { snapshot, result: snapshot }
-    })
+    transact(
+      authorityId,
+      (current) => {
+        const snapshot = operation(current)
+        return { snapshot, result: snapshot }
+      },
+      onPersistenceFailure,
+    )
   const requirePolicy = (
     current: RequestAdmissionSnapshot,
     policy: SpendingPolicy,
@@ -591,7 +690,7 @@ export function createRequestAdmissionStore(params: {
             ? undefined
             : capCentsToUsdMicros(parsedPolicy.capCents)
         return {
-          schemaVersion: STORE_SCHEMA_VERSION,
+          schemaVersion: SNAPSHOT_SCHEMA_VERSION,
           authorityId,
           policy: parsedPolicy,
           policyHash: policyHash(parsedPolicy),
@@ -655,6 +754,23 @@ export function createRequestAdmissionStore(params: {
         (current) => {
           if (!current)
             throw new Error('Request admission authority is unavailable')
+          if (
+            current.capUsdMicros !== undefined &&
+            reconciliationBlocked(
+              requestAdmissionRecordPath(directory, reservation.authorityId),
+            )
+          ) {
+            return {
+              snapshot: current,
+              result: {
+                ok: false,
+                code: 'spend_cap_exceeded',
+                message:
+                  'Capped admission is stopped because an observed overrun could not be durably reconciled',
+                snapshot: { ...current, exhausted: true },
+              },
+            }
+          }
           const timestamp = now()
           const total = checkedSum([
             current.heldUsdMicros,
@@ -668,7 +784,9 @@ export function createRequestAdmissionStore(params: {
             const result: RequestReservationResult = {
               ok: false,
               code: 'spend_cap_exceeded',
-              message: 'Request spending cap has no remaining reservation room',
+              message: hasReservationOverrun(current.attempts)
+                ? 'Capped admission is stopped because a settled request exceeded its reservation'
+                : 'Request spending cap has no remaining reservation room',
               snapshot: current,
             }
             return { snapshot: current, result }
@@ -763,51 +881,89 @@ export function createRequestAdmissionStore(params: {
         throw new Error(
           'Reconciled request cost must be a non-negative safe integer',
         )
-      return mutate(authorityId, (current) => {
-        if (!current)
-          throw new Error('Request admission authority is unavailable')
-        const index = current.attempts.findIndex(
-          (attempt) => attempt.attemptId === attemptId,
+      const recordPath = requestAdmissionRecordPath(directory, authorityId)
+      let hasReadAuthority = false
+      try {
+        return mutate(
+          authorityId,
+          (current) => {
+            hasReadAuthority = true
+            if (!current)
+              throw new Error('Request admission authority is unavailable')
+            const index = current.attempts.findIndex(
+              (attempt) => attempt.attemptId === attemptId,
+            )
+            if (index < 0)
+              throw new Error('Request admission attempt is unavailable')
+            const existing = current.attempts[index]
+            if (existing.state === 'reconciled') {
+              if (
+                existing.costUsdMicros !== costUsdMicros ||
+                existing.provenance !== provenance
+              )
+                throw new Error('Conflicting request admission reconciliation')
+              return current
+            }
+            const timestamp = now()
+            const attempts = [...current.attempts]
+            const {
+              incompleteReason: _incompleteReason,
+              ...reconciledAttempt
+            } = existing
+            attempts[index] = {
+              ...reconciledAttempt,
+              state: 'reconciled',
+              costUsdMicros,
+              provenance: provenance as RequestCostProvenance,
+              updatedAt: timestamp,
+            }
+            return recalculate(
+              { ...current, attempts, revision: current.revision + 1 },
+              timestamp,
+            )
+          },
+          (recordPath, current) => {
+            const original = current?.attempts.find(
+              (attempt) => attempt.attemptId === attemptId,
+            )
+            if (
+              current?.capUsdMicros === undefined ||
+              !original ||
+              costUsdMicros <= original.reservationUsdMicros
+            )
+              return
+            // Do not unlock and allow a racing reservation before publishing the
+            // refusal. Never fabricate the missing receipt or release the hold.
+            retainReconciliationRefusal(recordPath, attemptId)
+          },
         )
-        if (index < 0)
-          throw new Error('Request admission attempt is unavailable')
-        const existing = current.attempts[index]
-        if (existing.state === 'reconciled') {
-          if (
-            existing.costUsdMicros !== costUsdMicros ||
-            existing.provenance !== provenance
-          )
-            throw new Error('Conflicting request admission reconciliation')
-          return current
+      } catch (error) {
+        // Lock/read failure prevents determining whether the cost exceeds
+        // the reservation. Publish a conservative refusal before any retry.
+        if (!hasReadAuthority) {
+          try {
+            retainReconciliationRefusal(recordPath, attemptId)
+          } catch (markerError) {
+            throw new AggregateError(
+              [error, markerError],
+              'Request admission reconciliation and durable refusal persistence failed',
+            )
+          }
         }
-        const timestamp = now()
-        const attempts = [...current.attempts]
-        const { incompleteReason: _incompleteReason, ...reconciledAttempt } =
-          existing
-        attempts[index] = {
-          ...reconciledAttempt,
-          state: 'reconciled',
-          costUsdMicros,
-          provenance: provenance as RequestCostProvenance,
-          updatedAt: timestamp,
-        }
-        return recalculate(
-          { ...current, attempts, revision: current.revision + 1 },
-          timestamp,
-        )
-      })
+        throw error
+      }
     },
 
     snapshot(authorityId) {
-      const recordPath = requestAdmissionRecordPath(
-        params.directory,
-        authorityId,
-      )
+      const recordPath = requestAdmissionRecordPath(directory, authorityId)
       return withRecordLock(recordPath, () => {
         const snapshot = readSnapshot(recordPath, authorityId)
         if (!snapshot)
           throw new Error('Request admission authority is unavailable')
-        return snapshot
+        return snapshot.capUsdMicros !== undefined &&
+          reconciliationBlocked(recordPath)
+          ? { ...snapshot, exhausted: true }
+          : snapshot
       })
     },
   }

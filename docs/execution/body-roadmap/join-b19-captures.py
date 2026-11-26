@@ -293,9 +293,21 @@ def main():
     native = json.loads(native_line.partition(' ')[2])
     assert native['launches'] == [] and native['output']['type'] == 'error'
     assert not any(e['phase'] == 'dispatched' for e in native['execution'])
-    assert any(e.get('refusal', {}).get('reason') == 'unavailable' for e in native['execution'])
     expected_profile = {'policy': 'full-access', 'preferredBackend': 'native-exec', 'required': ['exact-env'], 'allowBackendFallback': False}
-    assert all(e['facts']['profile']['requested'] == expected_profile for e in native['execution'])
+    if native['execution']:
+        assert any(e.get('refusal', {}).get('reason') == 'unavailable' for e in native['execution'])
+        assert all(e['facts']['profile']['requested'] == expected_profile for e in native['execution'])
+    else:
+        # Current setup can refuse before the action recorder even exists.
+        # Require its typed SDK result and physical no-effect witnesses;
+        # absence of a launch alone does not establish why it was refused.
+        assert native['requestedProfile'] == expected_profile
+        assert native['runOutcome']['termination'] == 'failed'
+        assert native['runOutcome']['cause']['code'] == 'run_setup_failed'
+        assert native['output']['message'] == native['runOutcome']['cause']['message']
+        assert native['output']['message'] == 'Verified native installation/calibration is unavailable for this host clock'
+        assert native['targetObserved'] is False and native['inputUnchanged'] is True
+        assert native['actions'] == []
     assertion = test_assertion(native_suite, 'strategy.sdk: a second run with required unavailable execution starts no command target')
     assert assertion
     # The raw bytes use bootstrap branch names. native.unavailable is the

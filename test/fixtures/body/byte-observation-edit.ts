@@ -10,7 +10,16 @@ globalThis.fetch = Object.assign(async () => {
   fetchObservations.refused++
   throw new Error('B05 byte fixture refuses external fetch')
 }, { preconnect() {} }) as typeof fetch
-assert.equal(Bun.version, '1.3.5')
+const selectionPath = path.join(import.meta.dir, 'toolchain-manifest.json')
+const selection = JSON.parse(fs.readFileSync(selectionPath, 'utf8'))
+const host = `${process.platform}-${process.arch}`
+assert.equal(selection.schemaVersion, 1)
+assert.equal(Bun.version, selection.tools.bun.expectedVersion)
+assert.equal(
+  createHash('sha256').update(fs.readFileSync(fs.realpathSync(process.execPath))).digest('hex'),
+  selection.tools.bun.expectedSha256ByHost[host],
+  'B05 requires the selected Bun executable, not only its version string',
+)
 const out = path.resolve(process.argv[2] ?? '')
 assert(process.argv[2], 'A fresh evidence directory is required')
 fs.mkdirSync(out, { recursive: false })
@@ -45,6 +54,7 @@ type Case = {
 }
 const target = 'OLD😀e\u0301'
 const replacement = 'NEW😀e\u0301'
+const childFollowup = 'FINAL😀e\u0301'
 const base = 'prefix\r\n' + target + '\r\nsuffix\n'
 const cases: Case[] = []
 for (const bom of [false, true]) {
@@ -103,7 +113,7 @@ for (const adapter of ['missing_basis', 'partial', 'virtual_view', 'unsigned_bas
 for (const read of ['window', 'around'] as const) cases.push({ name: read + '-raw-source', before: '\uFEFF' + base,
   read, operation: 'range', expected: ('\uFEFF' + base).replace(target, replacement) })
 cases.push({ name: 'child-remint-raw-source', before: '\uFEFF' + base, read: 'range', operation: 'range', child: true,
-  expected: ('\uFEFF' + base).replace(target, replacement) })
+  expected: ('\uFEFF' + base).replace(target, childFollowup) })
 cases.push({ name: 'scoped-view-leading-feff-content', before: 'prefix\n\uFEFF' + target + '\r\nsuffix',
   read: 'range', operation: 'str_replace', forceBounded: true,
   expected: ('prefix\n\uFEFF' + target + '\r\nsuffix').replace(target, replacement) })
@@ -146,6 +156,15 @@ function generator(spec: Case): string {
     } else if (mode === 'range') {
       const changed = yield {toolName: 'replace_range', input: {path:'target.txt',readCapability:token,startLine:line,endLine:line,newContent:${JSON.stringify(replacement)}}};
       edits.push(changed.toolResult);
+      ${spec.child ? `
+      // No intervening read: only the just-published child-local authority
+      // can admit the second edit with the exact intermediate basis.
+      const post = changed.toolResult.find(x => x.type === 'json' && x.value.postEditCapabilities);
+      const fresh = post && post.value.postEditCapabilities.find(x => x.path === 'target.txt');
+      if (fresh) {
+        const followed = yield {toolName:'replace_range',input:{path:'target.txt',readCapability:fresh.readCapability,startLine:line,endLine:line,newContent:${JSON.stringify(childFollowup)}}};
+        edits.push(followed.toolResult);
+      }` : ''}
     } else if (mode === 'str_replace') {
       const changed = yield {toolName:'str_replace',input:{path:'target.txt',replacements:[{oldString:${JSON.stringify(target)},newString:${JSON.stringify(replacement)},basedOnRead:token}]}};
       edits.push(changed.toolResult);
@@ -170,15 +189,8 @@ function tokens(value: unknown): string[] {
 
 function observedToken(token: string, separateChild: boolean) {
   const verified = caps.decodeReadCapabilityToken(token)
-  if (!separateChild) return verified
-  // A parent cannot authenticate a child's HMAC with the parent's key. These
-  // are diagnostic payload facts only; the actual child edit must consume the
-  // capability successfully, and bridge tests verify child-local signatures.
-  assert.equal(typeof verified, 'string', 'A separate child reused the parent signing key')
-  try {
-    if (!token.startsWith('cap.v4.')) return verified
-    return { ...JSON.parse(Buffer.from(token.split('.')[2]!, 'base64url').toString('utf8')), tokenVersion: 'v4' }
-  } catch { return verified }
+  if (separateChild) assert.equal(typeof verified, 'string', 'A separate child reused the parent signing key')
+  return verified
 }
 
 function snapshot(directory: string, workspace: string, label: string) {
@@ -278,7 +290,10 @@ for (const spec of selectedCases) {
       initialReadCheckpointReached = true
       const decoded = token ? observedToken(token, Boolean(spec.child)) : 'missing'
       if (spec.noReadAuthority) check(!token, 'Incomplete actual large-line read granted fresh authority')
-      else if (!spec.adapter) {
+      else if (spec.child) {
+        check(/^cap\.v4\.h\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/u.test(token), 'Supervised read produced no opaque v4 authority')
+        check(typeof decoded === 'string', 'Supervised read capability authenticated in the parent')
+      } else if (!spec.adapter) {
         check(typeof decoded !== 'string' && decoded.tokenVersion === 'v4', 'Fresh actual SDK read did not mint v4 raw authority')
         if (typeof decoded !== 'string') {
           check(caps.readCapabilityMatchesScope(decoded, { projectId: workspace, path: 'target.txt', runId }), 'Actual read token scope differs from receiving agent')
@@ -298,17 +313,19 @@ for (const spec of selectedCases) {
           scope: { projectId: workspace, path: 'target.txt', runId } })
         check(typeof caps.decodeReadCapabilityToken(used) !== 'string', 'Legacy attack is not an authenticated v3 control')
       }
-      if (spec.token === 'unsigned' && token.startsWith('cap.v4.')) {
-        const parts = token.split('.')
-        const payload = JSON.parse(Buffer.from(parts[2]!, 'base64url').toString())
-        payload.rawBasis.rawHash = 'sha256:' + '0'.repeat(64)
-        used = `cap.v4.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.${parts[3]}`
-        check(typeof caps.decodeReadCapabilityToken(used) === 'string', 'Unsigned raw-basis tamper authenticated')
+      if (spec.token === 'unsigned') {
+        const parts = /^(cap\.v4\.h\.[A-Za-z0-9_-]{22}\.)/u.exec(token)
+        assert(parts && /^[A-Za-z0-9_-]{43}$/u.test(token.slice(parts[0].length)), 'Expected a current opaque cap.v4 handle')
+        // Keep the live handle and canonical encoding; change actual signature bits.
+        const signature = Buffer.from(token.slice(parts[0].length), 'base64url')
+        signature[0] = signature[0]! ^ 1
+        used = parts[0] + signature.toString('base64url')
+        check(typeof caps.decodeReadCapabilityToken(used) === 'string', 'Tampered handle signature authenticated')
       }
       if (spec.token === 'missing') used = ''
       if (spec.drift !== undefined) fs.writeFileSync(path.join(workspace, 'target.txt'), spec.drift)
       checkpointEvents.push({ token, decoded, usedToken: used, runId,
-        tokenAuthentication: spec.child ? 'diagnostic-child-payload; requires actual child edit verification' : 'authenticated-parent-process',
+        tokenAuthentication: spec.child ? 'parent refusal; child proves authority by consuming both real edit tokens' : 'authenticated-parent-process',
         driftHash: spec.drift === undefined ? null : hash(spec.drift) })
       return [{ type: 'json', value: { token: used } }]
     },
@@ -346,12 +363,15 @@ for (const spec of selectedCases) {
   const confirmed = mutations.flatMap(getConfirmedAppliedActionsV1)
   const validationRefusals = events.filter(e => e.type === 'error' && e.invalidArgumentsValidation === true)
   check(checkpointEvents.length === 1, 'Agent did not consume exactly one actual read checkpoint')
-  for (const mutation of mutations) {
+  for (const [index, mutation] of mutations.entries()) {
     const finalHashes = mutation.authorityReceipt?.finalHashes
     if (finalHashes) {
       for (const [name, digest] of Object.entries(finalHashes)) {
         const file = path.join(workspace, name)
-        check(digest === (fs.existsSync(file) ? hash(fs.readFileSync(file)) : null), 'Receipt final hash differs from actual final bytes: ' + name)
+        const expectedHash = spec.child && index === 0 && name === 'target.txt'
+          ? hash(spec.before.replace(target, replacement))
+          : fs.existsSync(file) ? hash(fs.readFileSync(file)) : null
+        check(digest === expectedHash, 'Receipt hash differs from its independent expected byte state: ' + name)
       }
     }
   }
@@ -368,10 +388,28 @@ for (const spec of selectedCases) {
     check(confirmed.length === 0 && observers.length === 0, 'Refused read/edit manufactured confirmed mutation or observer')
     check(validationRefusals.length > 0 || mutationValues.some(v => v?.error || v?.errorMessage) ||
       mutations.some(m => m.outcome !== 'applied'), 'Refusal lacks a real diagnostic result')
+    if (spec.token === 'unsigned') {
+      check(validationRefusals.some(e => /Invalid parameters for replace_range: readCapability: .*unauthenticated cap\.v4 raw basis/u.test(e.message)),
+        'The actual replace_range did not refuse the tampered signature')
+      check(mutationValues.length === 0 && after['moved.txt'] === null, 'Signature tamper reached mutation or created a destination')
+    }
   } else if (spec.operation.includes('rollback')) {
     check(adapterEvents.some((e: any) => e.threw), 'Forced later commit failure was not reached')
     check(mutations.length > 0 && mutations.some(m => m.authorityReceipt), 'Rollback lacks actual authority receipt')
     check(mutations.some(m => m.outcome !== 'applied'), 'Rollback/failure reported full success')
+  } else if (spec.child) {
+    const intermediate = hash(spec.before.replace(target, replacement))
+    const final = hash(spec.expected!)
+    const first = mutations[0]
+    const secondMutation = mutations[1]
+    const postEdit = mutationValues.flatMap(v => v?.postEditCapabilities ?? []).find(v => v.path === 'target.txt')
+    const published = postEdit && typeof postEdit.readCapability === 'string' && postEdit.readCapability.startsWith('cap.v4.h.')
+    check(mutations.length === 2 && confirmed.length === 2 && observers.length === 2, 'Child did not consume its own post-edit capability in a second observed edit')
+    check(first?.authorityReceipt?.finalHashes['target.txt'] === intermediate && secondMutation?.authorityReceipt?.finalHashes['target.txt'] === final, 'Child edit receipts lost the intermediate or final raw basis')
+    check(confirmed[0]?.beforeHash === hash(spec.before) && confirmed[0]?.afterHash === intermediate && confirmed[1]?.beforeHash === intermediate && confirmed[1]?.afterHash === final, 'Child receipt chain differs from the two expected byte transitions')
+    check(Boolean(published) && typeof caps.decodeReadCapabilityToken(postEdit!.readCapability) === 'string', 'Child after-state token is absent or was accepted by the parent')
+    afterCapabilityObservations.push({ path: 'target.txt', intermediate, final,
+      authentication: 'Actual supervised child independently consumed its own post-edit authority without a new read; parent refused it.' })
   } else {
     check(confirmed.length === 1 && observers.length === 1, 'Successful mutation lacks one confirmed action and observer')
     check(mutations.some(m => m.authorityReceipt), 'Successful mutation lacks actual authority receipt')

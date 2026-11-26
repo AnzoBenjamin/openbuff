@@ -5,13 +5,13 @@ This report never promotes the card or renews accepted source scopes.
 """
 import hashlib
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE = ROOT / 'docs/execution/body-roadmap/evidence/B19/continuation-20261111'
-CANONICAL = Path('/tmp/openbuff-b19-recovery-20261111/docs/execution/body-roadmap/evidence/B19/implementation/final-matrix-adjudication-13')
 REF_CACHE = {}
 
 
@@ -79,7 +79,7 @@ EXTRA = {
  'root-time': (COMMON, 'root configuration time counts and large deadlines are chunked'),
  'timer-unbounded': (TIMERS, 'unbounded schedules nothing and exhausted callbacks remain asynchronous'),
  'timer-early': (TIMERS, 'early and late timer frames recheck fixed time without duration renewal'),
- 'hook-default': (RUN, 'configured hooks default to 300 seconds, honor -1, and do not infer repository scripts'),
+ 'hook-default': (RUN, 'configured hooks honor the selected cap, default to unbounded, and do not infer repository scripts'),
  'hook-cap': (HOOKS, 'hook local %s and parent %s preserve the effective cap %s'),
  'hook-infer': (HOOKS, 'reaches one mediated hook launch'),
  'hook-missing': (HOOKS, 'missing captured configuration is unavailable and creates no launch'),
@@ -154,7 +154,7 @@ CLAUSES = {
  'hooks.config': [
   ('Omitted/false auto inference is off; true enables inference; explicit configured hooks still run', ['hook-default','hook-infer'], ['adapterCalls/options','policyInputs/target']),
   ('Captured trusted configuration and owner/profile/admission reach the hook', ['sdk-consumers','hook-capture','hook-missing'], ['capturedHostConfiguration','events/facts']),
-  ('Omitted local hook timeout is300s; -1 is unbounded; a finite parent wins', ['hook-default','hook-cap'], ['events/facts/deadlines','adapterCalls/options'])],
+  ('The current documented default and explicit -1 are unbounded; an explicitly configured finite cap and a shorter finite parent still apply', ['hook-default','hook-cap'], ['events/facts/deadlines','adapterCalls/options'])],
  'hooks.snapshot': [
   ('Both before/after snapshot Git launches preserve exact env/owner/admission/deadline and never retry via ambient runGit', ['snapshot-caps','snapshot-capture','snapshot-after-refusal'], ['fixtureCase/phase','adapterCalls/options','events/facts']),
   ('Preserve snapshot byte completeness and B36 unavailable/failed evidence', ['snapshot-tail','snapshot-files','snapshot-membership','snapshot-error','b36-status'], ['result/status','result/assurance','projected/observations','delta/diagnosticStatus'])],
@@ -237,19 +237,22 @@ def main():
     parser.add_argument('--join-directory', type=Path, default=BASE / 'capture-joins/current-r3')
     parser.add_argument('--cli-directory', type=Path, default=BASE / 'cli-consumer-r3')
     parser.add_argument('--package-directory', type=Path, default=BASE / 'package-consumers/runs/fresh-r6')
+    parser.add_argument('--broad-results', type=Path, default=BASE / 'broad-sdk-runtime/results.json')
+    parser.add_argument('--core-vectors', type=Path, default=BASE / 'core-oracle-controls/control-vectors.json')
     parser.add_argument('--ci-results', type=Path)
     parser.add_argument('--final-review', type=Path)
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     OUT = args.out.resolve()
     assert OUT.is_relative_to(BASE / 'capture-joins')
-    closure = read(CANONICAL / 'closure-requirements.json')
     focused = read(args.source_results)
     assert focused['passed']
     manifest_path = verify(focused['manifest'])
     manifest = read(manifest_path)
     join_report = read(args.join_directory / 'report.json')
     assert join_report['sourceResults']['sha256'] == sha(args.source_results)
+    canonical_closure = verify(join_report['canonicalInputs']['closure-requirements'])
+    closure = read(canonical_closure)
     joins = read(verify(join_report['artifacts']['selector-joins.json']))
     cases = read(verify(join_report['artifacts']['case-index.json']))
     edge_rows = read(verify(join_report['artifacts']['edge-coverage.json']))
@@ -261,16 +264,29 @@ def main():
         assert read(receipt_path) == suite
         logs.append({'source': suite['suite'], 'log': verify(suite['log']),
                      'receipt': receipt_path, 'sourceDispatchManifest': ref(manifest_path)})
-    broad = read(BASE / 'broad-sdk-runtime/results.json')
+    broad = read(args.broad_results)
     assert broad['passed']
     for receipt in broad['workspaces']:
         assert receipt['exitCode'] == 0
-        roster = {str(Path(arg).relative_to(ROOT)) for arg in receipt['command']
-                  if arg.endswith(('.test.ts', '.test.tsx')) and Path(arg).is_relative_to(ROOT)}
+        broad_dispatch = None
+        cwd = ROOT
+        if 'invocation' in receipt:
+            original = read(verify(receipt['invocation']))
+            assert original['argv'] == receipt['command'] and original['exitCode'] == 0
+            assert original['log']['path'] == receipt['log'] and original['log']['sha256'] == receipt['logSha256']
+            observed_inputs = [original['sourceBefore'], original['sourceAfter']]
+            observed_inputs = [read(verify(value)) if set(value) == {'path', 'sha256'} else value
+                               for value in observed_inputs]
+            assert all(value == manifest['inputs'] for value in observed_inputs)
+            cwd = (ROOT / original['cwd']).resolve()
+            assert cwd.is_relative_to(ROOT)
+            broad_dispatch = ref(manifest_path)
+        roster = {str((cwd / arg).resolve().relative_to(ROOT)) for arg in receipt['command']
+                  if arg.endswith(('.test.ts', '.test.tsx')) and (cwd / arg).resolve().is_relative_to(ROOT)}
         assert len(roster) == receipt['fileCount']
         logs.append({'source': None, 'roster': roster,
                      'log': verify({'path': receipt['log'], 'sha256': receipt['logSha256']}),
-                     'receipt': BASE / 'broad-sdk-runtime/results.json', 'sourceDispatchManifest': None})
+                     'receipt': args.broad_results, 'sourceDispatchManifest': broad_dispatch})
     for entry in logs:
         entry['lines'] = entry['log'].read_text().splitlines()
     structured_logs = []
@@ -335,7 +351,7 @@ def main():
                         'requestedProfile': data['requestedProfile'], 'limitations': data['limitations'],
                         'evidenceKind': data['evidenceKind'], 'route': 'OpenbuffClient.run SDK callback', 'acceptance': False})
     assert len(blender) == 35
-    core_vectors_path = BASE / 'core-oracle-controls/control-vectors.json'
+    core_vectors_path = args.core_vectors.resolve(strict=True)
     core_vectors = read(core_vectors_path)
     assert sha(ROOT / core_vectors['sourceFile']) == core_vectors['sourceSha256']
     assert len(core_vectors['vectors']) == core_vectors['testGroups']
@@ -434,14 +450,50 @@ def main():
         assert ci['manifest']['sha256'] == focused['manifest']['sha256']
         verify(ci['manifest'])
         dispatch = read(verify(ci['dispatchManifest']))
-        assert ci['ciMatrix'] == ['.agents', 'agents', 'cli', 'common', 'evals', 'packages/agent-runtime',
-                                  'packages/indexer', 'packages/internal', 'sdk', 'scripts']
-        assert len(ci['typecheckWorkspaces']) == 11 and len(ci['commands']) == 39
+        if ci.get('kind') == 'b19-current-local-ci-replay':
+            recorder = verify(dispatch['recorder'])
+            assert recorder.resolve() == Path(__file__).with_name('run-b19-current-ci.py').resolve()
+            spec = importlib.util.spec_from_file_location('current_ci', recorder)
+            current_ci = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(current_ci)
+            compiler = Path(dispatch['toolchain']['bun']['path']).resolve(strict=True)
+            assert sha(compiler) == manifest['bun']['sha256'] == dispatch['toolchain']['bun']['sha256']
+            node = Path(dispatch['toolchain']['node']['path']).resolve(strict=True)
+            assert sha(node) == dispatch['toolchain']['node']['sha256']
+            node_requirement = verify(dispatch['toolchain']['node']['requirement'])
+            assert node_requirement == ROOT / '.node-version'
+            assert 'v' + node_requirement.read_text().strip() == dispatch['toolchain']['node']['version']
+            assert read(verify(dispatch['toolchain']['node']['provenance']))['nodeSha256'] == sha(node)
+            ranges = dispatch['provenanceRange']
+            git_packages, git_typechecks, git_rosters, git_commands = current_ci.plan(
+                manifest, compiler, ranges['head'], ranges['base'])
+            assert ci['ciMatrix'] == git_packages and ci['typecheckWorkspaces'] == git_typechecks
+            assert dispatch['commands'] == git_commands
+            if ci.get('retryFrom'):
+                prior_ci = read(verify(ci['retryFrom']))
+                assert not prior_ci['passed'] and prior_ci['complete']
+                assert prior_ci['dispatchManifest'] == ci['dispatchManifest'] and prior_ci['manifest'] == ci['manifest']
+                verify(ci['retryRecorder'])
+                assert len(prior_ci['commands']) == len(ci['commands'])
+                for prior_row, row in zip(prior_ci['commands'], ci['commands']):
+                    if prior_row['passed']:
+                        assert row == prior_row
+                    else:
+                        assert prior_row['category'] == 'test' and prior_row['exitCode'] != 0
+                        assert read(verify(row['priorFailedInvocation'])) == prior_row
+                        verify(prior_row['log'])
+        else:
+            # Historical schema: the original tightly enumerated CI command set.
+            assert ci['ciMatrix'] == ['.agents', 'agents', 'cli', 'common', 'evals', 'packages/agent-runtime',
+                                      'packages/indexer', 'packages/internal', 'sdk', 'scripts']
+            assert len(ci['typecheckWorkspaces']) == 11 and len(ci['commands']) == 39
         assert len(dispatch['commands']) == len(ci['commands'])
         assert dispatch['sourceManifest']['sha256'] == focused['manifest']['sha256']
         rosters = read(verify(dispatch['rosters']))
         verify(rosters['workflow'])
         assert rosters['ciMatrix'] == ci['ciMatrix'] and rosters['typecheckWorkspaces'] == ci['typecheckWorkspaces']
+        if ci.get('kind') == 'b19-current-local-ci-replay':
+            assert rosters['rosters'] == git_rosters
         for roster in rosters['rosters'].values():
             assert roster['fileCount'] == len(roster['files']) > 0
             assert roster['files'] == sorted(roster['files'], key=lambda name: name.encode())
@@ -453,6 +505,10 @@ def main():
                    for row in ci['commands'])
         for row, planned in zip(ci['commands'], dispatch['commands']):
             assert all(row[name] == planned[name] for name in ['name', 'argv', 'cwd', 'category'])
+            if ci.get('kind') == 'b19-current-local-ci-replay':
+                assert row['environment'] == planned['environment']
+                if row['category'] == 'typecheck':
+                    assert row['observedTypechecks'] == ci['typecheckWorkspaces']
             verify(row['log'])
             assert read(verify(row['sourceBefore'])) == manifest['inputs']
             assert read(verify(row['sourceAfter'])) == manifest['inputs']
@@ -575,14 +631,21 @@ def main():
               'blenderSdkCallbackCasesJoined': len(blender),
               'sdkOracleCaptureCasesJoined': len(sdk_oracle_captures),
               'sourceNA': sum(e['selectorBoundaryVerdict'] == 'source-N/A' for e in verdicts)}
+    def retained(path):
+        return ref(path) if path.is_file() else {'path': str(path.relative_to(ROOT)), 'status': 'historical artifact missing; no credit'}
+
+    for mode in ['cjs', 'esm']:
+        package_result = read(args.package_directory / f'{mode}.result.json')
+        assert package_result['status'] == 'passed' and package_result['fetchCalls'] == 0
+        assert len(package_result['scenarios']) == 8 and all(c.get('passed') for c in package_result['scenarios'])
     report = {'card': 'B19', 'acceptance': False, 'counts': counts,
-              'canonical': ref(CANONICAL / 'closure-requirements.json'), 'joinReport': ref(args.join_directory / 'report.json'),
+              'canonical': ref(canonical_closure), 'joinReport': ref(args.join_directory / 'report.json'),
               'generator': ref(Path(__file__)), 'sourceResults': ref(args.source_results),
-              'compiledResults': ref(compiled_results_path), 'architecture': ref(BASE / 'architect-review.md'),
+              'compiledResults': ref(compiled_results_path), 'architecture': retained(BASE / 'architect-review.md'),
               'coreVectorManifest': ref(core_vectors_path),
               'packageSupplementalResults': [ref(args.package_directory / f'{mode}.result.json') for mode in ['cjs','esm']],
               'finalRootProof': final_root_proof,
-              'retainedRootGates': {name: ref(BASE / path) for name, path in {
+              'retainedRootGates': {name: retained(BASE / path) for name, path in {
                   'remainingPackageCI': 'remaining-gates-r1/results.json',
                   'guardChecks': 'guard-gates-r1/results.json', 'workspaceTypechecks': 'sequential-typechecks/results.json',
                   'cliBuild': 'cli-build/result.json', 'independentCoreReview': 'final-review.md',

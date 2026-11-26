@@ -305,20 +305,28 @@ async function exercise(sdk, state, resolved) {
     const unavailableConfiguration = configuration(unavailableRoot)
     fs.writeFileSync(path.join(unavailableRoot, 'input.txt'), 'before\n')
     const unavailableLog = path.join(unavailableRoot, 'must-not-exist.jsonl')
+    const requestedProfile = { ...fullAccess, preferredBackend: 'native-exec' }
     const unavailable = new sdk.OpenbuffClient({ cwd: unavailableRoot, projectFiles: {}, knowledgeFiles: {},
       harnessStateDir: path.join(unavailableRoot, '..', 'harness-' + state.phase), hostConfiguration: unavailableConfiguration, configReadFs: sdk.nodeConfigReadFs,
-      spawnSource: state.spawn, approvalMode: 'allow-all', executionProfile: { ...fullAccess, preferredBackend: 'native-exec' },
+      spawnSource: state.spawn, approvalMode: 'allow-all', executionProfile: requestedProfile,
       recordExecution: event => unavailableExecution.push(event), handleEvent: () => {} })
     const refused = await unavailable.run({ agent, prompt: `exec /usr/bin/node ${quote(peer)} env ${quote(unavailableLog)}` })
     retainOutput(state, 'OpenbuffClient.run', { output: refused.output, runOutcome: refused.runOutcome })
     assert.equal(refused.output.type, 'error')
     assert.equal(refused.runOutcome?.termination, 'failed')
-    assert.match(refused.output.message, /execution (profile|backend) unavailable/i)
+    // Required native mode can refuse during configuration, before the host
+    // action recorder exists. Keep the exact setup refusal and zero-effect
+    // assertions rather than inferring an unavailable route from no spawn.
+    assert.equal(refused.runOutcome?.cause?.code, 'run_setup_failed')
+    assert.equal(refused.output.message, refused.runOutcome.cause.message)
+    assert.equal(refused.output.message, 'Verified native installation/calibration is unavailable for this host clock')
+    assert.deepEqual(refused.actionOutcomes ?? [], [])
     assert.equal(state.children.length, beforeChildren)
     assert.equal(fs.existsSync(unavailableLog), false)
     assert.equal(fs.readFileSync(path.join(unavailableRoot, 'input.txt'), 'utf8'), 'before\n')
     assert.equal(unavailableExecution.some(event => event.phase === 'dispatched'), false)
-    state.scenarios.push({ name: state.phase, passed: true, output: refused.output, execution: unavailableExecution,
+    state.scenarios.push({ name: state.phase, passed: true, output: refused.output, runOutcome: refused.runOutcome,
+      requestedProfile, inputUnchanged: true, targetObserved: false, execution: unavailableExecution,
       processStarts: state.children.length - beforeChildren })
   }
 

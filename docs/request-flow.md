@@ -184,15 +184,18 @@ estimated mode uses its explicit degraded fixed reservation; uncapped mode adds
 no admission gate. Missing/failed usage remains held, complete known usage can
 reconcile, and interrupted active attempts become held on resume. The durable
 record is separate from `AgentState.creditsUsed` telemetry and from the prunable
-run-event journal. Already admitted requests can overshoot remotely, so this is
-not a billing guarantee.
+run-event journal. A settled attempt that exceeds its own reservation blocks
+new capped requests even if the total is still below the cap; already admitted
+requests can still settle or overshoot remotely. This is not a billing guarantee.
 
 A host that supplies a run journal can opt into bounded generator observations
 with `createRunJournal({ path, captureProgrammaticReplay: true })`. The journal
 retains the exact serialized `handleSteps` digest (a live callable is opaque),
 identified runtime component, configuration and input digests where those values
-are plain data, and the ordered yields and explicit inputs offered to `next()`.
-The producer observes a generator return separately from a completed run. The
+are plain data, and the ordered yields and explicit inputs offered to `next()`. Candidate
+model generation also records a bounded runtime request and response pair
+when these observations are available. The producer observes a generator
+return separately from a completed run. The
 capture is opt-in because reply values can include private tool results; it
 contains no duplicate copy of generator source. Unrecordable inputs and limits
 stop the tape rather than inventing a completion. A tape does not capture the
@@ -206,9 +209,27 @@ or effectful tool calls. The host opens the journal with
 `openReplayableReadJournal` using an absolute file path in a private directory
 it controls (mode `0700`). The SQLite journal can contain original file text;
 keep it private and use the same SDK artifact and workspace on restart. A
-fresh process must verify the retained prefix and claim it once before reusing
-confirmed reads and executing the remaining batches. Generic agent, terminal,
-and MCP re-entry are not enabled by this API.
+fresh process must verify the retained prefix and its original durable tail
+seal before it can claim the run once. It feeds each confirmed reply back into
+the built-in iterator in order, retaining repeated requests as distinct
+occurrences. Only the unrecorded suffix reaches dispatch. Unsealed older
+journals cannot resume; this is not a backup or protection against whole-store
+rollback. Generic agent, terminal, and MCP re-entry are not enabled by this API.
+
+The built Linux/Bun SDK also exposes `runReplayableProgram` for a small,
+versioned data-only recipe. A recipe can compose text-only model requests,
+clock and random observations, and SHA-256 over captured input or earlier
+results. The host selects one explicit OpenAI-compatible `/chat/completions`
+route. Before each attempt the host writes its exact request to the private
+SQLite journal; resume reconstructs the iterator with confirmed replies before
+one dead-owner claim can dispatch the unrecorded suffix. Missing or unmatched
+requests, changed build/input/model, and unknown recipes refuse. Unbuilt source
+cannot attest its loaded artifact. This is a separate SDK API, not a replay mode
+for `client.run()`: it does not run arbitrary JavaScript, model tool calls,
+shell/MCP work, retries, or fallback, and does not inherit `client.run()`'s
+spending configuration. Keep the journal in an owner-only directory; it can
+contain prompts and replies. No provider-side exactly-once or backup rollback
+protection is implied.
 
 ### 6. Response Flow Back to CLI
 

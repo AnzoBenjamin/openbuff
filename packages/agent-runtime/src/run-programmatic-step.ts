@@ -749,6 +749,9 @@ export async function runProgrammaticStep(
 
       toolResult = await executeSingleToolCall(toolCall, {
         ...params,
+        // A single generator drive can yield more than one tool. Journal
+        // each attempt at the current step, not the drive's entry step.
+        stepNumber,
         agentContext,
         agentStepId,
         agentTemplate: template,

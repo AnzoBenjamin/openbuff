@@ -2,8 +2,12 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { Database } from 'bun:sqlite'
+import type { ReadPlanOrigin } from '../../../packages/agent-runtime/src/util/read-plan-replay'
 
-const batches = [['first.txt'], ['second.txt']]
+// The first two actions have identical inputs but deliberately different
+// observations. Replay must retain each occurrence, not just match by input.
+const batches = [['first.txt'], ['first.txt'], ['second.txt']]
 const shaFile = (file: string) =>
   createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const writeJson = (file: string, value: unknown) =>
@@ -24,8 +28,6 @@ const { OpenbuffClient, openReplayableReadJournal } = (
     ? await import('../../../sdk/dist/index.mjs')
     : await import('../../../sdk/src/index')
 ) as typeof import('../../../sdk/src/index')
-const { verifyReadPlanPrefix } =
-  await import('../../../packages/agent-runtime/src/util/read-plan-replay')
 const options = (root: string) => ({
   cwd: path.join(root, 'project'),
   handleEvent() {},
@@ -35,9 +37,19 @@ const options = (root: string) => ({
 async function worker(root: string) {
   const journal = openReplayableReadJournal(path.join(root, 'journal.sqlite'))
   const durable = journal.appendDurable.bind(journal)
+  let confirmed = 0
   journal.appendDurable = async (runId, event) => {
     await durable(runId, event)
-    if (event.eventType === 'tool_result') {
+    if (event.eventType !== 'tool_result') return
+    confirmed++
+    if (confirmed === 1) {
+      fs.writeFileSync(
+        path.join(root, 'project', 'first.txt'),
+        'original-first-repeat\n',
+      )
+      return
+    }
+    if (confirmed === 2) {
       process.stdout.write(
         'READ_REPLAY_PAUSED ' + JSON.stringify({ runId }) + '\n',
       )
@@ -52,7 +64,7 @@ async function worker(root: string) {
       journal,
     })
     throw new Error(
-      'Live plan did not stop after the first result: ' +
+      'Live plan did not stop after the second durable result: ' +
         JSON.stringify(result.output),
     )
   } finally {
@@ -74,6 +86,7 @@ async function resumeWorker(root: string, runId: string) {
           output: result.output,
           runOutcome: result.runOutcome,
           runId: result.sessionState?.mainAgentState.runId,
+          agentId: result.sessionState?.mainAgentState.agentId,
         }) +
         '\n',
     )
@@ -152,7 +165,7 @@ async function parent(args: string[]) {
       })(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(
-          () => reject(new Error('First read timed out')),
+          () => reject(new Error('Durable prefix timed out')),
           20_000,
         )
       }),
@@ -192,22 +205,110 @@ async function parent(args: string[]) {
   try {
     const client = new OpenbuffClient(options(root))
     const changed = await client.runReplayableReads({
-      batches: [['second.txt'], ['first.txt']],
+      batches: [['second.txt'], ['first.txt'], ['first.txt']],
       journal,
       resumeRunId: runId,
     })
     assert.equal(changed.runOutcome?.cause?.code, 'replay_unavailable')
     const originalRows = journal.events(runId)
-    assert.deepEqual(
-      originalRows.map((row) => row.eventType),
-      ['read_plan_basis', 'tool_call', 'tool_result'],
+    const header = originalRows[0]!
+    const last = originalRows.at(-1)!
+    assert.equal(header.eventType, 'read_plan_basis')
+    assert.equal(last.eventType, 'tool_result')
+    const origin = header.payload as ReadPlanOrigin
+    const prefixCalls = originalRows.filter(
+      (event) => event.eventType === 'tool_call',
     )
-    const { basis } = originalRows[0]!.payload as {
-      basis: Parameters<typeof verifyReadPlanPrefix>[1]
+    assert.deepEqual(
+      prefixCalls.map((event) => event.stepNumber),
+      [1, 2],
+    )
+    assert.equal(new Set(prefixCalls.map((event) => event.correlation)).size, 2)
+    type Row = (typeof originalRows)[number]
+    async function refusedCopy(
+      name: string,
+      rows: Row[],
+      message: RegExp,
+      dropTail = false,
+    ) {
+      const file = path.join(root, `${name}.sqlite`)
+      const isolated = openReplayableReadJournal(file)
+      try {
+        for (const row of rows) await isolated.appendDurable(runId, row)
+        if (dropTail) {
+          const database = new Database(file)
+          try {
+            const firstResult = originalRows.find(
+              (row) => row.eventType === 'tool_result',
+            )!
+            const deleted = database.run(
+              'DELETE FROM run_events WHERE run_id = ? AND seq > ?',
+              [runId, firstResult.seq],
+            )
+            assert(deleted.changes > 0)
+          } finally {
+            database.close()
+          }
+        }
+        const before = isolated.events(runId)
+        const result = await client.runReplayableReads({
+          batches,
+          journal: isolated,
+          resumeRunId: runId,
+        })
+        assert.equal(result.runOutcome?.cause?.code, 'replay_unavailable')
+        assert.match(result.runOutcome.cause.message, message)
+        assert.deepEqual(isolated.events(runId), before)
+        assert.deepEqual(isolated.runIds(), [runId])
+        return { name, cause: result.runOutcome.cause }
+      } finally {
+        await isolated.close()
+      }
     }
-    assert.throws(
-      () => verifyReadPlanPrefix(originalRows.slice(0, 2), basis, batches),
+    // Each adverse stream is exercised through the packaged SDK lane, not a
+    // source verifier called directly. Copies cannot modify the owned source.
+    const missingResult = await refusedCopy(
+      'missing-confirmation',
+      originalRows.slice(0, -1),
       /no confirmed result/,
+    )
+    const changedArtifact = await refusedCopy(
+      'changed-artifact',
+      [
+        {
+          ...header,
+          payload: {
+            ...origin,
+            basis: { ...origin.basis, runtimeSha256: '0'.repeat(64) },
+          },
+        },
+        ...originalRows.slice(1),
+      ],
+      /runtime identity/,
+    )
+    const uncertainResult = await refusedCopy(
+      'uncertain-result',
+      [
+        ...originalRows.slice(0, -1),
+        {
+          ...last,
+          payload: { ...(last.payload as object), outcome: 'uncertain' },
+        },
+      ],
+      /unexpected, failed, or terminal action/,
+    )
+    const duplicateStep = await refusedCopy(
+      'duplicate-step',
+      originalRows.map((row) =>
+        row.stepNumber === 2 ? { ...row, stepNumber: 1 } : row,
+      ),
+      /unexpected, failed, or terminal action/,
+    )
+    const removedCompleteSuffix = await refusedCopy(
+      'removed-complete-suffix',
+      originalRows,
+      /tail seal/,
+      true,
     )
     const alternateRoot = path.join(root, 'alternate-project')
     fs.mkdirSync(alternateRoot)
@@ -234,6 +335,7 @@ async function parent(args: string[]) {
           output: unknown
           runOutcome?: { termination: string; cause?: { code: string } }
           runId?: string
+          agentId?: string
         }
       } finally {
         clearTimeout(timer)
@@ -256,16 +358,28 @@ async function parent(args: string[]) {
       (result) => result.runOutcome?.termination === 'completed',
     )!
     assert.equal(resumed.runId, runId)
-    assert.match(JSON.stringify(resumed.output), /original-first/)
-    assert.match(JSON.stringify(resumed.output), /second-live-after-restart/)
-    assert.doesNotMatch(
-      JSON.stringify(resumed.output),
-      /first-changed-after-capture/,
+    assert.equal(resumed.agentId, origin.agentId)
+    assert.deepEqual(journal.events(runId)[0], header)
+    const restored = resumed.output as {
+      type: string
+      value: { reads: unknown[] }
+    }
+    assert.equal(restored.type, 'structuredOutput')
+    assert.equal(restored.value.reads.length, 3)
+    assert.match(JSON.stringify(restored.value.reads[0]), /original-first\\n/)
+    assert.match(
+      JSON.stringify(restored.value.reads[1]),
+      /original-first-repeat\\n/,
     )
+    assert.match(
+      JSON.stringify(restored.value.reads[2]),
+      /second-live-after-restart/,
+    )
+    assert.doesNotMatch(JSON.stringify(restored), /first-changed-after-capture/)
     const reads = journal.eventsOfType(runId, 'tool_call')
     assert.deepEqual(
       reads.map((event) => event.stepNumber),
-      [1, 2],
+      [1, 2, 3],
     )
     assert.deepEqual(
       reads.map(
@@ -280,7 +394,8 @@ async function parent(args: string[]) {
       resumeRunId: runId,
     })
     assert.equal(duplicate.runOutcome?.cause?.code, 'replay_unavailable')
-    assert.equal(journal.eventsOfType(runId, 'tool_call').length, 2)
+    assert.deepEqual(reads.slice(0, 2), prefixCalls)
+    assert.equal(journal.eventsOfType(runId, 'tool_call').length, 3)
     writeJson(path.join(root, 'observation.json'), {
       runId,
       originalOwnerSignal: child.signalCode,
@@ -290,13 +405,20 @@ async function parent(args: string[]) {
       duplicate: duplicate.output,
       changed: changed.output,
       changedRoot: changedRoot.output,
+      adverseCopies: [
+        missingResult,
+        changedArtifact,
+        uncertainResult,
+        duplicateStep,
+        removedCompleteSuffix,
+      ],
       packaged,
       runtimeSha256: shaFile(executable),
       manifestSha256: shaFile(pathToManifest),
       accepted: false,
     })
     console.log(
-      'Verified live read replay: original run ID, one retained read, one live read, no duplicate',
+      'Verified live read replay: original run and actor, two retained occurrences, one live read, no duplicate',
     )
   } finally {
     await journal.close()

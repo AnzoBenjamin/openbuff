@@ -565,8 +565,23 @@ export function createRunJournal(params: {
   retention?: RunJournalRetention
   batching?: RunJournalBatching
   captureProgrammaticReplay?: boolean
+  /** SDK-internal persistent read-plan durability; not generic replay. */
+  readPlanDurability?: boolean
 }): CreatedRunJournal {
   const { path } = params
+  const readPlanDurability = params.readPlanDurability === true
+  if (
+    readPlanDurability &&
+    (path === ':memory:' ||
+      params.createDatabase ||
+      params.retention ||
+      params.batching ||
+      params.captureProgrammaticReplay)
+  ) {
+    throw new Error(
+      'Read-plan durability needs an unpruned, persistent SDK journal.',
+    )
+  }
   const clock = params.clock ?? realClock
   const create = params.createDatabase ?? defaultCreateDatabase
   const db = create(path) as SqliteDb
@@ -615,7 +630,11 @@ export function createRunJournal(params: {
   // for every reopened connection; only the PERSISTENT fixed I/O below is
   // gated per send.
   if (path !== ':memory:') {
-    db.run('PRAGMA synchronous=NORMAL;')
+    db.run(
+      readPlanDurability
+        ? 'PRAGMA synchronous=FULL;'
+        : 'PRAGMA synchronous=NORMAL;',
+    )
   }
 
   // Per-send open gate: SCHEMA_SQL (6 CREATE ... IF NOT EXISTS statements)
@@ -648,6 +667,36 @@ export function createRunJournal(params: {
       db.run(`PRAGMA user_version = ${SCHEMA_USER_VERSION};`)
     }
   }
+
+  if (readPlanDurability) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS read_plan_tail_seals (
+        run_id TEXT PRIMARY KEY,
+        event_count INTEGER NOT NULL,
+        tail_sha256 TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS read_plan_replay_claims (
+        run_id TEXT PRIMARY KEY,
+        prefix_sha256 TEXT NOT NULL
+      ) STRICT;
+    `)
+  }
+  const readPlanTail = readPlanDurability
+    ? db.query(
+        'SELECT event_count, tail_sha256 FROM read_plan_tail_seals WHERE run_id = ?',
+      )
+    : undefined
+  type ReadPlanTailSeal = { event_count: number; tail_sha256: string }
+  const extendReadPlanSeal = (tail: string | null, row: RunEventRow) =>
+    captureValueSha256([
+      tail,
+      row.seq,
+      row.step_number,
+      row.event_type,
+      row.correlation,
+      row.payload,
+      row.created_at,
+    ])
 
   // Hot per-append/retention statements (P2 perf): prepared ONCE per
   // connection and reused by insertEvent/enforceRetention/getRunPayloadBytes
@@ -1307,15 +1356,47 @@ export function createRunJournal(params: {
           // (Buffer.byteLength of this string equals LENGTH(CAST(payload AS
           // BLOB)) in SQLite).
           const serializedPayload = JSON.stringify(event.payload)
+          const correlation = event.correlation ?? null
+          const createdAt = clock.now()
           runInsertEvent(
             runId,
             nextSeq,
             event.stepNumber,
             event.eventType,
-            event.correlation ?? null,
+            correlation,
             serializedPayload,
-            clock.now(),
+            createdAt,
           )
+          if (readPlanTail) {
+            const tail = readPlanTail.get(runId) as ReadPlanTailSeal | undefined
+            if (tail || event.eventType === 'read_plan_basis') {
+              if (
+                (tail?.event_count ?? 0) !== nextSeq ||
+                !Number.isSafeInteger(nextSeq) ||
+                nextSeq >= MAX_READ_PLAN_REPLAY_ROWS ||
+                (event.eventType === 'read_plan_basis' && nextSeq !== 0)
+              ) {
+                throw new Error(
+                  'The durable read-plan tail is missing, changed, or full.',
+                )
+              }
+              const hash = extendReadPlanSeal(tail?.tail_sha256 ?? null, {
+                seq: nextSeq,
+                step_number: event.stepNumber,
+                event_type: event.eventType,
+                correlation,
+                payload: serializedPayload,
+                created_at: createdAt,
+              })
+              db.run(
+                `INSERT INTO read_plan_tail_seals (run_id, event_count, tail_sha256)
+                VALUES (?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET event_count = excluded.event_count, tail_sha256 = excluded.tail_sha256;`,
+                runId,
+                nextSeq + 1,
+                hash,
+              )
+            }
+          }
           // Maintain the PERSISTED per-run byte total inside the same
           // transaction as the append so the total is always exact and
           // survives reopen: the cap stays enforceable for resumed and
@@ -1927,15 +2008,9 @@ export function createRunJournal(params: {
       }
     },
   }
-  // The replay authority is attached only to an actual persistent, unbounded
-  // built-in journal. A reader/writer-shaped object is not an admission.
-  if (
-    path !== ':memory:' &&
-    !params.createDatabase &&
-    !params.retention &&
-    !params.batching &&
-    !params.captureProgrammaticReplay
-  ) {
+  // Only the specific persistent journal lane can admit this adapter. A
+  // generic reader/writer-shaped object cannot mint an admission.
+  if (readPlanTail) {
     readPlanJournalOperations.set(journal, {
       async begin(origin) {
         if (
@@ -1955,9 +2030,6 @@ export function createRunJournal(params: {
       claim(basis, batches) {
         if (closed) throw new Error('Read replay journal is closed.')
         const runId = basis.runId
-        db.run(
-          'CREATE TABLE IF NOT EXISTS read_plan_replay_claims (run_id TEXT PRIMARY KEY, prefix_sha256 TEXT NOT NULL) STRICT;',
-        )
         db.run('BEGIN IMMEDIATE;')
         try {
           if (
@@ -1985,14 +2057,24 @@ export function createRunJournal(params: {
               'The retained read-plan prefix exceeds replay limits.',
             )
           }
-          const rows = (
-            db
-              .query(
-                'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? ORDER BY seq ASC',
-              )
-              .all(runId) as RunEventRow[]
-          ).map(parseRow)
+          const retained = db
+            .query(
+              'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+            )
+            .all(runId) as RunEventRow[]
+          const rows = retained.map(parseRow)
           const verified = verifyReadPlanPrefix(rows, basis, batches)
+          const seal = readPlanTail.get(runId) as ReadPlanTailSeal | undefined
+          const hash = retained.reduce<string | null>(extendReadPlanSeal, null)
+          if (
+            !seal ||
+            seal.event_count !== rows.length ||
+            seal.tail_sha256 !== hash
+          ) {
+            throw new Error(
+              'The durable read-plan tail seal is missing or changed.',
+            )
+          }
           let dead = false
           try {
             process.kill(verified.origin.ownerPid, 0)
@@ -2006,7 +2088,7 @@ export function createRunJournal(params: {
           db.run(
             'INSERT INTO read_plan_replay_claims (run_id, prefix_sha256) VALUES (?, ?);',
             runId,
-            captureValueSha256(rows),
+            seal.tail_sha256,
           )
           db.run('COMMIT;')
           return verified

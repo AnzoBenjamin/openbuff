@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import React from 'react'
 
+import { SLASH_COMMANDS } from '../../data/slash-commands'
+import { useSuggestionEngine } from '../../hooks/use-suggestion-engine'
 import { initializeThemeStore } from '../../hooks/use-theme'
 import { useMessageBlockStore } from '../../state/message-block-store'
 import { useOutputReaderStore } from '../../state/output-reader-store'
@@ -8,6 +10,7 @@ import { createCommandDiagnosticDocument } from '../../utils/captured-diagnostic
 import { collectOutputEntries } from '../../utils/output-catalog'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 import { SingleBlock } from '../blocks/single-block'
+import { SuggestionMenu } from '../suggestion-menu'
 import type { ContentBlock, DoctorContentBlock } from '../../types/chat'
 
 initializeThemeStore()
@@ -57,6 +60,50 @@ test('doctor reader presents multiline status and preserves raw field access', (
   expect(catalog[0].read().kind).toBe('text')
   expect(catalog[0].read().text).toContain('Model: local/model')
 })
+
+renderTest(
+  'a fuzzy inline plan command exposes its usage and selects the canonical route',
+  async () => {
+    const { testRender } = await import('@opentui/react/test-utils')
+    const selected: string[] = []
+    const fileTree: Parameters<typeof useSuggestionEngine>[0]['fileTree'] = []
+    const agents: Parameters<typeof useSuggestionEngine>[0]['localAgents'] = []
+    function InlineCommands() {
+      const { slashSuggestionItems, slashMatches } = useSuggestionEngine({
+        inputValue: '/plu',
+        cursorPosition: 4,
+        slashCommands: SLASH_COMMANDS,
+        localAgents: agents,
+        fileTree,
+      })
+      return (
+        <SuggestionMenu
+          items={slashSuggestionItems}
+          selectedIndex={0}
+          maxVisible={8}
+          onItemClick={(index) => selected.push(slashMatches[index]!.id)}
+        />
+      )
+    }
+    const setup = await testRender(<InlineCommands />, {
+      width: 120,
+      height: 20,
+    })
+    try {
+      await React.act(async () => setup.renderOnce())
+      const rows = setup.captureCharFrame().split('\n')
+      expect(rows.join('\n')).toContain('/plan-use <slug>')
+      const y = rows.findIndex((row) => row.includes('/plan-use'))
+      expect(y).toBeGreaterThanOrEqual(0)
+      await React.act(async () =>
+        setup.mockMouse.click(rows[y]!.indexOf('/plan-use') + 1, y),
+      )
+      expect(selected).toEqual(['plan-use'])
+    } finally {
+      await React.act(async () => setup.renderer.destroy())
+    }
+  },
+)
 
 renderTest(
   'command reports reveal retained rows inline with mouse and keyboard',

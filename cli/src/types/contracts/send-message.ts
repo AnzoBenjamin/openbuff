@@ -15,6 +15,12 @@ export type PromptAdmissionResult =
   | { status: 'rejected'; reason: string; retryable: boolean }
   | { status: 'not-started'; reason: string }
 
+export type QueuedPromptAdmission = {
+  isPending: () => boolean
+  /** Authorize and dequeue only the admitted revision at transcript commit. */
+  tryCommit: () => boolean
+}
+
 export type SendMessageFn = (params: {
   content: string
   agentMode: AgentMode
@@ -22,4 +28,4 @@ export type SendMessageFn = (params: {
   attachments?: PendingAttachment[]
   /** Compatibility projection fired exactly once for an accepted admission. */
   onAccepted?: () => void
-}) => Promise<PromptAdmissionResult>
+}, queuedAdmission?: QueuedPromptAdmission) => Promise<PromptAdmissionResult>

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import {
@@ -23,6 +24,10 @@ import {
 import { changeFiles } from '../tools/change-file'
 import { hashFileContent } from '../tools/filesystem-authority'
 import { createNodeFileSystem } from '../tools/node-filesystem'
+import {
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+} from '../tools/transaction-intent-log'
 
 import type { WorkspaceMutationReceipt } from '../services/workspace-mutation-broker'
 
@@ -164,10 +169,37 @@ describe('WorkspaceMutationBroker', () => {
       stateDir,
     })
 
-    // Drive commits past the retention cap (1000): each conditionalCommit
-    // finalizes exactly one receipt, and each finalize prunes the oldest
-    // beyond the cap. 1002 receipts => the directory settles at 1000, and
-    // the SURVIVORS are the newest (sorted by zero-padded revision).
+    // Keep a transaction's still-unresolved receipt across normal pruning.
+    const owned = path.join(workspace, 'owned.txt')
+    await writeFile(owned, 'before')
+    const evidence = {
+      correlation: {
+        transactionId: 'tx-in-progress',
+        actionId: randomUUID(),
+        from: 0,
+        through: 0,
+      },
+      stages: [
+        {
+          path: 'owned.txt',
+          parent: await parentIdentity(workspace),
+          beforeHash: hashFileContent('before'),
+          afterHash: hashFileContent('after'),
+        },
+      ],
+    }
+    const proof = { evidence, index: 0, fullPath: owned }
+    const first = await broker.conditionalCommit(
+      owned,
+      'after',
+      hashFileContent('before'),
+      undefined,
+      evidence,
+    )
+    expect(first.applied).toBe(true)
+
+    // Drive commits past the retention cap (1000). The unresolved proof and
+    // the newest unpinned receipts are retained, not just the newest names.
     let content = Buffer.from('0\n')
     for (let i = 1; i <= 1002; i++) {
       const next = Buffer.from(`${i}\n`)
@@ -191,16 +223,20 @@ describe('WorkspaceMutationBroker', () => {
     )
     const names = (await fs.promises.readdir(receiptsDir)).sort()
     expect(names.length).toBe(1000)
-    // The newest listing window is intact: the last listing-limit receipts
-    // are all present, and the two OLDEST (revisions 1 and 2) were pruned.
-    expect(names[0]).not.toContain('-0000000000000001-')
-    expect(names[1]).not.toContain('-0000000000000002-')
+    expect(names[0]).toBe(`0000000000000001-${first.receipt.receiptId}.json`)
+    expect(names[1]).toMatch(/^0000000000000005-/)
+    await broker.verifyTransactionStage(proof)
     const listed = await broker.listReceipts()
     expect(listed.length).toBe(500)
     expect(listed[listed.length - 1]).toMatchObject({
-      brokerRevision: 1002,
+      brokerRevision: 1003,
       state: 'committed',
     })
+    await broker.withVerifiedTransactionCommit([proof], async () => ({
+      ok: true,
+    }))
+    await broker.conditionalCommit(file, 'done', hashFileContent(content))
+    expect(await readdir(receiptsDir)).not.toContain(names[0]!)
   }, 30_000)
 
   test('serializes compare-and-swap across Openbuff processes', async () => {
@@ -354,6 +390,167 @@ describe('WorkspaceMutationBroker', () => {
       }),
     )
   })
+
+  test('B07 retains a killed in-broker update and reconciles only after explicit operator repair', async () => {
+    if (process.platform !== 'linux') return
+    const { workspace, stateDir } = await makeWorkspace(
+      'broker-killed-at-workspace-sync',
+    )
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const file = path.join(workspace, 'first.txt')
+    const peer = path.join(workspace, 'second.txt')
+    await writeFile(file, 'before\n')
+    await writeFile(peer, 'untouched\n')
+    const modules = (file: string) =>
+      JSON.stringify(path.resolve(import.meta.dir, file))
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '--no-env-file',
+        '--no-install',
+        '-e',
+        `
+        import { WorkspaceMutationBroker } from ${modules('../services/workspace-mutation-broker.ts')}
+        import { createNodeFileSystem } from ${modules('../tools/node-filesystem.ts')}
+        import { createTransactionIntentLogForWorkspace } from ${modules('../tools/transaction-intent-log.ts')}
+        import { changeFiles } from ${modules('../tools/change-file.ts')}
+        const options = ${JSON.stringify({ cwd: workspace, stateDir })}
+        const broker = await WorkspaceMutationBroker.create(options)
+        const sync = broker.fsyncDirectory.bind(broker)
+        broker.fsyncDirectory = async (directory, held) => {
+          if (directory === broker.workspaceRoot) {
+            process.stdout.write('WORKSPACE_SYNC_BLOCKED\\n')
+            await new Promise(() => setInterval(() => {}, 1000))
+          }
+          return sync(directory, held)
+        }
+        await changeFiles({
+          cwd: options.cwd,
+          fs: createNodeFileSystem({ mutationBroker: broker }),
+          intentLog: createTransactionIntentLogForWorkspace(options),
+          parameters: [
+            { type: 'file', path: 'first.txt', content: 'after\\n', expectedRawHash: ${JSON.stringify(hashFileContent('before\n'))} },
+            { type: 'file', path: 'second.txt', content: 'unreached\\n', expectedRawHash: ${JSON.stringify(hashFileContent('untouched\n'))} },
+          ],
+        })
+      `,
+      ],
+      { stdout: 'pipe', stderr: 'pipe', env: { PATH: '/usr/bin:/bin' } },
+    )
+    const errors = new Response(child.stderr).text()
+    const output = child.stdout.getReader()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        (async () => {
+          let text = ''
+          while (!text.includes('WORKSPACE_SYNC_BLOCKED\n')) {
+            const { value, done } = await output.read()
+            if (done)
+              throw new Error(
+                `Expected the child to reach workspace fsync: ${await errors}`,
+              )
+            text += Buffer.from(value).toString()
+          }
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(new Error('Broker did not reach workspace fsync in time')),
+            5000,
+          )
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL')
+      await child.exited
+      output.releaseLock()
+    }
+    expect(child.signalCode).toBe('SIGKILL')
+    const lock = `${broker.brokerDir}.lock`
+    const ownerContents = await readFile(path.join(lock, 'owner.json'), 'utf8')
+    expect(JSON.parse(ownerContents).pid).toBe(child.pid)
+    const pending = await pendingReceipt(broker)
+    expect(pending.receipt).toMatchObject({
+      state: 'prepared',
+      path: 'first.txt',
+      correlation: { from: 0, through: 0 },
+    })
+    expect(await readFile(file, 'utf8')).toBe('after\n')
+    expect(await readFile(peer, 'utf8')).toBe('untouched\n')
+    await expect(
+      WorkspaceMutationBroker.create({
+        cwd: workspace,
+        stateDir,
+        lockTimeoutMs: 50,
+      }),
+    ).rejects.toThrow('automatic takeover is disabled')
+    expect(await readFile(path.join(lock, 'owner.json'), 'utf8')).toBe(
+      ownerContents,
+    )
+    expect(await brokerReceipt(pending.file)).toEqual(pending.receipt)
+
+    // Deliberate operator action in this quiescent, fixture-owned state root:
+    // the exact holder was joined above and nobody else can access the workspace.
+    // Retain the old lock for inspection; this is not automatic lock takeover.
+    await rename(lock, `${lock}.operator-retained`)
+    const recovered = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    expect(await recovered.listReceipts()).toMatchObject([
+      { state: 'recovered_committed', path: 'first.txt' },
+    ])
+    const fs = createNodeFileSystem({ mutationBroker: recovered })
+    const intentLog = createTransactionIntentLogForWorkspace({
+      cwd: workspace,
+      stateDir,
+    })
+    const recoveredGroup = await recoverAndRevertInterruptedTransactions({
+      cwd: workspace,
+      fs,
+      intentLog,
+    })
+    expect(recoveredGroup).toMatchObject({
+      ok: true,
+      revertedPaths: 1,
+      revertedTransactions: 1,
+    })
+    expect(await readFile(file, 'utf8')).toBe('before\n')
+    expect(await readFile(peer, 'utf8')).toBe('untouched\n')
+    const second = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const retry = await recoverAndRevertInterruptedTransactions({
+      cwd: workspace,
+      fs: createNodeFileSystem({ mutationBroker: second }),
+      intentLog,
+    })
+    expect(retry).toMatchObject({
+      ok: true,
+      revertedPaths: 0,
+      revertedTransactions: 0,
+    })
+    if (process.env.OPENBUFF_CAPTURE_B07_BOUNDARIES === '1') {
+      console.log(
+        'B07_LOCKED_CRASH ' +
+          JSON.stringify({
+            signal: child.signalCode,
+            beforeOperatorAction: 'recovery_required',
+            pending: pending.receipt,
+            afterOperatorAction: recoveredGroup,
+            retry,
+            receipts: await second.listReceipts(),
+          }),
+      )
+    }
+  }, 15_000)
 
   test('supports exclusive create, conditional delete, and no-clobber move', async () => {
     const { workspace, stateDir } = await makeWorkspace('broker-operations')
@@ -582,6 +779,43 @@ describe('WorkspaceMutationBroker', () => {
     expect(await readFile(ownerPath, 'utf8')).toBe(replacement)
     expect(await readFile(target, 'utf8')).toBe('before')
     expect(await brokers[0]!.listReceipts()).toEqual([])
+  })
+
+  test('retains pending evidence until the matching final receipt is synchronized', async () => {
+    if (process.platform !== 'linux') return
+    const { workspace, stateDir } = await makeWorkspace('broker-final-sync')
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const file = path.join(workspace, 'file.txt')
+    const receipts = path.join(broker.brokerDir, 'receipts')
+    await writeFile(file, 'before')
+    refuseNextWorkspaceSync(broker, receipts)
+    await expect(
+      broker.conditionalCommit(file, 'after', hashFileContent('before')),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    const pending = await pendingReceipt(broker)
+    const finalFile = path.join(receipts, path.basename(pending.file))
+    const final = await readFile(finalFile, 'utf8')
+    await writeFile(
+      finalFile,
+      JSON.stringify({ ...JSON.parse(final), path: 'other.txt' }),
+    )
+    await expect(
+      WorkspaceMutationBroker.create({ cwd: workspace, stateDir }),
+    ).rejects.toMatchObject({ code: 'RECOVERY_INVALID_RECEIPT' })
+    expect(await readFile(file, 'utf8')).toBe('after')
+    expect(await readFile(pending.file, 'utf8')).toContain('recovery_required')
+    await writeFile(finalFile, final)
+    const recovered = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    expect(await recovered.listReceipts()).toMatchObject([
+      { state: 'committed', path: 'file.txt' },
+    ])
+    expect(await readdir(path.dirname(pending.file))).toEqual([])
   })
 
   test('reconciles a committed create and removes its attested staging link', async () => {

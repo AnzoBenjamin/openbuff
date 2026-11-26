@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -41,6 +42,8 @@ import {
   createSdkCallbackMcpFixture,
   sdkCallbackOptions,
 } from './sdk-callback-fixture'
+import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
+import { changeFiles } from '../tools/change-file'
 import { createNodeFileSystem } from '../tools/node-filesystem'
 import { createTransactionIntentLogForWorkspace } from '../tools/transaction-intent-log'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
@@ -580,23 +583,29 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
   })
 
   it('publishes only the confirmed surviving forward change when another action throws', async () => {
-    const fs = createMockFs({
-      directories: { [callbackFixture.cwd]: [] },
-      files: {
-        [callbackFixture.file('a.txt')]: 'a-before\n',
-        [callbackFixture.file('b.txt')]: 'b-before\n',
-      },
+    const cwd = realpathSync(callbackFixture.cwd)
+    const a = path.join(cwd, 'a.txt')
+    const b = path.join(cwd, 'b.txt')
+    writeFileSync(a, 'a-before\n')
+    writeFileSync(b, 'b-before\n')
+    const broker = await WorkspaceMutationBroker.create({
+      cwd,
+      stateDir: callbackFixture.harnessStateDir,
     })
-    const commit = fs.conditionalCommit!.bind(fs)
+    const fs = createNodeFileSystem({ mutationBroker: broker })
+    const commit = fs.conditionalCommit!
     fs.conditionalCommit = async (filePath, data, options) => {
-      if (String(filePath) === callbackFixture.file('b.txt')) {
-        await fs.writeFile(callbackFixture.file('b.txt'), 'partial\n')
+      if (String(filePath) === b) {
+        writeFileSync(b, 'partial\n')
         throw new Error('partial write failure')
       }
-      if (String(data) === 'a-before\n')
-        return { applied: false, actualHash: getExactContentHash('a-after\n') }
       return commit(filePath, data, options)
     }
+    const rollback = spyOn(broker, 'restoreTransactionStage')
+      .mockImplementationOnce(async ({ fullPath }) => {
+        expect(fullPath).toBe(a)
+        throw new Error('fixture: inverse write unavailable')
+      })
     const events: FilesystemMutationEvent[] = []
     const canonicalReceipts: Array<CommitReceiptV1 | undefined> = []
     const outputs = await dispatchToolCalls({
@@ -611,13 +620,14 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
       ],
       canonicalReceipts,
       clientOptions: {
-        cwd: callbackFixture.cwd,
+        cwd,
         fsSource: fs,
         onFilesystemMutation: (event) => {
           events.push(event)
         },
       },
     })
+    expect(rollback).toHaveBeenCalledTimes(1)
     const mutation = fileMutationResultV1Schema.parse(jsonValue(outputs[0]))
     expect(mutation.outcome).toBe('rollback_incomplete')
     expect(mutation.actions.map((action) => action.outcome)).toEqual([
@@ -636,12 +646,15 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
     expect(canonicalReceipts[0]?.actions[1]?.forward?.outcome).toBe(
       'unconfirmed',
     )
-    expect(await fs.readFile(callbackFixture.file('a.txt'), 'utf8')).toBe(
-      'a-after\n',
-    )
-    expect(await fs.readFile(callbackFixture.file('b.txt'), 'utf8')).toBe(
-      'partial\n',
-    )
+    expect(await fs.readFile(a, 'utf8')).toBe('a-after\n')
+    expect(await fs.readFile(b, 'utf8')).toBe('partial\n')
+    expect(await broker.listReceipts()).toMatchObject([
+      {
+        path: 'a.txt',
+        state: 'committed',
+        correlation: { transactionId: mutation.authorityReceipt?.transactionId },
+      },
+    ])
   })
 })
 
@@ -811,51 +824,85 @@ describe('workspace transaction recovery across SDK runs', () => {
     writeFileSync(unrelated, 'keep')
     await dispatchToolCalls({ calls: [], clientOptions: options })
 
-    const { dev, ino } = statSync(cwd, { bigint: true })
-    const parent = { canonicalPath: cwd, dev: String(dev), ino: String(ino) }
     const log = createTransactionIntentLogForWorkspace({ cwd, stateDir })
-    expect(
-      (
-        await log.beginTransaction({
-          transactionId: 'tx-new-after-startup',
-          operationId: 'op-fixture',
-          callId: 'call-fixture',
-          entries: [
-            {
-              path: 'target.txt',
-              parent,
-              beforeHash: getExactContentHash('before\r\n'),
-              beforeBytes: 'before\r\n',
-              afterHash: getExactContentHash('owned after\n'),
-            },
-            {
-              path: 'future.txt',
-              parent,
-              beforeHash: null,
-              afterHash: getExactContentHash('not yet created'),
-            },
-          ],
-        })
-      ).ok,
-    ).toBe(true)
-    writeFileSync(target, 'foreign edit\n')
+    const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+    const fs = createNodeFileSystem({ mutationBroker: broker })
+    fs.createFileExclusive = async () => {
+      throw new Error('fixture: second action did not land')
+    }
+    const rollback = spyOn(broker, 'restoreTransactionStage')
+      .mockRejectedValueOnce(new Error('fixture: inverse write unavailable'))
+    const interrupted = await changeFiles({
+      cwd,
+      fs,
+      intentLog: log,
+      parameters: [
+        {
+          type: 'file',
+          path: 'target.txt',
+          content: 'owned after\n',
+          expectedHash: getContentHash('before\r\n'),
+        },
+        {
+          type: 'file',
+          path: 'future.txt',
+          content: 'not yet created',
+          expectedHash: null,
+        },
+      ],
+    })
+    expect(rollback).toHaveBeenCalledTimes(1)
+    rollback.mockRestore()
+    const mutation = fileMutationResultV1Schema.parse(jsonValue(interrupted))
+    expect(mutation.outcome).toBe('rollback_incomplete')
+    const transactionId = mutation.authorityReceipt?.transactionId
+    expect(transactionId).toBeDefined()
+    const receipts = await broker.listReceipts()
+    expect(receipts).toMatchObject([
+      { path: 'target.txt', state: 'committed', correlation: { transactionId } },
+    ])
+    expect(readFileSync(target, 'utf8')).toBe('owned after\n')
+    const foreign = path.join(cwd, 'replacement.txt')
+    writeFileSync(foreign, 'foreign edit\n')
+    renameSync(foreign, target)
+
     const refusal = await dispatchToolCalls({
       calls: [writeCall, { toolName: 'list_directory', input: { path: '.' } }],
       clientOptions: options,
     })
-    expect(jsonValue(refusal[0])).toMatchObject({
+    const blocked = {
       errorCode: 'recovery_required',
-      recovery: { transactionIds: ['tx-new-after-startup'] },
-    })
+      recovery: { transactionIds: [transactionId] },
+    }
+    expect(jsonValue(refusal[0])).toMatchObject(blocked)
     expect(JSON.stringify(refusal[1])).toContain('target.txt')
     expect(JSON.stringify(refusal[1])).not.toContain('recovery_required')
     expect(readFileSync(target, 'utf8')).toBe('foreign edit\n')
     expect(readFileSync(unrelated, 'utf8')).toBe('keep')
 
+    // Rewriting the expected postimage does not restore the replaced inode.
     writeFileSync(target, 'owned after\n')
+    const sameBytes = await dispatchToolCalls({
+      calls: [writeCall],
+      clientOptions: options,
+    })
+    expect(jsonValue(sameBytes[0])).toMatchObject(blocked)
+    expect(readFileSync(target, 'utf8')).toBe('owned after\n')
+    expect(readFileSync(unrelated, 'utf8')).toBe('keep')
+    expect(await broker.listReceipts()).toEqual(receipts)
+
+    // Independently repair the exact preimage (including CRLF), then give
+    // startup a fresh run with no tool calls to settle the intent itself.
+    writeFileSync(target, 'before\r\n')
+    const { dev, ino, ctimeNs } = statSync(target, { bigint: true })
     await dispatchToolCalls({ calls: [], clientOptions: options })
-    // No tool ran in that run: restored bytes exercise actual startup retry.
     expect(readFileSync(target, 'utf8')).toBe('before\r\n')
+    expect(statSync(target, { bigint: true })).toMatchObject({
+      dev,
+      ino,
+      ctimeNs,
+    })
+    expect(await broker.listReceipts()).toEqual(receipts)
     expect(await log.recoverInterruptedTransactions()).toMatchObject({
       ok: true,
       transactions: [],

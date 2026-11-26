@@ -22,7 +22,7 @@ describe.skipIf(process.platform !== 'linux')('real cooperative SDK process scop
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b20-sync-scope-'))
       const abort = new AbortController()
       const recorder = createRealExecutionProcessRecorder()
-      const host = createTerminalExecutionFixture({ projectRoot: directory, signal: abort.signal, spawn: recorder.spawn })
+      const host = createTerminalExecutionFixture({ projectRoot: directory, signal: abort.signal, spawn: recorder.spawn, bindProcessClock: true })
       const before = performance.now()
       let cleanup: CleanupResult | undefined
       try {
@@ -48,6 +48,10 @@ describe.skipIf(process.platform !== 'linux')('real cooperative SDK process scop
           expect(output.stderr).toBe('last stderr é✅')
         } else if (mode === 'deadline') {
           expect(output.timedOut).toBe(true)
+          expect(cleanup?.originalDeadline?.kind).toBe('finite')
+          if (cleanup?.originalDeadline?.kind !== 'finite') throw new Error('Missing the original finite deadline')
+          expect(cleanup.finalObservation.clockDomainId).toBe(cleanup.originalDeadline.domainId)
+          expect(cleanup.selectedLimitSatisfied).toBe(true)
           expect(performance.now() - before).toBeLessThan(1_650)
         } else if (mode === 'quota') {
           expect(cleanup?.output.retainedBytes).toBeLessThanOrEqual(10 * 1024 * 1024)

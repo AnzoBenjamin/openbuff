@@ -200,15 +200,21 @@ describe('B19 actual SDK host contract controls', () => {
 
   test('strategy.sdk: a second run with required unavailable execution starts no command target', async () => {
     const f = fixture(), observed = path.join(f.root, 'must-not-exist.json')
+    const requestedProfile = { ...fullAccess, preferredBackend: 'native-exec' as const }
     const result = await f.run(strategy, `exec ${quote(nodeExecutable)} ${quote(f.peer)} ${quote(observed)} unavailable`, {
-      executionProfile: { ...fullAccess, preferredBackend: 'native-exec' },
+      executionProfile: requestedProfile,
     })
-    console.log('B19_SDK_REQUIRED_UNAVAILABLE', JSON.stringify({ output: result.output, execution: f.events, launches: f.launches }))
+    const targetObserved = fs.existsSync(observed)
+    const inputUnchanged = fs.readFileSync(path.join(f.root, 'input.txt'), 'utf8') === 'before\n'
+    console.log('B19_SDK_REQUIRED_UNAVAILABLE', JSON.stringify({ output: result.output,
+      runOutcome: result.runOutcome, requestedProfile, execution: f.events, launches: f.launches,
+      targetObserved, inputUnchanged, actions: result.actionOutcomes ?? [] }))
     expect(f.launches).toEqual([])
     expect(f.events.some(event => event.phase === 'dispatched')).toBe(false)
-    expect(fs.existsSync(observed)).toBe(false)
-    expect(fs.readFileSync(path.join(f.root, 'input.txt'), 'utf8')).toBe('before\n')
-    expect(result.runOutcome?.termination).toBe('failed')
+    expect(targetObserved).toBe(false)
+    expect(inputUnchanged).toBe(true)
+    expect(result.actionOutcomes ?? []).toEqual([])
+    expect(result.runOutcome).toMatchObject({ termination: 'failed', cause: { code: 'run_setup_failed' } })
     if (result.output.type !== 'error') throw new Error('Required unavailable profile must fail the SDK run')
     expect(result.output.message).toMatch(/native installation\/calibration is unavailable/i)
   }, 20_000)

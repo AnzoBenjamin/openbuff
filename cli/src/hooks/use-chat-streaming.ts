@@ -91,11 +91,13 @@ export interface UseChatStreamingReturn {
   cancelQueuedMessages: (ids?: readonly string[]) => QueuedMessage[]
   queuePaused: boolean
   streamMessageIdRef: MutableRefObject<string | null>
+  getPromptTurnState: ReturnType<typeof useMessageQueue>['getPromptTurnState']
   addToQueue: (
     message: string,
     attachments: PendingAttachment[],
     agentMode: AgentMode,
   ) => void
+  parkRejectedPrompt: ReturnType<typeof useMessageQueue>['parkRejectedPrompt']
   stopStreaming: () => void
   setCanProcessQueue: (value: boolean | ((prev: boolean) => boolean)) => void
   pauseQueue: () => void
@@ -119,7 +121,6 @@ export interface UseChatStreamingReturn {
 
   // Exit handling
   handleCtrlC: () => true
-  ensureQueueActiveBeforeSubmit: () => boolean
   nextCtrlCWillExit: boolean
 }
 
@@ -197,7 +198,9 @@ export function useChatStreaming({
     streamStatus,
     queuePaused,
     streamMessageIdRef,
+    getPromptTurnState,
     addToQueue,
+    parkRejectedPrompt,
     stopStreaming,
     setStreamStatus,
     setCanProcessQueue,
@@ -207,7 +210,7 @@ export function useChatStreaming({
     isQueuePausedRef,
     isProcessingQueueRef,
   } = useMessageQueue(
-    (message: QueuedMessage) => {
+    (message: QueuedMessage, admission) => {
       const send = sendMessageRef.current
       if (!send) {
         // The send handler ref is not yet wired up (e.g. before the chat
@@ -216,8 +219,7 @@ export function useChatStreaming({
         // Log and reject so the queue layer surfaces the failure instead of
         // pretending the send succeeded.
         logger.warn(
-          { content: message.content },
-          '[chat-streaming] sendMessageRef.current is undefined; message dropped.',
+          '[chat-streaming] Send handler is not initialized; retaining the queued prompt.',
         )
         return Promise.reject(
           new Error(
@@ -225,11 +227,14 @@ export function useChatStreaming({
           ),
         )
       }
-      return send({
-        content: message.content,
-        agentMode: message.agentMode,
-        attachments: message.attachments,
-      })
+      return send(
+        {
+          content: message.content,
+          agentMode: message.agentMode,
+          attachments: message.attachments,
+        },
+        admission,
+      )
     },
     isChainInProgressRef,
     activeAgentStreamsRef,
@@ -268,9 +273,8 @@ export function useChatStreaming({
   })
 
   // Queue controls
-  const { handleCtrlC, ensureQueueActiveBeforeSubmit } = useQueueControls({
+  const { handleCtrlC } = useQueueControls({
     queuePaused,
-    isQueuePausedRef,
     queuedCount,
     clearQueue: cancelQueuedMessages,
     resumeQueue,
@@ -317,7 +321,9 @@ export function useChatStreaming({
     undoQueueRemoval,
     queuePaused,
     streamMessageIdRef,
+    getPromptTurnState,
     addToQueue,
+    parkRejectedPrompt,
     stopStreaming,
     setCanProcessQueue,
     pauseQueue,
@@ -335,7 +341,6 @@ export function useChatStreaming({
 
     // Exit handling
     handleCtrlC,
-    ensureQueueActiveBeforeSubmit,
     nextCtrlCWillExit,
   }
 }

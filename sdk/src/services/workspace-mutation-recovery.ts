@@ -289,6 +289,7 @@ export async function reconcileMutation(
   target: MutationEntry,
   other: MutationEntry,
   sync: (directory: MutationDirectory) => Promise<void>,
+  recordVerifiedTombstone: (stat: BigIntStats) => Promise<void>,
 ): Promise<'recovered_committed' | 'recovered_not_applied'> {
   const validHash = (hash: unknown) =>
     hash === null ||
@@ -307,10 +308,26 @@ export async function reconcileMutation(
   }
 
   const observed = await readMutationEntry(target)
+  const mustProveIncarnation =
+    !!receipt.correlation || !!receipt.compensationFor
+  const matchesIncarnation = (
+    stat: BigIntStats | null,
+    identity: MutationFileIdentity | undefined,
+    birthtimeNs: string | undefined,
+  ) =>
+    matchesFileIdentity(stat, identity) &&
+    (birthtimeNs === undefined
+      ? !mustProveIncarnation
+      : (!mustProveIncarnation || stat!.birthtimeNs > 0n) &&
+        String(stat!.birthtimeNs) === birthtimeNs)
   const atBefore =
     observed.hash === receipt.beforeHash &&
     (observed.stat === null ||
-      matchesFileIdentity(observed.stat, receipt.sourceIdentity))
+      matchesIncarnation(
+        observed.stat,
+        receipt.sourceIdentity,
+        receipt.sourceBirthtimeNs,
+      ))
   const sameAdmittedBasis = receipt.beforeHash === receipt.expectedHash
 
   if (receipt.action === 'move') {
@@ -321,10 +338,24 @@ export async function reconcileMutation(
       receipt.expectedDestinationHash === null &&
       receipt.afterHash !== null &&
       receipt.afterHash === receipt.beforeHash &&
+      ((!receipt.correlation && !receipt.compensationFor) ||
+        receipt.moveLinkVerified === true) &&
       destination.hash === receipt.afterHash &&
-      matchesFileIdentity(destination.stat, receipt.sourceIdentity)
+      matchesIncarnation(
+        destination.stat,
+        receipt.sourceIdentity,
+        receipt.sourceBirthtimeNs,
+      ) &&
+      (receipt.beforeMode === undefined ||
+        permissions(destination.stat!) === receipt.beforeMode)
     ) {
-      if (observed.stat === null) return 'recovered_committed'
+      if (observed.stat === null) {
+        await sync(other.directory)
+        await sync(target.directory)
+        await other.validate(destination.stat)
+        await target.validate(null)
+        return 'recovered_committed'
+      }
       if (atBefore) {
         await sync(other.directory)
         await other.validate(destination.stat)
@@ -357,7 +388,13 @@ export async function reconcileMutation(
       !sameAdmittedBasis ||
       !staged.isFile() ||
       !hasFileIdentity(stagingIdentity) ||
-      !matchesFileIdentity(staged, stagingIdentity)
+      !matchesIncarnation(
+        staged,
+        stagingIdentity,
+        receipt.action === 'delete'
+          ? receipt.sourceBirthtimeNs
+          : receipt.stagingBirthtimeNs,
+      )
     ) {
       refuseRecovery(
         'RECOVERY_FOREIGN_STAGING',
@@ -368,9 +405,11 @@ export async function reconcileMutation(
       receipt.action === 'delete' ? receipt.beforeHash : receipt.afterHash
     if (
       (await other.hash(staged)) !== expectedStageHash ||
-      (receipt.action !== 'delete' &&
-        receipt.afterMode !== undefined &&
-        permissions(staged) !== receipt.afterMode)
+      (receipt.action === 'delete'
+        ? receipt.beforeMode !== undefined &&
+          permissions(staged) !== receipt.beforeMode
+        : receipt.afterMode !== undefined &&
+          permissions(staged) !== receipt.afterMode)
     ) {
       refuseRecovery(
         'RECOVERY_FOREIGN_STAGING',
@@ -386,13 +425,22 @@ export async function reconcileMutation(
         'Invalid deletion receipt basis.',
       )
     }
-    if (observed.stat === null && sameAdmittedBasis) {
+    if (
+      observed.stat === null &&
+      sameAdmittedBasis &&
+      (staged || receipt.deleteTombstoneVerified === true)
+    ) {
+      await sync(other.directory)
       if (staged) {
+        await target.validate(null)
+        await other.validate(staged)
+        await recordVerifiedTombstone(staged)
         await target.validate(null)
         await other.validate(staged)
         await fs.unlink(other.ioPath)
         await sync(other.directory)
       }
+      await target.validate(null)
       return 'recovered_committed'
     }
     if (!staged && atBefore) return 'recovered_not_applied'
@@ -406,7 +454,11 @@ export async function reconcileMutation(
     sameAdmittedBasis &&
     receipt.afterHash !== null &&
     observed.hash === receipt.afterHash &&
-    matchesFileIdentity(observed.stat, receipt.stagingIdentity) &&
+    matchesIncarnation(
+      observed.stat,
+      receipt.stagingIdentity,
+      receipt.stagingBirthtimeNs,
+    ) &&
     (receipt.afterMode === undefined ||
       permissions(observed.stat!) === receipt.afterMode)
   if (!atBefore && !atAfter) {
@@ -420,6 +472,31 @@ export async function reconcileMutation(
     await other.validate(staged)
     await fs.unlink(other.ioPath)
     await sync(other.directory)
+  }
+  if (atAfter) {
+    await sync(target.directory)
+    // A completed create may still have its staging hard link. Removing our
+    // link changes ctime, so check the same inode, bytes and mode again rather
+    // than requiring the pre-unlink generation to survive our own cleanup.
+    if (
+      staged &&
+      matchesFileIdentity(staged, receipt.stagingIdentity) &&
+      matchesFileIdentity(observed.stat, receipt.stagingIdentity)
+    ) {
+      const cleaned = await readMutationEntry(target, receipt.stagingIdentity)
+      if (
+        !cleaned.stat ||
+        cleaned.hash !== receipt.afterHash ||
+        permissions(cleaned.stat) !== permissions(observed.stat!)
+      ) {
+        refuseRecovery(
+          'POST_COMMIT_STATE_MISMATCH',
+          'Recovered create lost its result identity.',
+        )
+      }
+    } else {
+      await target.validate(observed.stat)
+    }
   }
   return atAfter ? 'recovered_committed' : 'recovered_not_applied'
 }

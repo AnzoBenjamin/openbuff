@@ -13,6 +13,10 @@
 
 ## Current captured run and memory boundaries
 
+- Durable edit groups require an action-correlated broker receipt and a verified live postimage before automatic compensation. A dispatch marker or same-byte replacement cannot confer ownership. The broker retains unresolved receipts, and lost terminal acknowledgement is reported as unconfirmed rather than whole-group success.
+- A settled request over its own reservation exhausts capped admission even below the aggregate cap. Valid legacy records are evaluated under the new rule before the next write upgrades their durable version.
+- Linux/Bun `runReplayableReads` requires a private unpruned journal with a transactional tail seal and a one-shot dead-owner claim. Broader programmatic observation, including candidate-model replies, still does not grant generic resume.
+
 - `run({ model, outputSchema })` captures root-only per-run overrides before asynchronous setup; configured failover still applies, and later turns do not inherit either override. JSON Schema is bounded object-root draft-7 with unsupported actual references refused; final output must be freshly validated rather than reusing previous output.
 - Native local `record_decision` completion is captured before UI through private actor/action/task correlation, including supervised children. Explicit facts/decisions remain unverified until supporting evidence is checked. Confirmed primary append is required before dependent supersession/citation; cancelled terminal metadata is finalized separately from the aborted work signal. See [repository intelligence](../docs/repository-intelligence.md).
 - `strictProjectReads` is admission-selected from authoritative definitions, monotonically inherited and enforced through actor-bound guarded filesystem callbacks. Strict roots withhold raw disk skill bootstrap and unguarded index/archive/control readers; ordinary non-opt-in filesystem policy is unchanged. Linux/proc and adapter capability limitations fail closed, not via raw fallback.

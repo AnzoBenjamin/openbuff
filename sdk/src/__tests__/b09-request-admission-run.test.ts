@@ -14,6 +14,9 @@ let root: string
 let harness: string
 let configPath: string
 let requests: Array<Record<string, unknown>>
+let reportedUsage:
+  | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  | undefined
 let server: ReturnType<typeof Bun.serve>
 
 const child: AgentDefinition = {
@@ -51,11 +54,16 @@ beforeEach(() => {
   )
   harness = path.join(root, 'harness')
   requests = []
+  reportedUsage = undefined
   server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
     async fetch(request) {
-      requests.push((await request.json()) as Record<string, unknown>)
+      const body = (await request.json()) as Record<string, unknown>
+      requests.push(body)
+      const streamOptions = body.stream_options as
+        | { include_usage?: boolean }
+        | undefined
       await Bun.sleep(30)
       const data = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
       return new Response(
@@ -73,6 +81,9 @@ beforeEach(() => {
             id: 'admission-run',
             choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
           }) +
+          (reportedUsage && streamOptions?.include_usage
+            ? data({ id: 'admission-run', choices: [], usage: reportedUsage })
+            : '') +
           'data: [DONE]\n\n',
         { headers: { 'content-type': 'text/event-stream' } },
       )
@@ -93,6 +104,7 @@ beforeEach(() => {
           type: 'openai-compatible',
           baseURL: `http://127.0.0.1:${server.port}/v1`,
           models: ['model'],
+          compatibility: { includeUsage: true },
           defaultCapabilities: {
             context: { windowTokens: 10_000, outputTokens: 100 },
             pricing: {
@@ -171,6 +183,85 @@ describe('B09 SDK root/child/restart admission', () => {
         activeAttempts: 0,
       })
     }, 25_000)
+
+  test.each([
+    {
+      promptTokens: 10_000,
+      costUsdMicros: 450_000,
+      providerCalls: 2,
+      exhausted: false,
+    },
+    {
+      promptTokens: 15_000,
+      costUsdMicros: 600_000,
+      providerCalls: 1,
+      exhausted: true,
+    },
+  ])(
+    'usage of $promptTokens input tokens leaves $providerCalls SDK child request(s) dispatched',
+    async ({ promptTokens, costUsdMicros, providerCalls, exhausted }) => {
+      reportedUsage = {
+        prompt_tokens: promptTokens,
+        completion_tokens: 100,
+        total_tokens: promptTokens + 100,
+      }
+      const result = await client(false).run({
+        agent: {
+          ...parent,
+          handleSteps: function* () {
+            const first = yield {
+              toolName: 'spawn_agents',
+              input: {
+                agents: [{ agent_type: 'admission-child', prompt: 'First.' }],
+              },
+            }
+            const second = yield {
+              toolName: 'spawn_agents',
+              input: {
+                agents: [
+                  { agent_type: 'admission-child', prompt: 'Then second.' },
+                ],
+              },
+            }
+            yield {
+              toolName: 'set_output',
+              input: { first: first.toolResult, second: second.toolResult },
+            }
+          },
+        },
+        agentDefinitions: [child],
+        prompt: 'Run both children in sequence.',
+        // Even the higher observed charge plus another 450,000-micro
+        // reservation would fit under this cap.
+        spending: { mode: 'strict-capped', capCents: 2, currency: 'USD' },
+      })
+      const output = JSON.stringify(result.output)
+      expect(result.runOutcome?.termination, output).toBe('completed')
+      expect(requests, output).toHaveLength(providerCalls)
+      expect(requests[0]).toMatchObject({
+        stream_options: { include_usage: true },
+      })
+      expect(result.requestAdmission).toMatchObject({
+        capUsdMicros: 2_000_000,
+        heldUsdMicros: 0,
+        reconciledUsdMicros: costUsdMicros * providerCalls,
+        exhausted,
+        attempts: Array.from({ length: providerCalls }, () => ({
+          state: 'reconciled',
+          reservationUsdMicros: 450_000,
+          costUsdMicros,
+          provenance: 'usage-plus-configured-pricing',
+        })),
+      })
+      if (exhausted) {
+        expect(output).toContain('request_spend_refused')
+        expect(output).toContain('exceeded its reservation')
+      } else {
+        expect(output).not.toContain('request_spend_refused')
+      }
+    },
+    25_000,
+  )
 
   test('an explicit uncapped run overrides configured finite admission without persisting the override', async () => {
     const result = await client(false).run({

@@ -64,11 +64,11 @@ export const resetEarlyReturnState = (
     isQueuePausedRef,
   } = params
 
-  updateChainInProgress(false)
   setCanProcessQueue(!isQueuePausedRef?.current)
   if (isProcessingQueueRef) {
     isProcessingQueueRef.current = false
   }
+  updateChainInProgress(false)
 }
 
 export const createRunOwnership = (
@@ -152,10 +152,13 @@ export const finalizeQueueState = (params: FinalizeQueueStateParams): void => {
   if (isProcessingQueueRef) {
     isProcessingQueueRef.current = false
   }
-  if (resumeQueue) {
+  // Completing or cancelling a run is not the user's explicit Resume action.
+  // In particular, cancellation cleanup must not reopen an interrupted queue.
+  const queuePaused = isQueuePausedRef?.current ?? false
+  if (resumeQueue && !queuePaused) {
     resumeQueue()
   } else {
-    setCanProcessQueue(!isQueuePausedRef?.current)
+    setCanProcessQueue(!queuePaused)
   }
   updateChainInProgress(false)
 }
@@ -224,12 +227,16 @@ export const formatQueuedMessageForHistory = (
   return parts.join('\n\n')
 }
 
+export class PromptPreparationBlocked extends Error {}
+
 export const prepareUserMessage = async (params: {
   content: string
   agentMode: AgentMode
   postUserMessage?: (prev: ChatMessage[]) => ChatMessage[]
   attachments?: PendingAttachment[]
+  consumeComposerAttachments?: boolean
   isCurrent?: () => boolean
+  beforeCommit?: () => void
   deps: PrepareUserMessageDeps
 }): Promise<{
   userMessageId: string
@@ -246,23 +253,12 @@ export const prepareUserMessage = async (params: {
   const { setMessages, lastMessageMode, setLastMessageMode, scrollToLatest } =
     deps
 
-  // Atomic drain: the read and the clear are one store transaction, so a
-  // concurrent send or exit-time queue drain can neither re-append a drained
-  // item (interruption between read and clear) nor drop one (two readers, one
-  // clearing first) (reliability finding
-  // pending-attachments-and-bash-messages-non-atomic-drain).
-  const pendingBashMessages = useChatStore.getState().drainPendingBashMessages()
-  const { bashMessages, bashContextForPrompt } =
-    processBashContext(pendingBashMessages)
-
-  if (bashMessages.length > 0) {
-    setMessages((prev) => [...prev, ...bashMessages])
-  }
-
-  // Atomic drain as above; explicit `attachments` (a queued prompt's already
-  // detached attachments) bypass the store queue entirely.
+  // Stage the captured context without draining it. Image preparation may
+  // fail or yield long enough for the composer or turn owner to be replaced.
   const allAttachments =
-    attachments ?? useChatStore.getState().drainPendingAttachments()
+    attachments ?? useChatStore.getState().pendingAttachments
+  const consumeComposerAttachments =
+    params.consumeComposerAttachments ?? attachments === undefined
 
   const pendingImages = allAttachments.filter(
     (a): a is PendingImageAttachment => a.kind === 'image',
@@ -305,7 +301,26 @@ export const prepareUserMessage = async (params: {
       pendingImages,
       projectRoot: getProjectRoot(),
     })
+  await yieldToEventLoop()
   assertCurrent()
+  const context = useChatStore.getState()
+  if (
+    consumeComposerAttachments &&
+    allAttachments.some(
+      (attachment) => !context.pendingAttachments.includes(attachment),
+    )
+  ) {
+    throw new PromptPreparationBlocked(
+      'The captured attachments changed before sending. Review them and retry.',
+    )
+  }
+  // Running commands still own their pending rows; only harvest completed
+  // output that is actually delivered with this prompt.
+  const pendingBashMessages = context.pendingBashMessages.filter(
+    ({ isRunning }) => !isRunning,
+  )
+  const { bashMessages, bashContextForPrompt } =
+    processBashContext(pendingBashMessages)
 
   const shouldInsertDivider =
     lastMessageMode === null || lastMessageMode !== agentMode
@@ -340,8 +355,9 @@ export const prepareUserMessage = async (params: {
     userMessage.attachments = imageAttachments
   }
 
+  params.beforeCommit?.()
   setMessages((prev) => {
-    let next = [...prev]
+    let next = [...prev, ...bashMessages]
     if (shouldInsertDivider) {
       next.push(createModeDividerMessage(agentMode))
     }
@@ -355,8 +371,27 @@ export const prepareUserMessage = async (params: {
     return next
   })
 
+  if (
+    pendingBashMessages.length ||
+    (consumeComposerAttachments && allAttachments.length)
+  ) {
+    // Read the unproxied store values. An Immer updater wraps the entries in
+    // drafts, which would make an identity comparison miss its own capture.
+    const latest = useChatStore.getState()
+    useChatStore.setState({
+      pendingBashMessages: latest.pendingBashMessages.filter(
+        (message) => !pendingBashMessages.includes(message),
+      ),
+      ...(consumeComposerAttachments
+        ? {
+            pendingAttachments: latest.pendingAttachments.filter(
+              (attachment) => !allAttachments.includes(attachment),
+            ),
+          }
+        : {}),
+    })
+  }
   setLastMessageMode(agentMode)
-  await yieldToEventLoop()
   setTimeout(() => {
     if (params.isCurrent?.() !== false) scrollToLatest()
   }, 0)
@@ -408,6 +443,7 @@ export const setupStreamingContext = (params: {
   abortControllerRef.current = abortController
 
   abortController.signal.addEventListener('abort', () => {
+    if (abortControllerRef.current !== abortController) return
     // Cancellation is a state, not completion. Keep the chain/queue lock until
     // client.run() settles so its authoritative preserved RunState becomes the
     // continuation base before another prompt is admitted.

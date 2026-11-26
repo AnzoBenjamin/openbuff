@@ -33,6 +33,13 @@ import {
 } from './filesystem-authority'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { buildFreshWholeFileMutationAuthority } from './mutation-capabilities'
+import { captureHostMutationBroker } from '../services/host-filesystem'
+import {
+  transactionForward,
+  type TransactionForwardOptions,
+  type TransactionMutationEvidence,
+  type TransactionStageProof,
+} from '../services/transaction-mutation-proof'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -554,12 +561,7 @@ export async function changeFiles(params: {
         fs,
         change.source.operationPath,
       )
-      const sourceMatches =
-        currentSource === change.beforeContent ||
-        (currentSource !== null &&
-          change.beforeContent !== null &&
-          getContentHash(currentSource) ===
-            getContentHash(change.beforeContent))
+      const sourceMatches = currentSource === change.beforeContent
       const destinationMatches = change.destination
         ? (await readOptionalText(fs, change.destination.operationPath)) ===
           null
@@ -598,6 +600,7 @@ export async function changeFiles(params: {
 
     // A supplied log is the admission boundary, not asynchronous telemetry.
     const durableIntentLog = prepared.length > 1 ? intentLog : undefined
+    const broker = durableIntentLog ? captureHostMutationBroker(fs) : undefined
     const durableEntries: TransactionIntentEntry[] = []
     const byChange = new Map<
       number,
@@ -607,6 +610,12 @@ export async function changeFiles(params: {
     if (durableIntentLog) {
       let admitted: IntentOutcome
       try {
+        if (!broker) {
+          throw new Error(
+            'Durable transactions require verified broker-backed filesystem operations.',
+          )
+        }
+        await broker.preflightTransactionActions(prepared.length)
         for (const change of prepared) {
           const entries = await captureDurableChange(change, cwd, fs)
           const staged = entries.map((entry) => {
@@ -665,6 +674,10 @@ export async function changeFiles(params: {
     }
 
     const attempted: PreparedTransactionChange[] = []
+    const correlations = new Map<number, TransactionMutationEvidence>()
+    const proofs: TransactionStageProof[] = []
+    let preserveForwardForRecovery = false
+    let acknowledgementPending = false
     const forwardEvidence = new Map<
       number,
       NonNullable<CommitActionReceiptV1['forward']>
@@ -692,17 +705,37 @@ export async function changeFiles(params: {
         // Check the captured parent again before this action acquires any
         // forward ownership. An unattempted path must not be compensated.
         const stages = byChange.get(change.index)
+        const actionProofs: TransactionStageProof[] = []
+        let transactionOptions: TransactionForwardOptions | undefined
         if (durableIntentLog && stages?.length) {
+          const correlation = {
+            transactionId,
+            actionId: crypto.randomUUID(),
+            from: stages[0]!.index,
+            through: stages.at(-1)!.index,
+          }
           const authorization = await durableIntentLog.authorizeDispatch?.(
             transactionId,
-            stages.at(-1)!.index,
+            correlation.through,
+            correlation,
           )
           if (!authorization?.ok)
             throw new Error(
               `Transaction dispatch was not durable: ${authorization?.error ?? 'unavailable'}`,
             )
-          for (const { entry } of stages)
-            await verifyTransactionParent(cwd, fs, entry.path, entry.parent!)
+          const evidence = {
+            correlation,
+            stages: stages.map(({ entry }) => entry),
+          }
+          for (const { entry, index } of stages) {
+            const fullPath = await verifyTransactionParent(
+              cwd,
+              fs,
+              entry.path,
+              entry.parent!,
+            )
+            actionProofs.push({ evidence, index, fullPath })
+          }
           if (signal?.aborted) {
             throw new TransactionAbortedError(
               filesystemError(
@@ -711,6 +744,8 @@ export async function changeFiles(params: {
               ),
             )
           }
+          correlations.set(change.index, evidence)
+          transactionOptions = { [transactionForward]: evidence }
         }
         attempted.push(change)
         // Per-change try/catch: a failing adapter call is attributed to the
@@ -721,7 +756,15 @@ export async function changeFiles(params: {
             change,
             fs,
             authority,
+            transactionOptions,
           )
+          if (applied && broker) {
+            // A successful adapter reply or matching bytes are not proof of a
+            // durable action. Join its receipt before advancing to the next path.
+            for (const proof of actionProofs)
+              await broker.verifyTransactionStage(proof)
+            proofs.push(...actionProofs)
+          }
           forwardEvidence.set(change.index, {
             outcome: applied ? 'applied' : 'not_applied',
             afterHashes: applied
@@ -781,6 +824,22 @@ export async function changeFiles(params: {
               ],
         ),
       )
+      if (broker && durableIntentLog) {
+        if (proofs.length !== durableEntries.length) {
+          throw new Error('Durable transaction has incomplete forward proof.')
+        }
+        await broker.withVerifiedTransactionCommit(proofs, async () => {
+          // Only enter this state after the broker verifies every staged action.
+          // A fresh owner must reconcile an ambiguous marker; do not compensate.
+          preserveForwardForRecovery = true
+          acknowledgementPending = true
+          const committed =
+            await durableIntentLog.commitTransaction(transactionId)
+          if (!committed.ok) throw new Error(committed.error)
+          acknowledgementPending = false
+          return committed
+        })
+      }
       const receipt = await authority.issueCommittedReceipt({
         operationId,
         callId: callId ?? operationId,
@@ -803,18 +862,6 @@ export async function changeFiles(params: {
         expectedFinalHashes,
       })
       authority.finishCommit(begun.lease, { succeeded: true })
-      if (durableIntentLog && durableTransactionId) {
-        try {
-          const committedIntent =
-            await durableIntentLog.commitTransaction(transactionId)
-          if (!committedIntent.ok) throw new Error(committedIntent.error)
-        } catch (intentError) {
-          logger?.warn(
-            { operationId, transactionId, error: intentError },
-            'Files committed; transaction acknowledgement needs reconciliation',
-          )
-        }
-      }
       const postEditAuthorities = new Map(
         prepared.flatMap((change) => {
           if (change.afterContent === null) return []
@@ -863,19 +910,22 @@ export async function changeFiles(params: {
       // A mid-commit abort is not an I/O failure: it carries its own
       // 'cancelled' FilesystemError so the structured outcome stays honest,
       // while still reusing this rollback path verbatim.
-      const commitError =
-        error instanceof TransactionAbortedError ||
-        error instanceof TransactionRejectedError
+      const message = error instanceof Error ? error.message : String(error)
+      const commitError = acknowledgementPending
+        ? filesystemError(
+            'recovery_required',
+            `Files were written, but the durable transaction acknowledgement must be reconciled: ${message}`,
+            { retryable: false, recovery: 'inspect_rollback' },
+          )
+        : error instanceof TransactionAbortedError ||
+            error instanceof TransactionRejectedError
           ? error.filesystemError
-          : filesystemError(
-              'io_error',
-              error instanceof Error ? error.message : String(error),
-            )
+          : filesystemError('io_error', message)
       const rollbackFailures = new Map<number, FilesystemError>()
       const rollbackRestored = new Set<number>()
       const attemptedIndexes = new Set(attempted.map((change) => change.index))
       let rollbackAdmissionError: string | undefined
-      if (durableIntentLog && attempted.length) {
+      if (durableIntentLog && attempted.length && !preserveForwardForRecovery) {
         const unowned = [...byChange.entries()].flatMap(([index, entries]) =>
           !attemptedIndexes.has(index) ||
           forwardEvidence.get(index)?.outcome === 'not_applied'
@@ -900,7 +950,9 @@ export async function changeFiles(params: {
               : String(markerError)
         }
       }
-      for (const change of attempted.toReversed()) {
+      for (const change of preserveForwardForRecovery
+        ? []
+        : attempted.toReversed()) {
         // A refused adapter call did not acquire mutation ownership. Even an
         // identical foreign postimage must not authorize compensation.
         if (forwardEvidence.get(change.index)?.outcome === 'not_applied')
@@ -914,9 +966,17 @@ export async function changeFiles(params: {
           if (staged) {
             let restored = false
             let failure: unknown
-            for (const { entry } of staged.toReversed()) {
+            for (const { entry, index } of staged.toReversed()) {
               try {
-                if (await restoreOwnedTransactionPath(cwd, fs, entry))
+                if (
+                  (await restoreOwnedTransactionPath(
+                    cwd,
+                    fs,
+                    entry,
+                    correlations.get(change.index),
+                    index,
+                  )) > 0
+                )
                   restored = true
               } catch (restoreError) {
                 failure ??= restoreError
@@ -944,8 +1004,11 @@ export async function changeFiles(params: {
       }
       authority.finishCommit(begun.lease, {
         succeeded: false,
-        errorCode:
-          rollbackFailures.size > 0 ? 'ROLLBACK_INCOMPLETE' : 'WRITE_FAILED',
+        errorCode: acknowledgementPending
+          ? 'RECOVERY_REQUIRED'
+          : rollbackFailures.size > 0
+            ? 'ROLLBACK_INCOMPLETE'
+            : 'WRITE_FAILED',
       })
       // Cancel-on-exit: release the still-open operation registration on
       // every failure exit so `pruneTerminalOperations` can reclaim it.
@@ -957,8 +1020,9 @@ export async function changeFiles(params: {
         callId: callId ?? operationId,
         transactionId: durableTransactionId,
         authorityTier: tier,
-        status:
-          rollbackFailures.size > 0
+        status: acknowledgementPending
+          ? 'acknowledgement_pending'
+          : rollbackFailures.size > 0
             ? 'rollback_incomplete'
             : rollbackRestored.size > 0
               ? 'rolled_back'
@@ -971,13 +1035,15 @@ export async function changeFiles(params: {
           ...(change.destinationPath
             ? { destinationPath: change.destinationPath }
             : {}),
-          status: !attemptedIndexes.has(change.index)
-            ? ('not_started' as const)
-            : rollbackFailures.has(change.index)
-              ? ('rollback_failed' as const)
-              : rollbackRestored.has(change.index)
-                ? ('rolled_back' as const)
-                : ('failed' as const),
+          status: acknowledgementPending
+            ? 'forward_verified'
+            : !attemptedIndexes.has(change.index)
+              ? 'not_started'
+              : rollbackFailures.has(change.index)
+                ? 'rollback_failed'
+                : rollbackRestored.has(change.index)
+                  ? 'rolled_back'
+                  : 'failed',
           beforeHash:
             change.beforeContent === null
               ? null
@@ -992,21 +1058,38 @@ export async function changeFiles(params: {
             : {}),
         })),
       })
-      // Incomplete compensation remains nonterminal, including foreign or
-      // unreadable paths. Never acknowledge an abort merely because we tried.
+      // Confirm all preimages before acknowledging compensation, including
+      // rejected and undispatched stages that no action acquired ownership of.
+      let recoveryError: FilesystemError | undefined
       if (
+        broker &&
         durableIntentLog &&
-        durableTransactionId &&
+        !preserveForwardForRecovery &&
         rollbackFailures.size === 0
       ) {
-        const abortedIntent = await durableIntentLog.abortTransaction(
-          transactionId,
-          `compensated ${commitError.code}`,
-        )
-        if (!abortedIntent.ok) {
+        try {
+          const aborted = await broker.withVerifiedTransactionAbort(
+            transactionId,
+            durableEntries,
+            () =>
+              durableIntentLog.abortTransaction(
+                transactionId,
+                `compensated ${commitError.code}`,
+              ),
+          )
+          if (!aborted.ok) throw new Error(aborted.error)
+        } catch (abortError) {
+          const message =
+            abortError instanceof Error
+              ? abortError.message
+              : String(abortError)
+          recoveryError = filesystemError('recovery_required', message, {
+            retryable: false,
+            recovery: 'inspect_rollback',
+          })
           logger?.warn(
-            { operationId, transactionId, error: abortedIntent.error },
-            'Transaction abort acknowledgement needs reconciliation',
+            { operationId, transactionId, error: abortError },
+            'Transaction abort remains unresolved',
           )
         }
       }
@@ -1024,12 +1107,17 @@ export async function changeFiles(params: {
           rollbackFailureCount: rollbackFailures.size,
           rollbackRestoredCount: rollbackRestored.size,
         },
-        'File transaction commit failed',
+        acknowledgementPending
+          ? 'File transaction acknowledgement pending'
+          : 'File transaction commit failed',
       )
       return [
         {
           type: 'json',
-          value: buildFileMutationResultFromReceiptV1(receipt, [commitError]),
+          value: buildFileMutationResultFromReceiptV1(
+            receipt,
+            recoveryError ? [commitError, recoveryError] : [commitError],
+          ),
         },
       ]
     } finally {
@@ -1334,12 +1422,14 @@ async function commitPreparedTransactionChange(
   change: PreparedTransactionChange,
   fs: CodebuffFileSystem,
   authority: ReturnType<typeof getDefaultFilesystemAuthority>,
+  transactionOptions?: TransactionForwardOptions,
 ): Promise<boolean> {
   if (change.action === 'delete') {
     const expectedHash = hashFileContent(change.beforeContent!)
     const deleted = await authority.conditionalDelete(
       change.source,
       expectedHash,
+      transactionOptions,
     )
     if (deleted.supported) {
       return deleted.result.applied
@@ -1353,6 +1443,7 @@ async function commitPreparedTransactionChange(
       change.source,
       change.destination!,
       hashFileContent(change.beforeContent!),
+      transactionOptions,
     )
     if (!moved.supported) throw new Error('Conditional move is unsupported')
     return moved.result.applied
@@ -1363,6 +1454,7 @@ async function commitPreparedTransactionChange(
       const created = await authority.createExclusive(
         change.source,
         change.afterContent!,
+        transactionOptions,
       )
       if (!created.supported) throw new Error('Exclusive create is unsupported')
       return true
@@ -1384,6 +1476,7 @@ async function commitPreparedTransactionChange(
     change.source,
     change.afterContent!,
     { state: 'present', hash: expectedHash },
+    transactionOptions,
   )
   if (committed.supported) {
     return committed.result.applied

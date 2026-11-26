@@ -32,10 +32,18 @@ if (process.argv[2] === SUPERVISED_SELF_EXEC_FLAG) {
   const request = JSON.parse(readFileSync(process.argv[3]!, 'utf8')) as SupervisedSpawnRequest
   assert(request.rpcSocketPath && request.rpcBridgeNonce, 'Actual SDK factory must supply its live parent bridge')
   const bridge = await connectChildBridge(request.rpcSocketPath)
-  let bridgeReply: unknown
-  try { bridgeReply = await bridge.call('requestOptionalFile', { filePath: 'bridge-probe.txt' }) }
-  finally { bridge.close() }
-  const observation = { pid: process.pid, argv: process.argv, env: process.env, request, bridgeReply, receipt: undefined as unknown }
+  let preRegistrationRead: { denied: boolean; reason?: string }
+  try {
+    await bridge.call('requestOptionalFile', { filePath: 'bridge-probe.txt' })
+    preRegistrationRead = { denied: false }
+  } catch (error) {
+    preRegistrationRead = { denied: true, reason: error instanceof Error ? error.message : String(error) }
+  } finally { bridge.close() }
+  // Connection possession is not actor/action admission. The whole-SDK
+  // branch below also proves the same file is readable after registration.
+  assert(preRegistrationRead.denied && /Unregistered supervised execution actor/.test(preRegistrationRead.reason ?? ''),
+    'A compiled child obtained a workspace read before its actor was registered')
+  const observation = { pid: process.pid, argv: process.argv, env: process.env, request, preRegistrationRead, receipt: undefined as unknown }
   writeFileSync(recordFile, JSON.stringify(observation))
   const { runChildEntryMain } = await import('@codebuff/agent-runtime/supervision/child-entry')
   const exitCode = await runChildEntryMain([process.argv[0]!, process.argv[1]!, ...process.argv.slice(3)], async line => {
@@ -121,8 +129,9 @@ try {
   if (mode === 'sdk-run') {
     const { OpenbuffClient } = await import('../../client')
     const child: AgentDefinition = { id: 'b19-compiled-child', displayName: 'Compiled child', model: 'fixture/fixture-model',
-      outputMode: 'structured_output', toolNames: ['set_output'], handleSteps: function* () {
-        yield { toolName: 'set_output', input: { child: 'compiled-local-result' } }
+      outputMode: 'structured_output', toolNames: ['read_files', 'set_output'], handleSteps: function* () {
+        const read = yield { toolName: 'read_files', input: { paths: ['bridge-probe.txt'] } }
+        yield { toolName: 'set_output', input: { child: 'compiled-local-result', read: read.toolResult } }
       } }
     const parent: AgentDefinition = { id: 'b19-compiled-parent', displayName: 'Compiled parent', model: 'fixture/fixture-model',
       outputMode: 'structured_output', toolNames: ['spawn_agent_inline', 'set_output'], spawnableAgents: ['b19-compiled-child'],
@@ -256,14 +265,18 @@ try {
   assert.equal(observations.length, control === 'happy' ? 1 : 0)
   if (control === 'happy') {
     assert(peer && typeof peer === 'object')
-    const child = peer as { pid: number; env: unknown; bridgeReply: unknown; receipt: unknown }
+    const child = peer as { pid: number; env: unknown; preRegistrationRead: { denied: boolean; reason?: string }; receipt: unknown }
     assert.equal(child.pid, target[0]!.pid); assert.deepEqual(child.env, target[0]!.env)
-    assert(String(child.bridgeReply).includes('captured SDK parent bridge'))
+    assert.equal(child.preRegistrationRead.denied, true)
+    assert.match(child.preRegistrationRead.reason ?? '', /Unregistered supervised execution actor/)
     const receipt = agentReceiptSchema.parse(child.receipt)
     if (mode === 'factory') {
       assert.equal(receipt.status, 'failed')
       assert.equal((result as { outcome: string }).outcome, 'ok')
       assert.equal((result as { receipt: { receiptId: string } }).receipt.receiptId, receipt.receiptId)
+    } else {
+      assert.equal(receipt.status, 'completed')
+      assert.match(JSON.stringify(receipt.output), /captured SDK parent bridge/)
     }
   }
   if (control.startsWith('exhausted')) {

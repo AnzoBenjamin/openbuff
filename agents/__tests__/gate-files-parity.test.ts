@@ -240,6 +240,39 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
     assertParity(inline)
   })
 
+  test('base2 includes verified effects from a pending acknowledgement in review scope', () => {
+    const inline = loadInlineHelpers(
+      '../base2/base2.ts',
+      INLINE_HELPER_NAMES.reduce(
+        (acc, name) => ({ ...acc, [name]: name }),
+        {} as Record<GateFilesFunctionName, string>,
+      ),
+      BASE2_EXTRA_HELPER_NAMES,
+    )
+    const { authorityReceipt: receipt } = committedMutationFixture([
+      { path: 'src/edited.ts', content: 'after' },
+      { path: 'src/diverged.ts', content: 'after' },
+    ])
+    const result = buildFileMutationResultFromReceiptV1({
+      ...receipt!,
+      transactionId: 'review-pending-tx',
+      status: 'acknowledgement_pending',
+      actions: receipt!.actions.map((action) => ({
+        ...action,
+        status: 'forward_verified',
+      })),
+      finalHashes: { ...receipt!.finalHashes, 'src/diverged.ts': 'foreign' },
+    })
+    const inlineOut = new Set<string>()
+    const canonicalOut = new Set<string>()
+    inline.visitToolValue(result, inlineOut)
+    visitToolValue(result, canonicalOut)
+    expect(inlineOut).toEqual(canonicalOut)
+    expect([...inlineOut]).toEqual(['src/edited.ts'])
+    expect(inline.hasEditArtifact({ ...result, outcome: 'applied' })).toBe(false)
+    expect(inline.hasEditArtifact({ ...result, receiptId: 'foreign' })).toBe(false)
+  })
+
   test('editor inline copies match canonical gate-files.ts exports', () => {
     const inline = loadInlineHelpers(
       '../editor/editor.ts',

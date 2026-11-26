@@ -4,8 +4,6 @@ import type { QueuedMessage } from './use-message-queue'
 
 interface UseQueueControlsParams {
   queuePaused: boolean
-  /** Live pause state for same-input-batch interrupt/submit ordering. */
-  isQueuePausedRef?: { current: boolean }
   queuedCount: number
   clearQueue: () => QueuedMessage[]
   resumeQueue: () => void
@@ -35,7 +33,6 @@ export const createQueueCtrlCHandler =
 
 export const useQueueControls = ({
   queuePaused,
-  isQueuePausedRef,
   queuedCount,
   clearQueue,
   resumeQueue,
@@ -61,13 +58,5 @@ export const useQueueControls = ({
     ],
   )
 
-  const ensureQueueActiveBeforeSubmit = useCallback(() => {
-    if (isQueuePausedRef?.current ?? queuePaused) {
-      resumeQueue()
-      return true
-    }
-    return false
-  }, [isQueuePausedRef, queuePaused, resumeQueue])
-
-  return { handleCtrlC, ensureQueueActiveBeforeSubmit }
+  return { handleCtrlC }
 }

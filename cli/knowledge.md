@@ -16,7 +16,7 @@
 
 - Headless `run` accepts stdin or `-p`, per-run `--model`, validated `--output-schema` and private project-scoped `--continue [id]`. Continuation starts a new turn and disables the legacy interrupted-effect reader; it is not uncertain-tool replay. Provider readiness uses the TUI checker before journal admission. See [local mode](../docs/local-mode.md).
 - The shipped `knowledge-retriever`, `knowledge-reviewer` and `memory-manager` return evidence-backed proposals only. Their authenticated strict reads require the guarded Linux descriptor backend; raw index/archive/control readers and disk skill bootstrap are withheld. Ordinary unrestricted defaults are unchanged. See [agent boundaries](../docs/agents-and-tools.md#read-only-knowledge-and-memory-agents).
-- Plan artifact prefix/page/resume reads validate held no-follow regular single-link targets; command discovery/menu/help share static metadata. Interrupt pauses queued work before abort listeners settle, so resume remains explicit. Current verification and formal acceptance limits stay in the [body checkpoint](../docs/execution/body-roadmap/STATE.md).
+- Plan artifact prefix/page/resume reads validate held no-follow regular single-link targets; command discovery/menu/help share static metadata. Queue admission checks live turn and backlog ownership, not the last render. Interrupt and refusal park work until explicit Resume; only a started revision is removed, and late preparation cannot discard a newer draft or its context. Current verification and formal acceptance limits are in the [body checkpoint](../docs/execution/body-roadmap/STATE.md).
 
 ## Render-path performance checks
 

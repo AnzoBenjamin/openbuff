@@ -2,12 +2,15 @@ import z from 'zod/v4'
 
 import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
 import { __resetReadFilesSelectorRepairStatsForTest } from '@codebuff/common/tools/params/tool/read-files'
 import { MAX_TRUNCATION_RECOVERY_BYTES } from '@codebuff/common/tools/params/utils'
 import {
+  buildFileMutationResultFromReceiptV1,
   buildReadFilesResultV1,
   fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
 } from '@codebuff/common/tools/results/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { promptSuccess } from '@codebuff/common/util/error'
@@ -1006,6 +1009,43 @@ describe('tool validation error handling', () => {
       type: 'json',
       value: { kind: 'file_mutation_result', outcome: 'unconfirmed' },
     })
+  })
+
+  it('retains acknowledgement-pending effects only with the independent call receipt', () => {
+    const { authorityReceipt: receipt } = committedMutationFixture([
+      { path: 'src/changed.ts', content: 'after' },
+    ])
+    const mutation = buildFileMutationResultFromReceiptV1({
+      ...receipt!,
+      transactionId: 'pending-tx',
+      status: 'acknowledgement_pending',
+      actions: receipt!.actions.map((action) => ({
+        ...action,
+        status: 'forward_verified',
+      })),
+    })
+    const params = {
+      toolName: 'edit_transaction',
+      toolCallId: receipt!.callId,
+      output: jsonToolResult(mutation),
+    } as const
+    for (const canonicalReceipt of [
+      mutation.authorityReceipt,
+      { ...mutation.authorityReceipt, callId: 'another-call' },
+      undefined,
+    ]) {
+      const result = normalizeNativeToolOutput({ ...params, canonicalReceipt })
+      const part = result.output[0]
+      const parsed = fileMutationResultV1Schema.parse(
+        part?.type === 'json' ? part.value : null,
+      )
+      const backed = canonicalReceipt === mutation.authorityReceipt
+      expect(result.valid).toBe(backed)
+      expect(parsed.outcome).toBe('unconfirmed')
+      expect(getConfirmedAppliedActionsV1(parsed).map(({ path }) => path))
+        .toEqual(backed ? ['src/changed.ts'] : [])
+      expect(parsed.freshCapabilities).toEqual([])
+    }
   })
 
   it('should parse repeatedly stringified native tool input before validation', () => {

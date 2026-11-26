@@ -6,6 +6,7 @@ import { registerInjectedNodeScopeDriver } from '@codebuff/common/util/node-proc
 import { loadHostConfigSnapshot, nodeConfigReadFs } from '../host-config'
 import { createHostExecutionServices, executionClock } from '../host-execution'
 import { admitNodeLaunch, captureNodeTarget, deriveExecutionContext, dispatchNodeLaunch, prepareNodeLaunch } from '../services/execution-launch'
+import { runTerminalCommand } from '../tools/run-terminal-command'
 import type { ChildProcess } from 'node:child_process'
 import type { Clock, ExecutionAdapterContext, Result } from '@codebuff/common/types/contracts/execution-context'
 
@@ -166,6 +167,24 @@ describe('SDK Node scope clock integration', () => {
     const cleanup = await node.scope.requestStop('owner-cancel')
     expect(cleanup.originalDeadline).toMatchObject({ kind: 'finite', domainId: clock.domainId, expiresAtMs: 101_000 })
     expect(cleanup.firstStopAtMs).toBe(100_000)
+    expect(cleanup.selectedLimitSatisfied).toBe(true)
+  })
+
+  test.skipIf(process.platform === 'win32')('binds a finite SYNC terminal launch to the derived owner clock', async () => {
+    const { context } = host(executionClock, { unbounded: true, defaultClock: true })
+    const executable = "'" + process.execPath.replaceAll("'", "'\\''") + "'"
+    const [output] = await runTerminalCommand({
+      command: `exec ${executable} -e 'setInterval(() => {}, 1000)'`,
+      cwd: context.projectRoot,
+      process_type: 'SYNC',
+      timeout_seconds: 0.25,
+      executionContext: context,
+    })
+    expect(output!.value.executionRefusal?.reason).toBe('deadline-exhausted')
+    const cleanup = output!.value.processCleanup!
+    expect(cleanup.status).toBe('complete')
+    expect(cleanup.originalDeadline).toMatchObject({ kind: 'finite', domainId: executionClock.domainId })
+    expect(cleanup.finalObservation.clockDomainId).toBe(executionClock.domainId)
     expect(cleanup.selectedLimitSatisfied).toBe(true)
   })
 

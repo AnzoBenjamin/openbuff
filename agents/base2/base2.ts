@@ -14417,10 +14417,8 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
       //   - action beforeHash/afterHash consistency across record + receipt
       //   - equal action-array lengths and per-index actionId correlation
       //   - errors / freshCapabilities array shape
-      // The accepted-outcome set MUST stay identical to canonical
-      // (applied | partial | rollback_incomplete), and the authorityReceipt id
-      // match MUST stay. agents/__tests__/gate-files-parity.test.ts is the
-      // guard for both.
+      // Pending acknowledgements can invalidate review, not attest transaction
+      // completion. Keep this outcome gate aligned with the canonical helper.
       function hasEditArtifact(record: Record<string, unknown>): boolean {
         const authorityReceipt =
           record.authorityReceipt &&
@@ -14435,11 +14433,15 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
           record.operationId.length > 0 &&
           (record.authorityTier === 'portable_path' ||
             record.authorityTier === 'conditional_commit') &&
-          (record.outcome === 'applied' ||
-            record.outcome === 'partial' ||
-            record.outcome === 'rollback_incomplete') &&
           Array.isArray(record.actions) &&
           authorityReceipt !== null &&
+          (authorityReceipt.status === 'acknowledgement_pending'
+            ? record.outcome === 'unconfirmed' &&
+              typeof authorityReceipt.transactionId === 'string' &&
+              authorityReceipt.transactionId.length > 0
+            : record.outcome === 'applied' ||
+              record.outcome === 'partial' ||
+              record.outcome === 'rollback_incomplete') &&
           authorityReceipt.operationId === record.operationId &&
           authorityReceipt.receiptId === record.receiptId &&
           record.actions.some(

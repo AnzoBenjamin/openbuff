@@ -62,8 +62,8 @@ type TurnSnapshotOpts = {
 export type TurnSnapshotOutcome =
   | { status: 'created'; sha: string; label: string }
   | { status: 'unavailable' }
-  | { status: 'skipped'; reason: string }
-  | { status: 'error'; message: string }
+  | { status: 'skipped'; reason: string; dispatchBlocked?: true }
+  | { status: 'error'; message: string; dispatchBlocked?: true }
 
 export type TurnSnapshotEntry = {
   sha: string
@@ -439,6 +439,7 @@ export async function createTurnSnapshot(
   if (bisectRunning || isTurnBisectionLockHeld(root)) {
     return {
       status: 'skipped',
+      dispatchBlocked: true,
       reason:
         'another snapshot or bisection owns the repository gate; retry after it finishes, or resolve the preserved owner record if recovery is needed',
     }
@@ -447,6 +448,7 @@ export async function createTurnSnapshot(
   if (!acquireTurnBisectionLock(root)) {
     return {
       status: 'error',
+      dispatchBlocked: true,
       message:
         'Snapshot capture refused: repository gate is busy or requires recovery; retry once ownership is resolved.',
     }

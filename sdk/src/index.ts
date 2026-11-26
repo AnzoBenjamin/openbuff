@@ -217,6 +217,16 @@ export {
   type ReplayableReadJournal,
   type ReplayableReadsOptions,
 } from './services/replayable-reads'
+export { runReplayableProgram } from './services/replayable-program'
+export type {
+  ReplayProgram,
+  ReplayProgramModel,
+  ReplayProgramOperation,
+  ReplayProgramOutput,
+  ReplayProgramPart,
+  ReplayProgramRequest,
+  ReplayProgramResult,
+} from './services/immutable-replay-program'
 // P1-T3 backend seam + ACP-remote backend.
 export type { ClientBackend } from './client/backend'
 export { InProcessBackend, resolveClientBackend } from './client/backend'

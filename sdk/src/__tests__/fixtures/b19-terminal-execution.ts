@@ -11,6 +11,7 @@ import {
   createHostAuthority,
 } from '../../../../common/src/util/execution-context'
 import { classifyCapturedTargetForExecution } from '../../services/harness-enforcement'
+import { bindNodeScopeClock } from '../../services/node-scope-clock'
 import {
   captureNodeTarget,
   type AdmittedNodeLaunch,
@@ -210,6 +211,8 @@ type FixtureOptions = {
   signal?: AbortSignal
   spawn?: CodebuffSpawn
   clock?: Clock
+  /** Enable the same private scope clock binding as the real SDK host. */
+  bindProcessClock?: boolean
   scheduler?: Scheduler
   authorize?: (input: PolicyInput) => Promise<AsyncDecision> | AsyncDecision
   authorizeSync?: (input: PolicyInput) => SyncDecision
@@ -340,6 +343,7 @@ export function createTerminalExecutionFixture(options: FixtureOptions = {}) {
   const requestAbort = new AbortController()
   const request = executionValue(authority.registerRequest({ budget, signal: requestAbort.signal }))
   const execution = executionValue(authority.bindAction({ owner, budget, request }))
+  if (options.bindProcessClock) bindNodeScopeClock(execution, clock)
   const transferBudget = options.transferLimit ? executionValue(authority.deriveBudget({
     parent: budget, memoKey: 'fixture-transfer-budget', limit: options.transferLimit,
   })) : budget

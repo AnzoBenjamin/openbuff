@@ -4,7 +4,10 @@ import {
   isProjectOnlyReadPolicy,
   type HostReadPolicy,
 } from '@codebuff/common/util/project-path-containment'
-import { captureNodeProjectReadFactory } from '../tools/node-filesystem'
+import {
+  captureNodeMutationBroker,
+  captureNodeProjectReadFactory,
+} from '../tools/node-filesystem'
 import { projectReadUnavailable } from '../tools/guarded-project-read'
 
 const projectReaders = new WeakMap<
@@ -12,6 +15,15 @@ const projectReaders = new WeakMap<
   NonNullable<ReturnType<typeof captureNodeProjectReadFactory>>
 >()
 const guardedViews = new WeakMap<CodebuffFileSystem, HostReadPolicy>()
+const mutationBrokers = new WeakMap<
+  CodebuffFileSystem,
+  NonNullable<ReturnType<typeof captureNodeMutationBroker>>
+>()
+
+/** Only an original Node adapter or a host-bound view of one can prove effects. */
+export function captureHostMutationBroker(source: CodebuffFileSystem) {
+  return mutationBrokers.get(source) ?? captureNodeMutationBroker(source)
+}
 
 /** Private registry, not an adapter-supplied claim or a serialized capability. */
 export function hasGuardedProjectReads(view: CodebuffFileSystem): boolean {
@@ -139,6 +151,8 @@ export function bindHostFileSystem(
     })
   }
   if (projectReader) projectReaders.set(bound, projectReader)
+  const broker = captureHostMutationBroker(source)
+  if (broker) mutationBrokers.set(bound, broker)
   if (strict && projectReader) guardedViews.set(bound, readPolicy)
   return Object.freeze(bound)
 }

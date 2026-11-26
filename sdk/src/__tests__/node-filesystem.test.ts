@@ -11,6 +11,7 @@ import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { changeFile } from '../tools/change-file'
 import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
 import { detectFilesystemCapabilities } from '../tools/filesystem-authority'
+import { getFilesStructured } from '../tools/read-files'
 
 test('default Node filesystem provides bounded text range reads', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'openbuff-range-'))
@@ -84,12 +85,26 @@ test('whole bounded reads preserve BOM bytes and distinguish visible/final-empty
   }
 })
 
-test('skipped and rejected long lines retain only the actual B/C backing capacities', async () => {
+test('a 24 MiB line under a 1 KiB budget retains only the actual B/C backing capacities and no authority', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'openbuff-budget-'))
   const file = path.join(directory, 'text.txt')
   try {
+    const lineBytes = 24 * 1024 * 1024
+    const budget = 1024
+    // Build the input using a fixed buffer; don't count an allocated copy of the line as reader RSS.
+    const writer = await open(file, 'w')
+    try {
+      const chunk = Buffer.alloc(NODE_TEXT_READ_CHUNK_BYTES, 0x78)
+      for (let offset = 0; offset < lineBytes; offset += chunk.length)
+        await writer.writeFile(chunk)
+      await writer.writeFile('\nyes\n')
+    } finally {
+      await writer.close()
+    }
     let peak = 0
     let pending = 0
+    const rssBefore = process.memoryUsage().rss
+    let rssObservedPeak = rssBefore
     const fs = createNodeFileSystem({
       textReadInstrumentation: {
         observe(event) {
@@ -102,16 +117,13 @@ test('skipped and rejected long lines retain only the actual B/C backing capacit
             [...capacities.values()].reduce((sum, value) => sum + value, 0),
           )
           pending = Math.max(pending, event.pendingBytes)
+          rssObservedPeak = Math.max(rssObservedPeak, process.memoryUsage().rss)
         },
       },
     })
-    await writeFile(
-      file,
-      `${'x'.repeat(2 * NODE_TEXT_READ_CHUNK_BYTES)}\nyes\n`,
-    )
-    const skipped = await fs.readTextRange!(file, 2, 2, 1024)
+    const skipped = await fs.readTextRange!(file, 2, 2, budget)
     expect(Buffer.from(skipped.data).toString('utf8')).toBe('yes\n')
-    const rejected = await fs.readTextRange!(file, 1, 1, 1024)
+    const rejected = await fs.readTextRange!(file, 1, 1, budget)
     expect(rejected).toMatchObject({
       complete: false,
       metadataComplete: true,
@@ -119,9 +131,51 @@ test('skipped and rejected long lines retain only the actual B/C backing capacit
     })
     expect(rejected.data.byteLength).toBe(0)
     expect(rejected.rawBasis).toBeUndefined()
-    expect(peak).toBe(1024 + NODE_TEXT_READ_CHUNK_BYTES)
-    expect(pending).toBeLessThanOrEqual(1024)
-    expect(rejected.data.buffer.byteLength).toBe(1024)
+
+    // Also carry the actual capped descriptor result through the SDK read
+    // projection with an explicit issuer. A host adapter can lower the cap
+    // without turning its incomplete bytes into edit authority.
+    const range = fs.readTextRange!
+    const capped = Object.create(fs) as typeof fs
+    capped.readTextRange = Object.assign(
+      (...[target, start, end, maxBytes, options]: Parameters<typeof range>) =>
+        range(target, start, end, Math.min(maxBytes, budget), options),
+      { readFileView: range.readFileView },
+    )
+    const projected = await getFilesStructured({
+      fs: capped,
+      cwd: directory,
+      filePaths: [],
+      ranges: [{ path: 'text.txt', startLine: 1, endLine: 1 }],
+      capabilityIssuer: { projectId: directory, runId: 'b05-capped-read' },
+    })
+    expect(projected.results).toHaveLength(1)
+    expect(projected.results[0]?.status).not.toBe('ok')
+    expect(JSON.stringify(projected)).not.toContain('cap.v4.')
+    expect(peak).toBe(budget + NODE_TEXT_READ_CHUNK_BYTES)
+    expect(pending).toBeLessThanOrEqual(budget)
+    expect(rejected.data.buffer.byteLength).toBe(budget)
+    console.log(
+      JSON.stringify({
+        b05: 'bounded-24-mib-line',
+        lineBytes,
+        budget,
+        peakBackingBytes: peak,
+        maxPendingBytes: pending,
+        rssBefore,
+        rssObservedPeak,
+        rssScope: 'samples during descriptor activity; not an allocator bound',
+        descriptor: {
+          complete: rejected.complete,
+          metadataComplete: rejected.metadataComplete,
+          totalLines: rejected.totalLines,
+          returnedBytes: rejected.data.byteLength,
+          rawBasis: Boolean(rejected.rawBasis),
+        },
+        sdkStatus: projected.results[0]?.status,
+        grantedAuthority: false,
+      }),
+    )
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

@@ -579,6 +579,7 @@ export const Chat = ({
     moveQueuedMessage,
     undoQueueRemoval,
     addToQueue,
+    parkRejectedPrompt,
     stopStreaming,
     setCanProcessQueue,
     pauseQueue,
@@ -593,7 +594,7 @@ export const Chat = ({
     pausedQueueText,
     inputPlaceholder,
     handleCtrlC,
-    ensureQueueActiveBeforeSubmit,
+    getPromptTurnState,
     nextCtrlCWillExit,
   } = useChatStreaming({
     agentMode,
@@ -793,8 +794,6 @@ export const Chat = ({
         setSessionCostCents((prev) => prev + costCents),
       onTimerEvent: () => {},
       isQueuePausedRef,
-      isProcessingQueueRef,
-      resumeQueue,
       pauseQueue,
       continueChat,
       continueChatId,
@@ -869,7 +868,6 @@ export const Chat = ({
         setEditingMessageId(null)
         committedEdit = true
       }
-      ensureQueueActiveBeforeSubmit()
 
       // P6.1: Guard the top-level submit path so an unexpected rejection is
       // caught, logged, and surfaced as a visible inline error message instead
@@ -887,7 +885,10 @@ export const Chat = ({
           isChainInProgressRef,
           isStreaming,
           streamMessageIdRef,
+          getPromptTurnState,
           addToQueue,
+          parkRejectedPrompt,
+          pauseQueue,
           clearMessages,
           saveToHistory,
           scrollToLatest,
@@ -895,6 +896,7 @@ export const Chat = ({
           setCanProcessQueue,
           setInputFocused,
           setInputValue,
+          restoreComposerDraft: useChatStore.getState().setInputValue,
           setMessages,
           stopStreaming,
         })
@@ -2053,15 +2055,11 @@ export const Chat = ({
       setPlanSessionPickerCommand(null)
       setInputFocused(true)
 
-      // Picker-driven resume previously submitted with the mode captured when
-      // the picker opened. Switch first so both the visible persistent toggle
-      // and command routing enter EXECUTE_PLAN immediately.
-      const submitMode = command === 'resume-plan' ? 'EXECUTE_PLAN' : agentMode
-      if (command === 'resume-plan') {
-        setAgentMode('EXECUTE_PLAN')
-      }
-
-      onSubmitPrompt(`/${command} ${sessionDir}`, submitMode)
+      // The registry switches mode only after the prompt passes preflight.
+      // A picker selection is an action, not ownership of a newer draft.
+      onSubmitPrompt(`/${command} ${sessionDir}`, agentMode, {
+        preserveInputValue: true,
+      })
         .then((result) => handleCommandResult(result))
         .catch((error) => {
           logger.error(
@@ -2078,7 +2076,6 @@ export const Chat = ({
       setInputFocused,
       onSubmitPrompt,
       agentMode,
-      setAgentMode,
       handleCommandResult,
     ],
   )

@@ -3,7 +3,9 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -75,7 +77,7 @@ async function readWholeFiles(
 }
 
 describe('edit_transaction multi-file no-match recovery loop', () => {
-  it('retains SDK recovery-required through the runtime and allows a real retry after repair', async () => {
+  it('retains SDK recovery-required for a replaced postimage and retries after independent preimage repair', async () => {
     const { handleToolCall } = await import('../../../../sdk/src/run')
     const { createNodeFileSystem } =
       await import('../../../../sdk/src/tools/node-filesystem')
@@ -93,10 +95,15 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
     const later = path.join(cwd, 'later.txt')
     writeFileSync(target, 'original\r\n')
     writeFileSync(later, 'unchanged\n')
-    try {
-      const fs = createNodeFileSystem({
-        mutationBroker: await WorkspaceMutationBroker.create({ cwd, stateDir }),
+    const identity = (file: string) => {
+      const { dev, ino, ctimeNs, birthtimeNs, mode } = statSync(file, {
+        bigint: true,
       })
+      return { dev, ino, ctimeNs, birthtimeNs, mode }
+    }
+    try {
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+      const fs = createNodeFileSystem({ mutationBroker: broker })
       const intentLog = createTransactionIntentLogForWorkspace({
         cwd,
         stateDir,
@@ -104,7 +111,12 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
       const commit = fs.conditionalCommit!
       fs.conditionalCommit = async (file, bytes, options) => {
         if (String(file) === later) {
-          writeFileSync(target, 'foreign\n')
+          // Replace the real broker postimage with a different physical file.
+          const foreign = path.join(cwd, 'foreign.txt')
+          writeFileSync(foreign, 'foreign\n', {
+            mode: statSync(target).mode & 0o777,
+          })
+          renameSync(foreign, target)
           throw new Error('fixture: second commit failed')
         }
         return commit(file, bytes, options)
@@ -133,10 +145,22 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
         { outcome: 'rollback_incomplete' },
       )
       const pending = await intentLog.recoverInterruptedTransactions()
-      expect(pending.ok ? pending.transactions : []).toHaveLength(1)
-      const transactionId = pending.ok
-        ? pending.transactions[0]?.transactionId
-        : undefined
+      if (!pending.ok) throw new Error(pending.error)
+      expect(pending.transactions).toHaveLength(1)
+      const transactionId = pending.transactions[0]!.transactionId
+      const receipts = await broker.listReceipts()
+      expect(receipts).toMatchObject([
+        {
+          action: 'commit',
+          path: 'target.txt',
+          state: 'committed',
+          correlation: { transactionId, from: 0, through: 0 },
+          resultIdentity: { ino: expect.any(String) },
+        },
+      ])
+      expect(String(identity(target).ino)).not.toBe(
+        receipts[0]!.resultIdentity!.ino,
+      )
       const runId = 'transaction-runtime-retry'
       const fileProcessingState = createFileProcessingState()
       const dispatch = (id: string) =>
@@ -191,34 +215,46 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
             return response.output as CodebuffToolOutput<'edit_transaction'>
           },
         })
-      const blocked = (await dispatch('blocked')).output[0]
-      expect(blocked?.type === 'json' ? blocked.value : null).toMatchObject({
-        errorCode: 'recovery_required',
-        errorMessage: expect.stringContaining(
-          'No edits from this call were applied',
-        ),
-        recovery: {
-          kind: 'transaction_intent',
-          transactionIds: [transactionId],
-        },
-      })
-      expect(readFileSync(target, 'utf8')).toBe('foreign\n')
-      await expect(
-        fs.readFile(path.join(cwd, 'created-a.txt'), 'utf8'),
-      ).rejects.toMatchObject({ code: 'ENOENT' })
-      await expect(
-        fs.readFile(path.join(cwd, 'created-b.txt'), 'utf8'),
-      ).rejects.toMatchObject({ code: 'ENOENT' })
+      const expectBlockedWithoutWrites = async (id: string, content: string) => {
+        const before = identity(target)
+        const blocked = (await dispatch(id)).output[0]
+        expect(blocked?.type === 'json' ? blocked.value : null).toMatchObject({
+          errorCode: 'recovery_required',
+          errorMessage: expect.stringContaining(
+            'No edits from this call were applied',
+          ),
+          recovery: {
+            kind: 'transaction_intent',
+            transactionIds: [transactionId],
+          },
+        })
+        expect(readFileSync(target, 'utf8')).toBe(content)
+        expect(identity(target)).toEqual(before)
+        expect(readFileSync(later, 'utf8')).toBe('unchanged\n')
+        for (const file of ['created-a.txt', 'created-b.txt']) {
+          await expect(
+            fs.readFile(path.join(cwd, file), 'utf8'),
+          ).rejects.toMatchObject({ code: 'ENOENT' })
+        }
+        expect(await broker.listReceipts()).toEqual(receipts)
+      }
+      await expectBlockedWithoutWrites('blocked', 'foreign\n')
 
-      // Operator re-establishes the exact owned postimage. A retry first
-      // compensates the interrupted group, then admits the new files.
+      // Equal bytes cannot recover the original receipt's physical identity.
       writeFileSync(target, 'owned\n')
+      await expectBlockedWithoutWrites('blocked-matching-bytes', 'owned\n')
+
+      // The operator can restore the exact preimage instead. Recovery only
+      // settles the intent; the retry may then write its two new files.
+      writeFileSync(target, 'original\r\n')
+      const repaired = identity(target)
       const retried = (await dispatch('retry')).output[0]
       expect(retried?.type === 'json' ? retried.value : null).toMatchObject({
         kind: 'file_mutation_result',
         outcome: 'applied',
       })
       expect(readFileSync(target, 'utf8')).toBe('original\r\n')
+      expect(identity(target)).toEqual(repaired)
       expect(readFileSync(later, 'utf8')).toBe('unchanged\n')
       expect(readFileSync(path.join(cwd, 'created-a.txt'), 'utf8')).toBe(
         'created A',
@@ -226,6 +262,13 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
       expect(readFileSync(path.join(cwd, 'created-b.txt'), 'utf8')).toBe(
         'created B',
       )
+      expect(
+        (await broker.listReceipts()).map(({ action, path }) => [action, path]),
+      ).toEqual([
+        ['commit', 'target.txt'],
+        ['create', 'created-a.txt'],
+        ['create', 'created-b.txt'],
+      ])
       expect(await intentLog.recoverInterruptedTransactions()).toMatchObject({
         ok: true,
         transactions: [],

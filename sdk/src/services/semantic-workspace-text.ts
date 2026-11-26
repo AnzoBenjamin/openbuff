@@ -161,7 +161,6 @@ export function spliceSemanticText(
       ? byteOffsets.get(line)!.get(character)!
       : utf16Offset(text, range, character)
   }
-  const seen = new Set<string>()
   const positioned: Array<{
     start: number
     end: number
@@ -172,15 +171,11 @@ export function spliceSemanticText(
     const start = offset(edit.range.start)
     const end = offset(edit.range.end)
     if (start > end) throw new Error('edit range is reversed')
-    const key = `${start}:${end}:${edit.newText}`
-    if (seen.has(key)) continue
-    seen.add(key)
     positioned.push({ start, end, newText: edit.newText, order })
   }
-  // Stable insertion order at a shared boundary; a nonempty overlap refuses.
-  positioned.sort(
-    (a, b) => a.start - b.start || a.end - b.end || a.order - b.order,
-  )
+  // At a shared start the wire order must be inserts followed by at most
+  // one replacement. Sorting by end would silently repair malformed input.
+  positioned.sort((a, b) => a.start - b.start || a.order - b.order)
   let current = 0
   const pieces: string[] = []
   for (const { start, end, newText } of positioned) {
@@ -451,6 +446,10 @@ export function compileVersionedSemanticEdit(
     ) {
       throw new Error('unsupported annotation or malformed text edit')
     }
+    // Do not drop a document basis from the group or turn it into a write just
+    // to check it. This lane has no check-only operation.
+    if (edits.length === 0)
+      throw new Error('empty text edit lists are unsupported in WorkspaceEdit')
     const textAnnotations = edits.map((edit) => annotationFor(edit))
     const staged = created.get(uri)
     if (staged) {
@@ -477,7 +476,6 @@ export function compileVersionedSemanticEdit(
         'semantic edit document version does not match the pre-request version',
       )
     }
-    if (edits.length === 0) continue
     const newContent = spliceSemanticText(
       document.rawText,
       edits as LspTextEdit[],

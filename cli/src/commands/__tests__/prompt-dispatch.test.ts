@@ -8,6 +8,8 @@ import {
   test,
 } from 'bun:test'
 
+import { SLASH_COMMANDS } from '../../data/slash-commands'
+import { filterSlashCommands } from '../../hooks/use-suggestion-engine'
 import { useChatStore } from '../../state/chat-store'
 import * as turnSnapshots from '../../utils/turn-snapshots'
 import { routeUserPrompt } from '../router'
@@ -96,6 +98,18 @@ test('legacy OAuth callback routing never retains authorization input in transcr
   expect(history).toEqual([])
   expect(harness.input.text).toBe('')
   expect(useChatStore.getState().inputMode).toBe('default')
+})
+
+test('the fuzzy plan-use suggestion opens the local picker without sending a prompt', async () => {
+  const proposal = filterSlashCommands(SLASH_COMMANDS, 'plu').find(
+    ({ id }) => id === 'plan-use',
+  )
+  expect(proposal?.description).toContain('/plan-use <slug>')
+  const harness = createHarness(`/${proposal!.id}`)
+  const result = await routeUserPrompt(harness.params)
+  expect(result).toEqual({ openPlanSessionPicker: 'plan-use' })
+  expect(harness.sent).toEqual([])
+  expect(harness.queued).toEqual([])
 })
 
 describe('prompt-producing command dispatch', () => {

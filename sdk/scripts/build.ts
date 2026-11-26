@@ -67,6 +67,51 @@ async function build() {
   // Keep named reexports as local live bindings before Bun's tree shaking.
   // A post-build alias fix cannot recover a function removed with its module.
   const sdkEntry = resolve('src/index.ts')
+  // Embed the source closure at compile time. Reopening an installed file
+  // after import cannot establish which version the process loaded.
+  const replaySourceNames = [
+    'immutable-replay-program.ts',
+    'private-replay-journal.ts',
+    'replay-program-store.ts',
+    'replayable-program.ts',
+  ]
+  const replayClosure = createHash('sha256')
+  const replaySources = new Map<string, string>()
+  for (const name of replaySourceNames) {
+    const file = resolve('src', 'services', name)
+    const bytes = await readFile(file)
+    replayClosure.update(`${name}:${bytes.length}:`).update(bytes)
+    replaySources.set(file, bytes.toString('utf8'))
+  }
+  const replayBuildIdentity = replayClosure.digest('hex')
+  const replayEntry = resolve('src', 'services', 'replayable-program.ts')
+  const runtimeIdentityPlugin: import('bun').BunPlugin = {
+    name: 'immutable-replay-build-basis',
+    setup(builder) {
+      builder.onLoad(
+        {
+          filter:
+            /[/\\]src[/\\]services[/\\](?:immutable-replay-program|private-replay-journal|replay-program-store|replayable-program)\.ts$/,
+        },
+        (args) => {
+          const source = replaySources.get(args.path)
+          if (!source) return undefined
+          if (args.path !== replayEntry)
+            return { contents: source, loader: 'ts' }
+          const placeholder = 'const embeddedReplayBuildIdentity = undefined'
+          if (!source.includes(placeholder))
+            throw new Error('Missing replay build identity placeholder')
+          return {
+            contents: source.replace(
+              placeholder,
+              `const embeddedReplayBuildIdentity = ${JSON.stringify(replayBuildIdentity)}`,
+            ),
+            loader: 'ts',
+          }
+        },
+      )
+    },
+  }
   const publicReexports: import('bun').BunPlugin = {
     name: 'sdk-public-reexports',
     setup(builder) {
@@ -100,7 +145,7 @@ async function build() {
     loader: {
       '.scm': 'text',
     },
-    plugins: [publicReexports],
+    plugins: [publicReexports, runtimeIdentityPlugin],
   })
 
   console.log('📦 Building CJS format...')
@@ -124,7 +169,7 @@ async function build() {
     loader: {
       '.scm': 'text',
     },
-    plugins: [publicReexports],
+    plugins: [publicReexports, runtimeIdentityPlugin],
   })
 
   console.log('📝 Generating and bundling TypeScript declarations...')

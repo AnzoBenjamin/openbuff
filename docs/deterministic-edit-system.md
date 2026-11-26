@@ -293,17 +293,27 @@ This is **not** an always-on force-read before the first multi-file attempt. Fre
 reads of the failing paths are abort-time / capability / match recovery only.
 
 Crash recovery is separate. With a workspace intent log configured, a multi-file
-commit needs a durably saved pre-image, exact expected postimage, and existing
-physical parent for each path. A log admission failure (including the 8 MiB
-encoded-log limit) refuses the group before any file writes. The log records
-which staged paths entered dispatch; it never infers ownership just because bytes
-differ from the pre-image. Incomplete compensation, foreign bytes or permissions,
-replaced parents, and legacy intents without ownership evidence remain
-`recovery_required`. Participating mutation tools report the condition while
-read-only tools remain available. After repair, startup or a later mutation can
-retry recovery. These are cooperative checks, not filesystem-wide atomicity or
-isolation from external writers. The private log contains unencrypted source
-pre-images; keep its state directory outside the workspace and private.
+commit needs a verified broker-backed filesystem, a durably saved pre-image,
+an exact expected postimage, and an existing physical parent for each path.
+Admission failures (including the 8 MiB encoded-log cap) refuse before writes.
+A dispatch marker is not proof of an effect: recovery must also join the
+original action's durable broker receipt and the live physical postimage.
+The broker retains these receipts until durable acknowledgement. An
+interrupted move is reversed through a guarded no-clobber move, not by
+separately deleting a matching destination. A same-byte external replacement
+is not an owned after-state.
+
+Incomplete compensation, foreign bytes or permissions, replaced parents,
+and legacy intents without ownership evidence remain `recovery_required`.
+If all writes completed but the group acknowledgement did not persist, the
+immediate result is unconfirmed; a later owner can reconcile the proved commit
+without writing the files again. Participating mutation tools report these
+conditions while read-only tools remain available. An explicit operator repair
+can restore the preimage and retry without giving the broker permission to
+rewrite foreign bytes. A stale broker lock still needs explicit resolution;
+automatic takeover is not supported. These are cooperative checks, not
+filesystem-wide atomicity or isolation from external writers. The private log
+contains unencrypted source pre-images; keep it outside the workspace and private.
 
 On those aborts the model-visible result is additive and machine-readable:
 

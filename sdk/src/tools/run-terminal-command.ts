@@ -18,6 +18,7 @@ import { SIGTERM_GRACE_MS } from '../services/semgrep-baseline'
 import { MAX_TERMINAL_SPOOL_BYTES, TerminalOutputSpool } from './terminal-output-spool'
 import { processCleanupSchema } from '@codebuff/common/tools/params/process-cleanup'
 import { registerPreparedNativeLaunch } from '../services/native-host-execution'
+import { registerNodeLaunchClock } from '../services/node-scope-clock'
 import {
   evaluateTerminalCommandPolicy,
   type TerminalPermissionProfile,
@@ -1458,6 +1459,10 @@ export async function runTerminalCommand({
   if (!prepared.ok) return refused(prepared)
   const preparedLaunch = prepared.value
   registerPreparedNativeLaunch(context.value.execution, target.value, preparedLaunch)
+  // This path prepares the budgeted target directly. Keep the same private
+  // clock binding as prepareNodeLaunch; a transferred launch is already
+  // bound by its receiver and must not be rebound to the parent's clock.
+  if (!detach) registerNodeLaunchClock(context.value.execution, preparedLaunch)
   const admitted = await admitWithCallerCancellation(preparedLaunch, signal, requestedSignal)
   if (!admitted.ok) return refused(admitted)
   const launchFacts = preparedLaunch.facts()

@@ -138,6 +138,7 @@ type ChatStoreActions = {
   ) => void
   setInputValue: (
     value: InputValue | ((prev: InputValue) => InputValue),
+    restoredAttachments?: PendingAttachment[],
   ) => void
   setInputFocused: (focused: boolean) => void
   setIsFocusSupported: (supported: boolean) => void
@@ -380,7 +381,7 @@ export const useChatStore = create<ChatStore>()(
           typeof value === 'function' ? value(state.focusedAgentId) : value
       }),
 
-    setInputValue: (value) =>
+    setInputValue: (value, restoredAttachments) =>
       set((state) => {
         const { text, cursorPosition, lastEditDueToNav } =
           typeof value === 'function'
@@ -400,6 +401,8 @@ export const useChatStore = create<ChatStore>()(
         state.inputValue = text
         state.cursorPosition = cursor
         state.lastEditDueToNav = lastEditDueToNav
+        if (restoredAttachments !== undefined)
+          state.pendingAttachments = restoredAttachments
       }),
 
     setInputFocused: (focused) =>

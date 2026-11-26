@@ -867,9 +867,16 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
           receipt: params.canonicalReceipt,
           capabilityScope: params.capabilityScope,
         })
+        // Unlike an ordinary unconfirmed result, this projection can certify
+        // disk effects. The embedded receipt alone must not authorize them.
+        const verifiedAcknowledgementPending =
+          reconciled.mutation.authorityReceipt?.status ===
+          'acknowledgement_pending'
         if (
-          mutation.outcome !== 'unconfirmed' &&
-          reconciled.mutation.outcome === 'unconfirmed'
+          reconciled.mutation.outcome === 'unconfirmed' &&
+          (mutation.outcome !== 'unconfirmed' ||
+            (mutation.authorityReceipt?.status === 'acknowledgement_pending' &&
+              !verifiedAcknowledgementPending))
         ) {
           return {
             valid: false,
@@ -884,7 +891,10 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
             ],
           }
         }
-        if (reconciled.mutation.outcome !== 'unconfirmed') {
+        if (
+          reconciled.mutation.outcome !== 'unconfirmed' ||
+          verifiedAcknowledgementPending
+        ) {
           return {
             valid: true,
             output: [
@@ -1040,7 +1050,10 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
           receipt: params.canonicalReceipt,
           capabilityScope: params.capabilityScope,
         })
-        if (reconciled.mutation.outcome !== 'unconfirmed') {
+        if (
+          reconciled.mutation.outcome !== 'unconfirmed' ||
+          reconciled.mutation.authorityReceipt?.status === 'acknowledgement_pending'
+        ) {
           return {
             valid: false,
             output: jsonToolResult(

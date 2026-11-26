@@ -2102,8 +2102,11 @@ the command palette). Their static registry lives in
 `cli/src/data/slash-commands.ts` and is exported as one array plus two
 derived helpers:
 
-- `SLASH_COMMANDS: SlashCommand[]` — the authoritative list of every
-  registered command (mode commands are generated from `AGENT_MODES`).
+- `SLASH_COMMANDS: SlashCommand[]` — the shared static metadata for
+  suggestions and `/help` → **All commands** (mode commands are generated
+  from `AGENT_MODES`). Insertion-only shortcuts are not executable routes.
+  The legacy `general-agent` route is represented by the `agent:general`
+  insertion shortcut, and the disabled legacy `publish` route is omitted.
 - `SLASHLESS_COMMAND_IDS: Set<string>` — the lowercased ids of every
   command flagged `implicitCommand: true`. These are the commands that
   can be invoked without a leading `/` when the input matches the id
@@ -2132,27 +2135,33 @@ Every entry conforms to the `SlashCommand` interface:
 
 ### Registered commands
 
-The static command set (current as of the source file) is grouped by
-purpose:
+The grouped reference below lists all static command IDs and aliases. The
+inline menu ranks direct matches before fuzzy matches and shows the command's
+usage hint or description. For example, `/plu` can find `/plan-use`.
 
-| Group              | Commands                                                                                            |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| Diagnostics / info | `info` (`status`), `help` (`h`, `?`, implicit), `setup`, `models`, `provider`                       |
-| Project scaffold   | `init` (implicit)                                                                                   |
-| Provider account   | `connect` (`chatgpt`, `connect:chatgpt`) — only present when `CHATGPT_OAUTH_ENABLED` is `true`      |
-| Edit history       | `undo`, `redo`                                                                                      |
-| Durable plans      | `interview`, `resume-plan` (`rp`), `update-plan` (`up`), `plan-status` (`ps`), `lessons` (`lesson`), `plans` (`plan-ls`), `plan-use` (`plan-active`, `use-plan`) |
-| Code review        | `review`                                                                                            |
-| Conversation       | `new` (`n`, `clear`, `c`, `reset`, implicit), `history` (`chats`), `prompts` (`prompt-search`)      |
-| Agent shortcuts    | `agent:general` (inserts `@general-agent `)                                                         |
-| Feedback / misc    | `feedback`, `bash` (`!`), `diff`, `changes`, `image` (`img`, `attach`)                              |
-| Mode switching     | `mode:<mode>` for every mode in `AGENT_MODES`, each with a `model:<mode>` alias                     |
-| Theme / session    | `theme:toggle`, `exit` (`quit`, `q`, implicit)                                                      |
+| Group              | Commands |
+| ------------------ | -------- |
+| Diagnostics and help | `/info` (`/status`), `/doctor` (`/diagnose`), `/help` (`/h`, `/?`) |
+| Context, cost, and memory | `/context` (`/ctx`), `/usage`, `/compact`, `/index`, `/memory` (`/mem`) |
+| Project scaffold | `/init` |
+| Provider setup and routing | `/setup`, `/models`, `/provider`, `/connect` (`/connect:chatgpt`, `/chatgpt`, when `CHATGPT_OAUTH_ENABLED` is `true`) |
+| Approvals | `/permissions` (`/approvals`) |
+| Conversation history | `/undo`, `/redo`, `/new` (`/n`, `/clear`, `/c`, `/reset`), `/history` (`/chats`), `/prompts` (`/prompt-search`) |
+| Durable plans | `/interview`, `/resume-plan` (`/rp`), `/update-plan` (`/up`), `/plan-status` (`/ps`), `/lessons` (`/lesson`), `/plans` (`/plan-ls`), `/plan-use` (`/plan-active`, `/use-plan`), `/plan-timeline` (`/tl`), `/plan-artifact` |
+| Review and repository | `/review`, `/diff`, `/changes`, `/bash` (`/!`) |
+| Agent shortcut | `/agent:general` (inserts `@general-agent `) |
+| Feedback and media | `/feedback` (`/bug`, `/report`), `/image` (`/img`) |
+| Mode switching | `/mode:default` (`/model:default`), `/mode:plan` (`/model:plan`), `/mode:execute_plan` (`/model:execute_plan`) |
+| Workspace snapshots | `/undo-turn`, `/restore`, `/bisect-turn` |
+| Session and appearance | `/detach`, `/attach`, `/theme:toggle`, `/exit` (`/quit`, `/q`) |
+| Updates | `/update` (`/upgrade`, `/check-update`) |
 
-Starting a new durable plan is done by switching to plan MODE via
-`mode:plan` (documented in the Mode switching row below); the standalone
-`/plan` slash command has been removed because plan MODE already covers
-that entry path and produces structured plan artifacts. The durable-plan
+The bare IDs `help`, `init`, `new`, and `exit` also work without a slash.
+To initialize an existing directory without launching the TUI, use
+`openbuff init [--cwd <directory>]`.
+
+Starting a new durable plan is done by switching to plan mode via
+`/mode:plan`; the standalone `/plan` slash command has been removed. The durable-plan
 quartet (`/resume-plan`, `/update-plan`, `/plan-status`, `/lessons`) is
 backed by the `update_plan_status` and `create_plan` tools documented
 above and is the user-facing surface to the PlanLink artifact flow.

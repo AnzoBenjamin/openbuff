@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 
 import { COMMAND_REGISTRY, findCommand } from '../command-registry'
+import { filterSlashCommands } from '../../hooks/use-suggestion-engine'
 import {
   formatCommandDirectory,
   SLASH_COMMANDS,
@@ -35,11 +37,59 @@ describe('static command discovery parity', () => {
     }
   })
 
+  test('the executable registry follows the canonical discoverable metadata order', () => {
+    expect(
+      COMMAND_REGISTRY.filter(({ name }) => !hiddenRoutes.has(name)).map(
+        ({ name }) => name,
+      ),
+    ).toEqual(
+      SLASH_COMMANDS.filter((item) => !item.insertText).map(({ id }) => id),
+    )
+  })
+
   test('every non-insertion menu command reaches the registered local router', () => {
     for (const command of SLASH_COMMANDS) {
       if (command.insertText) continue
       expect(findCommand(command.id)?.name, command.id).toBe(command.id)
     }
+  })
+
+  test('the public slash-command reference lists every static command and alias exactly once', () => {
+    const docs = readFileSync(
+      new URL('../../../../docs/agents-and-tools.md', import.meta.url),
+      'utf8',
+    )
+    const section = docs
+      .split('\n### Registered commands\n')[1]
+      ?.split('\n### ')[0]
+    expect(section).toBeDefined()
+    const table = section!
+      .split('\n')
+      .filter((line) => line.startsWith('|'))
+      .join('\n')
+    const documented = Array.from(
+      table.matchAll(/`\/([^`\s]+)`/g),
+      (match) => match[1],
+    )
+    const expected = SLASH_COMMANDS.flatMap(({ id, aliases }) => [
+      id,
+      ...(aliases ?? []),
+    ])
+    expect(documented.sort()).toEqual(expected.sort())
+  })
+
+  test('inline fuzzy suggestions retain usage hints and resolve to the local command', () => {
+    const matches = filterSlashCommands(SLASH_COMMANDS, 'plu')
+    const plan = matches.find((item) => item.id === 'plan-use')
+    expect(plan).toMatchObject({
+      labelHighlightIndices: [0, 1, 5],
+      description: expect.stringContaining('/plan-use <slug>'),
+    })
+    expect(findCommand(plan!.id)?.name).toBe('plan-use')
+    expect(filterSlashCommands(SLASH_COMMANDS, 'plan-act')[0]?.id).toBe(
+      'plan-use',
+    )
+    expect(filterSlashCommands(SLASH_COMMANDS, 'pl')[0]?.id).toBe('plans')
   })
 
   test('plan commands and local feedback are described truthfully', () => {

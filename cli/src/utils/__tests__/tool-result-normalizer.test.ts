@@ -143,6 +143,27 @@ describe('[B03] confirmed mutation projection', () => {
     expect(computeCompletionSummary([block(historical)])?.filesEdited).toBe(0)
   })
 
+  test('a pending acknowledgement counts retained edits without reporting success', () => {
+    const mutation = buildFileMutationResultFromReceiptV1({
+      ...receipt,
+      transactionId: 'pending-tx',
+      status: 'acknowledgement_pending',
+      actions: receipt.actions.map((action) => ({
+        ...action,
+        status: 'forward_verified',
+        forward: { outcome: 'applied', afterHashes: receipt.finalHashes },
+      })),
+    })
+    const tool = block([{ type: 'json', value: mutation }])
+    expect(getConfirmedMutationActions(tool).map(({ path }) => path))
+      .toEqual(['a.txt'])
+    expect(computeCompletionSummary([tool])?.filesEdited).toBe(1)
+    expect(outcomeForTool(tool)).toMatchObject({
+      label: 'unconfirmed',
+      tone: 'warn',
+    })
+  })
+
   test('CLI summary and status preserve refused and uncertain actions', () => {
     const refused = buildFileMutationResultFromReceiptV1({
       ...receipt,
