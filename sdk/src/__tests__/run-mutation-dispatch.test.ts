@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -34,6 +42,7 @@ import {
   sdkCallbackOptions,
 } from './sdk-callback-fixture'
 import { createNodeFileSystem } from '../tools/node-filesystem'
+import { createTransactionIntentLogForWorkspace } from '../tools/transaction-intent-log'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import * as databaseModule from '../impl/database'
 import { handleToolCall } from '../run'
@@ -62,7 +71,9 @@ let callbackFixture: ReturnType<typeof createSdkCallbackFixture>
 beforeEach(() => {
   callbackFixture = createSdkCallbackFixture('mutation')
 })
-afterEach(() => { callbackFixture.close() })
+afterEach(() => {
+  callbackFixture.close()
+})
 
 const auditInput = {
   sessionSlug: 'audit-dispatch',
@@ -200,7 +211,12 @@ describe('[B36] diagnostic SDK/client projection', () => {
       const counter = path.join(workspace, 'cargo-invocations.txt')
       mkdirSync(bin)
       // Invoke the admitted cargo argv through PATH; the peer is a real process.
-      writeFileSync(path.join(bin, 'cargo'), '#!' + process.execPath + '\n' + String.raw`
+      writeFileSync(
+        path.join(bin, 'cargo'),
+        '#!' +
+          process.execPath +
+          '\n' +
+          String.raw`
 const fs = require('node:fs');
 const counter = process.env.OPENBUFF_CALLBACK_CARGO_COUNTER;
 const name = process.env.OPENBUFF_CALLBACK_CARGO_CASE;
@@ -224,7 +240,9 @@ if (hasError) console.log(JSON.stringify({
   },
 }));
 process.exit(hasError ? 101 : 0);
-`, { mode: 0o755 })
+`,
+        { mode: 0o755 },
+      )
       const hostConfiguration = sdkCallbackOptions(workspace).hostConfiguration!
       const environment = {
         ...hostConfiguration.environment,
@@ -240,17 +258,19 @@ process.exit(hasError ? 101 : 0);
           expect(argv).toEqual(['check', '--message-format=json'])
           launches++
         }
-        return nodeSpawn(command, [...argv ?? []], options ?? {})
+        return nodeSpawn(command, [...(argv ?? [])], options ?? {})
       }
       if (name === 'shifted-error') {
         mkdirSync(path.join(workspace, 'src'))
         writeFileSync(path.join(workspace, 'src/lib.rs'), 'fn fixture() {}\n')
       }
       if (name === 'thrown-baseline') {
-        spyOn(diagnosticDeltaModule, 'captureDiagnosticObservation')
-          .mockImplementationOnce(async () => {
-            throw new Error('Baseline capture failed unexpectedly')
-          })
+        spyOn(
+          diagnosticDeltaModule,
+          'captureDiagnosticObservation',
+        ).mockImplementationOnce(async () => {
+          throw new Error('Baseline capture failed unexpectedly')
+        })
       }
       try {
         const outputs = await dispatchToolCalls({
@@ -261,9 +281,10 @@ process.exit(hasError ? 101 : 0);
                 type: 'file',
                 path: 'src/lib.rs',
                 instructions: 'Create the fixture source',
-                content: name === 'shifted-error'
-                  ? '// inserted line 1\n// inserted line 2\n// inserted line 3\n// inserted line 4\nfn fixture() {}\n'
-                  : 'fn fixture() {}\n',
+                content:
+                  name === 'shifted-error'
+                    ? '// inserted line 1\n// inserted line 2\n// inserted line 3\n// inserted line 4\nfn fixture() {}\n'
+                    : 'fn fixture() {}\n',
               },
             },
             {
@@ -289,7 +310,8 @@ process.exit(hasError ? 101 : 0);
             env: {
               OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true',
               OPENBUFF_PROVIDER_CONFIG: configPath,
-              OPENBUFF_DIAGNOSTIC_DELTA_MODE: mode === 'default' ? 'strict' : 'tolerant',
+              OPENBUFF_DIAGNOSTIC_DELTA_MODE:
+                mode === 'default' ? 'strict' : 'tolerant',
             },
             onFilesystemMutation:
               name === 'foreign-bytes' || name === 'failed-foreign-baseline'
@@ -413,23 +435,40 @@ process.exit(hasError ? 101 : 0);
 })
 
 describe('registered SDK callback admission controls', () => {
-  afterEach(() => { mock.restore() })
+  afterEach(() => {
+    mock.restore()
+  })
 
   it('refuses changed forwarded input before invoking the registered tool override', async () => {
     let calls = 0
-    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(async params => {
-      const callback = await beginSdkCallback(params)
-      const prepared = await callback.prepare({ toolName: 'git_status', input: {} })
-      await expect(params.requestToolCall({
-        ...prepared,
-        input: { include_diff: true },
-      })).rejects.toThrow('registered B02 action and exact forwarded input')
-      expect(calls).toBe(0)
-      return { sessionState: callback.sessionState, output: { type: 'lastMessage' as const, value: [] } }
-    })
+    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
+      async (params) => {
+        const callback = await beginSdkCallback(params)
+        const prepared = await callback.prepare({
+          toolName: 'git_status',
+          input: {},
+        })
+        await expect(
+          params.requestToolCall({
+            ...prepared,
+            input: { include_diff: true },
+          }),
+        ).rejects.toThrow('registered B02 action and exact forwarded input')
+        expect(calls).toBe(0)
+        return {
+          sessionState: callback.sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
+      },
+    )
     const result = await new OpenbuffClient({
       ...callbackFixture.options,
-      overrideTools: { git_status: async () => { calls++; return [{ type: 'json', value: { status: '' } }] } },
+      overrideTools: {
+        git_status: async () => {
+          calls++
+          return [{ type: 'json', value: { status: '' } }]
+        },
+      },
     }).run({ agent: 'base2', prompt: 'exact request binding' })
     expect(result.output.type).toBe('lastMessage')
     expect(calls).toBe(0)
@@ -439,10 +478,12 @@ describe('registered SDK callback admission controls', () => {
     let cargoDispatches = 0
     const spawn: CodebuffSpawn = (command, argv, options) => {
       if (command === 'cargo') cargoDispatches++
-      return nodeSpawn(command, [...argv ?? []], options ?? {})
+      return nodeSpawn(command, [...(argv ?? [])], options ?? {})
     }
     const outputs = await dispatchToolCalls({
-      calls: [{ toolName: 'run_file_change_hooks', input: { files: ['src/lib.rs'] } }],
+      calls: [
+        { toolName: 'run_file_change_hooks', input: { files: ['src/lib.rs'] } },
+      ],
       clientOptions: {
         cwd: callbackFixture.cwd,
         spawnSource: spawn,
@@ -460,7 +501,9 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
   })
 
   it('retains a refused receipt after later recovery without publishing the refused edit', async () => {
-    const fs = createMockFs({ files: { [callbackFixture.file('a.txt')]: 'before\n' } })
+    const fs = createMockFs({
+      files: { [callbackFixture.file('a.txt')]: 'before\n' },
+    })
     const commit = fs.conditionalCommit!.bind(fs)
     let attempts = 0
     fs.conditionalCommit = async (filePath, data, options) => {
@@ -528,7 +571,9 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
       getExactContentHash('recovered\n'),
     )
     expect(attempts).toBe(2)
-    expect(await fs.readFile(callbackFixture.file('a.txt'), 'utf8')).toBe('recovered\n')
+    expect(await fs.readFile(callbackFixture.file('a.txt'), 'utf8')).toBe(
+      'recovered\n',
+    )
     expect(JSON.parse(JSON.stringify(refused)).authorityReceipt.status).toBe(
       'failed',
     )
@@ -536,7 +581,11 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
 
   it('publishes only the confirmed surviving forward change when another action throws', async () => {
     const fs = createMockFs({
-      files: { [callbackFixture.file('a.txt')]: 'a-before\n', [callbackFixture.file('b.txt')]: 'b-before\n' },
+      directories: { [callbackFixture.cwd]: [] },
+      files: {
+        [callbackFixture.file('a.txt')]: 'a-before\n',
+        [callbackFixture.file('b.txt')]: 'b-before\n',
+      },
     })
     const commit = fs.conditionalCommit!.bind(fs)
     fs.conditionalCommit = async (filePath, data, options) => {
@@ -587,8 +636,12 @@ describe('[B03] SDK confirmed mutation dispatch', () => {
     expect(canonicalReceipts[0]?.actions[1]?.forward?.outcome).toBe(
       'unconfirmed',
     )
-    expect(await fs.readFile(callbackFixture.file('a.txt'), 'utf8')).toBe('a-after\n')
-    expect(await fs.readFile(callbackFixture.file('b.txt'), 'utf8')).toBe('partial\n')
+    expect(await fs.readFile(callbackFixture.file('a.txt'), 'utf8')).toBe(
+      'a-after\n',
+    )
+    expect(await fs.readFile(callbackFixture.file('b.txt'), 'utf8')).toBe(
+      'partial\n',
+    )
   })
 })
 
@@ -665,9 +718,9 @@ describe('write_audit_findings dispatch advances workspace state', () => {
         }),
       ],
     })
-    expect(await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8')).toContain(
-      '# Audit findings: runtime-1',
-    )
+    expect(
+      await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8'),
+    ).toContain('# Audit findings: runtime-1')
   })
 
   it('falls back to onFilesChanged when no mutation observer is registered', async () => {
@@ -688,9 +741,9 @@ describe('write_audit_findings dispatch advances workspace state', () => {
     expect(fileChangeCalls).toBe(1)
     // Pins the notification to this artifact write: the counter alone would
     // also pass for an unrelated change notification.
-    expect(await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8')).toContain(
-      '# Audit findings: runtime-1',
-    )
+    expect(
+      await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8'),
+    ).toContain('# Audit findings: runtime-1')
   })
 
   it('does not notify observers when the artifact write is rejected', async () => {
@@ -728,9 +781,94 @@ describe('write_audit_findings dispatch advances workspace state', () => {
     // publish a committed-looking receipt for an edit that never landed.
     expect(canonicalReceipts).toHaveLength(1)
     expect(canonicalReceipts[0]).toBeUndefined()
-    expect(await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8')).toBe(
-      'existing\n',
-    )
+    expect(
+      await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8'),
+    ).toBe('existing\n')
+  })
+})
+
+describe('workspace transaction recovery across SDK runs', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
+  it('preserves reads and retries recovery after both a clean and a blocked startup', async () => {
+    const cwd = realpathSync(callbackFixture.cwd)
+    const stateDir = callbackFixture.harnessStateDir
+    const options = { cwd, fsSource: undefined, harnessStateDir: stateDir }
+    const target = path.join(cwd, 'target.txt')
+    const unrelated = path.join(cwd, 'unrelated.txt')
+    const writeCall = {
+      toolName: 'write_file',
+      input: {
+        type: 'file',
+        path: 'unrelated.txt',
+        content: 'new',
+        expectedHash: getContentHash('keep'),
+      },
+    }
+    writeFileSync(target, 'before\r\n')
+    writeFileSync(unrelated, 'keep')
+    await dispatchToolCalls({ calls: [], clientOptions: options })
+
+    const { dev, ino } = statSync(cwd, { bigint: true })
+    const parent = { canonicalPath: cwd, dev: String(dev), ino: String(ino) }
+    const log = createTransactionIntentLogForWorkspace({ cwd, stateDir })
+    expect(
+      (
+        await log.beginTransaction({
+          transactionId: 'tx-new-after-startup',
+          operationId: 'op-fixture',
+          callId: 'call-fixture',
+          entries: [
+            {
+              path: 'target.txt',
+              parent,
+              beforeHash: getExactContentHash('before\r\n'),
+              beforeBytes: 'before\r\n',
+              afterHash: getExactContentHash('owned after\n'),
+            },
+            {
+              path: 'future.txt',
+              parent,
+              beforeHash: null,
+              afterHash: getExactContentHash('not yet created'),
+            },
+          ],
+        })
+      ).ok,
+    ).toBe(true)
+    writeFileSync(target, 'foreign edit\n')
+    const refusal = await dispatchToolCalls({
+      calls: [writeCall, { toolName: 'list_directory', input: { path: '.' } }],
+      clientOptions: options,
+    })
+    expect(jsonValue(refusal[0])).toMatchObject({
+      errorCode: 'recovery_required',
+      recovery: { transactionIds: ['tx-new-after-startup'] },
+    })
+    expect(JSON.stringify(refusal[1])).toContain('target.txt')
+    expect(JSON.stringify(refusal[1])).not.toContain('recovery_required')
+    expect(readFileSync(target, 'utf8')).toBe('foreign edit\n')
+    expect(readFileSync(unrelated, 'utf8')).toBe('keep')
+
+    writeFileSync(target, 'owned after\n')
+    await dispatchToolCalls({ calls: [], clientOptions: options })
+    // No tool ran in that run: restored bytes exercise actual startup retry.
+    expect(readFileSync(target, 'utf8')).toBe('before\r\n')
+    expect(await log.recoverInterruptedTransactions()).toMatchObject({
+      ok: true,
+      transactions: [],
+    })
+    const applied = await dispatchToolCalls({
+      calls: [writeCall],
+      clientOptions: options,
+    })
+    expect(jsonValue(applied[0])).toMatchObject({
+      kind: 'file_mutation_result',
+      outcome: 'applied',
+    })
+    expect(readFileSync(unrelated, 'utf8')).toBe('new')
   })
 })
 
@@ -767,8 +905,10 @@ describe('replace_range dispatch wiring', () => {
       customToolDefinitions: {},
       fs: createMockFs(),
       trustedJobOwner: {
-        clientSessionId: 'session-1', rootRunId: 'run-1',
-        parentRunId: 'run-1', parentAgentId: 'agent-1',
+        clientSessionId: 'session-1',
+        rootRunId: 'run-1',
+        parentRunId: 'run-1',
+        parentAgentId: 'agent-1',
       },
       approvalReceiptIds: [],
       approvalMode: 'balanced',
@@ -785,34 +925,59 @@ describe('replace_range dispatch wiring', () => {
 
   it('the public SDK captures its host root when cwd is omitted and refuses a foreign capability', async () => {
     const original = 'line 1\nline 2\n'
-    const fs = createMockFs({ files: { [callbackFixture.file('src/file.ts')]: original } })
+    const fs = createMockFs({
+      files: { [callbackFixture.file('src/file.ts')]: original },
+    })
     let output: ToolResultOutput[] | undefined
-    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(async params => {
-      const callback = await beginSdkCallback(params)
-      expect(callback.sessionState.fileContext.projectRoot).toBe(callbackFixture.cwd)
-      output = (await callback.request({
-        toolName: 'replace_range',
-        input: {
-          path: 'src/file.ts',
-          readCapability: encodeReadCapabilityToken({
-            startLine: 1, endLine: 1, hash: getContentHash('line 1'),
-            scope: { projectId: callbackFixture.cwd, path: 'src/file.ts', runId: 'foreign-run' },
-          }),
-          newContent: 'updated line 1',
-        },
-      })).output
-      return { sessionState: callback.sessionState, output: { type: 'lastMessage' as const, value: [] } }
-    })
+    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
+      async (params) => {
+        const callback = await beginSdkCallback(params)
+        expect(callback.sessionState.fileContext.projectRoot).toBe(
+          callbackFixture.cwd,
+        )
+        output = (
+          await callback.request({
+            toolName: 'replace_range',
+            input: {
+              path: 'src/file.ts',
+              readCapability: encodeReadCapabilityToken({
+                startLine: 1,
+                endLine: 1,
+                hash: getContentHash('line 1'),
+                scope: {
+                  projectId: callbackFixture.cwd,
+                  path: 'src/file.ts',
+                  runId: 'foreign-run',
+                },
+              }),
+              newContent: 'updated line 1',
+            },
+          })
+        ).output
+        return {
+          sessionState: callback.sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
+      },
+    )
     const { cwd: _cwd, ...options } = sdkCallbackOptions(callbackFixture.cwd, {
-      fsSource: fs, harnessStateDir: callbackFixture.harnessStateDir,
+      fsSource: fs,
+      harnessStateDir: callbackFixture.harnessStateDir,
     })
-    const result = await new OpenbuffClient(options).run({ agent: 'base2', prompt: 'implicit root' })
+    const result = await new OpenbuffClient(options).run({
+      agent: 'base2',
+      prompt: 'implicit root',
+    })
     expect(result.output.type).toBe('lastMessage')
     expect(jsonValue(output)).toMatchObject({
       file: 'src/file.ts',
-      errorMessage: expect.stringContaining('different project, path, or agent run'),
+      errorMessage: expect.stringContaining(
+        'different project, path, or agent run',
+      ),
     })
-    expect(await fs.readFile(callbackFixture.file('src/file.ts'), 'utf8')).toBe(original)
+    expect(await fs.readFile(callbackFixture.file('src/file.ts'), 'utf8')).toBe(
+      original,
+    )
   })
 
   it('forwards the run-scoped capability issuer to the applicator', async () => {
@@ -854,7 +1019,9 @@ describe('replace_range dispatch wiring', () => {
         'different project, path, or agent run',
       ),
     })
-    expect(await fs.readFile(callbackFixture.file('src/file.ts'), 'utf8')).toBe(original)
+    expect(await fs.readFile(callbackFixture.file('src/file.ts'), 'utf8')).toBe(
+      original,
+    )
   })
 
   it('applies a range edit when the capability scope matches the run and notifies observers', async () => {
@@ -873,7 +1040,11 @@ describe('replace_range dispatch wiring', () => {
       endLine: 1,
       hash: getContentHash('line 1'),
       rawBasis: getRawReadBasis(document, 1, 1, 'lines'),
-      scope: { projectId: callbackFixture.cwd, path: 'src/file.ts', runId: 'run-1' },
+      scope: {
+        projectId: callbackFixture.cwd,
+        path: 'src/file.ts',
+        runId: 'run-1',
+      },
     })
     const handled = await handleToolCall({
       action: {
@@ -1018,7 +1189,10 @@ describe('handleToolCall compact-receipt mutation wiring', () => {
     // the hashes must describe the artifact that was actually created.
     // Receipt hashes are byte-exact, so the expectation uses the byte-exact
     // digest rather than the LF-normalized read/edit hash.
-    const written = await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8')
+    const written = await fs.readFile(
+      callbackFixture.file(auditArtifactPath),
+      'utf8',
+    )
     expect(event.actions).toEqual([
       {
         action: 'create',
@@ -1080,9 +1254,9 @@ describe('handleToolCall compact-receipt mutation wiring', () => {
     expect(workspaceState).toBe(priorState)
     expect(events).toHaveLength(0)
     expect(fileChangeCalls).toBe(0)
-    expect(await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8')).toBe(
-      'existing\n',
-    )
+    expect(
+      await fs.readFile(callbackFixture.file(auditArtifactPath), 'utf8'),
+    ).toBe('existing\n')
   })
 })
 
@@ -1091,16 +1265,25 @@ describe('client-origin MCP tool approval gate (P1-T2)', () => {
     mock.restore()
   })
 
-  const peers = new Map<MCPConfig, ReturnType<typeof createSdkCallbackMcpFixture>>()
+  const peers = new Map<
+    MCPConfig,
+    ReturnType<typeof createSdkCallbackMcpFixture>
+  >()
   afterEach(async () => {
-    await Promise.all([...peers.values()].map(peer => peer.close()))
+    await Promise.all([...peers.values()].map((peer) => peer.close()))
     peers.clear()
   })
   function createPeer(
     origin: 'client' | 'project',
-    options: { approvalMode?: OpenbuffClientOptions['approvalMode'] } = { approvalMode: 'allow-all' },
+    options: { approvalMode?: OpenbuffClientOptions['approvalMode'] } = {
+      approvalMode: 'allow-all',
+    },
   ) {
-    const peer = createSdkCallbackMcpFixture(callbackFixture.cwd, origin, options)
+    const peer = createSdkCallbackMcpFixture(
+      callbackFixture.cwd,
+      origin,
+      options,
+    )
     peers.set(peer.config, peer)
     return peer
   }
@@ -1140,7 +1323,9 @@ describe('client-origin MCP tool approval gate (P1-T2)', () => {
       approvalMode: 'balanced',
       requestApproval: params.requestApproval,
       approvedClientMcpTools: params.approvedClientMcpTools,
-      approvalService: new HarnessApprovalService(new LocalHarnessStore(harnessStateDir)),
+      approvalService: new HarnessApprovalService(
+        new LocalHarnessStore(harnessStateDir),
+      ),
       getWorkspaceState: () => undefined,
       setWorkspaceState: () => {},
       resolveMcpRequest: params.omitResolver ? undefined : peer.resolve,
@@ -1175,7 +1360,8 @@ describe('client-origin MCP tool approval gate (P1-T2)', () => {
     expect(callMcpToolCalls).toBe(1)
     expect(jsonValue([output[0]])).toMatchObject({ kind: 'mcp_tool_result' })
     expect(
-      (jsonValue([output[0]]) as { structuredContent: unknown }).structuredContent,
+      (jsonValue([output[0]]) as { structuredContent: unknown })
+        .structuredContent,
     ).toEqual({ ok: true })
     // The approved key is recorded so subsequent same-tool calls run freely.
     expect(approvedClientMcpTools.size).toBe(1)
@@ -1271,9 +1457,16 @@ describe('client-origin MCP tool approval gate (P1-T2)', () => {
       executionRefusal: { ok: false, reason: 'unavailable' },
       errorMessage: expect.stringMatching(/approval/i),
     })
-    const events = peer.events.filter(event => 'facts' in event && event.facts.family === 'mcp-stdio')
-    expect(events.some(event => event.phase === 'no-launch')).toBe(true)
-    expect(events.some(event => event.phase === 'dispatched' || event.phase === 'spawn-observed')).toBe(false)
+    const events = peer.events.filter(
+      (event) => 'facts' in event && event.facts.family === 'mcp-stdio',
+    )
+    expect(events.some((event) => event.phase === 'no-launch')).toBe(true)
+    expect(
+      events.some(
+        (event) =>
+          event.phase === 'dispatched' || event.phase === 'spawn-observed',
+      ),
+    ).toBe(false)
   })
 
   it('missing MCP resolver refuses without dispatching an owned peer', async () => {

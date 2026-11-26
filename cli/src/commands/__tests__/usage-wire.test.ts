@@ -50,7 +50,11 @@ test('real provider usage → CLI event handler → local /usage preserves token
         baseURL: `http://127.0.0.1:${server.port}/v1`,
         models: ['model'],
         defaultCapabilities: {
-          pricing: { inputPerMillionTokens: 3, outputPerMillionTokens: 15 },
+          pricing: {
+            inputPerMillionTokens: 3,
+            outputPerMillionTokens: 15,
+            currency: 'USD',
+          },
         },
       },
     },

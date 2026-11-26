@@ -584,6 +584,42 @@ export function capturePendingAttachments(): PendingAttachment[] {
   return pendingAttachments
 }
 
+/**
+ * Returns why a prompt cannot consume this attachment set. Text captures are
+ * immediately usable; image/file captures must have reached `ready`. Error and
+ * processing rows stay in the composer/queue for explicit retry or removal.
+ */
+export function getPromptAttachmentBlockReason(
+  attachments: readonly PendingAttachment[],
+): string | null {
+  for (const attachment of attachments) {
+    if (attachment.kind === 'text' || attachment.status === 'ready') continue
+    const label = attachment.path
+    return attachment.status === 'processing'
+      ? `Attachment ${JSON.stringify(label)} is still processing.`
+      : `Attachment ${JSON.stringify(label)} failed to load and must be retried or removed.`
+  }
+  return null
+}
+
+/**
+ * Restore a rejected direct submission without duplicating attachments that
+ * the user already restored or replaced while an async preflight was running.
+ */
+export function restorePendingAttachments(
+  attachments: readonly PendingAttachment[],
+): void {
+  for (const attachment of attachments) {
+    const id = getPendingAttachmentId(attachment)
+    const exists = useChatStore
+      .getState()
+      .pendingAttachments.some(
+        (candidate) => getPendingAttachmentId(candidate) === id,
+      )
+    if (!exists) useChatStore.getState().addPendingAttachment(attachment)
+  }
+}
+
 /** Stable IDs are additive; old image captures retain their path identity. */
 export function getPendingAttachmentId(attachment: PendingAttachment): string {
   return attachment.kind === 'image'

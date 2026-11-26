@@ -143,6 +143,7 @@ export function registerPlanTimelineCommand(): CommandDefinition {
         ?.aliases ?? []),
     ],
     acceptsArgs: true,
+    producesPrompt: () => false,
     handler: (params: RouterParams, args: string) => {
       const parsed = parsePlanTimelineArgs(args)
       params.saveToHistory(params.inputValue.trim())

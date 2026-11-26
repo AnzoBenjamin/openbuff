@@ -122,7 +122,14 @@ describe('command factory pattern', () => {
       clearMessages: mock(() => {}),
       saveToHistory: mock(() => {}),
       scrollToLatest: mock(() => {}),
-      sendMessage: mock(async () => {}),
+      sendMessage: mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      ),
       setCanProcessQueue: mock(() => {}),
       setInputFocused: mock(() => {}),
       setInputValue: mock(() => {}),
@@ -335,7 +342,14 @@ describe('command factory pattern', () => {
       const newCmd = COMMAND_REGISTRY.find((c) => c.name === 'new')
       expect(newCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const clearMessages = mock(() => {})
       const setCanProcessQueue = mock(() => {})
@@ -359,6 +373,7 @@ describe('command factory pattern', () => {
       expect(sendMessage).toHaveBeenCalledWith({
         content: 'hello world',
         agentMode: 'DEFAULT',
+        attachments: [],
       })
     })
 
@@ -366,7 +381,14 @@ describe('command factory pattern', () => {
       const newCmd = COMMAND_REGISTRY.find((c) => c.name === 'new')
       expect(newCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const clearMessages = mock(() => {})
       const setCanProcessQueue = mock(() => {})
@@ -489,7 +511,14 @@ describe('command factory pattern', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       expect(resumeCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         sendMessage,
@@ -526,7 +555,14 @@ describe('command factory pattern', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
-        sendMessage: mock(async () => {}),
+        sendMessage: mock(
+          async () =>
+            ({
+              status: 'accepted',
+              disposition: 'started',
+              completion: Promise.resolve(),
+            }) as const,
+        ),
       })
 
       resumeCmd!.handler(params, 'auth-refresh')
@@ -536,7 +572,14 @@ describe('command factory pattern', () => {
 
     test('resume-plan with missing session does not send', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/resume-plan missing-slug',
@@ -563,7 +606,14 @@ describe('command factory pattern', () => {
       // guarded-submit-busy-path-untested).
       const addToQueue = mock(() => {})
       const setInputFocused = mock(() => {})
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         isStreaming: true,
@@ -589,7 +639,14 @@ describe('command factory pattern', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       const addToQueue = mock(() => {})
       const setInputFocused = mock(() => {})
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         isChainInProgressRef: { current: true },
@@ -615,7 +672,14 @@ describe('command factory pattern', () => {
 
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       const addToQueue = mock(() => {})
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         addToQueue,
@@ -641,7 +705,14 @@ describe('command factory pattern', () => {
       writeArtifact('foo', 'PLAN.md', 'plan body')
 
       const updateCmd = COMMAND_REGISTRY.find((c) => c.name === 'update-plan')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/update-plan .agents/sessions/foo API changed',
         sendMessage,
@@ -664,7 +735,14 @@ describe('command factory pattern', () => {
       writeArtifact('foo', 'PLAN.md', 'plan body')
 
       const lessonsCmd = COMMAND_REGISTRY.find((c) => c.name === 'lessons')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/lessons foo always run tests',
         sendMessage,
@@ -688,7 +766,14 @@ describe('command factory pattern', () => {
       writeArtifact('foo', 'PLAN.md', 'plan body')
 
       const statusCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-status')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-status foo',
@@ -707,7 +792,14 @@ describe('command factory pattern', () => {
 
     test('plan-status reports a session directory that does not exist', () => {
       const statusCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-status')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-status ghost',
@@ -738,7 +830,14 @@ describe('command factory pattern', () => {
         const cmd = COMMAND_REGISTRY.find((c) => c.name === name)
         expect(cmd).toBeDefined()
 
-        const sendMessage = mock(async () => {})
+        const sendMessage = mock(
+          async () =>
+            ({
+              status: 'accepted',
+              disposition: 'started',
+              completion: Promise.resolve(),
+            }) as const,
+        )
         const setMessages = mock(() => {})
         const saveToHistory = mock(() => {})
         const setInputValue = mock(() => {})
@@ -778,7 +877,14 @@ describe('command factory pattern', () => {
       const plansCmd = COMMAND_REGISTRY.find((c) => c.name === 'plans')
       expect(plansCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plans',
@@ -1157,7 +1263,14 @@ describe('command factory pattern', () => {
       writeArtifact('alpha', 'PLAN.md', 'plan body')
 
       const planUseCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-use')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-use alpha',
@@ -1185,7 +1298,14 @@ describe('command factory pattern', () => {
       fs.mkdirSync(activeSessionPointerPath(), { recursive: true })
 
       const planUseCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-use')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-use alpha',
@@ -1538,8 +1658,7 @@ describe('command factory pattern', () => {
       const params = createMockParams({
         inputValue: '/feedback my bug report',
         setMessages: (update) => {
-          const messages =
-            typeof update === 'function' ? update([]) : update
+          const messages = typeof update === 'function' ? update([]) : update
           localMessages.push(...messages)
         },
       })

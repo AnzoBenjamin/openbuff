@@ -40,7 +40,11 @@ import {
 } from './chatgpt-backend-fetch'
 import { createOpenCodeGoResponsesFetch } from './opencode-go-responses-fetch'
 import { getSystemProcessEnv } from '../env'
-import { assertProviderHostContext, getCapturedProviderConfig } from '../host-config'
+import {
+  assertProviderHostContext,
+  getCapturedProviderConfig,
+} from '../host-config'
+import { shouldDefaultIncludeUsage } from '../model-capability-catalog'
 import type { ProviderHostContext } from '../host-config'
 import { resolveModelsToTry } from './failover'
 
@@ -183,9 +187,9 @@ export interface ModelResult {
   effectiveModel: string
   /** Context window in tokens for the resolved configured model, when known from provider metadata. */
   contextWindowTokens?: number
-  /** Configured per-million-token pricing for the resolved model, from
-   *  openbuff.json `modelCapabilities.pricing`. Used by the cost-accounting
-   *  fallback when the provider does not return OpenRouter-style cost metadata. */
+  /** Adapter usage semantics selected from the configured provider type; never inferred from a model-name substring. */
+  usageFormat?: 'anthropic' | 'compatible'
+  /** Resolved per-million-token pricing for the selected model. Explicit config/discovery wins over exact-route catalog fallback. */
   pricing?: ModelPricing
   /** Configured per-response output token ceiling for the resolved model, from
    *  provider config `defaultCapabilities`/`modelCapabilities`
@@ -240,7 +244,9 @@ export async function getModelForRequest(
   const { model, agentId, skipChatGptOAuth, preferModelParam } = params
   const sessionId = params.sessionId
   if (params.providerContext) assertProviderHostContext(params.providerContext)
-  const loadedProviderConfig = params.providerContext ? getCapturedProviderConfig(params.providerContext.snapshot) : loadProviderConfigSync()
+  const loadedProviderConfig = params.providerContext
+    ? getCapturedProviderConfig(params.providerContext.snapshot)
+    : loadProviderConfigSync()
   const effectiveAgentModelConfig = resolveConfiguredAgentModelConfig({
     agentId,
     model,
@@ -348,7 +354,9 @@ export async function getModelForRequest(
       }
     }
     if (configuredProviderModel.provider.type === 'chatgpt-oauth') {
-      const chatGptOAuthCredentials = await (params.providerContext ? params.providerContext.credentials.getValidChatGptOAuthCredentials() : getValidChatGptOAuthCredentials())
+      const chatGptOAuthCredentials = await (params.providerContext
+        ? params.providerContext.credentials.getValidChatGptOAuthCredentials()
+        : getValidChatGptOAuthCredentials())
       if (!chatGptOAuthCredentials) {
         throw new Error(
           `ChatGPT/Codex OAuth credentials unavailable for provider '${configuredProviderModel.providerId}'. Please reconnect with /connect.`,
@@ -376,6 +384,7 @@ export async function getModelForRequest(
           configuredProviderModel,
           sessionId,
         ),
+        usageFormat: 'anthropic',
         isChatGptOAuth: false,
         compatibility: configuredProviderModel.compatibility,
         reasoningEffort,
@@ -435,7 +444,9 @@ export async function getModelForRequest(
         'ChatGPT rate limit reached. Please wait a few minutes and try again.',
       )
     } else {
-      const chatGptOAuthCredentials = await (params.providerContext ? params.providerContext.credentials.getValidChatGptOAuthCredentials() : getValidChatGptOAuthCredentials())
+      const chatGptOAuthCredentials = await (params.providerContext
+        ? params.providerContext.credentials.getValidChatGptOAuthCredentials()
+        : getValidChatGptOAuthCredentials())
 
       if (chatGptOAuthCredentials) {
         return {
@@ -763,7 +774,14 @@ function createConfiguredOpenAICompatibleModel(
         sessionId,
       }),
     fetch: createConfiguredProviderFetch(resolvedModel),
-    includeUsage: undefined,
+    includeUsage:
+      ('includeUsage' in resolvedModel.compatibility
+        ? resolvedModel.compatibility.includeUsage
+        : undefined) ??
+      shouldDefaultIncludeUsage({
+        providerType: provider.type,
+        baseURL: provider.baseURL,
+      }),
     supportsStructuredOutputs: provider.supportsStructuredOutputs,
     stringifyTextContent: resolvedModel.compatibility.stringifyTextContent,
     reasoningReplay: resolvedModel.compatibility.reasoningReplay === 'required',

@@ -75,7 +75,14 @@ describe('bash command', () => {
       clearMessages: mock(() => {}),
       saveToHistory: mock(() => {}),
       scrollToLatest: mock(() => {}),
-      sendMessage: mock(async () => {}),
+      sendMessage: mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      ),
       setCanProcessQueue: mock(() => {}),
       setInputFocused: mock(() => {}),
       setInputValue: mock(() => {}),
@@ -216,9 +223,7 @@ describe('bash command', () => {
       // runBashCommand awaits capturePreDispatchSnapshot (the bounded
       // barrier) before dispatching, so once it resolves the snapshot call
       // has been made with the shell label.
-      expect(
-        turnSnapshots.capturePreDispatchSnapshot,
-      ).toHaveBeenCalledTimes(1)
+      expect(turnSnapshots.capturePreDispatchSnapshot).toHaveBeenCalledTimes(1)
       expect(turnSnapshots.capturePreDispatchSnapshot).toHaveBeenCalledWith({
         label: 'shell',
       })
@@ -240,7 +245,14 @@ describe('bash command', () => {
       clearMessages: mock(() => {}),
       saveToHistory: mock(() => {}),
       scrollToLatest: mock(() => {}),
-      sendMessage: mock(async () => {}),
+      sendMessage: mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      ),
       setCanProcessQueue: mock(() => {}),
       setInputFocused: mock(() => {}),
       setInputValue: mock(() => {}),
@@ -261,9 +273,7 @@ describe('bash command', () => {
       )
 
       // The command was never dispatched: no pre-command shell snapshot ran.
-      expect(
-        turnSnapshots.capturePreDispatchSnapshot,
-      ).not.toHaveBeenCalled()
+      expect(turnSnapshots.capturePreDispatchSnapshot).not.toHaveBeenCalled()
 
       // The block is surfaced in chat history as a system message.
       expect(setMessages).toHaveBeenCalledTimes(1)
@@ -291,9 +301,7 @@ describe('bash command', () => {
       )
 
       // The command was never dispatched: no pre-command shell snapshot ran.
-      expect(
-        turnSnapshots.capturePreDispatchSnapshot,
-      ).not.toHaveBeenCalled()
+      expect(turnSnapshots.capturePreDispatchSnapshot).not.toHaveBeenCalled()
       // Bash mode did not stay stuck on the blocked command.
       expect(useChatStore.getState().inputMode).toBe('default')
       expect(setMessages).toHaveBeenCalledTimes(1)
@@ -304,9 +312,7 @@ describe('bash command', () => {
 
       runBashCommand('echo blocked-during-bisect')
 
-      expect(
-        turnSnapshots.capturePreDispatchSnapshot,
-      ).not.toHaveBeenCalled()
+      expect(turnSnapshots.capturePreDispatchSnapshot).not.toHaveBeenCalled()
       const messages = useChatStore.getState().messages
       expect(
         messages.some(
@@ -363,9 +369,10 @@ describe('bash command', () => {
       // it (typed arg keeps bun's mock.calls tuple non-empty).
       const setMessages = mock((_updater: unknown) => {})
       spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
-      const startSpy = spyOn(turnSnapshots, 'runTurnBisection').mockResolvedValue(
-        { status: 'no-snapshots' },
-      )
+      const startSpy = spyOn(
+        turnSnapshots,
+        'runTurnBisection',
+      ).mockResolvedValue({ status: 'no-snapshots' })
 
       findCommand('bisect-turn')?.handler(
         createRouteParams({ inputValue: '/bisect-turn', setMessages }),
@@ -564,7 +571,14 @@ describe('bash command', () => {
       clearMessages: mock(() => {}),
       saveToHistory: mock(() => {}),
       scrollToLatest: mock(() => {}),
-      sendMessage: mock(async () => {}),
+      sendMessage: mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      ),
       setCanProcessQueue: mock(() => {}),
       setInputFocused: mock(() => {}),
       setInputValue: mock(() => {}),
@@ -810,24 +824,26 @@ describe('openbuff dash live journal wiring (P2-T7)', () => {
     const signalHandlers = new Map<string, () => void>()
     const originalOnce = process.once.bind(process)
     const originalOff = process.off.bind(process)
-    spyOn(process, 'once').mockImplementation(
-      ((event: string, listener: () => void) => {
-        if (event === 'SIGINT' || event === 'SIGTERM') {
-          signalHandlers.set(event, listener)
-          return process
-        }
-        return originalOnce(event as never, listener as never)
-      }) as unknown as typeof process.once,
-    )
-    spyOn(process, 'off').mockImplementation(
-      ((event: string, listener: () => void) => {
-        if (event === 'SIGINT' || event === 'SIGTERM') {
-          signalHandlers.delete(event)
-          return process
-        }
-        return originalOff(event as never, listener as never)
-      }) as unknown as typeof process.off,
-    )
+    spyOn(process, 'once').mockImplementation(((
+      event: string,
+      listener: () => void,
+    ) => {
+      if (event === 'SIGINT' || event === 'SIGTERM') {
+        signalHandlers.set(event, listener)
+        return process
+      }
+      return originalOnce(event as never, listener as never)
+    }) as unknown as typeof process.once)
+    spyOn(process, 'off').mockImplementation(((
+      event: string,
+      listener: () => void,
+    ) => {
+      if (event === 'SIGINT' || event === 'SIGTERM') {
+        signalHandlers.delete(event)
+        return process
+      }
+      return originalOff(event as never, listener as never)
+    }) as unknown as typeof process.off)
 
     try {
       const servePromise = runDashCommand(
@@ -866,7 +882,12 @@ describe('openbuff dash live journal wiring (P2-T7)', () => {
       shutdownHandler!()
       const code = await servePromise
 
-      return { code, servedData, stdout: stdout.join(''), stderr: stderr.join('') }
+      return {
+        code,
+        servedData,
+        stdout: stdout.join(''),
+        stderr: stderr.join(''),
+      }
     } finally {
       mock.restore()
     }
@@ -960,9 +981,11 @@ describe('openbuff dash live journal wiring (P2-T7)', () => {
       expect(stderr).toContain('run journal unavailable')
       expect(stderr).toContain('sqlite unavailable')
       expect(
-        await (servedData as {
-          getSourceStatus(): Promise<{ state: string }>
-        }).getSourceStatus(),
+        await (
+          servedData as {
+            getSourceStatus(): Promise<{ state: string }>
+          }
+        ).getSourceStatus(),
       ).toMatchObject({ state: 'unavailable' })
       expect(
         await (servedData as { listRuns(): Promise<unknown[]> }).listRuns(),

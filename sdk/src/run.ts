@@ -1,5 +1,8 @@
 import { createValidationReceiptRegistry } from './services/validation-receipts'
-import { buildContextArchiveBodyReader, buildContextArchiveSearchReader } from './services/context-archive-reader'
+import {
+  buildContextArchiveBodyReader,
+  buildContextArchiveSearchReader,
+} from './services/context-archive-reader'
 import {
   RepositoryIntelligenceService,
   createRepositoryIntelligenceSource,
@@ -18,6 +21,9 @@ import {
   withSystemTags,
 } from '@codebuff/agent-runtime/util/messages'
 import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
+import { unverifiedRunReplayRefusal } from '@codebuff/agent-runtime/util/run-journal'
+import { READ_PLAN_TEMPLATE_ID } from '@codebuff/agent-runtime/util/read-plan-replay'
+import { takeReadPlanExecution, type ReadPlanExecution } from './services/replayable-reads'
 import {
   getMCPClientCacheKey,
   resolveMCPConfigOrigin,
@@ -117,8 +123,19 @@ import {
   saveMergedTaskMemory,
 } from './services/task-memory-store'
 import { WorkspaceJournalService } from './services/workspace-journal'
-import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
+import {
+  WorkspaceMutationBroker,
+  WorkspaceMutationBrokerRecoveryError,
+} from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
+import {
+  createRequestAdmissionStore,
+  spendingPolicySchema,
+} from './services/request-admission-store'
+import type {
+  RequestAdmissionStore,
+  SpendingPolicy,
+} from '@codebuff/common/types/request-admission'
 import {
   captureDiagnosticObservation,
   type DiagnosticCapture,
@@ -133,7 +150,11 @@ import {
 } from './services/diagnostic-baseline'
 import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
 import { finishMemoryV2Turn } from './services/memory-v2/finish-turn'
-import { getEffectiveMemoryAuthority, type MemoryAuthorityMode, type MemoryV2ClientConfig } from './services/memory-v2/types'
+import {
+  getEffectiveMemoryAuthority,
+  type MemoryAuthorityMode,
+  type MemoryV2ClientConfig,
+} from './services/memory-v2/types'
 import {
   HarnessApprovalService,
   hashCommand,
@@ -164,7 +185,10 @@ import {
 } from './tools/browser-logs'
 import { replaceRange } from './tools/replace-range'
 import { runTerminalCommand } from './tools/run-terminal-command'
-import { captureTerminalTimeoutPolicy, resolveTerminalTimeout } from './services/terminal-timeout-policy'
+import {
+  captureTerminalTimeoutPolicy,
+  resolveTerminalTimeout,
+} from './services/terminal-timeout-policy'
 import type { TerminalTimeoutPolicy } from './services/terminal-timeout-policy'
 import { refuseByDeclaredTerminalProfile } from './tools/terminal-profile-bound'
 import { checkJob } from './tools/check-job'
@@ -308,6 +332,11 @@ const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'rename_symbol',
   'code_action',
   'extract_symbol',
+])
+
+const RECOVERY_GATED_MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  ...DIAGNOSTIC_BASELINE_TOOL_NAMES,
+  'edit_3d_asset',
 ])
 
 /**
@@ -591,6 +620,9 @@ export type OpenbuffClientOptions = {
    *  results (keyed deterministically by toolName+input per P2-T2-DESIGN §5,
    *  never by the freshly-minted toolCallId). Additive-optional. */
   journalReader?: JournalReader
+
+  /** Optional durable provider-request admission store. Capped policies fail closed when neither this nor a harness state directory is available. */
+  requestAdmissionStore?: RequestAdmissionStore
 }
 
 export type FilesystemMutationEvent = {
@@ -640,6 +672,8 @@ export type RunOptions = {
   extraToolResults?: ToolMessage[]
   signal?: AbortSignal
   costMode?: string
+  /** Root-shared provider request policy. Explicit run policy overrides captured config; omitted defaults to config/legacy root cap/uncapped. */
+  spending?: SpendingPolicy
   /** Extra key/values merged into each LLM request's `codebuff_metadata`.
    *  Used by hosts (e.g. the CLI) to forward client-scoped identifiers or
    *  provider-routing metadata that downstream adapters read from the request body. */
@@ -654,11 +688,8 @@ export type RunOptions = {
    *  the run. */
   onCheckpoint?: (agentState: SessionState['mainAgentState']) => void
 
-  /** P2-3: When true, the user prompt is already present in
-   *  `previousRun.sessionState.mainAgentState.messageHistory` (restored from a
-   *  checkpoint), so the main agent loop must NOT re-append a USER_PROMPT
-   *  message. The CLI sets this when it detects a valid checkpoint for the
-   *  current turn and resumes from it. */
+  /** Request exact interrupted-turn replay. Unverified prefixes are refused;
+   * a separate turn using `previousRun` does not implicitly replay effects. */
   resumeInterruptedTurn?: boolean
 }
 
@@ -898,13 +929,6 @@ type RunExecutionOptions = RunOptions &
 type RunReturnType = RunState
 
 /**
- * P2-T5: guards the once-per-process startup recovery of interrupted
- * multi-file transactions, keyed by state dir + intent-log file so two
- * concurrent projects in one process each recover exactly once.
- */
-const transactionRecoveryPerformed = new Set<string>()
-
-/**
  * P3-T10: guards the once-per-process registration of the bundled exact
  * token providers (registerBundledExactTokenProviders in
  * @codebuff/agent-runtime/util/exact-token-providers). Flipped only once a
@@ -933,21 +957,35 @@ export function captureRunDeadline(
 }
 
 export async function run(options: RunExecutionOptions): Promise<RunState> {
-  const admittedMemoryV2 = options.memoryV2 && Object.freeze({ ...options.memoryV2 })
+  const admittedMemoryV2 =
+    options.memoryV2 && Object.freeze({ ...options.memoryV2 })
   const memoryAuthorityMode = admittedMemoryV2
-    ? getEffectiveMemoryAuthority(admittedMemoryV2).requested : undefined
+    ? getEffectiveMemoryAuthority(admittedMemoryV2).requested
+    : undefined
   // Only authoritative supplied/static definitions at admission can opt in.
   // Neither resumed template JSON, later caller mutation nor model params is read.
-  const admittedReadModes = new Map([
-    ...(options.agentDefinitions ?? []),
-    ...(typeof options.agent === 'string' ? [] : [options.agent]),
-  ].map(definition => [definition.id, definition.programmaticConfig?.strictProjectReads === true]))
-  const strictProjectReadTemplateIds = new Set([...admittedReadModes].flatMap(([id, strict]) => strict ? [id] : []))
-  const rootStrictProjectReads = strictProjectReadTemplateIds.has(typeof options.agent === 'string' ? options.agent : options.agent.id)
+  const admittedReadModes = new Map(
+    [
+      ...(options.agentDefinitions ?? []),
+      ...(typeof options.agent === 'string' ? [] : [options.agent]),
+    ].map((definition) => [
+      definition.id,
+      definition.programmaticConfig?.strictProjectReads === true,
+    ]),
+  )
+  const strictProjectReadTemplateIds = new Set(
+    [...admittedReadModes].flatMap(([id, strict]) => (strict ? [id] : [])),
+  )
+  const rootStrictProjectReads = strictProjectReadTemplateIds.has(
+    typeof options.agent === 'string' ? options.agent : options.agent.id,
+  )
   options = Object.freeze({
     ...options,
     memoryV2: admittedMemoryV2,
-    terminalTimeoutPolicy: options.terminalTimeoutPolicy && Object.freeze({ ...options.terminalTimeoutPolicy }),
+    spending: options.spending && Object.freeze(cloneDeep(options.spending)),
+    terminalTimeoutPolicy:
+      options.terminalTimeoutPolicy &&
+      Object.freeze({ ...options.terminalTimeoutPolicy }),
     env: options.env && Object.freeze({ ...options.env }),
     executionProfile:
       options.executionProfile &&
@@ -979,6 +1017,32 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
         taskAcceptance: { status: 'unknown' },
       },
     )
+  }
+
+  const readPlan = takeReadPlanExecution(options.agent)
+  if (!readPlan && (typeof options.agent === 'string' ? options.agent : options.agent.id) === READ_PLAN_TEMPLATE_ID) {
+    const message = 'Select the read adapter through runReplayableReads.'
+    return projectRunOutcomes({ output: { type: 'error', message } }, {
+      runOutcome: { termination: 'failed', cause: { code: 'replay_unavailable', message } },
+    })
+  }
+
+  if (options.resumeInterruptedTurn) {
+    const previous = options.previousRun
+    const refusal = unverifiedRunReplayRefusal(
+      options.journalReader,
+      previous?.sessionState?.mainAgentState.runId,
+    )
+    // Diagnose the retained checkpoint without loading its generator,
+    // acquiring resources, or refreshing its spending/identity snapshot.
+    return projectRunOutcomes({
+      sessionState: previous?.sessionState ? cloneDeep(previous.sessionState) : undefined,
+      requestAdmission: previous?.requestAdmission ? cloneDeep(previous.requestAdmission) : undefined,
+      output: { type: 'error', message: refusal.message },
+    }, {
+      runOutcome: { termination: 'failed', cause: { code: refusal.code, message: refusal.message } },
+      taskAcceptance: { status: 'unknown' },
+    })
   }
 
   const limit = executionLimitMs(options.runTimeoutMs)
@@ -1051,8 +1115,15 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
       'output_schema_unavailable',
     )
   }
-  const timeoutPolicy = captureTerminalTimeoutPolicy(options.terminalTimeoutPolicy)
-  if (!timeoutPolicy.ok) return refusalState(timeoutPolicy.cause, 'failed', 'execution_invalid_context')
+  const timeoutPolicy = captureTerminalTimeoutPolicy(
+    options.terminalTimeoutPolicy,
+  )
+  if (!timeoutPolicy.ok)
+    return refusalState(
+      timeoutPolicy.cause,
+      'failed',
+      'execution_invalid_context',
+    )
   // Capture the absolute root deadline before this synchronous configuration read.
   const requestedRoot = path.resolve(options.cwd ?? '.')
   const inputs =
@@ -1079,7 +1150,8 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
       'host_configuration_unavailable',
     )
   const selectedModel = withRunModelOverride(captured.snapshot, options.model)
-  if (selectedModel.status !== 'complete') return refusalState(selectedModel.cause, 'failed', 'run_model_unavailable')
+  if (selectedModel.status !== 'complete')
+    return refusalState(selectedModel.cause, 'failed', 'run_model_unavailable')
   const snapshot = selectedModel.snapshot
   if (
     options.cwd !== undefined &&
@@ -1120,6 +1192,9 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   let basisResolver: HostExecutionOptions['isCurrentBasis']
   let basisMismatchResolver: HostExecutionOptions['describeBasisMismatch']
   let activeSession: SessionState | undefined
+  let activeRequestAdmission:
+    | { store: RequestAdmissionStore; authorityId: string }
+    | undefined
   let cancellationReady = false
   const completion = new AbortController()
   let disposeMcp: (() => Promise<void>) | undefined
@@ -1223,6 +1298,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
       snapshot.sandboxPolicy,
       () =>
         runOnce(capturedOptions, {
+          readPlan,
           snapshot,
           hostServices,
           memoryAuthorityMode,
@@ -1241,6 +1317,9 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
           },
           onSessionReady: (value) => {
             activeSession = value
+          },
+          onRequestAdmissionReady: (value) => {
+            activeRequestAdmission = value
           },
           onCancellationReady: () => {
             cancellationReady = true
@@ -1347,10 +1426,38 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
       options.logger?.warn({ error }, 'Run-owned MCP cleanup failed')
     }
   }
+  if (activeRequestAdmission) {
+    try {
+      result = {
+        ...result,
+        requestAdmission: activeRequestAdmission.store.snapshot(
+          activeRequestAdmission.authorityId,
+        ),
+      }
+    } catch (error) {
+      const message = `Request admission snapshot is unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      result = projectRunOutcomes(
+        {
+          ...result,
+          output: { type: 'error', message },
+        },
+        {
+          runOutcome: {
+            termination: 'failed',
+            cause: { code: 'request_admission_unavailable', message },
+          },
+          taskAcceptance: { status: 'unknown' },
+        },
+      )
+    }
+  }
   return executionCleanup.length ? { ...result, executionCleanup } : result
 }
 
 type RunHostBootstrap = {
+  readPlan?: ReadPlanExecution
   memoryAuthorityMode?: MemoryAuthorityMode
   resolveRunOutcome: NonNullable<AgentRuntimeDeps['resolveRunOutcome']>
   snapshot: HostConfigSnapshot
@@ -1367,6 +1474,10 @@ type RunHostBootstrap = {
     describe?: HostExecutionOptions['describeBasisMismatch'],
   ): void
   onSessionReady(state: SessionState): void
+  onRequestAdmissionReady(value: {
+    store: RequestAdmissionStore
+    authorityId: string
+  }): void
   onCancellationReady(): void
   onMcpReady(dispose: () => Promise<void>): void
 }
@@ -1414,6 +1525,7 @@ async function runOnce(
     repositoryIntelligence,
     journalWriter,
     journalReader,
+    requestAdmissionStore,
 
     agent,
     outputSchema,
@@ -1424,6 +1536,7 @@ async function runOnce(
     extraToolResults,
     signal,
     costMode,
+    spending,
     extraCodebuffMetadata,
     onCheckpoint,
     resumeInterruptedTurn,
@@ -1511,6 +1624,7 @@ async function runOnce(
   host.setSpawn(spawn)
   hostServices.rootSignal.throwIfAborted()
   let fs: CodebuffFileSystem
+  let brokerRecoveryBlocked = false
   if (fsSource !== undefined) {
     const fsSourceValue = typeof fsSource === 'function' ? fsSource() : fsSource
     fs = await fsSourceValue
@@ -1525,6 +1639,8 @@ async function runOnce(
       fs = createNodeFileSystem({ mutationBroker })
     } catch (error) {
       if (isExecutionRefusalError(error)) throw error
+      brokerRecoveryBlocked =
+        error instanceof WorkspaceMutationBrokerRecoveryError
       logger?.warn(
         { error },
         'Workspace mutation broker unavailable; guarded mutations will fail closed',
@@ -1537,26 +1653,30 @@ async function runOnce(
   hostServices.rootSignal.throwIfAborted()
   fs = bindHostFileSystem(fs, hostServices.readPolicy)
   const admittedRootReadPolicy = host.rootStrictProjectReads
-    ? deriveProjectOnlyReadPolicy(hostServices.readPolicy) : hostServices.readPolicy
-  const admittedRootReadFileSystem = admittedRootReadPolicy === fs.hostReadPolicy
-    ? fs : bindHostFileSystem(fs, admittedRootReadPolicy)
-  const contextSpawn: CodebuffSpawn = host.rootStrictProjectReads ? () => {
-    throw new Error('Strict project bootstrap process reads are unavailable')
-  } : spawn
+    ? deriveProjectOnlyReadPolicy(hostServices.readPolicy)
+    : hostServices.readPolicy
+  const admittedRootReadFileSystem =
+    admittedRootReadPolicy === fs.hostReadPolicy
+      ? fs
+      : bindHostFileSystem(fs, admittedRootReadPolicy)
+  const contextSpawn: CodebuffSpawn = host.rootStrictProjectReads
+    ? () => {
+        throw new Error(
+          'Strict project bootstrap process reads are unavailable',
+        )
+      }
+    : spawn
 
-  // P2-T5: startup recovery of interrupted multi-file transactions. The
-  // intent log is colocated with the harness state dir (outside the project
-  // tree it guards) and scoped to this workspace. Best-effort and
-  // once-per-process: failures are logged and never crash startup.
+  // Read-only work can continue if reconciliation is blocked. Never cache a
+  // clean result: an interrupted group can appear after startup, and a later
+  // tool call or run must be able to retry it.
   let intentLog: TransactionIntentLog | undefined
   if (cwd && resolvedHarnessStateDir) {
     intentLog = createTransactionIntentLogForWorkspace({
       stateDir: resolvedHarnessStateDir,
       cwd,
     })
-    const recoveryKey = `${resolvedHarnessStateDir}\u0000${intentLog.filePath}`
-    if (!transactionRecoveryPerformed.has(recoveryKey)) {
-      transactionRecoveryPerformed.add(recoveryKey)
+    if (!brokerRecoveryBlocked && !host.rootStrictProjectReads) {
       try {
         await recoverAndRevertInterruptedTransactions({
           intentLog,
@@ -1567,7 +1687,7 @@ async function runOnce(
       } catch (error) {
         logger?.warn(
           { error },
-          'Transaction intent recovery failed; startup continues',
+          'Transaction recovery could not finish at startup',
         )
       }
     }
@@ -1642,7 +1762,7 @@ async function runOnce(
   const preparedContent = wrapContentForUserMessage(content)
 
   // Per-run client session id (also the trusted process-job owner session).
-  const promptId = Math.random().toString(36).substring(2, 15)
+  const promptId = host.readPlan?.original?.userInputId ?? Math.random().toString(36).substring(2, 15)
 
   // Init session state
   let agentId
@@ -1733,6 +1853,9 @@ async function runOnce(
     })
   }
   const mainAgentState = sessionState.mainAgentState
+  if (host.readPlan?.original) {
+    mainAgentState.agentId = host.readPlan.original.agentId
+  }
   if (!resumeInterruptedTurn) {
     mainAgentState.cacheInputTokens = 0
     mainAgentState.cacheTotalInputTokens = 0
@@ -1745,15 +1868,83 @@ async function runOnce(
     const hasValidCacheTotalInputTokens =
       Number.isSafeInteger(mainAgentState.cacheTotalInputTokens) &&
       mainAgentState.cacheTotalInputTokens >= 0
-    if (!hasValidCacheInputTokens)
-      mainAgentState.cacheInputTokens = 0
-    if (!hasValidCacheTotalInputTokens)
-      mainAgentState.cacheTotalInputTokens = 0
+    if (!hasValidCacheInputTokens) mainAgentState.cacheInputTokens = 0
+    if (!hasValidCacheTotalInputTokens) mainAgentState.cacheTotalInputTokens = 0
     mainAgentState.cacheUsageComplete =
       mainAgentState.cacheUsageComplete === true &&
       hasValidCacheInputTokens &&
       hasValidCacheTotalInputTokens &&
       mainAgentState.cacheInputTokens <= mainAgentState.cacheTotalInputTokens
+  }
+  const rootTemplate = sessionState.fileContext.agentTemplates?.[agentId]
+  const legacyCostCap = rootTemplate?.maxCostCents
+  // The checkpoint replaces mainAgentState independently of the surrounding
+  // session object. On interrupted resume its root authority is therefore the
+  // freshest durable reference; the session-level copy may belong to an older
+  // completed turn.
+  const persistedAdmission = resumeInterruptedTurn
+    ? (mainAgentState.requestAdmission ?? sessionState.requestAdmission)
+    : undefined
+  const spendingCandidate: SpendingPolicy =
+    persistedAdmission?.policy ??
+    spending ??
+    loadedProviderConfig.config.spending ??
+    (typeof legacyCostCap === 'number' &&
+    Number.isFinite(legacyCostCap) &&
+    legacyCostCap >= 0
+      ? {
+          mode: 'strict-capped',
+          capCents: legacyCostCap,
+          currency: 'USD',
+        }
+      : { mode: 'uncapped' })
+  const spendingResult = spendingPolicySchema.safeParse(spendingCandidate)
+  if (!spendingResult.success)
+    throw new Error(
+      `Invalid request spending policy: ${spendingResult.error.message}`,
+    )
+  const selectedSpendingPolicy = Object.freeze(
+    cloneDeep(spendingResult.data),
+  ) as SpendingPolicy
+  let activeRequestAdmissionStore: RequestAdmissionStore | undefined
+  if (selectedSpendingPolicy.mode === 'uncapped') {
+    delete sessionState.requestAdmission
+    delete mainAgentState.requestAdmission
+  } else {
+    activeRequestAdmissionStore =
+      requestAdmissionStore ??
+      (resolvedHarnessStateDir
+        ? createRequestAdmissionStore({
+            directory: path.join(resolvedHarnessStateDir, 'request-admission'),
+          })
+        : undefined)
+    if (!activeRequestAdmissionStore)
+      throw new Error(
+        'Capped request admission requires a durable store or harness state directory.',
+      )
+    const authorityId =
+      persistedAdmission?.authorityId ??
+      `request-admission:${fingerprintId}:${promptId}`
+    const admissionSnapshot = persistedAdmission
+      ? activeRequestAdmissionStore.recover({
+          authorityId,
+          policy: selectedSpendingPolicy,
+        })
+      : activeRequestAdmissionStore.initialize({
+          authorityId,
+          policy: selectedSpendingPolicy,
+        })
+    const reference = {
+      authorityId,
+      policy: selectedSpendingPolicy,
+      policyHash: admissionSnapshot.policyHash,
+    }
+    sessionState.requestAdmission = reference
+    mainAgentState.requestAdmission = reference
+    host.onRequestAdmissionReady({
+      store: activeRequestAdmissionStore,
+      authorityId,
+    })
   }
   // A continued turn must not inherit the previous turn's terminal verdict.
   mainAgentState.runOutcome = undefined
@@ -1837,9 +2028,15 @@ async function runOnce(
   }
   // Capture template mode once, before any model, generator or bridged child runs.
   // A child's claimed template cannot discard its registered parent's plan lineage.
-  const planTemplateIds = new Set(Object.entries(sessionState.fileContext.agentTemplates ?? {}).flatMap(([id, template]) =>
-    template.programmaticConfig?.planOnly === true ? [id, template.id] : []))
-  const mainPlanOnly = planTemplateIds.has(agentId) || (typeof agent !== 'string' && agent.programmaticConfig?.planOnly === true)
+  const planTemplateIds = new Set(
+    Object.entries(sessionState.fileContext.agentTemplates ?? {}).flatMap(
+      ([id, template]) =>
+        template.programmaticConfig?.planOnly === true ? [id, template.id] : [],
+    ),
+  )
+  const mainPlanOnly =
+    planTemplateIds.has(agentId) ||
+    (typeof agent !== 'string' && agent.programmaticConfig?.planOnly === true)
   const registeredActors = new Map<
     string,
     {
@@ -2040,42 +2237,76 @@ async function runOnce(
         cause: 'Runtime actor identity is already registered',
       })
     const inheritedReadPolicy = parent?.readPolicy ?? admittedRootReadPolicy
-    const strictReads = isProjectOnlyReadPolicy(inheritedReadPolicy) ||
+    const strictReads =
+      isProjectOnlyReadPolicy(inheritedReadPolicy) ||
       (!parentActor && host.rootStrictProjectReads) ||
-      (agentType !== undefined && host.strictProjectReadTemplateIds.has(agentType))
-    const readPolicy = strictReads ? deriveProjectOnlyReadPolicy(inheritedReadPolicy) : inheritedReadPolicy
-    const fileSystem = readPolicy === parent?.readPolicy ? parent.fileSystem :
-      readPolicy === admittedRootReadFileSystem.hostReadPolicy ? admittedRootReadFileSystem :
-      readPolicy === fs.hostReadPolicy ? fs : bindHostFileSystem(fs, readPolicy)
-    registeredActors.set(key, Object.freeze({
-      agentType,
-      readPolicy,
-      fileSystem,
-      planOnly: parent?.planOnly === true || (!parentActor && mainPlanOnly) || (agentType !== undefined && planTemplateIds.has(agentType)),
-      userInputId,
-      actor: Object.freeze({ ...actor }),
-      parentActor: parentActor && Object.freeze({ ...parentActor }),
-      parentContext: executionContext,
-      ancestors: Object.freeze([...ancestorRunIds]),
-    }))
+      (agentType !== undefined &&
+        host.strictProjectReadTemplateIds.has(agentType))
+    const readPolicy = strictReads
+      ? deriveProjectOnlyReadPolicy(inheritedReadPolicy)
+      : inheritedReadPolicy
+    const fileSystem =
+      readPolicy === parent?.readPolicy
+        ? parent.fileSystem
+        : readPolicy === admittedRootReadFileSystem.hostReadPolicy
+          ? admittedRootReadFileSystem
+          : readPolicy === fs.hostReadPolicy
+            ? fs
+            : bindHostFileSystem(fs, readPolicy)
+    registeredActors.set(
+      key,
+      Object.freeze({
+        agentType,
+        readPolicy,
+        fileSystem,
+        planOnly:
+          parent?.planOnly === true ||
+          (!parentActor && mainPlanOnly) ||
+          (agentType !== undefined && planTemplateIds.has(agentType)),
+        userInputId,
+        actor: Object.freeze({ ...actor }),
+        parentActor: parentActor && Object.freeze({ ...parentActor }),
+        parentContext: executionContext,
+        ancestors: Object.freeze([...ancestorRunIds]),
+      }),
+    )
   }
   function fileSystemForActor(actor?: ExecutionActor): CodebuffFileSystem {
     const registered = actor && registeredActors.get(actorKey(actor))
     if (registered) return registered.fileSystem
-    if (actor || [...registeredActors.values()].some(entry => isProjectOnlyReadPolicy(entry.readPolicy)))
-      throw new ExecutionRefusalError({ ok: false, reason: 'unavailable',
-        cause: 'Filesystem reads require their registered runtime actor attribution' })
+    if (
+      actor ||
+      [...registeredActors.values()].some((entry) =>
+        isProjectOnlyReadPolicy(entry.readPolicy),
+      )
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'unavailable',
+        cause:
+          'Filesystem reads require their registered runtime actor attribution',
+      })
     return fs
   }
-  const authorizeToolRead: NonNullable<AgentRuntimeDeps['authorizeToolRead']> = ({ identity, toolName }) => {
+  const authorizeToolRead: NonNullable<
+    AgentRuntimeDeps['authorizeToolRead']
+  > = ({ identity, toolName }) => {
     const registered = registeredActors.get(actorKey(identity))
     const start = actionStarts.get(actionKey(identity))
     contextForRegisteredAction(identity)
     if (!registered || start?.toolName !== toolName)
-      throw new ExecutionRefusalError({ ok: false, reason: 'invalid-context', cause: 'Read dispatch does not match its registered actor/action' })
-    return !isProjectOnlyReadPolicy(registered.readPolicy) || isStrictProjectReadToolSupported(toolName)
-      ? { allowed: true } : { allowed: false,
-        reason: `strict_project_reads_unavailable: ${toolName} has no guarded project-only read contract. Use read_files, read_outline, glob or list_directory.` }
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Read dispatch does not match its registered actor/action',
+      })
+    return !isProjectOnlyReadPolicy(registered.readPolicy) ||
+      isStrictProjectReadToolSupported(toolName)
+      ? { allowed: true }
+      : {
+          allowed: false,
+          reason: `strict_project_reads_unavailable: ${toolName} has no guarded project-only read contract. Use read_files, read_outline, glob or list_directory.`,
+        }
   }
   function scopeForActor(actor?: ExecutionActor): ExecutionScope {
     if (!actor) return hostServices.directScope
@@ -2168,7 +2399,11 @@ async function runOnce(
     rememberExecutionScope(context, scope)
     return context
   }
-  const processOptionsFor = (toolName: string, input: Record<string, any>, actor?: ExecutionActor) => {
+  const processOptionsFor = (
+    toolName: string,
+    input: Record<string, any>,
+    actor?: ExecutionActor,
+  ) => {
     const terminal = toolName === 'run_terminal_command'
     const hooks =
       toolName === 'run_file_change_hooks' ||
@@ -2181,26 +2416,69 @@ async function runOnce(
         ? Object.freeze({ ...processProfile, policy: 'full-access' })
         : processProfile
     const registeredActor = actor && registeredActors.get(actorKey(actor))
-    const planTerminal = terminal && (actor ? registeredActor?.planOnly === true : mainPlanOnly)
+    const planTerminal =
+      terminal && (actor ? registeredActor?.planOnly === true : mainPlanOnly)
     const parent = planTerminal ? registeredActor?.parentContext : undefined
-    const parentRegistration = parent ? hostServices.execution.actionRegistration(parent.execution) : undefined
-    if (parentRegistration && !parentRegistration.ok) throw new ExecutionRefusalError(parentRegistration)
-    const inheritedProfile = parentRegistration?.ok ? parentRegistration.value.bounds?.profile : undefined
-    const profile = planTerminal ? readOnlyPlanExecutionProfile({ ...hostProfile,
-      required: [...new Set([...hostProfile.required, ...(inheritedProfile?.required ?? [])])],
-      optional: [...new Set([...(hostProfile.optional ?? []), ...(inheritedProfile?.optional ?? [])])]
-        .filter(capability => !hostProfile.required.includes(capability) && !inheritedProfile?.required.includes(capability)),
-    }) : hostProfile
+    const parentRegistration = parent
+      ? hostServices.execution.actionRegistration(parent.execution)
+      : undefined
+    if (parentRegistration && !parentRegistration.ok)
+      throw new ExecutionRefusalError(parentRegistration)
+    const inheritedProfile = parentRegistration?.ok
+      ? parentRegistration.value.bounds?.profile
+      : undefined
+    const profile = planTerminal
+      ? readOnlyPlanExecutionProfile({
+          ...hostProfile,
+          required: [
+            ...new Set([
+              ...hostProfile.required,
+              ...(inheritedProfile?.required ?? []),
+            ]),
+          ],
+          optional: [
+            ...new Set([
+              ...(hostProfile.optional ?? []),
+              ...(inheritedProfile?.optional ?? []),
+            ]),
+          ].filter(
+            (capability) =>
+              !hostProfile.required.includes(capability) &&
+              !inheritedProfile?.required.includes(capability),
+          ),
+        })
+      : hostProfile
     const planTerminalHostProfiles = planTerminal
-      ? Object.freeze([...new Set([hostProfile.policy, ...(inheritedProfile ? [inheritedProfile.policy] : [])])]) : undefined
-    const terminalTimeout = terminal ? resolveTerminalTimeout(
-      typeof input.timeout_seconds === 'number' ? input.timeout_seconds : undefined,
-      input.process_type === 'BACKGROUND' ? 'BACKGROUND' : 'SYNC', hostServices.terminalTimeoutPolicy,
-    ) : undefined
-    const limit = executionLimitMs(terminalTimeout
-      ? terminalTimeout.localSeconds === -1 ? -1 : terminalTimeout.localSeconds * 1000 : undefined)
+      ? Object.freeze([
+          ...new Set([
+            hostProfile.policy,
+            ...(inheritedProfile ? [inheritedProfile.policy] : []),
+          ]),
+        ])
+      : undefined
+    const terminalTimeout = terminal
+      ? resolveTerminalTimeout(
+          typeof input.timeout_seconds === 'number'
+            ? input.timeout_seconds
+            : undefined,
+          input.process_type === 'BACKGROUND' ? 'BACKGROUND' : 'SYNC',
+          hostServices.terminalTimeoutPolicy,
+        )
+      : undefined
+    const limit = executionLimitMs(
+      terminalTimeout
+        ? terminalTimeout.localSeconds === -1
+          ? -1
+          : terminalTimeout.localSeconds * 1000
+        : undefined,
+    )
     if (!limit.ok) throw new ExecutionRefusalError(limit)
-    return { profile, planTerminalHostProfiles, limit: limit.value, mode: 'assistant' as const }
+    return {
+      profile,
+      planTerminalHostProfiles,
+      limit: limit.value,
+      mode: 'assistant' as const,
+    }
   }
   const onExecutionActionStart: NonNullable<
     Parameters<typeof getAgentRuntimeImpl>[0]['onExecutionActionStart']
@@ -2237,7 +2515,11 @@ async function runOnce(
       typeof start.input === 'string'
         ? parseJsonBounded(start.input)
         : (start.input ?? {})
-    const options = processOptionsFor(toolName, input as Record<string, any>, identity)
+    const options = processOptionsFor(
+      toolName,
+      input as Record<string, any>,
+      identity,
+    )
     const scope = scopeForActor(identity)
     const signal = AbortSignal.any([runSignal, start.signal])
     const registered = scope.action({
@@ -2256,11 +2538,22 @@ async function runOnce(
         basis: Object.freeze({ ...identity.basis }),
       }),
       toolName,
-      nativeObservation: toolName === 'record_decision' ? {
-        inputHash: nativeToolObservationInputHash({ input: start.input, callId: identity.actionId,
-          logger: logger ?? { debug() {}, info() {}, warn() {}, error() {} } }),
-        signal: start.signal,
-      } : undefined,
+      nativeObservation:
+        toolName === 'record_decision'
+          ? {
+              inputHash: nativeToolObservationInputHash({
+                input: start.input,
+                callId: identity.actionId,
+                logger: logger ?? {
+                  debug() {},
+                  info() {},
+                  warn() {},
+                  error() {},
+                },
+              }),
+              signal: start.signal,
+            }
+          : undefined,
       context: registered.value,
       scope,
       planTerminalHostProfiles: options.planTerminalHostProfiles,
@@ -2697,8 +2990,8 @@ async function runOnce(
   )
   const onNativeToolObservation = buildNativeToolObservationReporter({
     coordinator: memoryV2Coordinator,
-    registeredActor: actor => registeredActors.get(actorKey(actor)),
-    registeredAction: identity => actionStarts.get(actionKey(identity)),
+    registeredActor: (actor) => registeredActors.get(actorKey(actor)),
+    registeredAction: (identity) => actionStarts.get(actionKey(identity)),
     workspaceState: () => sessionState.mainAgentState.workspaceState,
     logger,
   })
@@ -2741,23 +3034,54 @@ async function runOnce(
               validationReceipts?.evidence(actor) ?? Promise.resolve(undefined),
           })
         : undefined
-    const strictIntelligence = new Map<CodebuffFileSystem, RepositoryIntelligenceService>()
-    const archiveReaderParams = { repository: memoryV2?.repository,
-      allowProjectArchive: sessionState.mainAgentState.contextArchiveHydration !== 'in-memory-only', signal: runSignal,
+    const strictIntelligence = new Map<
+      CodebuffFileSystem,
+      RepositoryIntelligenceService
+    >()
+    const archiveReaderParams = {
+      repository: memoryV2?.repository,
+      allowProjectArchive:
+        sessionState.mainAgentState.contextArchiveHydration !==
+        'in-memory-only',
+      signal: runSignal,
       registeredActor: (actor: ExecutionActor) => {
         const registered = registeredActors.get(actorKey(actor))
-        return registered ? { actor: registered.actor, userInputId: registered.userInputId,
-          strictProjectReads: isProjectOnlyReadPolicy(registered.readPolicy) } : undefined
-      } }
-    const agentRuntimeImpl = getAgentRuntimeImpl({
-      readContextArchiveBodyPage: memoryV2 ? buildContextArchiveBodyReader(archiveReaderParams) : undefined,
-      searchContextArchive: memoryV2 ? buildContextArchiveSearchReader(archiveReaderParams) : undefined,
-      resolveMemoryAuthority: selectedMemoryAuthority === undefined ? undefined : ({ actor, userInputId }) => {
-        const registered = registeredActors.get(actorKey(actor))
-        if (!registered || !registered.userInputId || registered.userInputId !== userInputId)
-          throw new Error('Memory source selection does not match its registered actor/task')
-        return selectedMemoryAuthority
+        return registered
+          ? {
+              actor: registered.actor,
+              userInputId: registered.userInputId,
+              strictProjectReads: isProjectOnlyReadPolicy(
+                registered.readPolicy,
+              ),
+            }
+          : undefined
       },
+    }
+    const agentRuntimeImpl = getAgentRuntimeImpl({
+      requestAdmissionStore: activeRequestAdmissionStore,
+      spendingPolicy: selectedSpendingPolicy,
+      requestAdmissionAuthorityId: sessionState.requestAdmission?.authorityId,
+      readContextArchiveBodyPage: memoryV2
+        ? buildContextArchiveBodyReader(archiveReaderParams)
+        : undefined,
+      searchContextArchive: memoryV2
+        ? buildContextArchiveSearchReader(archiveReaderParams)
+        : undefined,
+      resolveMemoryAuthority:
+        selectedMemoryAuthority === undefined
+          ? undefined
+          : ({ actor, userInputId }) => {
+              const registered = registeredActors.get(actorKey(actor))
+              if (
+                !registered ||
+                !registered.userInputId ||
+                registered.userInputId !== userInputId
+              )
+                throw new Error(
+                  'Memory source selection does not match its registered actor/task',
+                )
+              return selectedMemoryAuthority
+            },
       authorizeToolRead,
       getFileSystemForActor: fileSystemForActor,
       getPlaybookValidationEvidence: async (actor) => {
@@ -2790,10 +3114,24 @@ async function runOnce(
               if (!compiler) {
                 // Cached source/index bytes are not guarded observations. Keep
                 // memory/procedure authority separate and attest through the read view.
-                compiler = new RepositoryIntelligenceService({ cwd: cwd!, fs: registered.fileSystem,
-                  memory: memoryV2, currentWorkspace: () => sessionState.mainAgentState.workspaceState,
-                  validationEvidence: actor => validationReceipts?.evidence(actor) ?? Promise.resolve(undefined),
-                  source: { async query() { return { freshness: 'degraded', candidates: [], reasons: ['strict-project-read-index-unavailable'] } } },
+                compiler = new RepositoryIntelligenceService({
+                  cwd: cwd!,
+                  fs: registered.fileSystem,
+                  memory: memoryV2,
+                  currentWorkspace: () =>
+                    sessionState.mainAgentState.workspaceState,
+                  validationEvidence: (actor) =>
+                    validationReceipts?.evidence(actor) ??
+                    Promise.resolve(undefined),
+                  source: {
+                    async query() {
+                      return {
+                        freshness: 'degraded',
+                        candidates: [],
+                        reasons: ['strict-project-read-index-unavailable'],
+                      }
+                    },
+                  },
                 })
                 strictIntelligence.set(registered.fileSystem, compiler)
               }
@@ -2815,6 +3153,23 @@ async function runOnce(
       logger,
       resolveRunOutcome: host.resolveRunOutcome,
       registerExecutionActor,
+      readPlanStepOffset: host.readPlan?.original ? runId =>
+        runId === host.readPlan!.original!.basis.runId ? host.readPlan!.completedBatches : 0 : undefined,
+      bindReadPlanRoot: host.readPlan ? async ({ agentId, userInputId, allocateRunId }) => {
+        const readPlan = host.readPlan!
+        await readPlan.verifyRoot()
+        runSignal.throwIfAborted()
+        if (readPlan.original) {
+          if (agentId !== readPlan.original.agentId || userInputId !== readPlan.original.userInputId) {
+            throw new Error('Read replay root identity does not match the claimed origin.')
+          }
+          return readPlan.original.basis.runId
+        }
+        const runId = await allocateRunId()
+        if (!runId || !userInputId) throw new Error('Cannot initialize read-plan actor identity.')
+        await readPlan.begin(runId, agentId, userInputId)
+        return runId
+      } : undefined,
       onExecutionActionStart,
       synchronizeWorkspace,
       executionForAction: contextForRegisteredAction,
@@ -2930,14 +3285,33 @@ async function runOnce(
               'Tool request does not match a registered B02 action and exact forwarded input',
           })
         const actorFileSystem = fileSystemForActor(executionIdentity)
-        if (isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
-          (!isStrictProjectReadToolSupported(toolName) || capturedExternalAlias ||
-            overrideTools?.[toolName as PublishedToolName] || !hasGuardedProjectReads(actorFileSystem)))
-          return { output: [{ type: 'json', value: { errorCode: 'strict_project_reads_unavailable',
-            errorMessage: `strict_project_reads_unavailable: ${toolName} has no verified guarded project-only read view.` } }] }
+        if (
+          isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
+          (!isStrictProjectReadToolSupported(toolName) ||
+            capturedExternalAlias ||
+            overrideTools?.[toolName as PublishedToolName] ||
+            !hasGuardedProjectReads(actorFileSystem))
+        )
+          return {
+            output: [
+              {
+                type: 'json',
+                value: {
+                  errorCode: 'strict_project_reads_unavailable',
+                  errorMessage: `strict_project_reads_unavailable: ${toolName} has no verified guarded project-only read view.`,
+                },
+              },
+            ],
+          }
         const scope = start?.scope ?? hostServices.directScope
-        const planMode = executionIdentity ? registeredActors.get(actorKey(executionIdentity))?.planOnly === true : mainPlanOnly
-        const directOptions = processOptionsFor(toolName, toolInput, executionIdentity)
+        const planMode = executionIdentity
+          ? registeredActors.get(actorKey(executionIdentity))?.planOnly === true
+          : mainPlanOnly
+        const directOptions = processOptionsFor(
+          toolName,
+          toolInput,
+          executionIdentity,
+        )
         const registered = start
           ? { ok: true as const, value: start.context }
           : scope.operation({
@@ -2945,7 +3319,9 @@ async function runOnce(
               limit: directOptions.limit,
               profile: directOptions.profile,
               mode:
-                toolName === 'run_terminal_command' && toolInput.mode === 'user' && !planMode
+                toolName === 'run_terminal_command' &&
+                toolInput.mode === 'user' &&
+                !planMode
                   ? 'user'
                   : 'assistant',
             })
@@ -3135,7 +3511,9 @@ async function runOnce(
             executionContext,
             planMode,
             terminalTimeoutPolicy: hostServices.terminalTimeoutPolicy,
-            planTerminalHostProfiles: start?.planTerminalHostProfiles ?? directOptions.planTerminalHostProfiles,
+            planTerminalHostProfiles:
+              start?.planTerminalHostProfiles ??
+              directOptions.planTerminalHostProfiles,
             resources: scope.resources,
             capturedHookConfiguration,
             diagnosticPreflightEnabled,
@@ -3168,13 +3546,15 @@ async function runOnce(
             fileFilter,
             filesystemPolicy,
             intentLog,
+            brokerRecoveryBlocked,
             trustedJobOwner,
             logger,
             capabilityIssuer: cwd
               ? {
                   projectId: cwd,
                   runId:
-                    executionIdentity?.runId ?? sessionState.mainAgentState.runId ??
+                    executionIdentity?.runId ??
+                    sessionState.mainAgentState.runId ??
                     sessionState.mainAgentState.agentId,
                 }
               : undefined,
@@ -3367,8 +3747,14 @@ async function runOnce(
         return handled
       },
       requestMcpToolData: async (request) => {
-        if (isProjectOnlyReadPolicy(fileSystemForActor(request.executionActor).hostReadPolicy))
-          throw new Error('strict_project_reads_unavailable: MCP discovery has no guarded read contract')
+        if (
+          isProjectOnlyReadPolicy(
+            fileSystemForActor(request.executionActor).hostReadPolicy,
+          )
+        )
+          throw new Error(
+            'strict_project_reads_unavailable: MCP discovery has no guarded read contract',
+          )
         const scope = scopeForActor(request.executionActor)
         const signal = request.signal
           ? AbortSignal.any([runSignal, request.signal])
@@ -3413,24 +3799,58 @@ async function runOnce(
         const actorFileSystem = fileSystemForActor(executionActor)
         if (executionIdentity) {
           contextForRegisteredAction(executionIdentity)
-          if (!executionActor || actorKey(executionActor) !== actorKey(executionIdentity))
-            throw new Error('Read attribution does not match its registered action')
+          if (
+            !executionActor ||
+            actorKey(executionActor) !== actorKey(executionIdentity)
+          )
+            throw new Error(
+              'Read attribution does not match its registered action',
+            )
         }
-        if (executionActor && capabilityIssuer && (capabilityIssuer.runId !== executionActor.runId || capabilityIssuer.projectId !== cwd))
-          throw new Error('Read issuer does not match its registered actor/project')
+        if (
+          executionActor &&
+          capabilityIssuer &&
+          (capabilityIssuer.runId !== executionActor.runId ||
+            capabilityIssuer.projectId !== cwd)
+        )
+          throw new Error(
+            'Read issuer does not match its registered actor/project',
+          )
         const readSignal = requestSignal
           ? AbortSignal.any([runSignal, requestSignal])
           : runSignal
         if (readSignal.aborted || terminalRequested) {
           throw createAbortError(readSignal)
         }
-        if (isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
-          (overrideTools?.read_files || !hasGuardedProjectReads(actorFileSystem))) {
-          return Promise.resolve(buildReadFilesResultV1([
-            ...filePaths.map(path => ({ selector: 'file' as const, path })),
-            ...(ranges ?? []).map(range => ({ selector: 'range' as const, path: range.path })),
-          ].map((selector, requestIndex) => ({ ...selector, requestIndex, status: 'error' as const,
-            error: { code: 'unsupported' as const, message: 'Strict project reads are unavailable for this adapter or override.', retryable: false } }))))
+        if (
+          isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
+          (overrideTools?.read_files ||
+            !hasGuardedProjectReads(actorFileSystem))
+        ) {
+          return Promise.resolve(
+            buildReadFilesResultV1(
+              [
+                ...filePaths.map((path) => ({
+                  selector: 'file' as const,
+                  path,
+                })),
+                ...(ranges ?? []).map((range) => ({
+                  selector: 'range' as const,
+                  path: range.path,
+                })),
+              ].map((selector, requestIndex) => ({
+                ...selector,
+                requestIndex,
+                status: 'error' as const,
+                error: {
+                  code: 'unsupported' as const,
+                  message:
+                    'Strict project reads are unavailable for this adapter or override.',
+                  retryable: false,
+                },
+              })),
+            ),
+          )
         }
         return readFiles({
           filePaths,
@@ -3443,16 +3863,31 @@ async function runOnce(
           capabilityIssuer,
         })
       },
-      requestOptionalFile: async ({ filePath, executionActor, executionIdentity, signal: requestSignal }) => {
+      requestOptionalFile: async ({
+        filePath,
+        executionActor,
+        executionIdentity,
+        signal: requestSignal,
+      }) => {
         const actorFileSystem = fileSystemForActor(executionActor)
         if (executionIdentity) {
           contextForRegisteredAction(executionIdentity)
-          if (!executionActor || actorKey(executionActor) !== actorKey(executionIdentity))
-            throw new Error('Read attribution does not match its registered action')
+          if (
+            !executionActor ||
+            actorKey(executionActor) !== actorKey(executionIdentity)
+          )
+            throw new Error(
+              'Read attribution does not match its registered action',
+            )
         }
-        if (isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
-          (overrideTools?.read_files || !hasGuardedProjectReads(actorFileSystem)))
-          throw new Error('Strict project reads are unavailable for this adapter or override.')
+        if (
+          isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
+          (overrideTools?.read_files ||
+            !hasGuardedProjectReads(actorFileSystem))
+        )
+          throw new Error(
+            'Strict project reads are unavailable for this adapter or override.',
+          )
         const readSignal = requestSignal
           ? AbortSignal.any([runSignal, requestSignal])
           : runSignal
@@ -3820,12 +4255,19 @@ async function runOnce(
 /** Host correlation of completed metadata; never creates an execution operation. */
 export function buildNativeToolObservationReporter(params: {
   coordinator?: Pick<MemoryV2Coordinator, 'recordToolObservation'>
-  registeredActor: (actor: ExecutionActor) => Readonly<{ actor: ExecutionActor; userInputId?: string }> | undefined
-  registeredAction: (identity: ToolExecutionIdentity) => Readonly<{
-    identity: ToolExecutionIdentity
-    toolName: string
-    nativeObservation?: Readonly<{ inputHash?: string; signal: AbortSignal }>
-  }> | undefined
+  registeredActor: (
+    actor: ExecutionActor,
+  ) => Readonly<{ actor: ExecutionActor; userInputId?: string }> | undefined
+  registeredAction: (identity: ToolExecutionIdentity) =>
+    | Readonly<{
+        identity: ToolExecutionIdentity
+        toolName: string
+        nativeObservation?: Readonly<{
+          inputHash?: string
+          signal: AbortSignal
+        }>
+      }>
+    | undefined
   workspaceState: () => WorkspaceStateV1 | undefined
   logger?: Pick<Logger, 'warn'>
 }): AgentRuntimeDeps['onNativeToolObservation'] {
@@ -3834,35 +4276,81 @@ export function buildNativeToolObservationReporter(params: {
   if (!coordinator) return undefined
   const delivered = new Set<string>()
   const sameActor = (left: ExecutionActor, right: ExecutionActor) =>
-    left.runId === right.runId && left.rootRunId === right.rootRunId && left.agentId === right.agentId
-  return async observation => {
+    left.runId === right.runId &&
+    left.rootRunId === right.rootRunId &&
+    left.agentId === right.agentId
+  return async (observation) => {
     try {
       const actor = params.registeredActor(observation.actor)
       const start = params.registeredAction(observation.executionIdentity)
-      const input = toolParams.record_decision.inputSchema.safeParse(observation.input)
-      const output = toolParams.record_decision.outputSchema.safeParse(observation.output)
-      if (!actor || !start || !sameActor(actor.actor, observation.actor) || !sameActor(actor.actor, start.identity) ||
-        hashActionInput('openbuff.native-observation-identity.v1', start.identity) !== hashActionInput('openbuff.native-observation-identity.v1', observation.executionIdentity) ||
-        observation.toolName !== 'record_decision' || start.toolName !== 'record_decision' || observation.callId !== start.identity.actionId ||
-        !actor.userInputId || observation.userInputId !== actor.userInputId ||
-        !start.nativeObservation?.inputHash || start.nativeObservation.inputHash !== hashActionInput('record_decision', observation.input) ||
+      const input = toolParams.record_decision.inputSchema.safeParse(
+        observation.input,
+      )
+      const output = toolParams.record_decision.outputSchema.safeParse(
+        observation.output,
+      )
+      if (
+        !actor ||
+        !start ||
+        !sameActor(actor.actor, observation.actor) ||
+        !sameActor(actor.actor, start.identity) ||
+        hashActionInput(
+          'openbuff.native-observation-identity.v1',
+          start.identity,
+        ) !==
+          hashActionInput(
+            'openbuff.native-observation-identity.v1',
+            observation.executionIdentity,
+          ) ||
+        observation.toolName !== 'record_decision' ||
+        start.toolName !== 'record_decision' ||
+        observation.callId !== start.identity.actionId ||
+        !actor.userInputId ||
+        observation.userInputId !== actor.userInputId ||
+        !start.nativeObservation?.inputHash ||
+        start.nativeObservation.inputHash !==
+          hashActionInput('record_decision', observation.input) ||
         observation.signal !== start.nativeObservation.signal ||
-        !input.success || start.nativeObservation.inputHash !== hashActionInput('record_decision', input.data) ||
-        !output.success || observation.output.some(part => 'errorMessage' in part.value))
-        throw new Error('Native tool observation does not match its private actor/action registration')
+        !input.success ||
+        start.nativeObservation.inputHash !==
+          hashActionInput('record_decision', input.data) ||
+        !output.success ||
+        observation.output.some((part) => 'errorMessage' in part.value)
+      )
+        throw new Error(
+          'Native tool observation does not match its private actor/action registration',
+        )
       // The original identity/basis stays intact. Its separate metadata hash
       // correlates the parser's final defaults/trim/repairs, not fresh authority.
-      const key = JSON.stringify([actor.actor.rootRunId, actor.actor.runId, actor.actor.agentId, start.identity.actionId, start.identity.attemptId])
+      const key = JSON.stringify([
+        actor.actor.rootRunId,
+        actor.actor.runId,
+        actor.actor.agentId,
+        start.identity.actionId,
+        start.identity.attemptId,
+      ])
       if (delivered.has(key)) return
       delivered.add(key)
       await coordinator.recordToolObservation({
-        toolName: 'record_decision', callId: observation.callId, userInputId: actor.userInputId,
-        input: cloneDeep(input.data), output: cloneDeep(output.data), workspaceState: params.workspaceState(),
-        native: true, mcp: false, completed: true,
+        toolName: 'record_decision',
+        callId: observation.callId,
+        userInputId: actor.userInputId,
+        input: cloneDeep(input.data),
+        output: cloneDeep(output.data),
+        workspaceState: params.workspaceState(),
+        native: true,
+        mcp: false,
+        completed: true,
       })
     } catch (error) {
-      try { params.logger?.warn({ error }, 'Native tool observation is unconfirmed (non-fatal)') }
-      catch { /* Metadata reporting cannot change the completed native result. */ }
+      try {
+        params.logger?.warn(
+          { error },
+          'Native tool observation is unconfirmed (non-fatal)',
+        )
+      } catch {
+        /* Metadata reporting cannot change the completed native result. */
+      }
     }
   }
 }
@@ -4140,6 +4628,7 @@ export async function handleToolCall({
   fileFilter,
   filesystemPolicy,
   intentLog,
+  brokerRecoveryBlocked = false,
   trustedJobOwner,
   capabilityIssuer,
   logger,
@@ -4184,8 +4673,10 @@ export async function handleToolCall({
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
   filesystemPolicy?: FilesystemAuthorityPolicy
-  /** P2-T5: durable transaction-intent log for multi-file commit loops. */
+  /** Durable intent authority for this workspace. */
   intentLog?: TransactionIntentLog
+  /** Broker initialization discovered unfinished workspace effects. */
+  brokerRecoveryBlocked?: boolean
   /** Trusted owner injected into every process-job op; never model-derived. */
   trustedJobOwner: JobOwner
   capabilityIssuer?: ReadCapabilityIssuer
@@ -4286,11 +4777,68 @@ export async function handleToolCall({
   if (signal?.aborted) {
     throw createAbortError(signal)
   }
-  if (isProjectOnlyReadPolicy(fs.hostReadPolicy) &&
-    (!isStrictProjectReadToolSupported(toolName) || action.mcpConfig ||
-      customToolDefinitions[toolName] || overrides[toolName as PublishedToolName] || !hasGuardedProjectReads(fs))) {
-    return { output: [{ type: 'json', value: { errorCode: 'strict_project_reads_unavailable',
-      errorMessage: `strict_project_reads_unavailable: ${toolName} has no verified guarded project-only read view.` } }] }
+  if (
+    isProjectOnlyReadPolicy(fs.hostReadPolicy) &&
+    (!isStrictProjectReadToolSupported(toolName) ||
+      action.mcpConfig ||
+      customToolDefinitions[toolName] ||
+      overrides[toolName as PublishedToolName] ||
+      !hasGuardedProjectReads(fs))
+  ) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            errorCode: 'strict_project_reads_unavailable',
+            errorMessage: `strict_project_reads_unavailable: ${toolName} has no verified guarded project-only read view.`,
+          },
+        },
+      ],
+    }
+  }
+
+  // Recheck before invoking a participating mutator, including overrides.
+  // A pending intent is an operator recovery condition, not a stale read.
+  if (!action.mcpConfig && RECOVERY_GATED_MUTATION_TOOLS.has(toolName)) {
+    let blocked = brokerRecoveryBlocked
+    let transactionIds: string[] = []
+    if (!blocked && intentLog && cwd) {
+      try {
+        const recovery = await recoverAndRevertInterruptedTransactions({
+          intentLog,
+          cwd,
+          fs,
+          logger,
+        })
+        if (!recovery.ok) {
+          blocked = true
+          transactionIds = recovery.transactionIds.slice(0, 16)
+        }
+      } catch (error) {
+        blocked = true
+        logger?.warn({ error }, 'Workspace mutation recovery check failed')
+      }
+    }
+    if (signal?.aborted) throw createAbortError(signal)
+    if (blocked) {
+      return {
+        output: [
+          {
+            type: 'json',
+            value: {
+              errorCode: 'recovery_required',
+              errorMessage:
+                'Workspace mutation recovery is required. No edits from this call were applied. Inspect the pending workspace transaction or broker receipt before retrying.',
+              recovery: {
+                kind: brokerRecoveryBlocked ? 'broker' : 'transaction_intent',
+                transactionIds,
+              },
+            },
+          },
+        ],
+      }
+    }
   }
 
   // Handle MCP tool calls when mcpConfig is present
@@ -4610,10 +5158,26 @@ export async function handleToolCall({
       : undefined
 
     if (override && planMode && toolName === 'run_terminal_command') {
-      const cause = 'plan_mode_read_only: plan terminal overrides have no verified native read-only enforcement contract. File and search tools remain available.'
-      return { output: [{ type: 'json', value: { command: typeof (input as { command?: unknown }).command === 'string' ? (input as { command: string }).command : '',
-        errorCode: 'plan_mode_read_only', errorMessage: cause, permissionProfile: 'read-only', permissionDenied: true,
-        executionRefusal: { ok: false, reason: 'denied', cause } } }] }
+      const cause =
+        'plan_mode_read_only: plan terminal overrides have no verified native read-only enforcement contract. File and search tools remain available.'
+      return {
+        output: [
+          {
+            type: 'json',
+            value: {
+              command:
+                typeof (input as { command?: unknown }).command === 'string'
+                  ? (input as { command: string }).command
+                  : '',
+              errorCode: 'plan_mode_read_only',
+              errorMessage: cause,
+              permissionProfile: 'read-only',
+              permissionDenied: true,
+              executionRefusal: { ok: false, reason: 'denied', cause },
+            },
+          },
+        ],
+      }
     }
     if (override) {
       onUnscopedHandlerEntered?.()
@@ -4633,7 +5197,14 @@ export async function handleToolCall({
         const refusal = refusalForSignal(overrideSignal)
         // A timed-out override has no attested effect. Preserve the captured
         // action refusal rather than returning an untyped recovered error.
-        return { output: [{ type: 'json', value: { errorMessage: refusal.cause, executionRefusal: refusal } }] }
+        return {
+          output: [
+            {
+              type: 'json',
+              value: { errorMessage: refusal.cause, executionRefusal: refusal },
+            },
+          ],
+        }
       }
       if (
         toolName === 'write_file' ||
@@ -4787,16 +5358,30 @@ export async function handleToolCall({
           'Expected a parsed run_terminal_command client tool call',
         )
       }
-      const terminalInput = planMode ? { ...parsed.input, mode: 'assistant' as const, permission_profile: 'read-only' as const } : parsed.input
+      const terminalInput = planMode
+        ? {
+            ...parsed.input,
+            mode: 'assistant' as const,
+            permission_profile: 'read-only' as const,
+          }
+        : parsed.input
       // Plan profiles are bound to the original host request, not merely
       // checked lexically. Keep the original host/task gates as additional
       // restrictions; execute-mode declarations retain their existing behavior.
-      const hostProfileRefusal = planTerminalHostProfiles?.map(declaredProfile => refuseByDeclaredTerminalProfile({
-        command: terminalInput.command, declaredProfile, enforceCapturedProfile: true,
-        hostProfile: executionContext?.profile.policy, mode: 'assistant',
-        projectRoot: executionContext?.projectRoot ?? projectRoot,
-        allowedPaths: executionContext?.allowedPaths, cwd: terminalInput.cwd,
-      })).find(refusal => refusal !== undefined)
+      const hostProfileRefusal = planTerminalHostProfiles
+        ?.map((declaredProfile) =>
+          refuseByDeclaredTerminalProfile({
+            command: terminalInput.command,
+            declaredProfile,
+            enforceCapturedProfile: true,
+            hostProfile: executionContext?.profile.policy,
+            mode: 'assistant',
+            projectRoot: executionContext?.projectRoot ?? projectRoot,
+            allowedPaths: executionContext?.allowedPaths,
+            cwd: terminalInput.cwd,
+          }),
+        )
+        .find((refusal) => refusal !== undefined)
       const declaredProfileRefusal = refuseByDeclaredTerminalProfile({
         command: terminalInput.command,
         declaredProfile: terminalInput.permission_profile,
@@ -4808,7 +5393,8 @@ export async function handleToolCall({
         cwd: terminalInput.cwd,
       })
       result =
-        hostProfileRefusal ?? declaredProfileRefusal ??
+        hostProfileRefusal ??
+        declaredProfileRefusal ??
         (await runTerminalCommand({
           ...terminalInput,
           permission_profile:
@@ -4833,13 +5419,33 @@ export async function handleToolCall({
           prepareTransferredLaunch,
         }))
       if (planMode) {
-        result = result.map(part => {
-          if (part.type !== 'json' || !part.value || typeof part.value !== 'object') return part
+        result = result.map((part) => {
+          if (
+            part.type !== 'json' ||
+            !part.value ||
+            typeof part.value !== 'object'
+          )
+            return part
           const value = part.value as Record<string, unknown>
-          const refusal = value.executionRefusal as { reason?: string } | undefined
-          if (value.permissionDenied !== true && !['denied', 'unavailable', 'invalid-context'].includes(refusal?.reason ?? '')) return part
-          return { ...part, value: { ...value, errorCode: 'plan_mode_read_only',
-            errorMessage: `plan_mode_read_only: plan terminal commands require verified native read-only enforcement. File and search tools remain available. ${value.errorMessage ?? ''}`.trim() } }
+          const refusal = value.executionRefusal as
+            | { reason?: string }
+            | undefined
+          if (
+            value.permissionDenied !== true &&
+            !['denied', 'unavailable', 'invalid-context'].includes(
+              refusal?.reason ?? '',
+            )
+          )
+            return part
+          return {
+            ...part,
+            value: {
+              ...value,
+              errorCode: 'plan_mode_read_only',
+              errorMessage:
+                `plan_mode_read_only: plan terminal commands require verified native read-only enforcement. File and search tools remain available. ${value.errorMessage ?? ''}`.trim(),
+            },
+          }
         })
       }
     } else if (toolName === 'read_image') {

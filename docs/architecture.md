@@ -52,6 +52,7 @@ The public SDK used by the CLI and available to external users via `@openbuff/sd
   - **Executes tool calls locally** on the user's machine (file edits, terminal commands, code search).
   - Creates a worktree-scoped cooperative mutation broker for the default Node filesystem. Participating Openbuff processes serialize exact-byte conditional commits, deletes, creates, and no-clobber moves through a durable receipt journal; external editors remain outside this authority and are detected through workspace revision/watcher invalidation.
   - Manages model provider routing dynamically: reads `openbuff.json` to select and invoke user-configured OpenAI-compatible APIs (OpenAI, OpenRouter, Ollama, GLM, etc.), Anthropic-compatible Claude APIs, or ChatGPT OAuth directly from the client.
+  - Owns optional durable provider-request admission: one root-shared strict/estimated/uncapped authority reserves each retry/failover/descendant attempt before dispatch and retains incomplete reservations across restart; usage telemetry remains separate and no exact remote-billing claim is made.
 - **Depends on:** none (standalone — published as `@openbuff/sdk` with no workspace dependencies)
 
 ### `packages/agent-runtime/` — Agent Execution Engine
@@ -265,7 +266,6 @@ During the transition from the upstream Codebuff codebase, a small set of compat
 ### Internal Workspace Package Names
 
 All internal workspace packages retain the `@codebuff/*` namespace: `@codebuff/common`, `@codebuff/agents`, `@codebuff/internal`, `@codebuff/code-map`, `@codebuff/indexer`, `@codebuff/agent-runtime`, `@codebuff/build-tools`, `@codebuff/evals`, `@codebuff/scripts`, `@codebuff/local-agents` (the `.agents/` workspace), and the workspace `@codebuff/cli` (which is published as `@openbuff/cli`). These are private and never published to npm. Only `@openbuff/cli` (v0.1.0) and `@openbuff/sdk` (v0.11.0) are published. Homepage: openbuff.dev. Repo: github.com/AnzoBenjamin/openbuff.
-
 
 ## Durable repository intelligence
 

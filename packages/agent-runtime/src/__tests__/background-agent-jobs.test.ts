@@ -23,6 +23,8 @@ import {
 } from 'bun:test'
 
 import { createToolCallChunk, mockFileContext } from './test-utils'
+import { buildWholeFileReadResultV1 } from './read-files-edit-state-fixtures'
+import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
 import * as runAgentStep from '../run-agent-step'
 const realLoopAgentSteps = runAgentStep.loopAgentSteps
 import {
@@ -1670,6 +1672,15 @@ describe('background agent journaling (P2-T2)', () => {
       // The child coroutine runs the REAL loopAgentSteps here (no spy), so
       // every dep the loop touches must be non-throwing.
       handleStepsLogChunk: () => {},
+      requestFiles: async ({
+        filePaths,
+        capabilityIssuer,
+      }: Parameters<RequestFilesFn>[0]) =>
+        buildWholeFileReadResultV1(
+          filePaths,
+          () => 'owned background fixture\n',
+          capabilityIssuer,
+        ),
       requestToolCall: async () => ({ success: true, result: 'mock result' }),
       consumeCreditsWithFallback: async () => {},
       // Unique child runIds per test: run-programmatic-step caches
@@ -1841,7 +1852,7 @@ describe('background agent journaling (P2-T2)', () => {
   })
 })
 
-describe('background resume from own journal (P2-T2b runtime seam)', () => {
+describe('unverified background replay admission (B15)', () => {
   let baseParams: Record<string, unknown>
 
   const createMockAgent = (id: string): AgentTemplate => ({
@@ -1953,6 +1964,15 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
       // The loops below (parent turns + the re-drive) run the REAL
       // loopAgentSteps, so every dep the loop touches must be non-throwing.
       handleStepsLogChunk: () => {},
+      requestFiles: async ({
+        filePaths,
+        capabilityIssuer,
+      }: Parameters<RequestFilesFn>[0]) =>
+        buildWholeFileReadResultV1(
+          filePaths,
+          () => 'owned resumed fixture\n',
+          capabilityIssuer,
+        ),
       requestToolCall: async () => ({ success: true, result: 'mock result' }),
       consumeCreditsWithFallback: async () => {},
       promptAiSdkStream: mock(async function* () {
@@ -1972,235 +1992,90 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
     __clearBackgroundReDriveReservationsForTest()
   })
 
-  // Reviewer finding pinned-runid-seam-coverage (a): a pinned relaunch
-  // never mints a fresh runId and journals into the ORIGINAL run's stream.
-  test('pinnedRunId skips startAgentRun and journals under the pinned runId', async () => {
+  test('a pinned run ID cannot admit an unverified re-drive', async () => {
     const journal = makeJournal()
     try {
       const { mainAgentState: parentState } =
         getInitialSessionState(mockFileContext)
       const thinker = createMockAgent('thinker')
       const childState = createAgentState('thinker', thinker, parentState, {})
-      let startAgentRunCalls = 0
-      const result = await runAgentStep.loopAgentSteps({
-        ...baseParams,
-        agentType: 'thinker',
-        agentTemplate: thinker,
-        agentState: childState,
-        // prompt:'' + no spawnParams keeps hasUserMessage false: the pinned
-        // relaunch must not append a duplicate user prompt.
-        prompt: '',
-        pinnedRunId: 'pinned-resume-child-1',
-        journalWriter: journal,
-        journalReader: journal,
-        localAgentTemplates: { thinker },
-        startAgentRun: async () => {
-          startAgentRunCalls++
-          return `should-not-mint-${startAgentRunCalls}`
-        },
-      } as unknown as Parameters<typeof runAgentStep.loopAgentSteps>[0])
-
-      expect(startAgentRunCalls).toBe(0)
-      expect(childState.runId).toBe('pinned-resume-child-1')
-      expect(result.agentState.runId).toBe('pinned-resume-child-1')
-      const childEventTypes = new Set(
-        journal.events('pinned-resume-child-1').map((event) => event.eventType),
-      )
-      for (const eventType of [
-        'llm_request',
-        'llm_response',
-        'tool_call',
-        'tool_result',
-        'step_boundary',
-      ] as const) {
-        expect(childEventTypes.has(eventType)).toBe(true)
-      }
-      expect(classifyChildRun(journal, 'pinned-resume-child-1').kind).toBe(
-        'child_completed',
-      )
+      const pinnedRunId = 'pinned-unverified-child'
+      childState.runId = pinnedRunId
+      const startAgentRun = mock(async () => 'should-not-mint')
+      await expect(
+        runAgentStep.loopAgentSteps({
+          ...baseParams,
+          agentType: 'thinker',
+          agentTemplate: thinker,
+          agentState: childState,
+          prompt: '',
+          pinnedRunId,
+          journalWriter: journal,
+          journalReader: journal,
+          localAgentTemplates: { thinker },
+          startAgentRun,
+        } as unknown as Parameters<typeof runAgentStep.loopAgentSteps>[0]),
+      ).rejects.toMatchObject({
+        code: 'replay_unavailable',
+        reason: 'prefix_unverified',
+        runId: pinnedRunId,
+      })
+      expect(startAgentRun).not.toHaveBeenCalled()
+      expect(childState.runId).toBe(pinnedRunId)
+      expect(journal.events(pinnedRunId)).toEqual([])
     } finally {
       await journal.close()
     }
   })
 
-  // Reviewer findings pinned-runid-seam-coverage (b) +
-  // resume-result-not-delivered: one loop-entry resume of a pre-populated
-  // interrupted intent + linkage + child llm_request launches the detached
-  // re-drive under the pinned runId, journals the respawn marker, and the
-  // settle delivers the result into the intent.
-  test('a loop-entry resume launches the pinned re-drive, journals the respawn marker, and settles the intent', async () => {
+  test('explicit new turns retain an interrupted child without marking or re-driving it', async () => {
     const journal = makeJournal()
-    const parentRunId = 'parent-run-resume'
-    const childRunId = 'resume-child-2'
-    const jobId = 'bg-agent-resume-2'
+    const parentRunId = 'parent-with-interrupted-child'
+    const childRunId = 'retained-child-before-replay'
+    const jobId = 'retained-background-job'
     try {
       seedCrashedBackgroundJob(journal, parentRunId, childRunId, jobId)
-
-      const { mainAgentState: parentState } =
-        getInitialSessionState(mockFileContext)
-      parentState.runId = parentRunId
-      parentState.backgroundAgentJobs = [
-        { jobId, agentType: 'thinker', status: 'interrupted', startedAt: 1 },
-      ]
-
-      await runAgentStep.loopAgentSteps({
-        ...baseParams,
-        agentType: 'parent',
-        agentTemplate: createMockAgent('parent'),
-        agentState: parentState,
-        prompt: 'parent turn after the crash',
-        journalWriter: journal,
-        journalReader: journal,
-        localAgentTemplates: { thinker: createMockAgent('thinker') },
-        startAgentRun: async () => parentRunId,
-      } as unknown as Parameters<typeof runAgentStep.loopAgentSteps>[0])
-
-      // The re-drive was launched during the parent's loop entry: bounded-wait
-      // for the detached coroutine to journal into the ORIGINAL child stream
-      // (the pin) and reach a terminal tail.
-      const driveDeadline = Date.now() + 10_000
-      while (
-        classifyChildRun(journal, childRunId).kind !== 'child_completed' &&
-        Date.now() < driveDeadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
-      expect(classifyChildRun(journal, childRunId).kind).toBe('child_completed')
-      // The re-drive journaled BEYOND the seeded llm_request under the SAME
-      // runId — a re-minted run would have started a fresh, empty stream.
-      const childEventTypes = new Set(
-        journal.events(childRunId).map((event) => event.eventType),
-      )
-      expect(childEventTypes.has('tool_call')).toBe(true)
-      expect(childEventTypes.has('step_boundary')).toBe(true)
-
-      // The respawn marker landed under the PARENT runId, correlated on the
-      // pinned child runId per the documented settlement contract.
-      const marker = journal
-        .events(parentRunId)
-        .find(
-          (event) =>
-            event.eventType === 'spawn' &&
-            (event.payload as Record<string, unknown> | null)?.respawnOf ===
-              jobId,
+      const parentRows = journal.events(parentRunId)
+      const childRows = journal.events(childRunId)
+      const resumeDriver = mock(async () => undefined)
+      const childRequests = mock(() => {})
+      const steps = mock(async function* (params: { agentId?: string }) {
+        if (params.agentId === 'thinker') childRequests()
+        yield { type: 'text' as const, text: 'New turn' }
+        yield createToolCallChunk('end_turn', {})
+        return promptSuccess('separate-turn')
+      })
+      for (const newRunId of ['fresh-parent-one', 'fresh-parent-two']) {
+        const { mainAgentState: state } =
+          getInitialSessionState(mockFileContext)
+        state.runId = parentRunId
+        state.backgroundAgentJobs = [
+          { jobId, agentType: 'thinker', status: 'interrupted', startedAt: 1 },
+        ]
+        const result = await runAgentStep.loopAgentSteps({
+          ...baseParams,
+          agentType: 'parent',
+          agentTemplate: createMockAgent('parent'),
+          agentState: state,
+          prompt: 'Explicit separate turn',
+          journalWriter: journal,
+          journalReader: journal,
+          resumeDriver,
+          localAgentTemplates: { thinker: createMockAgent('thinker') },
+          startAgentRun: async () => newRunId,
+          promptAiSdkStream: steps,
+        } as unknown as Parameters<typeof runAgentStep.loopAgentSteps>[0])
+        expect(result.agentState.runId).toBe(newRunId)
+        expect(result.agentState.backgroundAgentJobs?.[0]?.status).toBe(
+          'interrupted',
         )
-      expect(marker).toMatchObject({
-        eventType: 'spawn',
-        correlation: childRunId,
-      })
-
-      // The minimal settle delivered the result: the intent left 'interrupted'
-      // and now carries the pinned childRunId plus a receipt.
-      const settleDeadline = Date.now() + 10_000
-      const intent = parentState.backgroundAgentJobs?.[0]
-      while (intent?.status !== 'completed' && Date.now() < settleDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20))
+        expect(journal.events(parentRunId)).toEqual(parentRows)
+        expect(journal.events(childRunId)).toEqual(childRows)
       }
-      expect(intent?.status).toBe('completed')
-      expect(intent?.childRunId).toBe(childRunId)
-      expect(intent?.receipt).toBeTruthy()
-      expect(typeof intent?.completedAt).toBe('number')
+      expect(steps).toHaveBeenCalledTimes(2)
+      expect(childRequests).not.toHaveBeenCalled()
+      expect(resumeDriver).not.toHaveBeenCalled()
     } finally {
-      await journal.close()
-    }
-  })
-
-  // Reviewer finding respawn-seam-concurrent-dedupe: while a re-drive is
-  // LIVE, a second resume pass in the same process must not launch a
-  // duplicate coroutine pinned to the same child stream.
-  test('a live re-drive suppresses duplicate launches on a second resume pass', async () => {
-    const journal = makeJournal()
-    const parentRunId = 'parent-run-dedupe'
-    const childRunId = 'resume-child-3'
-    const jobId = 'bg-agent-resume-3'
-    let releaseThinkerStream: (() => void) | undefined
-    const thinkerStreamGate = new Promise<void>((resolve) => {
-      releaseThinkerStream = resolve
-    })
-    let thinkerStreamCalls = 0
-    try {
-      seedCrashedBackgroundJob(journal, parentRunId, childRunId, jobId)
-
-      const { mainAgentState: parentState } =
-        getInitialSessionState(mockFileContext)
-      parentState.runId = parentRunId
-      parentState.backgroundAgentJobs = [
-        { jobId, agentType: 'thinker', status: 'interrupted', startedAt: 1 },
-      ]
-
-      const driveParams = {
-        ...baseParams,
-        agentType: 'parent',
-        agentTemplate: createMockAgent('parent'),
-        agentState: parentState,
-        prompt: 'parent turn one',
-        journalWriter: journal,
-        journalReader: journal,
-        localAgentTemplates: { thinker: createMockAgent('thinker') },
-        startAgentRun: async () => parentRunId,
-        // The re-driven child ('thinker') hangs at its model step until
-        // released, so the first drive stays live across the second pass; the
-        // parent's own loops stream through normally (different agentId).
-        promptAiSdkStream: mock(async function* (streamParams: {
-          agentId?: string
-        }) {
-          if (streamParams?.agentId === 'thinker') {
-            thinkerStreamCalls++
-            await thinkerStreamGate
-          }
-          yield { type: 'text' as const, text: 'Thinking...' }
-          yield createToolCallChunk('end_turn', {})
-          return promptSuccess('dedupe-mock-message')
-        }),
-      } as unknown as Parameters<typeof runAgentStep.loopAgentSteps>[0]
-
-      // Pass 1: the entry block launches the re-drive, which completes its
-      // programmatic read_files and then hangs at its gated model step.
-      await runAgentStep.loopAgentSteps(driveParams)
-      const launchDeadline = Date.now() + 10_000
-      while (
-        journal
-          .events(childRunId)
-          .filter((event) => event.eventType === 'llm_request').length < 2 &&
-        Date.now() < launchDeadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
-      expect(thinkerStreamCalls).toBe(1)
-      expect(
-        journal
-          .events(childRunId)
-          .filter((event) => event.eventType === 'llm_request').length,
-      ).toBe(2) // the seeded pre-crash request + the live drive's own step
-
-      // Pass 2: the intent is still 'interrupted' (the drive has not
-      // settled), so the planner re-plans 'respawn' — but the LIVE reservation
-      // must skip the duplicate launch. A duplicate coroutine would reach its
-      // own gated model step and bump thinkerStreamCalls.
-      await runAgentStep.loopAgentSteps({
-        ...driveParams,
-        prompt: 'parent turn two',
-      })
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      expect(thinkerStreamCalls).toBe(1)
-      expect(
-        journal
-          .events(childRunId)
-          .filter((event) => event.eventType === 'llm_request').length,
-      ).toBe(2)
-
-      // Release: the live drive completes, the marker settles on its
-      // terminal tail, and the minimal settle completes the intent.
-      releaseThinkerStream?.()
-      const settleDeadline = Date.now() + 10_000
-      const intent = parentState.backgroundAgentJobs?.[0]
-      while (intent?.status !== 'completed' && Date.now() < settleDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
-      expect(intent?.status).toBe('completed')
-      expect(classifyChildRun(journal, childRunId).kind).toBe('child_completed')
-    } finally {
-      releaseThinkerStream?.()
       await journal.close()
     }
   })

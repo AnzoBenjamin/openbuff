@@ -1,7 +1,18 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -12,6 +23,8 @@ import {
 import { changeFiles } from '../tools/change-file'
 import { hashFileContent } from '../tools/filesystem-authority'
 import { createNodeFileSystem } from '../tools/node-filesystem'
+
+import type { WorkspaceMutationReceipt } from '../services/workspace-mutation-broker'
 
 const roots: string[] = []
 
@@ -31,6 +44,68 @@ async function makeWorkspace(name: string): Promise<{
   const stateDir = path.join(root, 'state')
   await mkdir(workspace, { recursive: true })
   return { workspace, stateDir }
+}
+
+async function fileIdentity(file: string) {
+  const { dev, ino } = await lstat(file, { bigint: true })
+  return { dev: String(dev), ino: String(ino) }
+}
+
+async function parentIdentity(directory: string) {
+  return {
+    canonicalPath: await realpath(directory),
+    ...(await fileIdentity(directory)),
+  }
+}
+
+function brokerReceipt(file: string): Promise<WorkspaceMutationReceipt> {
+  return readFile(file, 'utf8').then((contents) => JSON.parse(contents))
+}
+
+async function pendingReceipt(broker: WorkspaceMutationBroker) {
+  const directory = path.join(broker.brokerDir, 'pending')
+  const names = await readdir(directory)
+  expect(names).toHaveLength(1)
+  const file = path.join(directory, names[0]!)
+  return { file, receipt: await brokerReceipt(file) }
+}
+
+function stagedName(receiptId: string, role: 'tmp' | 'delete') {
+  return `.openbuff-mutation-${receiptId}.${role}`
+}
+
+async function writePendingReceipt(
+  broker: WorkspaceMutationBroker,
+  receipt: WorkspaceMutationReceipt,
+) {
+  const file = path.join(
+    broker.brokerDir,
+    'pending',
+    `${String(receipt.brokerRevision).padStart(16, '0')}-${receipt.receiptId}.json`,
+  )
+  await writeFile(file, `${JSON.stringify(receipt, null, 2)}\n`)
+  return file
+}
+
+// Inject an I/O fault at the real workspace durability boundary, after the
+// operation has published a staging/target entry and before receipt finalization.
+function refuseNextWorkspaceSync(
+  broker: WorkspaceMutationBroker,
+  directory: string,
+) {
+  const internals = broker as unknown as {
+    fsyncDirectory(directory: string, ...options: unknown[]): Promise<void>
+  }
+  const original = internals.fsyncDirectory.bind(broker)
+  internals.fsyncDirectory = async (candidate, ...options) => {
+    if (candidate === directory) {
+      internals.fsyncDirectory = original
+      throw Object.assign(new Error('fixture workspace fsync failure'), {
+        code: 'EIO',
+      })
+    }
+    return original(candidate, ...options)
+  }
 }
 
 describe('WorkspaceMutationBroker', () => {
@@ -67,9 +142,14 @@ describe('WorkspaceMutationBroker', () => {
       receipt: { authorityKind: 'cooperative_cas', brokerRevision: 2 },
     })
     expect(await readFile(file)).toEqual(after)
-    expect(
-      (await broker.listReceipts()).map((receipt) => receipt.state),
-    ).toEqual(['committed', 'rejected'])
+    expect(await broker.listReceipts()).toMatchObject([
+      {
+        state: 'committed',
+        parent: await parentIdentity(workspace),
+        stagingIdentity: await fileIdentity(file),
+      },
+      { state: 'rejected', parent: await parentIdentity(workspace) },
+    ])
   })
 
   // 1002 sequential fs-heavy commits: ~2.2s locally, but CI-disk contention
@@ -168,9 +248,13 @@ describe('WorkspaceMutationBroker', () => {
         );
         console.log(JSON.stringify(result));
       `
-      const child = spawn(process.execPath, ['-e', code], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
+      const child = spawn(
+        process.execPath,
+        ['--no-env-file', '--no-install', '-e', code],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
       let stdout = ''
       let stderr = ''
       child.stdout.on('data', (chunk) => (stdout += String(chunk)))
@@ -236,6 +320,8 @@ describe('WorkspaceMutationBroker', () => {
     const child = Bun.spawn(
       [
         process.execPath,
+        '--no-env-file',
+        '--no-install',
         '-e',
         `
       import { WorkspaceMutationBroker } from ${JSON.stringify(path.resolve(import.meta.dir, '../services/workspace-mutation-broker.ts'))};
@@ -334,7 +420,10 @@ describe('WorkspaceMutationBroker', () => {
       commitCount += 1
       if (commitCount === 2) {
         // Model a confirmed refusal so the fixture can require a full rollback.
-        return { applied: false, actualHash: hashFileContent(await readFile(second)) }
+        return {
+          applied: false,
+          actualHash: hashFileContent(await readFile(second)),
+        }
       }
       return conditionalCommit(...args)
     }
@@ -495,58 +584,429 @@ describe('WorkspaceMutationBroker', () => {
     expect(await brokers[0]!.listReceipts()).toEqual([])
   })
 
-  test('reconciles a committed workspace state from an incomplete receipt', async () => {
+  test('reconciles a committed create and removes its attested staging link', async () => {
     const { workspace, stateDir } = await makeWorkspace('broker-recovery')
     const broker = await WorkspaceMutationBroker.create({
       cwd: workspace,
       stateDir,
     })
-    const target = path.join(workspace, 'file.txt')
-    const staging = path.join(workspace, '.openbuff-mutation-crash.tmp')
-    const before = 'before\n'
-    const after = 'after\n'
-    await writeFile(target, after)
-    await writeFile(staging, after)
     const receiptId = '00000000-0000-4000-8000-000000000001'
-    const revision = 7
+    const target = path.join(workspace, 'file.txt')
+    const stagingPath = stagedName(receiptId, 'tmp')
+    const staging = path.join(workspace, stagingPath)
+    const after = 'after\n'
+    await writeFile(staging, after)
+    await fs.promises.link(staging, target)
     const now = new Date().toISOString()
-    const receipt = {
+    await writePendingReceipt(broker, {
       schemaVersion: 1,
       receiptId,
-      brokerRevision: revision,
+      brokerRevision: 7,
       authorityKind: 'cooperative_cas',
       repositoryId: broker.repositoryId,
       workspaceId: broker.workspaceId,
-      action: 'commit',
+      action: 'create',
       path: 'file.txt',
-      expectedHash: hashFileContent(before),
-      beforeHash: hashFileContent(before),
+      parent: await parentIdentity(workspace),
+      expectedHash: null,
+      beforeHash: null,
       afterHash: hashFileContent(after),
       state: 'prepared',
       createdAt: now,
       updatedAt: now,
-      stagingPath: '.openbuff-mutation-crash.tmp',
-    }
-    const pendingDir = path.join(broker.brokerDir, 'pending')
-    await writeFile(
-      path.join(
-        pendingDir,
-        `${String(revision).padStart(16, '0')}-${receiptId}.json`,
-      ),
-      `${JSON.stringify(receipt, null, 2)}\n`,
-    )
+      stagingPath,
+      stagingIdentity: await fileIdentity(staging),
+    })
 
-    const recovered = await WorkspaceMutationBroker.create({
+    const unlinks: string[] = []
+    const unlink = fs.promises.unlink
+    fs.promises.unlink = async (file) => {
+      if (path.basename(String(file)) === stagingPath)
+        unlinks.push(String(file))
+      return unlink(file)
+    }
+    let recovered: WorkspaceMutationBroker
+    try {
+      recovered = await WorkspaceMutationBroker.create({
+        cwd: workspace,
+        stateDir,
+      })
+    } finally {
+      fs.promises.unlink = unlink
+    }
+    expect(unlinks).toHaveLength(1)
+    if (process.platform === 'linux') {
+      expect(unlinks[0]).toMatch(/^\/proc\/self\/fd\/\d+\//)
+    }
+    expect(fs.existsSync(staging)).toBe(false)
+    expect(await readFile(target, 'utf8')).toBe(after)
+    expect(await recovered.listReceipts()).toMatchObject([
+      { receiptId, state: 'recovered_committed' },
+    ])
+  })
+
+  test.each(['directory', 'symlink'] as const)(
+    'refuses a replacement %s parent before opening deletion tombstone bytes and retries',
+    async (replacement) => {
+      const { workspace, stateDir } = await makeWorkspace(
+        'broker-replaced-parent',
+      )
+      const broker = await WorkspaceMutationBroker.create({
+        cwd: workspace,
+        stateDir,
+      })
+      const parent = path.join(broker.workspaceRoot, 'src')
+      const target = path.join(parent, 'file.txt')
+      const original = path.join(path.dirname(workspace), 'original-src')
+      const preimage = 'original bytes\n'
+      await mkdir(parent)
+      await writeFile(target, preimage)
+      const proof = await parentIdentity(parent)
+      const sourceIdentity = await fileIdentity(target)
+      refuseNextWorkspaceSync(broker, proof.canonicalPath)
+      await expect(
+        broker.conditionalDelete(target, hashFileContent(preimage)),
+      ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+      const { file, receipt } = await pendingReceipt(broker)
+      const tombstone = path.basename(receipt.stagingPath!)
+      const owned = path.join(original, tombstone)
+      await rename(parent, original)
+      if (replacement === 'directory') {
+        await mkdir(parent)
+        await writeFile(path.join(parent, tombstone), preimage)
+        expect(await parentIdentity(parent)).not.toEqual(proof)
+      } else {
+        await fs.promises.symlink(original, parent, 'junction')
+      }
+
+      const open = fs.promises.open
+      const openedTargets: string[] = []
+      fs.promises.open = (async (candidate, ...options) => {
+        if (
+          [tombstone, 'file.txt'].includes(path.basename(String(candidate)))
+        ) {
+          openedTargets.push(String(candidate))
+        }
+        return open(candidate, ...options)
+      }) as typeof open
+      try {
+        await expect(
+          WorkspaceMutationBroker.create({ cwd: workspace, stateDir }),
+        ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+      } finally {
+        fs.promises.open = open
+      }
+      expect(openedTargets).toEqual([])
+      expect(await brokerReceipt(file)).toMatchObject({
+        state: 'recovery_required',
+        errorCode: 'RECOVERY_PARENT_CHANGED',
+        parent: proof,
+        sourceIdentity,
+      })
+      expect(await readFile(owned, 'utf8')).toBe(preimage)
+      expect(await readFile(path.join(parent, tombstone), 'utf8')).toBe(
+        preimage,
+      )
+      expect(await broker.listReceipts()).toEqual([])
+
+      // Keep any foreign replacement as evidence while putting the actual
+      // original directory back; the receipt can now finish only its own work.
+      const retired = path.join(path.dirname(workspace), 'retired-src')
+      await rename(parent, retired)
+      await rename(original, parent)
+      const retried = await WorkspaceMutationBroker.create({
+        cwd: workspace,
+        stateDir,
+      })
+      expect(await readdir(parent)).toEqual([])
+      if (replacement === 'directory') {
+        expect(await readFile(path.join(retired, tombstone), 'utf8')).toBe(
+          preimage,
+        )
+      }
+      expect(await retried.listReceipts()).toMatchObject([
+        { receiptId: receipt.receiptId, state: 'recovered_committed' },
+      ])
+    },
+  )
+
+  test('refuses a same-byte foreign tombstone until the owned entry is restored', async () => {
+    const { workspace, stateDir } = await makeWorkspace(
+      'broker-foreign-staging',
+    )
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const target = path.join(broker.workspaceRoot, 'file.txt')
+    const preimage = 'before\n'
+    await writeFile(target, preimage)
+    refuseNextWorkspaceSync(broker, broker.workspaceRoot)
+    await expect(
+      broker.conditionalDelete(target, hashFileContent(preimage)),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    const { file, receipt } = await pendingReceipt(broker)
+    const staging = path.join(broker.workspaceRoot, receipt.stagingPath!)
+    const held = path.join(path.dirname(workspace), 'held-tombstone')
+    await rename(staging, held)
+    await writeFile(staging, preimage)
+    expect(await fileIdentity(staging)).not.toEqual(await fileIdentity(held))
+
+    await expect(
+      WorkspaceMutationBroker.create({ cwd: workspace, stateDir }),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect(await brokerReceipt(file)).toMatchObject({
+      state: 'recovery_required',
+      errorCode: 'RECOVERY_FOREIGN_STAGING',
+    })
+    expect(await readFile(staging, 'utf8')).toBe(preimage)
+    expect(await readFile(held, 'utf8')).toBe(preimage)
+    expect(await broker.listReceipts()).toEqual([])
+
+    await rename(
+      staging,
+      path.join(path.dirname(workspace), 'foreign-tombstone'),
+    )
+    await rename(held, staging)
+    const retried = await WorkspaceMutationBroker.create({
       cwd: workspace,
       stateDir,
     })
     expect(fs.existsSync(staging)).toBe(false)
-    expect(
-      (await recovered.listReceipts()).find(
-        (candidate) => candidate.receiptId === receiptId,
-      )?.state,
-    ).toBe('recovered_committed')
+    expect(await retried.listReceipts()).toMatchObject([
+      { receiptId: receipt.receiptId, state: 'recovered_committed' },
+    ])
   })
+
+  test('refuses to finish a link/unlink move when just its destination parent was replaced', async () => {
+    const { workspace, stateDir } = await makeWorkspace('broker-move-parent')
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const parent = path.join(broker.workspaceRoot, 'dest')
+    const source = path.join(broker.workspaceRoot, 'source.txt')
+    const destination = path.join(parent, 'file.txt')
+    const original = path.join(path.dirname(workspace), 'original-dest')
+    const contents = 'move bytes\n'
+    await mkdir(parent)
+    await writeFile(source, contents)
+    const proof = await parentIdentity(parent)
+    refuseNextWorkspaceSync(broker, proof.canonicalPath)
+    await expect(
+      broker.conditionalMove(source, destination, hashFileContent(contents)),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    const { file, receipt } = await pendingReceipt(broker)
+    await rename(parent, original)
+    await mkdir(parent)
+    await fs.promises.link(source, destination)
+    expect(await fileIdentity(destination)).toEqual(await fileIdentity(source))
+
+    await expect(
+      WorkspaceMutationBroker.create({ cwd: workspace, stateDir }),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect(await brokerReceipt(file)).toMatchObject({
+      state: 'recovery_required',
+      errorCode: 'RECOVERY_PARENT_CHANGED',
+      parent: await parentIdentity(broker.workspaceRoot),
+      destinationParent: proof,
+    })
+    expect(await readFile(source, 'utf8')).toBe(contents)
+    expect(await readFile(destination, 'utf8')).toBe(contents)
+
+    const retired = path.join(path.dirname(workspace), 'retired-dest')
+    await rename(parent, retired)
+    await rename(original, parent)
+    const retried = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    expect(fs.existsSync(source)).toBe(false)
+    expect(await readFile(destination, 'utf8')).toBe(contents)
+    expect(await readFile(path.join(retired, 'file.txt'), 'utf8')).toBe(
+      contents,
+    )
+    expect(await retried.listReceipts()).toMatchObject([
+      { receiptId: receipt.receiptId, state: 'recovered_committed' },
+    ])
+  })
+
+  test('legacy receipts with matching staging bytes and no parent proof stay unresolved', async () => {
+    const { workspace, stateDir } = await makeWorkspace('broker-legacy-proof')
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const receiptId = '00000000-0000-4000-8000-000000000003'
+    const stagingPath = stagedName(receiptId, 'delete')
+    const staging = path.join(workspace, stagingPath)
+    const expectedHash = hashFileContent('before\n')
+    await writeFile(staging, 'before\n')
+    const now = new Date().toISOString()
+    const pending = await writePendingReceipt(broker, {
+      schemaVersion: 1,
+      receiptId,
+      brokerRevision: 5,
+      authorityKind: 'cooperative_cas',
+      repositoryId: broker.repositoryId,
+      workspaceId: broker.workspaceId,
+      action: 'delete',
+      path: 'file.txt',
+      expectedHash,
+      beforeHash: expectedHash,
+      afterHash: null,
+      state: 'prepared',
+      createdAt: now,
+      updatedAt: now,
+      stagingPath,
+    })
+    await expect(
+      WorkspaceMutationBroker.create({ cwd: workspace, stateDir }),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect(await brokerReceipt(pending)).toMatchObject({
+      state: 'recovery_required',
+      errorCode: 'RECOVERY_MISSING_PARENT_PROOF',
+    })
+    expect(await readFile(staging, 'utf8')).toBe('before\n')
+    expect(await broker.listReceipts()).toEqual([])
+  })
+
+  test('rechecks the group recovery parent under lock; does not hash or mutate a replacement', async () => {
+    const { workspace, stateDir } = await makeWorkspace('broker-group-guard')
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const parent = path.join(broker.workspaceRoot, 'src')
+    await mkdir(parent)
+    const target = path.join(parent, 'file.txt')
+    const original = path.join(broker.workspaceRoot, 'original')
+    const contents = 'postimage\n'
+    const expectedHash = hashFileContent(contents)
+    await writeFile(target, contents)
+    const proof = await parentIdentity(parent)
+    const internals = broker as unknown as {
+      withWorkspaceLock<T>(operation: () => Promise<T>): Promise<T>
+    }
+    const originalLock = internals.withWorkspaceLock.bind(broker)
+    internals.withWorkspaceLock = (operation) =>
+      originalLock(async () => {
+        internals.withWorkspaceLock = originalLock
+        await rename(parent, original)
+        await mkdir(parent)
+        await writeFile(target, contents)
+        return operation()
+      })
+    await expect(
+      broker.conditionalCommit(target, 'preimage\n', expectedHash, {
+        parent: proof,
+      }),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    await expect(
+      broker.conditionalDelete(target, expectedHash, { parent: proof }),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect(await readFile(target, 'utf8')).toBe(contents)
+    expect(await readFile(path.join(original, 'file.txt'), 'utf8')).toBe(
+      contents,
+    )
+    expect(await broker.listReceipts()).toEqual([])
+    await rename(parent, path.join(broker.workspaceRoot, 'replacement'))
+    await rename(original, parent)
+    expect(
+      await broker.conditionalDelete(target, expectedHash, { parent: proof }),
+    ).toMatchObject({ applied: true })
+    expect(fs.existsSync(target)).toBe(false)
+  })
+
+  test('guarded recovery refuses a final symlink even if the referent has the expected hash', async () => {
+    const { workspace, stateDir } = await makeWorkspace(
+      'broker-group-final-symlink',
+    )
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const target = path.join(broker.workspaceRoot, 'file.txt')
+    const outside = path.join(path.dirname(workspace), 'other.txt')
+    await writeFile(outside, 'postimage\n')
+    await fs.promises.symlink(outside, target, 'file')
+    const guard = { parent: await parentIdentity(broker.workspaceRoot) }
+    const hash = hashFileContent('postimage\n')
+    await expect(
+      broker.conditionalCommit(target, 'preimage\n', hash, guard),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    await expect(
+      broker.conditionalDelete(target, hash, guard),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect((await lstat(target)).isSymbolicLink()).toBe(true)
+    expect(await readFile(outside, 'utf8')).toBe('postimage\n')
+    expect(await broker.listReceipts()).toEqual([])
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'publishes guarded replacement bytes and preimage mode together',
+    async () => {
+      const { workspace, stateDir } = await makeWorkspace('broker-group-mode')
+      const broker = await WorkspaceMutationBroker.create({
+        cwd: workspace,
+        stateDir,
+      })
+      const target = path.join(broker.workspaceRoot, 'file.txt')
+      await writeFile(target, 'postimage\n', { mode: 0o600 })
+      const proof = await parentIdentity(broker.workspaceRoot)
+      const mode = fs.constants.S_IFREG | 0o751
+      const internals = broker as unknown as {
+        fsyncDirectory(directory: string, ...options: unknown[]): Promise<void>
+      }
+      const sync = internals.fsyncDirectory.bind(broker)
+      let publishedMode: number | undefined
+      internals.fsyncDirectory = async (directory, ...options) => {
+        if (directory === proof.canonicalPath && publishedMode === undefined) {
+          publishedMode = (await stat(target)).mode & 0o7777
+        }
+        return sync(directory, ...options)
+      }
+      await expect(
+        broker.conditionalCommit(
+          target,
+          'preimage\n',
+          hashFileContent('postimage\n'),
+          { parent: proof, mode },
+        ),
+      ).resolves.toMatchObject({ applied: true })
+      expect(publishedMode).toBe(0o751)
+      expect((await stat(target)).mode & 0o7777).toBe(0o751)
+      expect(await readFile(target, 'utf8')).toBe('preimage\n')
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
+    'guarded rollback refuses matching bytes with a different mode',
+    async () => {
+      const { workspace, stateDir } = await makeWorkspace(
+        'broker-group-mode-conflict',
+      )
+      const broker = await WorkspaceMutationBroker.create({
+        cwd: workspace,
+        stateDir,
+      })
+      const target = path.join(broker.workspaceRoot, 'file.txt')
+      await writeFile(target, 'postimage', { mode: 0o600 })
+      const hash = hashFileContent('postimage')
+      const guard = {
+        parent: await parentIdentity(broker.workspaceRoot),
+        expectedMode: 0o644,
+      }
+      await expect(
+        broker.conditionalCommit(target, 'original', hash, guard),
+      ).rejects.toMatchObject({ code: 'RECOVERY_MODE_CHANGED' })
+      await expect(
+        broker.conditionalDelete(target, hash, guard),
+      ).rejects.toMatchObject({ code: 'RECOVERY_MODE_CHANGED' })
+      expect(await readFile(target, 'utf8')).toBe('postimage')
+      expect(await broker.listReceipts()).toEqual([])
+    },
+  )
 
   test('isolates workspace state and fails closed for invalid state roots', async () => {
     const root = await mkdtemp(
@@ -592,38 +1052,38 @@ describe('WorkspaceMutationBroker', () => {
       stateDir,
     })
     const target = path.join(workspace, 'file.txt')
+    await writeFile(target, 'before\n')
+    const sourceIdentity = await fileIdentity(target)
     await writeFile(target, 'external\n')
     const receiptId = '00000000-0000-4000-8000-000000000002'
-    const revision = 4
     const now = new Date().toISOString()
-    const receipt = {
+    const pending = await writePendingReceipt(broker, {
       schemaVersion: 1,
       receiptId,
-      brokerRevision: revision,
+      brokerRevision: 4,
       authorityKind: 'cooperative_cas',
       repositoryId: broker.repositoryId,
       workspaceId: broker.workspaceId,
       action: 'commit',
       path: 'file.txt',
+      parent: await parentIdentity(workspace),
+      sourceIdentity,
       expectedHash: hashFileContent('before\n'),
       beforeHash: hashFileContent('before\n'),
       afterHash: hashFileContent('after\n'),
       state: 'prepared',
       createdAt: now,
       updatedAt: now,
-    }
-    await writeFile(
-      path.join(
-        broker.brokerDir,
-        'pending',
-        `${String(revision).padStart(16, '0')}-${receiptId}.json`,
-      ),
-      `${JSON.stringify(receipt, null, 2)}\n`,
-    )
+      stagingPath: stagedName(receiptId, 'tmp'),
+    })
 
     await expect(
       WorkspaceMutationBroker.create({ cwd: workspace, stateDir }),
     ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect(await brokerReceipt(pending)).toMatchObject({
+      state: 'recovery_required',
+      errorCode: 'AMBIGUOUS_COMMIT_STATE',
+    })
     expect(await readFile(target, 'utf8')).toBe('external\n')
   })
 })

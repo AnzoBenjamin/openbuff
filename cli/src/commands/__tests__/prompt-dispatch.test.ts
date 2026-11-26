@@ -1,6 +1,15 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test'
 
 import { useChatStore } from '../../state/chat-store'
+import * as turnSnapshots from '../../utils/turn-snapshots'
 import { routeUserPrompt } from '../router'
 
 import type { RouterParams } from '../command-registry'
@@ -32,6 +41,11 @@ function createHarness(inputValue: string) {
     inputRef: { current: null },
     sendMessage: async (request) => {
       sent.push(request)
+      return {
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      }
     },
     addToQueue: (content, attachments = [], agentMode) => {
       queued.push({ content, attachments, agentMode })
@@ -63,17 +77,22 @@ function createHarness(inputValue: string) {
 }
 
 beforeEach(() => useChatStore.getState().reset())
-afterEach(() => useChatStore.getState().reset())
+afterEach(() => {
+  mock.restore()
+  useChatStore.getState().reset()
+})
 
 test('legacy OAuth callback routing never retains authorization input in transcript or prompt history', async () => {
   const secret = 'https://localhost:1455/auth/callback?code=fixture-secret-code'
   const harness = createHarness(secret)
   const history: string[] = []
-  harness.params.saveToHistory = value => history.push(value)
+  harness.params.saveToHistory = (value) => history.push(value)
   useChatStore.getState().setInputMode('connect:chatgpt')
   await routeUserPrompt(harness.params)
   expect(JSON.stringify(harness.messages)).not.toContain('fixture-secret-code')
-  expect(JSON.stringify(harness.messages)).toContain('ChatGPT connection failed')
+  expect(JSON.stringify(harness.messages)).toContain(
+    'ChatGPT connection failed',
+  )
   expect(history).toEqual([])
   expect(harness.input.text).toBe('')
   expect(useChatStore.getState().inputMode).toBe('default')
@@ -96,12 +115,32 @@ describe('prompt-producing command dispatch', () => {
     await routeUserPrompt(harness.params)
     expect(harness.queued[0]?.content).toBe(exact)
     expect(accepted).toBe(2)
-    harness.params.addToQueue = () => { throw new Error('queue unavailable') }
-    await expect(routeUserPrompt(harness.params)).rejects.toThrow('queue unavailable')
+    harness.params.addToQueue = () => {
+      throw new Error('queue unavailable')
+    }
+    expect(await routeUserPrompt(harness.params)).toMatchObject({
+      status: 'rejected',
+      reason: 'queue unavailable',
+    })
     expect(accepted).toBe(2)
     harness.params.inputValue = '/unknown-captured-command'
     await routeUserPrompt(harness.params)
     expect(accepted).toBe(2)
+  })
+
+  test('queued acceptance remains authoritative when compatibility callback throws', async () => {
+    const harness = createHarness('queue once')
+    harness.params.isStreaming = true
+    harness.params.onPromptAccepted = () => {
+      throw new Error('fixture callback failed')
+    }
+
+    expect(await routeUserPrompt(harness.params)).toEqual({
+      status: 'accepted',
+      disposition: 'queued',
+    })
+    expect(harness.queued).toHaveLength(1)
+    expect(harness.queued[0]?.content).toBe('queue once')
   })
 
   for (const busy of ['stream', 'message', 'chain'] as const) {
@@ -158,6 +197,151 @@ describe('prompt-producing command dispatch', () => {
     ).toBe(true)
   })
 
+  test('processing or failed context returns not-started without clearing ordinary or mode-command input', async () => {
+    const processing: PendingAttachment = {
+      kind: 'file',
+      id: 'processing-context',
+      path: 'notes.txt',
+      filename: 'notes.txt',
+      isDirectory: false,
+      content: '',
+      status: 'processing',
+    }
+    useChatStore.getState().addPendingAttachment(processing)
+    const ordinary = createHarness('keep this draft')
+
+    const ordinaryResult = await routeUserPrompt(ordinary.params)
+
+    expect(ordinaryResult).toMatchObject({ status: 'not-started' })
+    expect(ordinary.sent).toEqual([])
+    expect(ordinary.input.text).toBe('keep this draft')
+    expect(useChatStore.getState().pendingAttachments).toEqual([processing])
+
+    useChatStore.getState().removePendingAttachment('notes.txt')
+    const failed: PendingAttachment = {
+      ...processing,
+      id: 'failed-context',
+      status: 'error',
+      note: 'fixture read failed',
+    }
+    useChatStore.getState().addPendingAttachment(failed)
+    const command = createHarness('/mode:plan inspect changes')
+
+    const commandResult = await routeUserPrompt(command.params)
+
+    expect(commandResult).toMatchObject({ status: 'not-started' })
+    expect(command.sent).toEqual([])
+    expect(command.queued).toEqual([])
+    expect(command.input.text).toBe('/mode:plan inspect changes')
+    expect(useChatStore.getState().pendingAttachments).toEqual([failed])
+  })
+
+  test('prompt-producing command is not started during bisection while local stop stays reachable', async () => {
+    spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+    const command = createHarness('/mode:plan inspect changes')
+
+    const result = await routeUserPrompt(command.params)
+
+    expect(result).toMatchObject({ status: 'not-started' })
+    expect(command.sent).toEqual([])
+    expect(command.queued).toEqual([])
+    expect(command.input.text).toBe('/mode:plan inspect changes')
+
+    const stop = createHarness('/bisect-turn stop')
+    const cancel = spyOn(turnSnapshots, 'cancelTurnBisection')
+    await routeUserPrompt(stop.params)
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  test('accepted, rejected and not-started outcomes are separate from run completion', async () => {
+    const accepted = createHarness('accepted prompt')
+    accepted.params.sendMessage = async (request) => {
+      accepted.sent.push(request)
+      request.onAccepted?.()
+      return {
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      } as const
+    }
+    expect(await routeUserPrompt(accepted.params)).toMatchObject({
+      status: 'accepted',
+      disposition: 'started',
+    })
+
+    const rejected = createHarness('rejected prompt')
+    rejected.params.sendMessage = async (request) => {
+      rejected.sent.push(request)
+      return {
+        status: 'rejected',
+        reason: 'fixture validation failure',
+        retryable: true,
+      } as const
+    }
+    expect(await routeUserPrompt(rejected.params)).toMatchObject({
+      status: 'rejected',
+      retryable: true,
+    })
+
+    useChatStore.getState().addPendingAttachment({
+      kind: 'image',
+      id: 'pending-image',
+      path: 'pending.png',
+      filename: 'pending.png',
+      status: 'processing',
+    })
+    const notStarted = createHarness('not started prompt')
+    expect(await routeUserPrompt(notStarted.params)).toMatchObject({
+      status: 'not-started',
+    })
+  })
+
+  test('ready context is restored after rejection and consumed exactly once by retry', async () => {
+    const ready: PendingAttachment = {
+      kind: 'file',
+      id: 'ready-context',
+      path: 'evidence.txt',
+      filename: 'evidence.txt',
+      isDirectory: false,
+      content: 'captured evidence',
+      status: 'ready',
+      note: 'metadata-only fixture',
+    }
+    useChatStore.getState().addPendingAttachment(ready)
+    const harness = createHarness('retry this draft')
+    harness.params.sendMessage = async (request) => {
+      harness.sent.push(request)
+      return {
+        status: 'rejected',
+        reason: 'fixture readiness failure',
+        retryable: true,
+      }
+    }
+
+    expect(await routeUserPrompt(harness.params)).toMatchObject({
+      status: 'rejected',
+    })
+    expect(harness.input.text).toBe('retry this draft')
+    expect(useChatStore.getState().pendingAttachments).toEqual([ready])
+    expect(harness.sent[0]?.attachments).toEqual([ready])
+
+    harness.params.sendMessage = async (request) => {
+      harness.sent.push(request)
+      request.onAccepted?.()
+      return {
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      }
+    }
+    expect(await routeUserPrompt(harness.params)).toMatchObject({
+      status: 'accepted',
+      disposition: 'started',
+    })
+    expect(harness.sent[1]?.attachments).toEqual([ready])
+    expect(useChatStore.getState().pendingAttachments).toEqual([])
+  })
+
   test('queued commands capture draft attachments and the requested mode', async () => {
     const attachment: PendingAttachment = {
       kind: 'text',
@@ -202,6 +386,11 @@ describe('prompt-producing command dispatch', () => {
       await new Promise<void>((resolve) => {
         complete = resolve
       })
+      return {
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      }
     }
 
     const pending = routeUserPrompt(harness.params)

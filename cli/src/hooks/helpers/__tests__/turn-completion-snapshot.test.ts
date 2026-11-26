@@ -221,6 +221,11 @@ describe('successful turn snapshot settlement', () => {
       sendMessage: async () => {
         dispatched = true
         writeFileSync(path.join(repo, 'tracked.txt'), 'turn-B\n')
+        return {
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        }
       },
     })
     expect(dispatched).toBe(true)
@@ -378,24 +383,32 @@ describe('send caller snapshot ownership', () => {
     }
   })
 
-  test('caller finally cannot release the queue while snapshot capture is pending', async () => {
+  test('admission resolves before snapshot completion while execution ownership keeps the queue closed', async () => {
     const barrier = captureBarrier()
     const state = callerHarness(async () => runState)
-    let returned = false
-    const pending = state.hook
-      .sendMessage({ content: 'turn A', agentMode: 'DEFAULT' })
-      .then(() => {
-        returned = true
-      })
+    const admission = await state.hook.sendMessage({
+      content: 'turn A',
+      agentMode: 'DEFAULT',
+    })
+    expect(admission).toMatchObject({
+      status: 'accepted',
+      disposition: 'started',
+    })
+    if (admission.status !== 'accepted' || admission.disposition !== 'started')
+      throw new Error('started admission did not expose execution completion')
+    let completed = false
+    const completion = admission.completion.then(() => {
+      completed = true
+    })
     try {
       await barrier.reached
-      expect(returned).toBe(false)
+      expect(completed).toBe(false)
       expect(state.chain.current).toBe(true)
       expect(state.processing.current).toBe(true)
       expect(state.canQueue()).toBe(false)
     } finally {
       barrier.release()
-      await pending
+      await completion
     }
     expect(state.chain.current).toBe(false)
     expect(state.canQueue()).toBe(true)

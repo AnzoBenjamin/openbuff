@@ -49,6 +49,8 @@ export function createTestLspMultiplexer(options: LspMultiplexerOptions): LspMul
     hover: (params, request = context) => mux.hover(params, request),
     prepareRenameParams: (params, request = context) => mux.prepareRenameParams(params, request),
     rename: (params, request = context) => mux.rename(params, request),
+    renameIntent: (params, request = context) => mux.renameIntent!(params, request),
+    codeActionIntent: (params, request = context) => mux.codeActionIntent!(params, request),
     codeAction: (params, request = context) => mux.codeAction(params, request),
     executeCommand: (params, request = context) => mux.executeCommand(params, request),
     documentSymbol: (params, request = context) => mux.documentSymbol(params, request),

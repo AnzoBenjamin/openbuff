@@ -1,5 +1,13 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import {
+  MAX_FILE_CHANGES_PER_TRANSACTION,
+  MAX_TRANSACTION_FILE_BYTES,
+  MAX_TRANSACTION_PREPARED_BYTES,
+} from '@codebuff/common/actions'
+import { captureTextDocument } from '@codebuff/common/util/byte-text'
 
 import {
   getLanguageCapability,
@@ -18,6 +26,7 @@ import {
   type LspRequestContext,
 } from './lsp-multiplexer'
 import { observeNodeChild } from './toolchain-execution'
+import { spliceSemanticText, type SemanticEditAnnotation } from './semantic-workspace-text'
 import { mapWithConcurrency } from '../tools/concurrency'
 import { LRUCache } from '@codebuff/common/util/lru-cache'
 
@@ -29,6 +38,7 @@ import type {
   LspMultiplexer,
   LspPosition,
   LspTextEdit,
+  LspVersionedWorkspaceIntent,
   LspWorkspaceEditChanges,
 } from './lsp-multiplexer'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -274,68 +284,64 @@ const ORGANIZE_IMPORTS_KIND = 'source.organizeImports'
  * there), so this layer returns only spliced per-file contents or the honest
  * unavailable/errorMessage degradations.
  */
+export type StagedSemanticFile = {
+  kind?: 'file'
+  path: string
+  newContent: string
+  annotations?: SemanticEditAnnotation[]
+  /** Raw hash of the spliced bytes, or absent basis for explicit creation. */
+  expectedRawHash: string | null
+}
+
+type StagedResourceChange = {
+  path: string
+  expectedHash: string
+  expectedRawHash: string
+  annotations?: SemanticEditAnnotation[]
+} & ({ kind: 'delete' } | { kind: 'move'; destinationPath: string })
+
 export type RenameCodeActionResult =
   | {
-      changedFiles: Array<{ path: string; newContent: string }>
-      /** Present when SOME files failed but at least one spliced. */
+      changedFiles: Array<StagedSemanticFile | StagedResourceChange>
       errorMessage?: string
     }
   | UnavailableResult
   | { errorMessage: string }
 
-/**
- * A WorkspaceEdit lookup (uri → lineStarts) for the raw on-disk text; the
- * 0-based offset of every position starts from this table, so reverse-order
- * splicing works purely on offsets of the LIMITED raw text.
- */
-function buildLineStartOffsets(text: string): number[] {
-  const lineStarts = [0]
-  let index = text.indexOf('\n')
-  while (index !== -1) {
-    lineStarts.push(index + 1)
-    index = text.indexOf('\n', index + 1)
+function stageVersionedIntent(
+  intent: LspVersionedWorkspaceIntent,
+  extract?: { source: string; destination: string },
+): RenameCodeActionResult {
+  if (intent.operations.length === 0) {
+    return { errorMessage: 'The language server returned no applicable edits.' }
   }
-  return lineStarts
-}
-
-/**
- * The 0-based offset of an edit range start/end inside the raw on-disk text.
- * `undefined` means the position is out of bounds of the ACTUAL document —
- * the caller must fail the file honestly instead of clamping (a clamped
- * splice would silently corrupt neighboring content).
- */
-function toOffsetInRangeText(
-  text: string,
-  lineStarts: number[],
-  position: LspPosition,
-): number | undefined {
-  const lineStart = lineStarts[position.line]
-  if (lineStart === undefined) {
-    return undefined
+  let changedFiles: Array<StagedSemanticFile | StagedResourceChange>
+  try {
+    changedFiles = intent.operations.map((operation) => {
+      const path = fileURLToPath(operation.uri)
+      const metadata = operation.annotations ? { annotations: operation.annotations } : {}
+      if (operation.kind === 'file') {
+        return { path, ...metadata, newContent: operation.newContent, expectedRawHash: operation.expectedRawHash }
+      }
+      const basis = { path, ...metadata, expectedRawHash: operation.expectedRawHash, expectedHash: operation.expectedHash }
+      return operation.kind === 'move'
+        ? { ...basis, kind: 'move', destinationPath: fileURLToPath(operation.destinationUri) }
+        : { ...basis, kind: 'delete' }
+    })
+  } catch {
+    return { errorMessage: 'The workspace edit contains an invalid local document URI.' }
   }
-  const nextLineStart = lineStarts[position.line + 1]
-  // The character must stay within ITS OWN line's content (the text between
-  // this line start and the next line's '\n'); a character that overshoots
-  // is a server/client disagreement about the document, not a splice input.
-  const lineEnd = nextLineStart === undefined ? text.length : nextLineStart - 1
-  const offset = lineStart + position.character
-  if (offset > lineEnd) {
-    return undefined
+  if (extract) {
+    const creations = changedFiles.filter((file) => file.expectedRawHash === null)
+    if (creations.length !== 1 || creations[0]?.path !== extract.destination) {
+      return { errorMessage: 'The extract edit must create exactly the requested destination; no files were changed.' }
+    }
+    if (changedFiles.some((file) => file.kind === 'delete' || file.kind === 'move') ||
+        !changedFiles.some((file) => file.path === extract.source && file.expectedRawHash !== null)) {
+      return { errorMessage: 'The extract edit must update its source without unrelated resource operations; no files were changed.' }
+    }
   }
-  return offset
-}
-
-/** Drop edits that carry an identical range AND replacement text (per file). */
-function dedupePerFileEdits(edits: LspTextEdit[]): LspTextEdit[] {
-  const seen = new Set<string>()
-  const unique: LspTextEdit[] = []
-  for (const edit of edits) {
-    const key = `${edit.range.start.line}:${edit.range.start.character}:${edit.range.end.line}:${edit.range.end.character}:${edit.newText}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    unique.push(edit)
-  }
-  return unique
+  return { changedFiles }
 }
 
 /**
@@ -381,169 +387,91 @@ async function resolveSplicePath(
   return contained?.fullPath ?? null
 }
 
-/**
- * P4-T2: apply ONE normalized per-URI edit list to the CURRENT bytes of the
- * run's filesystem — never a stale copy, and never raw host disk when a
- * virtual-fs host injected its own filesystem — and return the spliced
- * content. Dedupe per file, convert the 0-based LSP ranges to offsets ONCE
- * against a shared index of the raw text, then apply in a single
- * reverse-document-order pass (descending start offset), so each splice
- * never shifts a later one. An overlap, an out-of-bounds range, or a
- * server-supplied uri outside the project / the configured read roots fails
- * THAT file with an errorMessage here (recorded per file upstream, never
- * thrown for the whole call).
- */
-async function applyFileEditsFromDisk(
-  uri: string,
-  edits: LspTextEdit[],
-  readContext: FileReadContext,
-): Promise<{ path: string; newContent: string } | { path: string; errorMessage: string }> {
-  const filePath = uriToPath(uri)
-  const containedPath = await resolveSplicePath(filePath, readContext)
-  if (!containedPath) {
-    return {
-      path: filePath,
-      errorMessage: 'path is outside the project and the configured read roots',
-    }
-  }
-  let text: string
-  try {
-    text = await readContext.fs.readFile(containedPath, 'utf8')
-  } catch {
-    return { path: filePath, errorMessage: 'file could not be read from disk' }
-  }
-  const lineStarts = buildLineStartOffsets(text)
-  const positioned: Array<{
-    startOffset: number
-    endOffset: number
-    newText: string
-  }> = []
-  for (const edit of dedupePerFileEdits(edits)) {
-    const startOffset = toOffsetInRangeText(text, lineStarts, edit.range.start)
-    const endOffset = toOffsetInRangeText(text, lineStarts, edit.range.end)
-    if (startOffset === undefined || endOffset === undefined) {
-      return {
-        path: filePath,
-        errorMessage: 'edit range is out of bounds of the current document',
-      }
-    }
-    positioned.push({ startOffset, endOffset, newText: edit.newText })
-  }
-  // Reverse document order: after this sort, positioned[index] has the next-
-  // applied (larger) start and positioned[index + 1] the smaller one, so a
-  // pair overlaps iff the smaller-start range's END reaches into the larger-
-  // start range (e.g. two edits occupying the same span). A zero-width
-  // adjacency (end exactly AT the next start) is legal and NOT an overlap.
-  positioned.sort((a, b) => b.startOffset - a.startOffset)
-  for (let index = 0; index < positioned.length - 1; index++) {
-    const current = positioned[index]
-    const previous = positioned[index + 1]
-    if (previous.endOffset > current.startOffset) {
-      return {
-        path: filePath,
-        errorMessage: `edits overlap in the current document: the edit ending at offset ${previous.endOffset} reaches into the edit starting at offset ${current.startOffset}`,
-      }
-    }
-  }
-  let spliced = text
-  for (const { startOffset, endOffset, newText } of positioned) {
-    spliced = spliced.slice(0, startOffset) + newText + spliced.slice(endOffset)
-  }
-  return { path: filePath, newContent: spliced }
-}
-
-/**
- * P4-T2: apply a whole normalized changesByUri to disk and aggregate into
- * the service result shape. Per-file failures are recorded per file (an
- * overlapping file does not fail its peers) and summarized in a top-level
- * errorMessage only when they exist — the whole call never throws for one
- * bad file.
- */
+/** Prepare exact-byte file replacements without applying any of them. */
 async function applyChangesByUriFromDisk(
   changesByUri: LspWorkspaceEditChanges,
   verb: string,
-  readContext: FileReadContext,
+  { fs, cwd, readPolicy }: FileReadContext,
 ): Promise<RenameCodeActionResult> {
-  const spliced = await Promise.all(
-    Object.entries(changesByUri)
-      // A uri with no edits contributes nothing: reading its disk bytes just
-      // to echo them back as a "changed" file would make the apply sibling
-      // hash-gate a file the language server never actually edited.
-      .filter(([, edits]) => edits.length > 0)
-      .map(([uri, edits]) =>
-        applyFileEditsFromDisk(uri, edits, readContext),
-      ),
-  )
-  const changedFiles: Array<{ path: string; newContent: string }> = []
-  const failures: string[] = []
-  for (const outcome of spliced) {
-    if ('newContent' in outcome) {
-      changedFiles.push(outcome)
-    } else {
-      failures.push(`${outcome.path}: ${outcome.errorMessage}`)
+  const files = Object.entries(changesByUri)
+  const refusal = (reason: string) => ({
+    errorMessage: `could not ${verb}: ${reason}`,
+  })
+  if (
+    files.length > MAX_FILE_CHANGES_PER_TRANSACTION ||
+    files.some(([, edits]) => !Array.isArray(edits))
+  ) {
+    return refusal('invalid or oversized semantic file set')
+  }
+  const changedFiles: StagedSemanticFile[] = []
+  const seenPaths = new Set<string>()
+  let stagedBytes = 0
+  for (const [uri, edits] of files) {
+    if (edits.length === 0) continue
+    let filePath: string
+    try {
+      if (!uri.startsWith('file:///')) throw new Error('not a local file URI')
+      filePath = fileURLToPath(uri)
+    } catch {
+      return refusal('workspace edit target is not a local file URI')
+    }
+    try {
+      const contained = await resolveProjectPathForFileSystemRead(
+        cwd,
+        filePath,
+        fs,
+        readPolicy,
+      )
+      if (contained?.scope !== 'project')
+        return refusal(`${filePath}: path is outside the project workspace`)
+      if (seenPaths.has(contained.realFullPath))
+        return refusal(`${filePath}: duplicate canonical edit target`)
+      seenPaths.add(contained.realFullPath)
+      const stat = await fs.stat(contained.realFullPath)
+      if (!stat.isFile() || stat.size > MAX_TRANSACTION_FILE_BYTES)
+        return refusal(`${filePath}: unsupported or oversized edit basis`)
+      const document = captureTextDocument(
+        await fs.readFile(contained.realFullPath),
+      )
+      if (document.byteLength > MAX_TRANSACTION_FILE_BYTES)
+        return refusal(
+          `${filePath}: semantic edit basis exceeds the file limit`,
+        )
+      const newContent = spliceSemanticText(document.rawText, edits)
+      stagedBytes += Buffer.byteLength(newContent) + document.byteLength
+      if (stagedBytes > MAX_TRANSACTION_PREPARED_BYTES)
+        return refusal('semantic edit exceeds the prepared byte limit')
+      changedFiles.push({
+        path: contained.realFullPath,
+        newContent,
+        expectedRawHash: document.rawHash,
+      })
+    } catch (error) {
+      return refusal(
+        `${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
-  if (changedFiles.length === 0) {
-    return {
-      errorMessage:
-        failures.length > 0
-          ? `could not ${verb}: ${failures.join('; ')}`
-          : `could not ${verb}: the language server returned no applicable edits`,
-    }
-  }
-  return {
-    changedFiles,
-    ...(failures.length > 0 ? { errorMessage: failures.join('; ') } : {}),
-  }
+  return changedFiles.length > 0
+    ? { changedFiles }
+    : refusal('the language server returned no applicable edits')
 }
 
-/**
- * P4-T2 (extract_symbol): splice a CREATED file's edits against an empty
- * base. The LSP create-file contract makes the created document's content
- * arrive as ordinary text edits against an empty document, so offsets resolve
- * against '' with a single line start — an edit claiming any other line is a
- * server/client disagreement and fails that file honestly. The destination
- * path is the CALLER's project-relative path, never derived from the created
- * uri. Same dedupe + reverse-order + overlap contract as the disk splice.
- */
 function applyCreatedFileEdits(
   destinationPath: string,
   edits: LspTextEdit[],
-): { path: string; newContent: string } | { path: string; errorMessage: string } {
-  const lineStarts = [0]
-  const positioned: Array<{
-    startOffset: number
-    endOffset: number
-    newText: string
-  }> = []
-  for (const edit of dedupePerFileEdits(edits)) {
-    const startOffset = toOffsetInRangeText('', lineStarts, edit.range.start)
-    const endOffset = toOffsetInRangeText('', lineStarts, edit.range.end)
-    if (startOffset === undefined || endOffset === undefined) {
-      return {
-        path: destinationPath,
-        errorMessage:
-          'created-file edit range is out of bounds of the empty document',
-      }
+): StagedSemanticFile | { errorMessage: string } {
+  try {
+    return {
+      path: destinationPath,
+      newContent: spliceSemanticText('', edits),
+      expectedRawHash: null,
     }
-    positioned.push({ startOffset, endOffset, newText: edit.newText })
-  }
-  positioned.sort((a, b) => b.startOffset - a.startOffset)
-  for (let index = 0; index < positioned.length - 1; index++) {
-    const current = positioned[index]
-    const previous = positioned[index + 1]
-    if (previous.endOffset > current.startOffset) {
-      return {
-        path: destinationPath,
-        errorMessage: `created-file edits overlap: the edit ending at offset ${previous.endOffset} reaches into the edit starting at offset ${current.startOffset}`,
-      }
+  } catch (error) {
+    return {
+      errorMessage: `${destinationPath}: ${error instanceof Error ? error.message : String(error)}`,
     }
   }
-  let spliced = ''
-  for (const { startOffset, endOffset, newText } of positioned) {
-    spliced = spliced.slice(0, startOffset) + newText + spliced.slice(endOffset)
-  }
-  return { path: destinationPath, newContent: spliced }
 }
 
 /** Bounded work: cap files synced per syncMutatedFiles call. */
@@ -700,7 +628,16 @@ export function createLanguageIntelligence(
               { reason: 'unavailable' },
             )
           }
-          return readContext.fs.readFile(containedPath, 'utf8')
+          try {
+            return captureTextDocument(
+              await readContext.fs.readFile(containedPath),
+            ).rawText
+          } catch (error) {
+            throw new LspServerError(
+              'LSP document open could not capture lossless text.',
+              { reason: 'unavailable', cause: error },
+            )
+          }
         },
       })
       built = true
@@ -824,16 +761,17 @@ export function createLanguageIntelligence(
             { reason: 'position is not renameable' },
           )
         }
-        return {
-          changesByUri: await mux.rename({
-            filePath,
-            position,
-            newName: params.new_name,
-          }, executionContext),
-        }
+        const rename = { filePath, position, newName: params.new_name }
+        return mux.renameIntent
+          ? { intent: await mux.renameIntent(rename, executionContext) }
+          : { changesByUri: await mux.rename(rename, executionContext) }
       })
       if ('unavailable' in result || 'errorMessage' in result) {
         return [{ type: 'json', value: result }]
+      }
+      if (result.intent) {
+        // Never replace the captured basis with a post-response disk read.
+        return [{ type: 'json', value: stageVersionedIntent(result.intent) }]
       }
       return [
         {
@@ -859,6 +797,9 @@ export function createLanguageIntelligence(
         }
         const filePath = path.resolve(options.cwd, params.path)
         const position = toLspPosition(params.line, params.character)
+        if (mux.codeActionIntent) {
+          return { intent: await mux.codeActionIntent({ filePath, position, purpose: 'organize-imports' }, executionContext) }
+        }
         const actions = await mux.codeAction({
           filePath,
           position,
@@ -880,6 +821,9 @@ export function createLanguageIntelligence(
       if ('unavailable' in result || 'errorMessage' in result) {
         return [{ type: 'json', value: result }]
       }
+      if (result.intent) {
+        return [{ type: 'json', value: stageVersionedIntent(result.intent) }]
+      }
       return [
         {
           type: 'json',
@@ -896,6 +840,12 @@ export function createLanguageIntelligence(
       const result = await runQuery(async (mux) => {
         const filePath = path.resolve(options.cwd, params.path)
         const position = toLspPosition(params.line, params.character)
+        if (mux.codeActionIntent) {
+          const intent = await mux.codeActionIntent({ filePath, position, purpose: 'extract' }, executionContext)
+          return stageVersionedIntent(intent, { source: filePath, destination: path.resolve(options.cwd, params.destination_path) })
+        }
+        // Compatibility for injected legacy multiplexers only. The built-in
+        // applicator never dispatches command-bearing code actions.
         // NO `only` filter: extract refactors are `refactor.extract.*` kinds
         // and the kind vocabulary is server-specific, so filtering here would
         // match nothing. Selection is heuristic and documented: prefer an
@@ -963,50 +913,25 @@ export function createLanguageIntelligence(
           if (uri === createdUri) continue
           sourceChanges[uri] = edits
         }
-        const sourceResult = await applyChangesByUriFromDisk(
-          sourceChanges,
-          'extract symbols from',
-          readContext,
-        )
-        // The created file splices against an empty base and is published
-        // under the caller's destination_path VERBATIM — the server's uri
-        // only supplies bytes, never the destination path. A failed
-        // created-file splice fails the extract honestly (the model must
-        // never see a partial extract as a success).
+        const sourceEdits = Object.values(sourceChanges)
+        if (sourceEdits.some((edits) => !Array.isArray(edits)))
+          return { errorMessage: 'Invalid extract source edit set.' }
+        const sourceResult = sourceEdits.some((edits) => edits.length > 0)
+          ? await applyChangesByUriFromDisk(
+              sourceChanges,
+              'extract symbols from',
+              readContext,
+            )
+          : { changedFiles: [] }
+        if (!('changedFiles' in sourceResult)) return sourceResult
+        // The caller owns destination_path, but the explicit create basis
+        // is absence. A failed splice on either side discards the whole plan.
         const createdSplice = applyCreatedFileEdits(
           params.destination_path,
           createdEdits,
         )
-        if ('errorMessage' in createdSplice) {
-          if ('changedFiles' in sourceResult) {
-            return {
-              changedFiles: sourceResult.changedFiles,
-              errorMessage: `${createdSplice.path}: ${createdSplice.errorMessage}`,
-            }
-          }
-          return {
-            errorMessage: `could not extract symbols: ${createdSplice.path}: ${createdSplice.errorMessage}`,
-          }
-        }
-        if ('changedFiles' in sourceResult) {
-          return {
-            changedFiles: [...sourceResult.changedFiles, createdSplice],
-            ...(sourceResult.errorMessage
-              ? { errorMessage: sourceResult.errorMessage }
-              : {}),
-          }
-        }
-        // No source-file edits at all: the created file alone is the result —
-        // but a source-splice failure message still surfaces. Never drop an
-        // honest failure just because the created file spliced. (The narrowed
-        // no-changedFiles type still admits UnavailableResult, so the
-        // errorMessage access is guarded by its own `in` check.)
-        return {
-          changedFiles: [createdSplice],
-          ...('errorMessage' in sourceResult
-            ? { errorMessage: sourceResult.errorMessage }
-            : {}),
-        }
+        if ('errorMessage' in createdSplice) return createdSplice
+        return { changedFiles: [...sourceResult.changedFiles, createdSplice] }
       })
       return [{ type: 'json', value: result }]
     },
@@ -1051,7 +976,9 @@ export function createLanguageIntelligence(
             // Read current bytes through the run's filesystem — never a
             // cached copy — so the server sees exactly what the mutation
             // committed.
-            const text = await readContext.fs.readFile(containedPath, 'utf8')
+            const text = captureTextDocument(
+              await readContext.fs.readFile(containedPath),
+            ).rawText
             const version = (syncVersions.get(filePath) ?? 0) + 1
             syncVersions.set(filePath, version)
             await activeMultiplexer.syncFile({ filePath, version, text }, executionContext)

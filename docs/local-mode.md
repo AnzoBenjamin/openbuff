@@ -329,7 +329,8 @@ provider can declare compatibility behavior:
     "supportsTools": true,
     "supportsRequiredToolChoice": true,
     "supportsStopSequences": false,
-    "stripProviderMetadata": true
+    "stripProviderMetadata": true,
+    "includeUsage": true
   }
 }
 ```
@@ -340,6 +341,7 @@ provider can declare compatibility behavior:
 - `supportsRequiredToolChoice`: set `false` for providers that accept tools but reject `tool_choice: "required"`.
 - `supportsStopSequences`: set `true` only for OpenAI-compatible providers that accept the `stop` request field; otherwise Openbuff enforces stop sequences locally.
 - `stripProviderMetadata`: omits Codebuff/OpenRouter-specific provider metadata.
+- `includeUsage`: canonical OpenAI and OpenRouter endpoints default this on so Openbuff requests `stream_options.include_usage` and retains a choices-free usage chunk after a tool-call finish. Set `false` to opt out. Other OpenAI-compatible endpoints omit the field unless explicitly set to `true` because some compatible servers reject it.
 - `reasoningReplay`: set to `"required"` for OpenAI-compatible endpoints that require assistant reasoning in conversation history. Openbuff retains the streamed reasoning and sends `reasoning_content` on each assistant message. This is enabled automatically for `api.ifm.ai`; set it to `"none"` to override that default. Reasoning replay increases stored history and input tokens. Earlier sessions whose reasoning was discarded cannot recover the original trace.
 
 ## Model output degeneration
@@ -497,11 +499,20 @@ zero. Per-request streaming `usage` also carries `costStatus` (`observed`,
 `estimated`, `unknown`, or `subscription`), optional fractional `costCents`, and
 an unknown-cost reason. Configured USD token pricing works even when request
 provider metadata is stripped. Missing/malformed counts, positive unpriced
-components and non-USD pricing do not become zero-cost estimates; explicit
+components and missing or non-USD currency do not become zero-cost estimates; explicit
 zero-rate/zero-cost observations remain distinct. Totals in legacy finish/session
-fields are known subtotals, not proof that unpriced requests were free. There is
-no automatic model-price lookup, cache-write price handling or restart-durable
-shared spending reservation implied by this telemetry.
+fields are known subtotals, not proof that unpriced requests were free.
+Anthropic-compatible routes normalize cache reads and writes into disjoint
+buckets; a positive cache write is priced only when
+`cacheWriteInputPerMillionTokens` is available. Exact canonical
+OpenAI/Anthropic/OpenRouter models may obtain an offline estimate and context
+window from the checked-in models.dev snapshot; custom, unknown, or tiered-price
+routes remain unknown. There is no runtime catalog fetch. When top-level
+`spending` selects a finite policy, a separate owner-only authority reserves
+each root/descendant/retry attempt before provider dispatch and survives
+restart; strict, explicitly degraded estimated, and uncapped behavior is
+documented in [Configuration](configuration.md#provider-request-spending-admission).
+Usage telemetry alone never grants or refunds admission.
 
 Provider readiness uses the same route/credential checker and messages
 as the TUI, including explicit model selection.
@@ -509,15 +520,18 @@ as the TUI, including explicit model selection.
 ## Local usage observations
 
 `/usage` reports the current conversation's observed request events from this
-CLI process, including descendant run/model attribution, input/output/cache-read
-token counts, known fractional-cost subtotals, unknown-cost reasons and the last
-prompt-build context snapshot. It runs locally without contacting a provider.
-Missing counts remain incomplete, subscription usage is separate, and cache-write
-tokens are explicitly not reported yet. The store retains 100 detail rows and
-shows the newest 20; cumulative observed totals and omitted-row counts remain.
-Only eight recent process-local conversations are retained. Restored sessions and
+CLI process, including descendant run/model attribution,
+input/output/cache-read/cache-write token counts, known fractional-cost
+subtotals, unknown-cost reasons and the last prompt-build context snapshot. It
+runs locally without contacting a provider. Missing counts remain incomplete,
+subscription usage is separate, and cache-write counts remain incomplete for
+adapters that do not report them. The store retains 100 detail rows and shows
+the newest 20; cumulative observed totals and omitted-row counts remain. Only
+eight recent process-local conversations are retained. Restored sessions and
 provider failures with no usage event are not reconstructed, and this is neither
-a provider invoice nor a durable spending-limit authority.
+a provider invoice nor, by itself, a durable spending-limit authority. Finite
+`spending` policy state comes from the separate request-admission record; `/usage`
+does not reconstruct, modify, or authorize that record.
 
 ## Local semantic search
 

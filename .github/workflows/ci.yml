@@ -102,6 +102,9 @@ jobs:
           # dependency must reconcile with the checked-in upstream provenance
           # record (scripts/dependency-provenance.json), offline.
           bun --cwd=scripts run guard:dependency-provenance
+          # The runtime catalog is checked in and hash-bound; no CI network
+          # request may silently refresh or replace it.
+          bun --cwd=scripts run guard:model-catalog
 
       # The offline guard reconciles manifests/lock data; it cannot attest
       # upstream identity or human approval. Keep each new release's registry

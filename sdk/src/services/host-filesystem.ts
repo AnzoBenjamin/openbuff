@@ -86,6 +86,7 @@ export function bindHostFileSystem(
     mkdir: source.mkdir.bind(source),
     readdir,
     readFile,
+    ...(strict || !source.lstat ? {} : { lstat: source.lstat.bind(source) }),
     realpath: readSource.realpath.bind(readSource),
     stat: readSource.stat.bind(readSource),
     unlink: source.unlink.bind(source),

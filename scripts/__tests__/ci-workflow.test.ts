@@ -171,6 +171,13 @@ describe('CI project-root guard gate', () => {
     )
   })
 
+  test('build-and-check runs the models.dev catalog drift guard', () => {
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain('bun --cwd=scripts run guard:model-catalog')
+  })
+
   test('build-and-check runs the types-declaration guard', () => {
     // The co-declaration invariant (an untyped runtime dependency must declare
     // its @types sibling in the same manifest) only blocks a merge if CI runs

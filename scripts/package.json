@@ -10,6 +10,7 @@
     "guard:byok-wording": "bun run byok-wording-guard.ts",
     "guard:dependency-provenance": "bun run dependency-provenance-guard.ts",
     "guard:types-declaration": "bun run types-declaration-guard.ts",
+    "guard:model-catalog": "bun run generate-model-capability-catalog.ts --check",
     "guard:memory-drift": "bun run memory-drift-guard.ts",
     "guard:project-root": "bun run project-root-guard.ts",
     "guard:sync-agent-config": "bun run sync-agent-config.ts",

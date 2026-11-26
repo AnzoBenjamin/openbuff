@@ -51,6 +51,14 @@ import type {
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import { stableHash } from '@codebuff/common/util/stable-hash'
+import { captureValueSha256, type ReplayBasis } from './recorded-replay-prefix'
+import {
+  MAX_READ_PLAN_REPLAY_BYTES,
+  MAX_READ_PLAN_REPLAY_ROWS,
+  verifyReadPlanPrefix,
+  type ReadPlanOrigin,
+  type VerifiedReadPlanPrefix,
+} from './read-plan-replay'
 
 /**
  * Narrow structural subset of one prepared bun:sqlite statement. `run` is
@@ -503,6 +511,42 @@ export type RunJournalBatching = {
   maxBatchDelayMs?: number
 }
 
+const readPlanJournalOperations = new WeakMap<
+  JournalWriter,
+  {
+    begin(origin: ReadPlanOrigin): Promise<void>
+    claim(
+      basis: ReplayBasis,
+      batches: readonly (readonly string[])[],
+    ): VerifiedReadPlanPrefix
+  }
+>()
+
+export function isReadPlanJournal(journal: JournalWriter): boolean {
+  return readPlanJournalOperations.has(journal)
+}
+
+export function beginReadPlanJournal(
+  journal: JournalWriter,
+  origin: ReadPlanOrigin,
+): Promise<void> {
+  const operations = readPlanJournalOperations.get(journal)
+  if (!operations)
+    throw new Error('Read replay requires the built-in persistent journal.')
+  return operations.begin(origin)
+}
+
+export function claimReadPlanReplay(
+  journal: JournalWriter,
+  basis: ReplayBasis,
+  batches: readonly (readonly string[])[],
+): VerifiedReadPlanPrefix {
+  const operations = readPlanJournalOperations.get(journal)
+  if (!operations)
+    throw new Error('Read replay requires the built-in persistent journal.')
+  return operations.claim(basis, batches)
+}
+
 /**
  * Build/open a journal. `path` ':memory:' for tests; `opts.createDatabase` is
  * the injectable seam. Constructs the schema when the db is not yet marked
@@ -520,6 +564,7 @@ export function createRunJournal(params: {
   createDatabase?: (path: string) => unknown
   retention?: RunJournalRetention
   batching?: RunJournalBatching
+  captureProgrammaticReplay?: boolean
 }): CreatedRunJournal {
   const { path } = params
   const clock = params.clock ?? realClock
@@ -1228,7 +1273,7 @@ export function createRunJournal(params: {
    * verbatim from `append` so the batching drain can replay buffered events
    * through the identical path (slices 1-3 behavior, unchanged).
    */
-  const insertEvent = (runId: string, event: JournalEvent): void => {
+  const insertEvent = (runId: string, event: JournalEvent): number => {
     // Next seq is monotonic gap-free per runId. The read-then-insert is
     // wrapped in a BEGIN IMMEDIATE transaction so two appends cannot mint
     // the same seq (a PK violation on (run_id, seq)) or interleave rows.
@@ -1323,7 +1368,7 @@ export function createRunJournal(params: {
             }
           }
           db.run('COMMIT;')
-          return
+          return nextSeq
         } catch (error) {
           // A failed INSERT/COMMIT leaves the transaction open, and the
           // rollback below can itself fail with SQLITE_BUSY while a
@@ -1405,7 +1450,56 @@ export function createRunJournal(params: {
     flushTimer = timer
   }
 
-  return {
+  const toolResultAfter = (
+    runId: string,
+    correlation: string,
+    seq: number,
+    attemptId: string | null | undefined,
+  ): unknown | undefined => {
+    if (attemptId === undefined) return undefined
+    // A stamped result cannot settle a legacy call, or vice versa. This is
+    // independent of arrival order when a provider ID is reused.
+    const row = db
+      .query(
+        "SELECT payload FROM run_events WHERE run_id = ? AND event_type = 'tool_result' AND correlation = ? AND seq > ? AND ((? IS NULL AND json_type(payload, '$.attemptId') IS NULL) OR (json_type(payload, '$.attemptId') = 'text' AND json_extract(payload, '$.attemptId') = ?)) ORDER BY seq DESC LIMIT 1",
+      )
+      .get(runId, correlation, seq, attemptId, attemptId) as
+      | { payload: string }
+      | undefined
+    return row ? JSON.parse(row.payload) : undefined
+  }
+
+  const journal: CreatedRunJournal = {
+    ...(params.captureProgrammaticReplay === true
+      ? { captureProgrammaticReplay: true as const }
+      : {}),
+    appendDurable(runId: string, event: JournalEvent): void {
+      if (closed)
+        throw new Error(
+          'Cannot acknowledge a durable event on a closed run journal.',
+        )
+      if (
+        maxBytesCap !== undefined &&
+        Buffer.byteLength(JSON.stringify(event.payload)) > maxBytesCap
+      ) {
+        throw new Error(
+          'The run journal could not retain the durable effect event within its byte budget.',
+        )
+      }
+      drainPending()
+      const seq = insertEvent(runId, event)
+      enforceRetention(runId)
+      if (
+        !db
+          .query('SELECT 1 FROM run_events WHERE run_id = ? AND seq = ?')
+          .get(runId, seq)
+      ) {
+        throw new Error(
+          'The run journal could not retain the durable effect event.',
+        )
+      }
+    },
+
     append(runId: string, event: JournalEvent): void {
       // Fail-open after close: a detached background child that outlives the
       // turn whose promise chain closed the journal still appends under its
@@ -1718,16 +1812,16 @@ export function createRunJournal(params: {
       // cannot prove any attempt of this call completed.
       const callRow = db
         .query(
-          "SELECT seq FROM run_events WHERE run_id = ? AND event_type = 'tool_call' AND correlation = ? ORDER BY seq DESC LIMIT 1",
+          "SELECT seq, payload FROM run_events WHERE run_id = ? AND event_type = 'tool_call' AND correlation = ? ORDER BY seq DESC LIMIT 1",
         )
-        .get(runId, toolCallId) as { seq: number } | undefined
+        .get(runId, toolCallId) as { seq: number; payload: string } | undefined
       if (!callRow) return undefined
-      const row = db
-        .query(
-          "SELECT payload FROM run_events WHERE run_id = ? AND event_type = 'tool_result' AND correlation = ? AND seq > ? ORDER BY seq DESC LIMIT 1",
-        )
-        .get(runId, toolCallId, callRow.seq) as { payload: string } | undefined
-      return row ? JSON.parse(row.payload) : undefined
+      return toolResultAfter(
+        runId,
+        toolCallId,
+        callRow.seq,
+        journalAttemptId(JSON.parse(callRow.payload)),
+      )
     },
 
     toolResultForInput(
@@ -1787,17 +1881,18 @@ export function createRunJournal(params: {
         // completed; an in-flight or null-correlation match is skipped.
         const correlation = row.correlation
         if (correlation == null) continue
-        const resultRow = db
-          .query(
-            "SELECT payload FROM run_events WHERE run_id = ? AND event_type = 'tool_result' AND correlation = ? AND seq > ? ORDER BY seq DESC LIMIT 1",
-          )
-          .get(runId, correlation, row.seq) as { payload: string } | undefined
-        if (!resultRow) continue
+        const result = toolResultAfter(
+          runId,
+          correlation,
+          row.seq,
+          journalAttemptId(payload),
+        )
+        if (result === undefined) continue
         if (completed !== occurrence) {
           completed += 1
           continue
         }
-        return JSON.parse(resultRow.payload)
+        return result
       }
       return undefined
     },
@@ -1832,18 +1927,121 @@ export function createRunJournal(params: {
       }
     },
   }
+  // The replay authority is attached only to an actual persistent, unbounded
+  // built-in journal. A reader/writer-shaped object is not an admission.
+  if (
+    path !== ':memory:' &&
+    !params.createDatabase &&
+    !params.retention &&
+    !params.batching &&
+    !params.captureProgrammaticReplay
+  ) {
+    readPlanJournalOperations.set(journal, {
+      async begin(origin) {
+        if (
+          closed ||
+          (selectMaxSeq.get(origin.basis.runId) as MaxSeqRow)?.max_seq != null
+        ) {
+          throw new Error(
+            'Cannot initialize a read plan over an existing journal stream.',
+          )
+        }
+        insertEvent(origin.basis.runId, {
+          eventType: 'read_plan_basis',
+          stepNumber: 0,
+          payload: origin,
+        })
+      },
+      claim(basis, batches) {
+        if (closed) throw new Error('Read replay journal is closed.')
+        const runId = basis.runId
+        db.run(
+          'CREATE TABLE IF NOT EXISTS read_plan_replay_claims (run_id TEXT PRIMARY KEY, prefix_sha256 TEXT NOT NULL) STRICT;',
+        )
+        db.run('BEGIN IMMEDIATE;')
+        try {
+          if (
+            db
+              .query('SELECT 1 FROM read_plan_replay_claims WHERE run_id = ?')
+              .get(runId)
+          ) {
+            throw new Error(
+              'The interrupted read plan already has a replay claim.',
+            )
+          }
+          const size = db
+            .query(
+              'SELECT COUNT(*) AS count, SUM(LENGTH(CAST(payload AS BLOB))) AS bytes FROM (SELECT payload FROM run_events WHERE run_id = ? LIMIT ?)',
+            )
+            .get(runId, MAX_READ_PLAN_REPLAY_ROWS + 1) as {
+            count: number
+            bytes: number | null
+          }
+          if (
+            size.count > MAX_READ_PLAN_REPLAY_ROWS ||
+            (size.bytes ?? 0) > MAX_READ_PLAN_REPLAY_BYTES
+          ) {
+            throw new Error(
+              'The retained read-plan prefix exceeds replay limits.',
+            )
+          }
+          const rows = (
+            db
+              .query(
+                'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+              )
+              .all(runId) as RunEventRow[]
+          ).map(parseRow)
+          const verified = verifyReadPlanPrefix(rows, basis, batches)
+          let dead = false
+          try {
+            process.kill(verified.origin.ownerPid, 0)
+          } catch (error) {
+            dead = (error as NodeJS.ErrnoException).code === 'ESRCH'
+          }
+          if (!dead)
+            throw new Error('The original read-plan owner may still be live.')
+          // Verify and claim under one write lock. A crashed continuation
+          // does not implicitly release this one-shot claim.
+          db.run(
+            'INSERT INTO read_plan_replay_claims (run_id, prefix_sha256) VALUES (?, ?);',
+            runId,
+            captureValueSha256(rows),
+          )
+          db.run('COMMIT;')
+          return verified
+        } catch (error) {
+          rollbackTransaction(db)
+          throw error
+        }
+      },
+    })
+  }
+  return journal
+}
+
+/** null is an unstamped legacy event; undefined is an invalid explicit stamp. */
+function journalAttemptId(payload: unknown): string | null | undefined {
+  if (!payload || typeof payload !== 'object' || !('attemptId' in payload))
+    return null
+  return typeof payload.attemptId === 'string' && payload.attemptId.length > 0
+    ? payload.attemptId
+    : undefined
+}
+
+function toolAttemptQueueKey(event: JournalEvent): string | null {
+  if (event.correlation == null) return null
+  const attemptId = journalAttemptId(event.payload)
+  return attemptId === undefined
+    ? null
+    : JSON.stringify([event.correlation, attemptId])
 }
 
 /**
- * Pure crash classifier (design §4a). Scans every retained event and matches
- * each result to at most one preceding request with the same non-null
- * correlation. Unmatched tool calls are returned before unmatched model
- * requests because their effects may be uncertain. A model replay boundary
- * retires pre-replay model requests. Null-correlated requests cannot be
- * matched by a response.
- *
- * `clean` describes the retained events only: retention may have removed
- * earlier rows, so it is not proof of a complete prefix or replay eligibility.
+ * Scans the retained events, pairing tool results with the original attempt
+ * stamp when present, and with unstamped requests only for legacy rows.
+ * Unmatched tools take precedence over model requests. A clean retained
+ * suffix is not proof of a complete prefix or of replay eligibility.
  */
 export function classifyRunResume(
   reader: JournalReader,
@@ -1861,14 +2059,15 @@ export function classifyRunResume(
     pending: PendingRequest[],
     requests: Map<string, RequestQueue>,
     correlation: string | null,
+    key = correlation,
   ) => {
     const request = { correlation, settled: false }
     pending.push(request)
-    if (correlation == null) return
+    if (key == null) return
 
-    const queue = requests.get(correlation) ?? { requests: [], next: 0 }
+    const queue = requests.get(key) ?? { requests: [], next: 0 }
     queue.requests.push(request)
-    requests.set(correlation, queue)
+    requests.set(key, queue)
   }
 
   const settleRequest = (
@@ -1888,10 +2087,15 @@ export function classifyRunResume(
   for (const event of [...reader.events(runId)].sort((a, b) => a.seq - b.seq)) {
     switch (event.eventType) {
       case 'tool_call':
-        recordRequest(pendingTools, toolRequests, event.correlation ?? null)
+        recordRequest(
+          pendingTools,
+          toolRequests,
+          event.correlation ?? null,
+          toolAttemptQueueKey(event),
+        )
         break
       case 'tool_result':
-        settleRequest(toolRequests, event.correlation ?? null)
+        settleRequest(toolRequests, toolAttemptQueueKey(event))
         break
       case 'llm_request':
         recordRequest(pendingLlm, llmRequests, event.correlation ?? null)
@@ -1919,6 +2123,45 @@ export function classifyRunResume(
     return { kind: 'in_flight_llm' }
   }
   return { kind: 'clean' }
+}
+
+export class RunReplayUnavailableError extends Error {
+  readonly code = 'replay_unavailable'
+
+  constructor(
+    readonly reason: 'unconfirmed_tool_effect' | 'prefix_unverified',
+    readonly runId?: string,
+    readonly toolCallId?: string,
+  ) {
+    super(
+      reason === 'unconfirmed_tool_effect'
+        ? 'Cannot resume: the previous tool outcome is unconfirmed. Inspect the retained effect before starting separate work.'
+        : 'Cannot resume: no verified replay prefix is available. Inspect the saved state before starting a separate turn.',
+    )
+    this.name = 'RunReplayUnavailableError'
+  }
+}
+
+/** A retained suffix can diagnose uncertainty, never admit live replay. */
+export function unverifiedRunReplayRefusal(
+  reader: JournalReader | undefined,
+  runId: string | undefined,
+): RunReplayUnavailableError {
+  if (reader && runId) {
+    try {
+      const pending = classifyRunResume(reader, runId)
+      if (pending.kind === 'in_flight_tool') {
+        return new RunReplayUnavailableError(
+          'unconfirmed_tool_effect',
+          runId,
+          pending.toolCallId,
+        )
+      }
+    } catch {
+      // An unreadable journal is still not a verified prefix.
+    }
+  }
+  return new RunReplayUnavailableError('prefix_unverified', runId)
 }
 
 /**

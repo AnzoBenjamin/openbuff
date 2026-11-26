@@ -48,7 +48,7 @@ const hookTimeout = captureNumber(
 )
 const maxHookTimeout = captureNumber(
   providerConfig,
-  /timeoutSeconds:\s*z\.union\(\[[\s\S]*?z\.number\(\)\.int\(\)\.positive\(\)\.max\((\d+)\)/,
+  /timeoutSeconds:\s*z\s*\.union\(\[[\s\S]*?z\.number\(\)\.int\(\)\.positive\(\)\.max\((\d+)\)/,
   'maximum hook timeout',
 )
 const defaultWindowSize = captureNumber(

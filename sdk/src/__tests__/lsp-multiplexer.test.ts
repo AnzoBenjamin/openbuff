@@ -1,8 +1,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import { toolParams } from '@codebuff/common/tools/list'
 
 import {
   clearRootResolutionCache,
@@ -11,6 +14,13 @@ import {
   LspServerUnavailableError,
 } from '../services/lsp-multiplexer'
 import { createTestLspMultiplexer as createLspMultiplexer } from './lsp-execution-fixture'
+import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
+import { createLanguageIntelligence } from '../services/language-intelligence'
+import { createNodeFileSystem } from '../tools/node-filesystem'
+import { createTransactionIntentLogForWorkspace, recoverAndRevertInterruptedTransactions } from '../tools/transaction-intent-log'
+import { renameSymbol } from '../tools/rename-symbol'
+import { codeAction } from '../tools/code-action'
+import { extractSymbol } from '../tools/extract-symbol'
 
 import type { LspChildHandle, LspSpawnSpec } from '../services/lsp-multiplexer'
 
@@ -1035,6 +1045,374 @@ describe('createLspMultiplexer', () => {
     expect(rename?.params?.position).toEqual({ line: 7, character: 2 })
     expect(rename?.params?.newName).toBe('renamed')
     await mux.dispose()
+  })
+
+  test('B06 preserves the exact version-7 document basis in a framed rename response', async () => {
+    const text = '\uFEFFconst value = 1\r\n'
+    const uri = 'file:///proj/a.ts'
+    const peer = makePeer(message => message.method === 'textDocument/rename'
+      ? { jsonrpc: '2.0', id: message.id, result: { documentChanges: [{
+          textDocument: { uri, version: 7 },
+          edits: [{ range: { start: { line: 0, character: 7 }, end: { line: 0, character: 12 } }, newText: 'next' }],
+        }] } }
+      : defaultBehavior(message))
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    try {
+      await mux.syncFile({ filePath: '/proj/a.ts', version: 7, text })
+      const intent = await mux.renameIntent!({ filePath: '/proj/a.ts', position: { line: 0, character: 7 }, newName: 'next' })
+      expect(intent).toMatchObject({ encoding: 'utf-16', operations: [{
+        uri, version: 7, requestedVersion: 7, expectedRawHash: getExactContentHash(text), newContent: '\uFEFFconst next = 1\r\n',
+      }] })
+    } finally { await mux.dispose() }
+  })
+
+  const b06Uri = 'file:///proj/a.ts'
+  const b06Edit = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: 'replacement' }
+  const b06Document = { textDocument: { uri: b06Uri, version: 7 }, edits: [b06Edit] }
+
+  test.each([
+    ['wrong version', { documentChanges: [{ ...b06Document, textDocument: { uri: b06Uri, version: 6 } }] }, 'version'],
+    ['missing basis', { changes: { [b06Uri]: [b06Edit], 'file:///proj/unknown.ts': [b06Edit] } }, 'missing pre-request'],
+    ['malformed member', { documentChanges: [b06Document, { textDocument: { uri: 'file:///proj/b.ts', version: 7 }, edits: [{ unexpected: 'payload' }] }] }, 'malformed text edit'],
+    ['unsupported resource option', { documentChanges: [b06Document, { kind: 'delete', uri: 'file:///proj/b.ts', options: { recursive: true } }] }, 'unsupported'],
+    ['mixed edit forms', { changes: { [b06Uri]: [b06Edit] }, documentChanges: [b06Document] }, 'exactly one'],
+    ['unverified annotations', { documentChanges: [{ ...b06Document, edits: [{ ...b06Edit, annotationId: 'confirmation' }] }] }, 'unsupported annotation'],
+    ['repeated text version', { documentChanges: [b06Document, b06Document] }, 'repeated semantic path'],
+    ['rename cycle', { documentChanges: [
+      { kind: 'rename', oldUri: b06Uri, newUri: 'file:///proj/new.ts' },
+      { kind: 'rename', oldUri: 'file:///proj/new.ts', newUri: b06Uri },
+    ] }, 'repeated semantic path'],
+    ['numeric version on a created document', { documentChanges: [
+      { kind: 'create', uri: 'file:///proj/new.ts' },
+      { textDocument: { uri: 'file:///proj/new.ts', version: 1 }, edits: [] },
+    ] }, 'created document does not have a pre-request version'],
+  ] as const)('B06 refuses a whole framed plan containing %s', async (_label, reply, message) => {
+    const peer = makePeer(request => request.method === 'textDocument/rename'
+      ? { jsonrpc: '2.0', id: request.id, result: reply }
+      : defaultBehavior(request))
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    try {
+      await mux.syncFile({ filePath: '/proj/a.ts', version: 7, text: 'a\n' })
+      await mux.syncFile({ filePath: '/proj/b.ts', version: 7, text: 'b\n' })
+      await expect(mux.renameIntent!({ filePath: '/proj/a.ts', position: { line: 0, character: 0 }, newName: 'replacement' })).rejects.toThrow(message)
+    } finally { await mux.dispose() }
+  })
+
+  test('B06 does not accept a document sync while the rename is pending', async () => {
+    const peer = makeRawPeer(request => request.method === 'textDocument/rename' ? null : defaultBehavior(request))
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    try {
+      await mux.syncFile({ filePath: '/proj/a.ts', version: 7, text: 'original\n' })
+      const rename = mux.renameIntent!({ filePath: '/proj/a.ts', position: { line: 0, character: 0 }, newName: 'replacement' })
+      await waitUntilSent(peer, 'textDocument/rename')
+      await mux.syncFile({ filePath: '/proj/a.ts', version: 8, text: 'concurrent\n' })
+      const request = peer.received.map(body => JSON.parse(body)).find(body => body.method === 'textDocument/rename')
+      peer.emitRaw(frame(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { documentChanges: [b06Document] } })))
+      await expect(rename).rejects.toThrow('changed while the edit request was in flight')
+    } finally { await mux.dispose() }
+  })
+
+  test.each(['rename', 'bad-scalar', 'hover'] as const)('B06 negotiated UTF-8 uses the captured raw coordinate units: %s', async mode => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b06-utf8-'))
+    const cwd = path.join(fs.realpathSync(tmp), 'project')
+    fs.mkdirSync(cwd)
+    const file = path.join(cwd, 'source.ts')
+    const original = '\uFEFF😀 café\r\nnext\r'
+    const wireRange = { start: { line: 0, character: 8 }, end: { line: 0, character: 13 } }
+    const peer = makePeer(request => {
+      if (request.method === 'initialize') return { jsonrpc: '2.0', id: request.id, result: { capabilities: { positionEncoding: 'utf-8' } } }
+      if (request.method === 'textDocument/prepareRename') return { jsonrpc: '2.0', id: request.id, result: wireRange }
+      if (request.method === 'textDocument/hover') return { jsonrpc: '2.0', id: request.id, result: { contents: 'known symbol', range: wireRange } }
+      if (request.method !== 'textDocument/rename') return defaultBehavior(request)
+      return { jsonrpc: '2.0', id: request.id, result: { documentChanges: [{
+        textDocument: { uri: pathToFileURL(file).href, version: 3 },
+        edits: [{ range: { ...wireRange, start: { line: 0, character: mode === 'bad-scalar' ? 4 : 8 } }, newText: '茶' }],
+      }] } }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child, rootResolver: () => cwd })
+    try {
+      fs.writeFileSync(file, original)
+      await mux.syncFile({ filePath: file, version: 3, text: original })
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir: path.join(tmp, 'state') })
+      const host = createNodeFileSystem({ mutationBroker: broker })
+      const service = createLanguageIntelligence({ cwd, fs: host, multiplexer: mux })
+      const request = { path: 'source.ts', line: 1, character: 4 }
+      if (mode === 'hover') {
+        const result = await service.hoverType(request)
+        expect(result[0]?.value).toMatchObject({ hover: { range: { ...wireRange, positionEncoding: 'utf-8' }, contents: 'known symbol' } })
+      } else {
+        const result = await renameSymbol(service, { ...request, new_name: '茶' }, { cwd, fs: host })
+        if (mode === 'bad-scalar') {
+          expect(result.output[0]?.value).toMatchObject({ errorMessage: expect.stringContaining('Unicode scalar') })
+        } else {
+          expect(result.mutation?.outcome).toBe('applied')
+          expect(result.mutation?.authorityReceipt?.actions[0]?.beforeHash).toBe(getExactContentHash(original))
+        }
+      }
+      const frames = peer.received.map(body => JSON.parse(body))
+      expect(frames[0]?.params.capabilities.general.positionEncodings).toContain('utf-8')
+      for (const sent of frames.filter(frame => ['textDocument/prepareRename', 'textDocument/rename', 'textDocument/hover'].includes(frame.method))) {
+        expect(sent.params.position).toEqual({ line: 0, character: 8 })
+      }
+      expect(fs.readFileSync(file, 'utf8')).toBe(mode === 'rename' ? '\uFEFF😀 茶\r\nnext\r' : original)
+      expect(await broker.listReceipts()).toHaveLength(mode === 'rename' ? 1 : 0)
+      if (process.env.OPENBUFF_CAPTURE_B06_SEMANTICS === '1') {
+        console.log('B06_UTF8 ' + JSON.stringify({
+          mode, encoding: 'utf-8',
+          beforeHash: getExactContentHash(original),
+          afterHash: getExactContentHash(fs.readFileSync(file, 'utf8')),
+          sentPositions: frames.filter(frame => ['textDocument/prepareRename', 'textDocument/rename', 'textDocument/hover'].includes(frame.method)).map(frame => frame.params.position),
+          brokerStates: (await broker.listReceipts()).map(receipt => receipt.state),
+        }))
+      }
+    } finally {
+      await mux.dispose()
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test('B06 refuses an encoding not negotiated by the semantic lane before dispatch', async () => {
+    const peer = makePeer(request => request.method === 'initialize'
+      ? { jsonrpc: '2.0', id: request.id, result: { capabilities: { positionEncoding: 'utf-32' } } }
+      : defaultBehavior(request))
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    try {
+      await mux.syncFile({ filePath: '/proj/a.ts', version: 7, text: 'a\n' })
+      await expect(mux.renameIntent!({ filePath: '/proj/a.ts', position: { line: 0, character: 0 }, newName: 'replacement' })).rejects.toThrow('position encoding')
+      expect(peer.received.some(body => JSON.parse(body).method === 'textDocument/rename')).toBe(false)
+    } finally { await mux.dispose() }
+  })
+
+  test.each(['committed', 'stale', 'occupied-create', 'foreign-midcommit'] as const)('B06 producer-to-broker rename result: %s', async mode => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b06-broker-'))
+    const cwd = path.join(fs.realpathSync(tmp), 'project')
+    const stateDir = path.join(tmp, 'state')
+    fs.mkdirSync(cwd)
+    const paths = ['definition.ts', 'consumer.ts', 'move-from.ts', 'obsolete.ts'].map(name => path.join(cwd, name))
+    const original = ['export const value = 1\r\n', 'import { value } from "./definition"\r\n', 'export const moved = 2\n', 'obsolete\n']
+    const created = path.join(cwd, 'helper.ts')
+    const moved = path.join(cwd, 'moved.ts')
+    const edits = paths.slice(0, 2).map((file, index) => ({
+      textDocument: { uri: pathToFileURL(file).href, version: index + 5 },
+      edits: [{ range: { start: { line: 0, character: original[index]!.indexOf('value') }, end: { line: 0, character: original[index]!.indexOf('value') + 5 } }, newText: 'renamed' }],
+    }))
+    const peer = makeRawPeer(request => request.method === 'textDocument/prepareRename'
+      ? { jsonrpc: '2.0', id: request.id, result: edits[0]!.edits[0]!.range }
+      : request.method === 'textDocument/rename' ? null : defaultBehavior(request))
+    const mux = createLspMultiplexer({ rootResolver: () => cwd, spawner: () => peer.child })
+    try {
+      for (const [index, file] of paths.entries()) {
+        fs.writeFileSync(file, original[index]!)
+        await mux.syncFile({ filePath: file, version: index + 5, text: original[index]! })
+      }
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+      const fileSystem = createNodeFileSystem({ mutationBroker: broker })
+      const intentLog = createTransactionIntentLogForWorkspace({ cwd, stateDir })
+      if (mode === 'foreign-midcommit') {
+        const commit = fileSystem.conditionalCommit!
+        fileSystem.conditionalCommit = async (target, bytes, options) => {
+          if (String(target) === paths[1]) {
+            fs.writeFileSync(paths[0]!, 'foreign source\n')
+            throw new Error('fixture failure during consumer commit')
+          }
+          return commit(target, bytes, options)
+        }
+      }
+      const service = createLanguageIntelligence({ cwd, fs: fileSystem, multiplexer: mux })
+      const application = renameSymbol(service, { path: 'definition.ts', line: 1, character: 13, new_name: 'renamed' }, { cwd, fs: fileSystem, intentLog })
+      await waitUntilSent(peer, 'textDocument/rename')
+      const request = peer.received.map(body => JSON.parse(body)).find(body => body.method === 'textDocument/rename')
+      const consumer = mode === 'stale' ? original[1]!.replace('\r\n', '\n') : original[1]!
+      if (mode === 'stale') fs.writeFileSync(paths[1]!, consumer)
+      if (mode === 'occupied-create') fs.writeFileSync(created, 'occupied\n')
+      const documentChanges = [
+        edits[0],
+        { kind: 'create', uri: pathToFileURL(created).href, options: { overwrite: false, ignoreIfExists: false } },
+        { textDocument: { uri: pathToFileURL(created).href, version: null }, edits: [{ ...b06Edit, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'export const helper = true\n' }] },
+        edits[1],
+        { kind: 'rename', oldUri: pathToFileURL(paths[2]!).href, newUri: pathToFileURL(moved).href },
+        { kind: 'delete', uri: pathToFileURL(paths[3]!).href, options: { recursive: false } },
+      ]
+      const capture = process.env.OPENBUFF_CAPTURE_B06_SEMANTICS === '1'
+      const currentHashes = () => Object.fromEntries([...paths, created, moved].map(file => [path.basename(file), fs.existsSync(file) ? getExactContentHash(fs.readFileSync(file, 'utf8')) : null]))
+      const preApplicationHashes = capture ? currentHashes() : undefined
+      const wireReply = JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { documentChanges } })
+      peer.emitRaw(frame(wireReply))
+      const result = await application
+      const postApplicationHashes = capture ? currentHashes() : undefined
+      let recovery: unknown
+      if (mode === 'foreign-midcommit') {
+        expect(result.output[0]?.value).toMatchObject({ applied: false })
+        expect(result.mutation?.outcome).toBe('rollback_incomplete')
+        expect(result.mutation?.authorityReceipt?.actions.map(action => action.status)).toEqual([
+          'rollback_failed', 'rolled_back', 'failed', 'not_started', 'not_started',
+        ])
+        const recover = () => recoverAndRevertInterruptedTransactions({ cwd, fs: fileSystem, intentLog })
+        const blocked = await recover()
+        expect(blocked).toMatchObject({ ok: false, status: 'recovery_required', transactionIds: [result.mutation?.authorityReceipt?.transactionId] })
+        expect(paths.map(file => fs.readFileSync(file, 'utf8'))).toEqual(['foreign source\n', ...original.slice(1)])
+        expect(fs.existsSync(created)).toBe(false)
+        expect(fs.existsSync(moved)).toBe(false)
+        fs.writeFileSync(paths[0]!, original[0]!.replace('value', 'renamed'))
+        const repaired = await recover()
+        expect(repaired).toMatchObject({ ok: true, revertedPaths: 1 })
+        recovery = { blocked, repaired }
+        expect(paths.map(file => fs.readFileSync(file, 'utf8'))).toEqual(original)
+      } else if (mode !== 'committed') {
+        expect(result.mutation?.outcome).toBe('not_applied')
+        expect(result.mutation?.errors[0]?.code).toBe(mode === 'stale' ? 'stale_state' : 'already_exists')
+        expect(await broker.listReceipts()).toEqual([])
+        expect(paths.map(file => fs.readFileSync(file, 'utf8'))).toEqual([original[0], consumer, ...original.slice(2)])
+        expect(fs.existsSync(intentLog.filePath)).toBe(false)
+        expect(fs.existsSync(moved)).toBe(false)
+        if (mode === 'occupied-create') expect(fs.readFileSync(created, 'utf8')).toBe('occupied\n')
+        else expect(fs.existsSync(created)).toBe(false)
+      } else {
+        expect(result.mutation?.outcome).toBe('applied')
+        expect(result.mutation?.authorityReceipt?.transactionId).toStartWith('tx-')
+        expect((await broker.listReceipts()).map(receipt => [receipt.action, receipt.state])).toEqual([
+          ['commit', 'committed'], ['create', 'committed'], ['commit', 'committed'], ['move', 'committed'], ['delete', 'committed'],
+        ])
+        expect(paths.slice(0, 2).map(file => fs.readFileSync(file, 'utf8'))).toEqual(original.slice(0, 2).map(text => text.replace('value', 'renamed')))
+        expect(fs.readFileSync(created, 'utf8')).toBe('export const helper = true\n')
+        expect(fs.readFileSync(moved, 'utf8')).toBe(original[2]!)
+        expect(paths.slice(2).map(file => fs.existsSync(file))).toEqual([false, false])
+      }
+      if (capture) {
+        const receipt = result.mutation?.authorityReceipt
+        console.log('B06_SEMANTIC ' + JSON.stringify({
+          mode, outcome: result.mutation?.outcome,
+          errors: result.mutation?.errors.map(error => error.code),
+          transactionId: receipt?.transactionId,
+          wireReplyHash: getExactContentHash(wireReply),
+          requested: documentChanges.map(change => change?.textDocument ? { kind: 'text', ...change.textDocument } : { kind: change?.kind, uri: change?.uri, oldUri: change?.oldUri, newUri: change?.newUri }),
+          preApplicationHashes, postApplicationHashes, recovery,
+          actions: receipt?.actions.map(({ action, path, destinationPath, beforeHash, afterHash, status, forward }) => ({ action, path, destinationPath, beforeHash, afterHash, status, forward })),
+          liveHashes: currentHashes(),
+        }))
+      }
+    } finally {
+      await mux.dispose()
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test.each([
+    'organize-applied',
+    'organize-annotated',
+    'organize-confirmation',
+    'organize-missing-annotation',
+    'organize-stale',
+    'organize-wrong-kind',
+    'extract-applied',
+    'extract-annotated',
+    'extract-confirmation',
+    'extract-wrong-destination',
+    'extract-command-only',
+    'extract-edit-and-command',
+  ] as const)('B06 applies only a complete versioned code action: %s', async mode => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b06-action-'))
+    const cwd = path.join(fs.realpathSync(tmp), 'project')
+    const stateDir = path.join(tmp, 'state')
+    fs.mkdirSync(cwd)
+    const source = path.join(cwd, 'source.ts')
+    const dest = path.join(cwd, 'helper.ts')
+    const offeredDest = mode === 'extract-wrong-destination' ? path.join(cwd, 'different.ts') : dest
+    const extract = mode.startsWith('extract')
+    const original = extract ? 'const selected = 1\r\n' : 'import { selected } from "./helper"\r\n'
+    const next = extract ? 'import { selected } from "./helper"' : ''
+    const annotated = mode.endsWith('-annotated') || mode.endsWith('-confirmation') || mode === 'organize-missing-annotation'
+    const sourceAnnotation = { id: 'source', label: 'Update the source', description: 'Replace the selected range.' }
+    const createAnnotation = { id: 'create', label: 'Create helper file' }
+    const contentAnnotation = { id: 'content', label: 'Populate helper' }
+    const edit = {
+      ...(annotated && mode !== 'organize-missing-annotation' ? { changeAnnotations: {
+        source: { label: sourceAnnotation.label, description: sourceAnnotation.description, needsConfirmation: mode === 'organize-confirmation' },
+        create: { label: createAnnotation.label, needsConfirmation: mode === 'extract-confirmation' },
+        content: { label: contentAnnotation.label },
+      } } : {}),
+      documentChanges: [
+      { textDocument: { uri: pathToFileURL(source).href, version: 4 }, edits: [{
+        ...(annotated ? { annotationId: 'source' } : {}),
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: original.indexOf('\r') } }, newText: next,
+      }] },
+      ...(extract ? [
+        { kind: 'create', uri: pathToFileURL(offeredDest).href, ...(annotated ? { annotationId: 'create' } : {}) },
+        { textDocument: { uri: pathToFileURL(offeredDest).href, version: null }, edits: [{
+          ...(annotated ? { annotationId: 'content' } : {}),
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'export const selected = 1\r\n',
+        }] },
+      ] : []),
+    ] }
+    const peer = makeRawPeer(message => message.method === 'textDocument/codeAction' ? null : defaultBehavior(message))
+    const mux = createLspMultiplexer({ spawner: () => peer.child, rootResolver: () => cwd })
+    try {
+      fs.writeFileSync(source, original)
+      await mux.syncFile({ filePath: source, version: 4, text: original })
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+      const fileSystem = createNodeFileSystem({ mutationBroker: broker })
+      const intentLog = createTransactionIntentLogForWorkspace({ cwd, stateDir })
+      const service = createLanguageIntelligence({ cwd, fs: fileSystem, multiplexer: mux })
+      const opts = { cwd, fs: fileSystem, intentLog }
+      const position = { path: 'source.ts', line: 1, character: 0 }
+      const application = extract
+        ? extractSymbol(service, { ...position, destination_path: 'helper.ts', symbol_name: 'selected' }, opts)
+        : codeAction(service, { ...position, kind: 'source.organizeImports' }, opts)
+      await waitUntilSent(peer, 'textDocument/codeAction')
+      const request = peer.received.map(body => JSON.parse(body)).find(body => body.method === 'textDocument/codeAction')
+      if (mode === 'organize-stale') fs.writeFileSync(source, original.replace('\r\n', '\n'))
+      const commandBearing = mode === 'extract-command-only' || mode === 'extract-edit-and-command'
+      const action = {
+        title: extract ? 'Extract to file' : 'Organize imports',
+        kind: mode === 'organize-wrong-kind' ? 'quickfix' : extract ? 'refactor.extract.constant' : 'source.organizeImports',
+        ...(mode === 'extract-command-only' ? {} : { edit }),
+        ...(commandBearing ? { command: { title: 'Resolve extraction', command: 'fixture.extract' } } : {}),
+      }
+      peer.emitRaw(frame(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: [action] })))
+      const result = await application
+      if (mode.endsWith('-applied') || mode.endsWith('-annotated')) {
+        expect(result.mutation?.outcome).toBe('applied')
+        expect(fs.readFileSync(source, 'utf8')).toBe(next + '\r\n')
+        if (extract) expect(fs.readFileSync(dest, 'utf8')).toBe('export const selected = 1\r\n')
+        if (annotated) {
+          const schema = extract ? toolParams.extract_symbol.outputSchema : toolParams.code_action.outputSchema
+          const published = schema.parse(result.output)
+          expect(published[0]?.value).toMatchObject({ results: [
+            { applied: true, annotations: [sourceAnnotation] },
+            ...(extract ? [{ applied: true, annotations: [createAnnotation, contentAnnotation] }] : []),
+          ] })
+        }
+      } else {
+        expect(result.mutation?.outcome).not.toBe('applied')
+        expect(await broker.listReceipts()).toEqual([])
+        expect(fs.readFileSync(source, 'utf8')).toBe(mode === 'organize-stale' ? original.replace('\r\n', '\n') : original)
+        expect(fs.existsSync(dest)).toBe(false)
+        expect(fs.existsSync(offeredDest)).toBe(false)
+        const message = JSON.stringify(result.output)
+        if (commandBearing) expect(message).toContain('command')
+        if (mode.endsWith('-confirmation')) expect(message).toContain('requires host confirmation')
+        if (mode === 'organize-missing-annotation') expect(message).toContain('annotation reference')
+        if (mode === 'extract-wrong-destination') expect(message).toContain('destination')
+        if (mode === 'organize-stale') expect(result.mutation?.errors[0]?.code).toBe('stale_state')
+      }
+      const commandRequests = peer.received.filter(body => JSON.parse(body).method === 'workspace/executeCommand').length
+      expect(commandRequests).toBe(0)
+      if (!extract) expect(request.params.context.only).toEqual(['source.organizeImports'])
+      if (process.env.OPENBUFF_CAPTURE_B06_SEMANTICS === '1') {
+        console.log('B06_ACTION ' + JSON.stringify({
+          mode, commandRequests,
+          wireKind: action.kind,
+          outcome: result.mutation?.outcome ?? 'refused',
+          output: result.output[0]?.value,
+          sourceAfterHash: getExactContentHash(fs.readFileSync(source, 'utf8')),
+          destinationAfterHash: fs.existsSync(dest) ? getExactContentHash(fs.readFileSync(dest, 'utf8')) : null,
+          brokerStates: (await broker.listReceipts()).map(receipt => receipt.state),
+        }))
+      }
+    } finally {
+      await mux.dispose()
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
   })
 
   test('rename normalizes documentChanges and skips a non-text-edit entry honestly', async () => {

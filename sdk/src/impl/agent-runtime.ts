@@ -10,7 +10,14 @@ import { getCiEnv } from '@codebuff/common/env-ci'
 import { clientEnvSchema } from '@codebuff/common/env-schema'
 import { success } from '@codebuff/common/util/error'
 import { hashActionInput } from '@codebuff/common/util/action-outcomes'
-import type { ExecutionActor, ExecutionHostOperationOrigin, OnExecutionActionStart, RequestMcpToolDataFn, RequestToolCallFn, ToolExecutionIdentity } from '@codebuff/common/types/contracts/client'
+import type {
+  ExecutionActor,
+  ExecutionHostOperationOrigin,
+  OnExecutionActionStart,
+  RequestMcpToolDataFn,
+  RequestToolCallFn,
+  ToolExecutionIdentity,
+} from '@codebuff/common/types/contracts/client'
 import { isContextPrunerAgentId } from '@codebuff/agent-runtime/util/context-pruner-identity'
 import { CONSOLIDATOR_AGENT_ID } from '@codebuff/agent-runtime/util/context-consolidation'
 
@@ -20,6 +27,10 @@ import { getCapturedProviderConfig } from '../host-config'
 import type { RunHostServices } from '../host-execution'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/agent-runtime'
+import type {
+  RequestAdmissionStore,
+  SpendingPolicy,
+} from '@codebuff/common/types/request-admission'
 import {
   getByokOpenrouterApiKeyFromEnv,
   getChatGptOAuthTokenFromEnv,
@@ -65,16 +76,27 @@ const PROCESS_SUPERVISION_ON = /^(1|true|yes|on)$/i
 const PROCESS_SUPERVISION_OFF = /^(0|false|no|off)$/i
 
 /** Apply the established local client defaults without consulting ambient env. */
-const capturedClientEnv = (environment: Readonly<Record<string, string | undefined>>): ClientEnv =>
-  Object.assign(clientEnvSchema.parse({
-    NEXT_PUBLIC_CB_ENVIRONMENT: environment.NEXT_PUBLIC_CB_ENVIRONMENT ?? 'dev',
-    NEXT_PUBLIC_CODEBUFF_APP_URL: environment.NEXT_PUBLIC_CODEBUFF_APP_URL ?? 'http://localhost:3000',
-    NEXT_PUBLIC_OPENBUFF_APP_URL: environment.NEXT_PUBLIC_OPENBUFF_APP_URL,
-    NEXT_PUBLIC_SUPPORT_EMAIL: environment.NEXT_PUBLIC_SUPPORT_EMAIL ?? 'support@openbuff.local',
-    NEXT_PUBLIC_POSTHOG_API_KEY: environment.NEXT_PUBLIC_POSTHOG_API_KEY ?? 'openbuff-local',
-    NEXT_PUBLIC_POSTHOG_HOST_URL: environment.NEXT_PUBLIC_POSTHOG_HOST_URL ?? 'https://app.posthog.com',
-    NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID: environment.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID,
-  }), { OPENBUFF_PLAYBOOK_GATE: environment.OPENBUFF_PLAYBOOK_GATE })
+const capturedClientEnv = (
+  environment: Readonly<Record<string, string | undefined>>,
+): ClientEnv =>
+  Object.assign(
+    clientEnvSchema.parse({
+      NEXT_PUBLIC_CB_ENVIRONMENT:
+        environment.NEXT_PUBLIC_CB_ENVIRONMENT ?? 'dev',
+      NEXT_PUBLIC_CODEBUFF_APP_URL:
+        environment.NEXT_PUBLIC_CODEBUFF_APP_URL ?? 'http://localhost:3000',
+      NEXT_PUBLIC_OPENBUFF_APP_URL: environment.NEXT_PUBLIC_OPENBUFF_APP_URL,
+      NEXT_PUBLIC_SUPPORT_EMAIL:
+        environment.NEXT_PUBLIC_SUPPORT_EMAIL ?? 'support@openbuff.local',
+      NEXT_PUBLIC_POSTHOG_API_KEY:
+        environment.NEXT_PUBLIC_POSTHOG_API_KEY ?? 'openbuff-local',
+      NEXT_PUBLIC_POSTHOG_HOST_URL:
+        environment.NEXT_PUBLIC_POSTHOG_HOST_URL ?? 'https://app.posthog.com',
+      NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID:
+        environment.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID,
+    }),
+    { OPENBUFF_PLAYBOOK_GATE: environment.OPENBUFF_PLAYBOOK_GATE },
+  )
 
 /**
  * P2-T8: resolution of the `OPENBUFF_PROCESS_SUPERVISION` env var.
@@ -110,7 +132,10 @@ export const isProcessSupervisionEnabled = (
  * supervision (`1`/`true`/`yes`/`on`) but the child cannot be launched, a
  * warning is logged and subagents run in-process.
  */
-const resolveDefaultProcessSupervision = (logger: Logger, env = getSystemProcessEnv()): boolean => {
+const resolveDefaultProcessSupervision = (
+  logger: Logger,
+  env = getSystemProcessEnv(),
+): boolean => {
   if (!isProcessSupervisionEnabled(env)) {
     return false
   }
@@ -139,7 +164,10 @@ const resolveDefaultProcessSupervision = (logger: Logger, env = getSystemProcess
  * slice that enables native-tool children must seed them explicitly and
  * document that choice on `SupervisedChildEnvSeed`.
  */
-const buildSupervisedChildEnvSeedFromSystemEnv = (env = getSystemProcessEnv(), parentMediated = false): SupervisedChildEnvSeed => {
+const buildSupervisedChildEnvSeedFromSystemEnv = (
+  env = getSystemProcessEnv(),
+  parentMediated = false,
+): SupervisedChildEnvSeed => {
   // Runtime pass-through keys (provider-config endpoint override, proxy,
   // TMPDIR/locale, ripgrep override) are picked ONE named key at a time
   // from the closed SUPERVISED_CHILD_RUNTIME_ENV_KEYS universe — ambient
@@ -178,26 +206,45 @@ export type AgentRuntimeImplDeps = AgentRuntimeDeps &
     resumeDriver?: (report: RunResumeReport) => Promise<unknown>
   }
 
-export type RegisterExecutionActor = (registration: Readonly<{
-  actor: ExecutionActor
-  agentType?: string
-  userInputId?: string
-  parentActor?: ExecutionActor
-  executionContext?: ExecutionAdapterContext
-  ancestorRunIds: readonly string[]
-}>) => void
+export type RegisterExecutionActor = (
+  registration: Readonly<{
+    actor: ExecutionActor
+    agentType?: string
+    userInputId?: string
+    parentActor?: ExecutionActor
+    executionContext?: ExecutionAdapterContext
+    ancestorRunIds: readonly string[]
+  }>,
+) => void
 
-const nonemptyExecutionId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && !value.includes('\0')
-const actorKey = (actor: ExecutionActor) => JSON.stringify([actor.rootRunId, actor.runId, actor.agentId])
-const actionKey = (identity: ToolExecutionIdentity) => JSON.stringify([actorKey(identity), identity.actionId, identity.attemptId])
-const matchesHostOperation = (origin: ExecutionHostOperationOrigin, actor: ExecutionActor, templateId: string) =>
-  origin.actor && actorKey(origin.actor) === actorKey(actor) &&
-  (origin.purpose === 'semantic-compaction' ? isContextPrunerAgentId(templateId) :
-    origin.purpose === 'snapshot-consolidation' && templateId === CONSOLIDATOR_AGENT_ID)
-const sameIdentity = (left: ToolExecutionIdentity, right: ToolExecutionIdentity) =>
-  actorKey(left) === actorKey(right) && left.actionId === right.actionId && left.attemptId === right.attemptId &&
-  left.basisId === right.basisId && left.basis.inputHash === right.basis?.inputHash &&
-  left.basis.workspaceRevision === right.basis?.workspaceRevision && left.workspaceSnapshotId === right.workspaceSnapshotId
+const nonemptyExecutionId = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && !value.includes('\0')
+const actorKey = (actor: ExecutionActor) =>
+  JSON.stringify([actor.rootRunId, actor.runId, actor.agentId])
+const actionKey = (identity: ToolExecutionIdentity) =>
+  JSON.stringify([actorKey(identity), identity.actionId, identity.attemptId])
+const matchesHostOperation = (
+  origin: ExecutionHostOperationOrigin,
+  actor: ExecutionActor,
+  templateId: string,
+) =>
+  origin.actor &&
+  actorKey(origin.actor) === actorKey(actor) &&
+  (origin.purpose === 'semantic-compaction'
+    ? isContextPrunerAgentId(templateId)
+    : origin.purpose === 'snapshot-consolidation' &&
+      templateId === CONSOLIDATOR_AGENT_ID)
+const sameIdentity = (
+  left: ToolExecutionIdentity,
+  right: ToolExecutionIdentity,
+) =>
+  actorKey(left) === actorKey(right) &&
+  left.actionId === right.actionId &&
+  left.attemptId === right.attemptId &&
+  left.basisId === right.basisId &&
+  left.basis.inputHash === right.basis?.inputHash &&
+  left.basis.workspaceRevision === right.basis?.workspaceRevision &&
+  left.workspaceSnapshotId === right.workspaceSnapshotId
 
 /** Parent-owned bridge registry. Wire descriptions cannot choose an existing sibling/root owner. */
 export function createSupervisedExecutionScope(p: {
@@ -219,8 +266,12 @@ export function createSupervisedExecutionScope(p: {
   requestOptionalFile?: AgentRuntimeScopedDeps['requestOptionalFile']
   authorizeToolRead?: AgentRuntimeDeps['authorizeToolRead']
   requestMcpToolData: RequestMcpToolDataFn
-  executionForAction?: (identity: ToolExecutionIdentity) => ExecutionAdapterContext
-  executionForActorOperation?: (actor: ExecutionActor) => ExecutionAdapterContext
+  executionForAction?: (
+    identity: ToolExecutionIdentity,
+  ) => ExecutionAdapterContext
+  executionForActorOperation?: (
+    actor: ExecutionActor,
+  ) => ExecutionAdapterContext
 }) {
   const parentIdentity = p.request.executionIdentity
   const hostOperation = p.request.executionHostOperation
@@ -228,14 +279,35 @@ export function createSupervisedExecutionScope(p: {
   const childId = p.request.child?.agentId
   const childTemplateId = p.request.agentType
   const ancestors = p.request.ancestorRunIds
-  if (!parentOrigin || (parentIdentity && hostOperation) ||
-    !nonemptyExecutionId(childId) || !nonemptyExecutionId(childTemplateId) || !ancestors?.length ||
-    (hostOperation && !matchesHostOperation(hostOperation, parentOrigin, childTemplateId)) ||
-    ancestors[0] !== parentOrigin.rootRunId || ancestors.at(-1) !== parentOrigin.runId ||
-    ancestors.some(value => !nonemptyExecutionId(value))) throw new Error('Supervised execution lineage is unavailable')
-  const parentActor: ExecutionActor = Object.freeze({ runId: parentOrigin.runId, rootRunId: parentOrigin.rootRunId, agentId: parentOrigin.agentId })
+  if (
+    !parentOrigin ||
+    (parentIdentity && hostOperation) ||
+    !nonemptyExecutionId(childId) ||
+    !nonemptyExecutionId(childTemplateId) ||
+    !ancestors?.length ||
+    (hostOperation &&
+      !matchesHostOperation(hostOperation, parentOrigin, childTemplateId)) ||
+    ancestors[0] !== parentOrigin.rootRunId ||
+    ancestors.at(-1) !== parentOrigin.runId ||
+    ancestors.some((value) => !nonemptyExecutionId(value))
+  )
+    throw new Error('Supervised execution lineage is unavailable')
+  const parentActor: ExecutionActor = Object.freeze({
+    runId: parentOrigin.runId,
+    rootRunId: parentOrigin.rootRunId,
+    agentId: parentOrigin.agentId,
+  })
   const rootAncestors = Object.freeze([...ancestors])
-  const actors = new Map<string, { actor: ExecutionActor; agentType: string; userInputId?: string; ancestors: readonly string[]; context: ExecutionAdapterContext }>()
+  const actors = new Map<
+    string,
+    {
+      actor: ExecutionActor
+      agentType: string
+      userInputId?: string
+      ancestors: readonly string[]
+      context: ExecutionAdapterContext
+    }
+  >()
   const actions = new Map<string, ToolExecutionIdentity>()
   const nativeObservationInputs = new Map<string, string>()
   const actionContexts = new Map<string, ExecutionAdapterContext>()
@@ -244,59 +316,107 @@ export function createSupervisedExecutionScope(p: {
   let initialRegistrationStarted = false
   const signal = p.executionContext.execution.signal
   if (!signal) throw new Error('Supervised execution lifetime is unavailable')
-  const checkSignal = (candidate?: AbortSignal) => { signal.throwIfAborted(); if (candidate?.aborted) candidate.throwIfAborted() }
+  const checkSignal = (candidate?: AbortSignal) => {
+    signal.throwIfAborted()
+    if (candidate?.aborted) candidate.throwIfAborted()
+  }
   const checkContext = (context: ExecutionAdapterContext) => {
     const requestSignal = context.execution.signal
-    if (!requestSignal) throw new Error('Supervised child spawning context signal is unavailable')
+    if (!requestSignal)
+      throw new Error('Supervised child spawning context signal is unavailable')
     checkSignal(requestSignal)
     context.signal?.throwIfAborted()
   }
-  const requireActor = (candidate: ExecutionActor | undefined): ExecutionActor => {
+  const requireActor = (
+    candidate: ExecutionActor | undefined,
+  ): ExecutionActor => {
     checkSignal()
     const registered = candidate && actors.get(candidate.runId)
-    if (!registered || actorKey(registered.actor) !== actorKey(candidate!)) throw new Error('Unregistered supervised execution actor')
+    if (!registered || actorKey(registered.actor) !== actorKey(candidate!))
+      throw new Error('Unregistered supervised execution actor')
     checkContext(registered.context)
     return registered.actor
   }
   // Completed metadata authenticates ownership without cancellation-sensitive
   // action/context registration. It grants no permission for further dispatch.
-  const requireCompletedActor = (candidate: ExecutionActor | undefined): ExecutionActor => {
+  const requireCompletedActor = (
+    candidate: ExecutionActor | undefined,
+  ): ExecutionActor => {
     const registered = candidate && actors.get(candidate.runId)
-    if (!registered || actorKey(registered.actor) !== actorKey(candidate!)) throw new Error('Unregistered supervised execution actor')
+    if (!registered || actorKey(registered.actor) !== actorKey(candidate!))
+      throw new Error('Unregistered supervised execution actor')
     return registered.actor
   }
-  const startAgentRun: StartAgentRunFn = async input => {
+  const startAgentRun: StartAgentRunFn = async (input) => {
     checkSignal()
     const lineage = input.ancestorRunIds
-    const runtimeInput = input as typeof input & { agentState?: { agentId?: unknown }; userInputId?: string; executionIdentity?: ToolExecutionIdentity;
-      executionHostOperation?: ExecutionHostOperationOrigin }
+    const runtimeInput = input as typeof input & {
+      agentState?: { agentId?: unknown }
+      userInputId?: string
+      executionIdentity?: ToolExecutionIdentity
+      executionHostOperation?: ExecutionHostOperationOrigin
+    }
     const agentId = runtimeInput.agentState?.agentId
-    if (!Array.isArray(lineage) || !nonemptyExecutionId(agentId)) throw new Error('Supervised actor registration requires runtime state')
+    if (!Array.isArray(lineage) || !nonemptyExecutionId(agentId))
+      throw new Error('Supervised actor registration requires runtime state')
     const isInitial = !initialRegistrationStarted
     const parent = isInitial ? undefined : actors.get(lineage.at(-1) ?? '')
-    const expected = isInitial ? rootAncestors : parent ? [...parent.ancestors, parent.actor.runId] : undefined
-    if (!expected || JSON.stringify(lineage) !== JSON.stringify(expected) ||
-      (isInitial && (agentId !== childId || input.agentId !== childTemplateId)) ||
-      agentId === parentActor.agentId || pendingAgentIds.has(agentId) || [...actors.values()].some(value => value.actor.agentId === agentId))
-      throw new Error('Supervised actor ancestry does not match its parent scope')
+    const expected = isInitial
+      ? rootAncestors
+      : parent
+        ? [...parent.ancestors, parent.actor.runId]
+        : undefined
+    if (
+      !expected ||
+      JSON.stringify(lineage) !== JSON.stringify(expected) ||
+      (isInitial &&
+        (agentId !== childId || input.agentId !== childTemplateId)) ||
+      agentId === parentActor.agentId ||
+      pendingAgentIds.has(agentId) ||
+      [...actors.values()].some((value) => value.actor.agentId === agentId)
+    )
+      throw new Error(
+        'Supervised actor ancestry does not match its parent scope',
+      )
     let executionContext = p.executionContext
     if (!isInitial) {
-      const origin = runtimeInput.executionHostOperation, identity = runtimeInput.executionIdentity
+      const origin = runtimeInput.executionHostOperation,
+        identity = runtimeInput.executionIdentity
       if (origin) {
-        if (identity || !matchesHostOperation(origin, parent!.actor, input.agentId))
-          throw new Error('Supervised host-operation origin does not match its registered parent')
+        if (
+          identity ||
+          !matchesHostOperation(origin, parent!.actor, input.agentId)
+        )
+          throw new Error(
+            'Supervised host-operation origin does not match its registered parent',
+          )
         const key = actorKey(parent!.actor)
-        const context = operationContexts.get(key) ?? p.executionForActorOperation?.(parent!.actor)
-        if (!context) throw new Error('Supervised child host-operation context is unavailable')
+        const context =
+          operationContexts.get(key) ??
+          p.executionForActorOperation?.(parent!.actor)
+        if (!context)
+          throw new Error(
+            'Supervised child host-operation context is unavailable',
+          )
         operationContexts.set(key, context)
         executionContext = context
       } else {
         const registered = identity && actions.get(actionKey(identity))
-        if (!registered || !sameIdentity(registered, identity!) || actorKey(identity!) !== actorKey(parent!.actor))
-          throw new Error('Supervised child lacks its acknowledged spawning action')
+        if (
+          !registered ||
+          !sameIdentity(registered, identity!) ||
+          actorKey(identity!) !== actorKey(parent!.actor)
+        )
+          throw new Error(
+            'Supervised child lacks its acknowledged spawning action',
+          )
         const key = actionKey(registered)
-        const context = actionContexts.get(key) ?? p.executionForAction?.(registered)
-        if (!context) throw new Error('Supervised child spawning action context is unavailable')
+        const context =
+          actionContexts.get(key) ?? p.executionForAction?.(registered)
+        if (!context)
+          throw new Error(
+            'Supervised child spawning action context is unavailable',
+          )
         actionContexts.set(key, context)
         executionContext = context
       }
@@ -306,132 +426,321 @@ export function createSupervisedExecutionScope(p: {
     initialRegistrationStarted = true
     pendingAgentIds.add(agentId)
     let runId: string | null
-    try { runId = await p.startAgentRun({ ...input, ancestorRunIds: [...expected] }) }
-    finally { pendingAgentIds.delete(agentId) }
+    try {
+      runId = await p.startAgentRun({ ...input, ancestorRunIds: [...expected] })
+    } finally {
+      pendingAgentIds.delete(agentId)
+    }
     checkContext(executionContext)
-    if (!nonemptyExecutionId(runId) || rootAncestors.includes(runId) || actors.has(runId)) throw new Error('Invalid host-issued supervised run ID')
-    const actor: ExecutionActor = Object.freeze({ runId, rootRunId: parentActor.rootRunId, agentId })
-    p.registerExecutionActor({ actor, agentType: input.agentId, userInputId: isInitial ? p.request.userInputId : runtimeInput.userInputId, parentActor: parent?.actor ?? parentActor,
-      executionContext, ancestorRunIds: expected })
-    actors.set(runId, { actor, agentType: input.agentId, userInputId: isInitial ? p.request.userInputId : runtimeInput.userInputId, ancestors: Object.freeze([...expected]), context: executionContext })
+    if (
+      !nonemptyExecutionId(runId) ||
+      rootAncestors.includes(runId) ||
+      actors.has(runId)
+    )
+      throw new Error('Invalid host-issued supervised run ID')
+    const actor: ExecutionActor = Object.freeze({
+      runId,
+      rootRunId: parentActor.rootRunId,
+      agentId,
+    })
+    p.registerExecutionActor({
+      actor,
+      agentType: input.agentId,
+      userInputId: isInitial ? p.request.userInputId : runtimeInput.userInputId,
+      parentActor: parent?.actor ?? parentActor,
+      executionContext,
+      ancestorRunIds: expected,
+    })
+    actors.set(runId, {
+      actor,
+      agentType: input.agentId,
+      userInputId: isInitial ? p.request.userInputId : runtimeInput.userInputId,
+      ancestors: Object.freeze([...expected]),
+      context: executionContext,
+    })
     return runId
   }
-  const onExecutionActionStart: OnExecutionActionStart = async start => {
+  const onExecutionActionStart: OnExecutionActionStart = async (start) => {
     checkSignal(start.signal)
     const actor = requireActor(start.identity)
     const value = start.identity
-    if (!nonemptyExecutionId(value.actionId) || !nonemptyExecutionId(value.attemptId) || !nonemptyExecutionId(start.toolName) ||
-      !value.basis || value.basis.inputHash !== hashActionInput(start.toolName, start.input) ||
-      Object.keys(value.basis).some(key => !['inputHash', 'workspaceRevision'].includes(key)) ||
-      (value.basis.workspaceRevision !== undefined && (!Number.isSafeInteger(value.basis.workspaceRevision) || value.basis.workspaceRevision < 0)) ||
-      (value.workspaceSnapshotId !== undefined && !nonemptyExecutionId(value.workspaceSnapshotId)) ||
-      value.basisId !== hashActionInput('openbuff.execution-b02-basis.v1', { basis: value.basis, workspaceSnapshotId: value.workspaceSnapshotId ?? null }))
-      throw new Error('Supervised action basis does not match its original input')
-    const identity: ToolExecutionIdentity = Object.freeze({ ...actor, actionId: value.actionId, attemptId: value.attemptId,
-      basisId: value.basisId, basis: Object.freeze({ ...value.basis }), ...(value.workspaceSnapshotId ? { workspaceSnapshotId: value.workspaceSnapshotId } : {}) })
-    const key = actionKey(identity), existing = actions.get(key)
+    if (
+      !nonemptyExecutionId(value.actionId) ||
+      !nonemptyExecutionId(value.attemptId) ||
+      !nonemptyExecutionId(start.toolName) ||
+      !value.basis ||
+      value.basis.inputHash !== hashActionInput(start.toolName, start.input) ||
+      Object.keys(value.basis).some(
+        (key) => !['inputHash', 'workspaceRevision'].includes(key),
+      ) ||
+      (value.basis.workspaceRevision !== undefined &&
+        (!Number.isSafeInteger(value.basis.workspaceRevision) ||
+          value.basis.workspaceRevision < 0)) ||
+      (value.workspaceSnapshotId !== undefined &&
+        !nonemptyExecutionId(value.workspaceSnapshotId)) ||
+      value.basisId !==
+        hashActionInput('openbuff.execution-b02-basis.v1', {
+          basis: value.basis,
+          workspaceSnapshotId: value.workspaceSnapshotId ?? null,
+        })
+    )
+      throw new Error(
+        'Supervised action basis does not match its original input',
+      )
+    const identity: ToolExecutionIdentity = Object.freeze({
+      ...actor,
+      actionId: value.actionId,
+      attemptId: value.attemptId,
+      basisId: value.basisId,
+      basis: Object.freeze({ ...value.basis }),
+      ...(value.workspaceSnapshotId
+        ? { workspaceSnapshotId: value.workspaceSnapshotId }
+        : {}),
+    })
+    const key = actionKey(identity),
+      existing = actions.get(key)
     if (existing) {
-      if (!sameIdentity(existing, identity)) throw new Error('Supervised action identity changed after registration')
+      if (!sameIdentity(existing, identity))
+        throw new Error('Supervised action identity changed after registration')
       return
     }
-    await p.onExecutionActionStart({ ...start, identity, signal: actors.get(actor.runId)!.context.execution.signal! })
+    await p.onExecutionActionStart({
+      ...start,
+      identity,
+      signal: actors.get(actor.runId)!.context.execution.signal!,
+    })
     requireActor(actor)
     actions.set(key, identity)
     if (start.toolName === 'record_decision' && p.onNativeToolObservation) {
-      const inputHash = nativeToolObservationInputHash({ input: start.input, callId: identity.actionId, logger: noopLogger })
+      const inputHash = nativeToolObservationInputHash({
+        input: start.input,
+        callId: identity.actionId,
+        logger: noopLogger,
+      })
       if (inputHash) nativeObservationInputs.set(key, inputHash)
     }
   }
-  const onNativeToolObservation: AgentRuntimeDeps['onNativeToolObservation'] = p.onNativeToolObservation ? async observation => {
-    const actor = requireCompletedActor(observation.actor)
-    const identity = actions.get(actionKey(observation.executionIdentity))
-    const input = toolParams.record_decision.inputSchema.safeParse(observation.input)
-    const output = toolParams.record_decision.outputSchema.safeParse(observation.output)
-    const registered = actors.get(actor.runId)!
-    if (!identity || !sameIdentity(identity, observation.executionIdentity) || actorKey(identity) !== actorKey(actor) ||
-      hashActionInput('openbuff.native-observation-identity.v1', identity) !== hashActionInput('openbuff.native-observation-identity.v1', observation.executionIdentity) ||
-      observation.toolName !== 'record_decision' || observation.callId !== identity.actionId ||
-      !registered.userInputId || observation.userInputId !== registered.userInputId ||
-      nativeObservationInputs.get(actionKey(identity)) !== hashActionInput('record_decision', observation.input) ||
-      !input.success || !output.success || observation.output.some(part => 'errorMessage' in part.value))
-      throw new Error('Supervised native tool observation does not match its registered completion')
-    const signal = registered.context.execution.signal
-    if (!signal) throw new Error('Supervised completed observation lifetime is unavailable')
-    await p.onNativeToolObservation!({ ...observation, actor, executionIdentity: identity,
-      input: input.data, output: output.data, signal })
-  } : undefined
-  const requestToolCall: RequestToolCallFn = input => {
+  const onNativeToolObservation: AgentRuntimeDeps['onNativeToolObservation'] =
+    p.onNativeToolObservation
+      ? async (observation) => {
+          const actor = requireCompletedActor(observation.actor)
+          const identity = actions.get(actionKey(observation.executionIdentity))
+          const input = toolParams.record_decision.inputSchema.safeParse(
+            observation.input,
+          )
+          const output = toolParams.record_decision.outputSchema.safeParse(
+            observation.output,
+          )
+          const registered = actors.get(actor.runId)!
+          if (
+            !identity ||
+            !sameIdentity(identity, observation.executionIdentity) ||
+            actorKey(identity) !== actorKey(actor) ||
+            hashActionInput(
+              'openbuff.native-observation-identity.v1',
+              identity,
+            ) !==
+              hashActionInput(
+                'openbuff.native-observation-identity.v1',
+                observation.executionIdentity,
+              ) ||
+            observation.toolName !== 'record_decision' ||
+            observation.callId !== identity.actionId ||
+            !registered.userInputId ||
+            observation.userInputId !== registered.userInputId ||
+            nativeObservationInputs.get(actionKey(identity)) !==
+              hashActionInput('record_decision', observation.input) ||
+            !input.success ||
+            !output.success ||
+            observation.output.some((part) => 'errorMessage' in part.value)
+          )
+            throw new Error(
+              'Supervised native tool observation does not match its registered completion',
+            )
+          const signal = registered.context.execution.signal
+          if (!signal)
+            throw new Error(
+              'Supervised completed observation lifetime is unavailable',
+            )
+          await p.onNativeToolObservation!({
+            ...observation,
+            actor,
+            executionIdentity: identity,
+            input: input.data,
+            output: output.data,
+            signal,
+          })
+        }
+      : undefined
+  const requestToolCall: RequestToolCallFn = (input) => {
     checkSignal(input.signal)
     requireActor(input.executionIdentity)
-    const identity = input.executionIdentity && actions.get(actionKey(input.executionIdentity))
-    if (!identity || !sameIdentity(identity, input.executionIdentity!) ||
-      input.executionRequestHash !== hashActionInput(input.toolName, input.input))
-      throw new Error('Supervised tool request lacks its registered action or exact forwarded input')
+    const identity =
+      input.executionIdentity && actions.get(actionKey(input.executionIdentity))
+    if (
+      !identity ||
+      !sameIdentity(identity, input.executionIdentity!) ||
+      input.executionRequestHash !==
+        hashActionInput(input.toolName, input.input)
+    )
+      throw new Error(
+        'Supervised tool request lacks its registered action or exact forwarded input',
+      )
     return p.requestToolCall({ ...input, executionIdentity: identity, signal })
   }
-  const requireReadIdentity = (input: { executionActor?: ExecutionActor; executionIdentity?: ToolExecutionIdentity; signal?: AbortSignal }) => {
+  const requireReadIdentity = (input: {
+    executionActor?: ExecutionActor
+    executionIdentity?: ToolExecutionIdentity
+    signal?: AbortSignal
+  }) => {
     checkSignal(input.signal)
     const actor = requireActor(input.executionActor)
-    const identity = input.executionIdentity && actions.get(actionKey(input.executionIdentity))
-    if (!identity || !sameIdentity(identity, input.executionIdentity!) || actorKey(actor) !== actorKey(identity))
-      throw new Error('Supervised read lacks its registered actor/action attribution')
+    const identity =
+      input.executionIdentity && actions.get(actionKey(input.executionIdentity))
+    if (
+      !identity ||
+      !sameIdentity(identity, input.executionIdentity!) ||
+      actorKey(actor) !== actorKey(identity)
+    )
+      throw new Error(
+        'Supervised read lacks its registered actor/action attribution',
+      )
     return { actor, identity }
   }
-  const requestFiles: AgentRuntimeScopedDeps['requestFiles'] = input => {
+  const requestFiles: AgentRuntimeScopedDeps['requestFiles'] = (input) => {
     const { actor, identity } = requireReadIdentity(input)
     if (input.capabilityIssuer && input.capabilityIssuer.runId !== actor.runId)
-      throw new Error('Supervised read issuer does not match its registered actor')
+      throw new Error(
+        'Supervised read issuer does not match its registered actor',
+      )
     if (!p.requestFiles) throw new Error('Supervised reads are unavailable')
-    return p.requestFiles({ ...input, executionActor: actor, executionIdentity: identity, signal })
+    return p.requestFiles({
+      ...input,
+      executionActor: actor,
+      executionIdentity: identity,
+      signal,
+    })
   }
-  const requestOptionalFile: AgentRuntimeScopedDeps['requestOptionalFile'] = input => {
+  const requestOptionalFile: AgentRuntimeScopedDeps['requestOptionalFile'] = (
+    input,
+  ) => {
     const { actor, identity } = requireReadIdentity(input)
-    if (!p.requestOptionalFile) throw new Error('Supervised reads are unavailable')
-    return p.requestOptionalFile({ ...input, executionActor: actor, executionIdentity: identity, signal })
+    if (!p.requestOptionalFile)
+      throw new Error('Supervised reads are unavailable')
+    return p.requestOptionalFile({
+      ...input,
+      executionActor: actor,
+      executionIdentity: identity,
+      signal,
+    })
   }
-  const authorizeToolRead: NonNullable<AgentRuntimeDeps['authorizeToolRead']> = input => {
+  const authorizeToolRead: NonNullable<
+    AgentRuntimeDeps['authorizeToolRead']
+  > = (input) => {
     requireActor(input.identity)
     const identity = actions.get(actionKey(input.identity))
     if (!identity || !sameIdentity(identity, input.identity))
       throw new Error('Supervised read dispatch lacks its registered action')
     return p.authorizeToolRead?.({ ...input, identity }) ?? { allowed: true }
   }
-  const requestMcpToolData: RequestMcpToolDataFn = input => {
+  const requestMcpToolData: RequestMcpToolDataFn = (input) => {
     checkSignal(input.signal)
-    return p.requestMcpToolData({ ...input, executionActor: requireActor(input.executionActor), signal })
+    return p.requestMcpToolData({
+      ...input,
+      executionActor: requireActor(input.executionActor),
+      signal,
+    })
   }
-  const synchronizeWorkspace: AgentRuntimeDeps['synchronizeWorkspace'] = actor =>
-    p.synchronizeWorkspace?.(requireActor(actor))
-  const prepareRepositoryContext: AgentRuntimeDeps['prepareRepositoryContext'] = async input => {
-    const actor = requireActor(input.actor)
-    return p.prepareRepositoryContext?.({ ...input, actor, agentType: actors.get(actor.runId)!.agentType, userInputId: actors.get(actor.runId)!.userInputId ?? input.userInputId })
-  }
-  const resolveMemoryAuthority: AgentRuntimeDeps['resolveMemoryAuthority'] = p.resolveMemoryAuthority ? async input => {
-    const actor = requireActor(input.actor)
-    const registered = actors.get(actor.runId)!
-    if (!registered.userInputId || input.userInputId !== registered.userInputId)
-      throw new Error('Supervised memory source selection does not match its registered actor/task')
-    return p.resolveMemoryAuthority!({ actor, userInputId: registered.userInputId })
-  } : undefined
-  const readContextArchiveBodyPage: AgentRuntimeDeps['readContextArchiveBodyPage'] = p.readContextArchiveBodyPage ? async input => {
-    const actor = requireActor(input.actor)
-    const registered = actors.get(actor.runId)!
-    if (!registered.userInputId || input.userInputId !== registered.userInputId)
-      throw new Error('Supervised archive recall does not match its registered actor/task')
-    return p.readContextArchiveBodyPage!({ ...input, actor, userInputId: registered.userInputId })
-  } : undefined
-  const searchContextArchive: AgentRuntimeDeps['searchContextArchive'] = p.searchContextArchive ? async input => {
-    const actor = requireActor(input.actor), registered = actors.get(actor.runId)!
-    if (!registered.userInputId || input.userInputId !== registered.userInputId)
-      throw new Error('Supervised archive search does not match its registered actor/task')
-    return p.searchContextArchive!({ ...input, actor, userInputId: registered.userInputId })
-  } : undefined
-  const getPlaybookValidationEvidence: AgentRuntimeDeps['getPlaybookValidationEvidence'] = actor =>
-    p.getPlaybookValidationEvidence?.(requireActor(actor)) ?? Promise.resolve(undefined)
-  return { startAgentRun, onExecutionActionStart, synchronizeWorkspace, requestToolCall, requestMcpToolData,
-    requestFiles, requestOptionalFile, authorizeToolRead,
+  const synchronizeWorkspace: AgentRuntimeDeps['synchronizeWorkspace'] = (
+    actor,
+  ) => p.synchronizeWorkspace?.(requireActor(actor))
+  const prepareRepositoryContext: AgentRuntimeDeps['prepareRepositoryContext'] =
+    async (input) => {
+      const actor = requireActor(input.actor)
+      return p.prepareRepositoryContext?.({
+        ...input,
+        actor,
+        agentType: actors.get(actor.runId)!.agentType,
+        userInputId: actors.get(actor.runId)!.userInputId ?? input.userInputId,
+      })
+    }
+  const resolveMemoryAuthority: AgentRuntimeDeps['resolveMemoryAuthority'] =
+    p.resolveMemoryAuthority
+      ? async (input) => {
+          const actor = requireActor(input.actor)
+          const registered = actors.get(actor.runId)!
+          if (
+            !registered.userInputId ||
+            input.userInputId !== registered.userInputId
+          )
+            throw new Error(
+              'Supervised memory source selection does not match its registered actor/task',
+            )
+          return p.resolveMemoryAuthority!({
+            actor,
+            userInputId: registered.userInputId,
+          })
+        }
+      : undefined
+  const readContextArchiveBodyPage: AgentRuntimeDeps['readContextArchiveBodyPage'] =
+    p.readContextArchiveBodyPage
+      ? async (input) => {
+          const actor = requireActor(input.actor)
+          const registered = actors.get(actor.runId)!
+          if (
+            !registered.userInputId ||
+            input.userInputId !== registered.userInputId
+          )
+            throw new Error(
+              'Supervised archive recall does not match its registered actor/task',
+            )
+          return p.readContextArchiveBodyPage!({
+            ...input,
+            actor,
+            userInputId: registered.userInputId,
+          })
+        }
+      : undefined
+  const searchContextArchive: AgentRuntimeDeps['searchContextArchive'] =
+    p.searchContextArchive
+      ? async (input) => {
+          const actor = requireActor(input.actor),
+            registered = actors.get(actor.runId)!
+          if (
+            !registered.userInputId ||
+            input.userInputId !== registered.userInputId
+          )
+            throw new Error(
+              'Supervised archive search does not match its registered actor/task',
+            )
+          return p.searchContextArchive!({
+            ...input,
+            actor,
+            userInputId: registered.userInputId,
+          })
+        }
+      : undefined
+  const getPlaybookValidationEvidence: AgentRuntimeDeps['getPlaybookValidationEvidence'] =
+    (actor) =>
+      p.getPlaybookValidationEvidence?.(requireActor(actor)) ??
+      Promise.resolve(undefined)
+  return {
+    startAgentRun,
+    onExecutionActionStart,
+    synchronizeWorkspace,
+    requestToolCall,
+    requestMcpToolData,
+    requestFiles,
+    requestOptionalFile,
+    authorizeToolRead,
     ...(onNativeToolObservation ? { onNativeToolObservation } : {}),
-    prepareRepositoryContext, resolveMemoryAuthority, readContextArchiveBodyPage, searchContextArchive, getPlaybookValidationEvidence, classifyPlaybookTerminalActions: p.classifyPlaybookTerminalActions }
+    prepareRepositoryContext,
+    resolveMemoryAuthority,
+    readContextArchiveBodyPage,
+    searchContextArchive,
+    getPlaybookValidationEvidence,
+    classifyPlaybookTerminalActions: p.classifyPlaybookTerminalActions,
+  }
 }
 
 export function getAgentRuntimeImpl(
@@ -439,12 +748,23 @@ export function getAgentRuntimeImpl(
     logger?: Logger
     apiKey: string
     hostServices?: RunHostServices
-    supervisedExecutionForRequest?: (request: SupervisedSpawnRequest) => ExecutionAdapterContext
+    requestAdmissionStore?: RequestAdmissionStore
+    spendingPolicy?: SpendingPolicy
+    requestAdmissionAuthorityId?: string
+    supervisedExecutionForRequest?: (
+      request: SupervisedSpawnRequest,
+    ) => ExecutionAdapterContext
     /** Root-only lookup of the already registered original spawning action. */
-    executionForAction?: (identity: ToolExecutionIdentity) => ExecutionAdapterContext
+    executionForAction?: (
+      identity: ToolExecutionIdentity,
+    ) => ExecutionAdapterContext
     /** Root-owned infrastructure operation under the registered actor lifetime. */
-    executionForActorOperation?: (actor: ExecutionActor) => ExecutionAdapterContext
+    executionForActorOperation?: (
+      actor: ExecutionActor,
+    ) => ExecutionAdapterContext
     registerExecutionActor?: RegisterExecutionActor
+    // SDK host-only binding for an already selected replayable-read recipe.
+    bindReadPlanRoot?: (input: { agentId: string; userInputId: string | undefined; allocateRunId(): Promise<string | undefined> }) => Promise<string>
     onExecutionActionStart?: OnExecutionActionStart
     clientEnv?: ClientEnv
     /** P2-audit-fix-8: production crash-resume driver (additive-optional). */
@@ -458,6 +778,7 @@ export function getAgentRuntimeImpl(
     | 'processSupervision'
     | 'spawnSupervised'
     | 'resolveRunOutcome'
+    | 'readPlanStepOffset'
     | 'synchronizeWorkspace'
     | 'authorizeToolRead'
     | 'playbookGateMode'
@@ -485,7 +806,9 @@ export function getAgentRuntimeImpl(
   const {
     logger,
     apiKey,
-    clientEnv = params.hostServices ? capturedClientEnv(params.hostServices.provider.credentialEnvironment) : clientEnvDefault,
+    clientEnv = params.hostServices
+      ? capturedClientEnv(params.hostServices.provider.credentialEnvironment)
+      : clientEnvDefault,
     journalWriter,
     journalReader,
     onPlaybookGateOutcome,
@@ -507,16 +830,50 @@ export function getAgentRuntimeImpl(
   const trackSdkRuntimeEvent: TrackEventFn = () => {
     return
   }
-  const llmDeps = params.hostServices?.llm
-  const boundStream: typeof promptAiSdkStream = p => promptAiSdkStream(p, llmDeps)
-  const boundPlain: typeof promptAiSdk = p => promptAiSdk(p, llmDeps)
-  const boundStructured: typeof promptAiSdkStructured = (p) => promptAiSdkStructured(p, llmDeps)
-  const boundContextWindow: typeof resolveModelContextWindow = p => resolveModelContextWindow({ ...p,
-    ...(params.hostServices ? { loadedConfig: getCapturedProviderConfig(params.hostServices.provider.snapshot) } : {}) })
-  const localActors = new Map<string, { actor: ExecutionActor; ancestorRunIds: readonly string[] }>()
-  const localSpawnContexts = new Map<string, { identity: ToolExecutionIdentity; context: ExecutionAdapterContext }>()
+  const baseLlmDeps = params.hostServices?.llm
+  const llmDeps =
+    baseLlmDeps && params.requestAdmissionStore
+      ? { ...baseLlmDeps, requestAdmission: params.requestAdmissionStore }
+      : baseLlmDeps
+  const withAdmission = <T extends Record<string, unknown>>(p: T): T =>
+    ({
+      ...p,
+      ...(params.spendingPolicy
+        ? { spendingPolicy: params.spendingPolicy }
+        : {}),
+      ...(params.requestAdmissionAuthorityId
+        ? {
+            requestAdmissionAuthorityId: params.requestAdmissionAuthorityId,
+          }
+        : {}),
+    }) as T
+  const boundStream: typeof promptAiSdkStream = (p) =>
+    promptAiSdkStream(withAdmission(p), llmDeps)
+  const boundPlain: typeof promptAiSdk = (p) =>
+    promptAiSdk(withAdmission(p), llmDeps)
+  const boundStructured: typeof promptAiSdkStructured = (p) =>
+    promptAiSdkStructured(withAdmission(p), llmDeps)
+  const boundContextWindow: typeof resolveModelContextWindow = (p) =>
+    resolveModelContextWindow({
+      ...p,
+      ...(params.hostServices
+        ? {
+            loadedConfig: getCapturedProviderConfig(
+              params.hostServices.provider.snapshot,
+            ),
+          }
+        : {}),
+    })
+  const localActors = new Map<
+    string,
+    { actor: ExecutionActor; ancestorRunIds: readonly string[] }
+  >()
+  const localSpawnContexts = new Map<
+    string,
+    { identity: ToolExecutionIdentity; context: ExecutionAdapterContext }
+  >()
   const localOperationContexts = new Map<string, ExecutionAdapterContext>()
-  const boundStartAgentRun: StartAgentRunFn = async input => {
+  const boundStartAgentRun: StartAgentRunFn = async (input) => {
     if (!params.registerExecutionActor) return localStartAgentRun(input)
     // loopAgentSteps receives this identity through the runtime-owned spawn
     // context, before it replaces the parent actor with the child's new run.
@@ -527,83 +884,155 @@ export function getAgentRuntimeImpl(
       executionHostOperation?: ExecutionHostOperationOrigin
     }
     const agentId = runtimeInput.agentState?.agentId
-    if (!nonemptyExecutionId(agentId) || !Array.isArray(input.ancestorRunIds) ||
-      input.ancestorRunIds.some(value => !nonemptyExecutionId(value)))
-      throw new Error('Runtime actor registration requires actual state and ancestry')
+    if (
+      !nonemptyExecutionId(agentId) ||
+      !Array.isArray(input.ancestorRunIds) ||
+      input.ancestorRunIds.some((value) => !nonemptyExecutionId(value))
+    )
+      throw new Error(
+        'Runtime actor registration requires actual state and ancestry',
+      )
     const ancestorRunIds = Object.freeze([...input.ancestorRunIds])
     const parent = localActors.get(ancestorRunIds.at(-1) ?? '')
     let executionContext: ExecutionAdapterContext | undefined
     let executionSignal: AbortSignal | undefined
     if (ancestorRunIds.length) {
-      const identity = runtimeInput.executionIdentity, origin = runtimeInput.executionHostOperation
-      if (!parent || JSON.stringify(ancestorRunIds) !== JSON.stringify([...parent.ancestorRunIds, parent.actor.runId]))
-        throw new Error('In-process child lacks its registered spawning actor and ancestry')
+      const identity = runtimeInput.executionIdentity,
+        origin = runtimeInput.executionHostOperation
+      if (
+        !parent ||
+        JSON.stringify(ancestorRunIds) !==
+          JSON.stringify([...parent.ancestorRunIds, parent.actor.runId])
+      )
+        throw new Error(
+          'In-process child lacks its registered spawning actor and ancestry',
+        )
       if (origin) {
-        if (identity || !matchesHostOperation(origin, parent.actor, input.agentId))
-          throw new Error('In-process host-operation origin does not match its registered parent')
+        if (
+          identity ||
+          !matchesHostOperation(origin, parent.actor, input.agentId)
+        )
+          throw new Error(
+            'In-process host-operation origin does not match its registered parent',
+          )
         const key = actorKey(parent.actor)
-        executionContext = localOperationContexts.get(key) ?? params.executionForActorOperation?.(parent.actor)
+        executionContext =
+          localOperationContexts.get(key) ??
+          params.executionForActorOperation?.(parent.actor)
         if (executionContext) localOperationContexts.set(key, executionContext)
       } else {
         if (!identity || actorKey(identity) !== actorKey(parent.actor))
-          throw new Error('In-process child lacks its registered spawning actor and ancestry')
+          throw new Error(
+            'In-process child lacks its registered spawning actor and ancestry',
+          )
         const key = actionKey(identity)
         const existing = localSpawnContexts.get(key)
         if (existing && !sameIdentity(existing.identity, identity))
-          throw new Error('Original spawning action identity changed after registration')
-        executionContext = existing?.context ?? params.executionForAction?.(identity)
-        if (executionContext && !existing) localSpawnContexts.set(key, {
-          identity: Object.freeze({ ...identity, basis: Object.freeze({ ...identity.basis }) }), context: executionContext,
-        })
+          throw new Error(
+            'Original spawning action identity changed after registration',
+          )
+        executionContext =
+          existing?.context ?? params.executionForAction?.(identity)
+        if (executionContext && !existing)
+          localSpawnContexts.set(key, {
+            identity: Object.freeze({
+              ...identity,
+              basis: Object.freeze({ ...identity.basis }),
+            }),
+            context: executionContext,
+          })
       }
-      if (!executionContext) throw new Error('In-process child spawning action context is unavailable')
+      if (!executionContext)
+        throw new Error(
+          'In-process child spawning action context is unavailable',
+        )
       executionSignal = executionContext.execution.signal
-      if (!executionSignal) throw new Error('In-process child spawning action signal is unavailable')
+      if (!executionSignal)
+        throw new Error(
+          'In-process child spawning action signal is unavailable',
+        )
       executionSignal.throwIfAborted()
       executionContext.signal?.throwIfAborted()
-    } else if (runtimeInput.executionIdentity || runtimeInput.executionHostOperation) {
+    } else if (
+      runtimeInput.executionIdentity ||
+      runtimeInput.executionHostOperation
+    ) {
       throw new Error('Root actor cannot adopt a child spawning identity')
     }
-    const runId = await localStartAgentRun(input)
+    const runId = ancestorRunIds.length === 0 && params.bindReadPlanRoot
+      ? await params.bindReadPlanRoot({ agentId, userInputId: runtimeInput.userInputId, allocateRunId: async () => (await localStartAgentRun(input)) ?? undefined })
+      : await localStartAgentRun(input)
     if (runId) {
       executionSignal?.throwIfAborted()
       executionContext?.signal?.throwIfAborted()
-      const actor = Object.freeze({ runId, rootRunId: ancestorRunIds[0] ?? runId, agentId })
-      params.registerExecutionActor({ actor, agentType: input.agentId, userInputId: runtimeInput.userInputId, parentActor: parent?.actor, executionContext, ancestorRunIds })
+      const actor = Object.freeze({
+        runId,
+        rootRunId: ancestorRunIds[0] ?? runId,
+        agentId,
+      })
+      params.registerExecutionActor({
+        actor,
+        agentType: input.agentId,
+        userInputId: runtimeInput.userInputId,
+        parentActor: parent?.actor,
+        executionContext,
+        ancestorRunIds,
+      })
       localActors.set(runId, { actor, ancestorRunIds })
     }
     return runId
   }
-  const supervisedContexts = new WeakMap<SupervisedSpawnRequest, ExecutionAdapterContext>()
+  const supervisedContexts = new WeakMap<
+    SupervisedSpawnRequest,
+    ExecutionAdapterContext
+  >()
   const supervisedExecutionForRequest = (request: SupervisedSpawnRequest) => {
     const existing = supervisedContexts.get(request)
     if (existing) return existing
     const context = params.supervisedExecutionForRequest?.(request)
     if (!context) {
-      if (params.hostServices) throw new Error('Supervised execution requires a registered parent action')
+      if (params.hostServices)
+        throw new Error(
+          'Supervised execution requires a registered parent action',
+        )
       return undefined
     }
-    const derived = context.execution.derive({ memoKey: 'supervised.action', limit: request.timeoutMs === undefined
-      ? { kind: 'unbounded' } : { kind: 'finite', durationMs: request.timeoutMs } })
+    const derived = context.execution.derive({
+      memoKey: 'supervised.action',
+      limit:
+        request.timeoutMs === undefined
+          ? { kind: 'unbounded' }
+          : { kind: 'finite', durationMs: request.timeoutMs },
+    })
     if (!derived.ok) throw new Error(derived.cause)
-    const bounded = Object.freeze({ ...context, execution: derived.value, signal: derived.value.signal })
+    const bounded = Object.freeze({
+      ...context,
+      execution: derived.value,
+      signal: derived.value.signal,
+    })
     supervisedContexts.set(request, bounded)
     return bounded
   }
 
   const resolveRunOutcome = params.resolveRunOutcome
   return {
+    readPlanStepOffset: params.readPlanStepOffset,
     onExecutionActionStart: params.onExecutionActionStart,
     synchronizeWorkspace: params.synchronizeWorkspace,
     authorizeToolRead: params.authorizeToolRead,
-    ...(resolveRunOutcome ? {
-      resolveRunOutcome: (input) => {
-        const registered = localActors.get(input.runId)
-        return registered ? resolveRunOutcome({
-          ...input, ancestorRunIds: registered.ancestorRunIds,
-        }) : input.outcome
-      },
-    } : {}),
+    ...(resolveRunOutcome
+      ? {
+          resolveRunOutcome: (input) => {
+            const registered = localActors.get(input.runId)
+            return registered
+              ? resolveRunOutcome({
+                  ...input,
+                  ancestorRunIds: registered.ancestorRunIds,
+                })
+              : input.outcome
+          },
+        }
+      : {}),
     // Environment
     clientEnv,
     ciEnv: getCiEnv(params.hostServices?.provider.credentialEnvironment),
@@ -664,7 +1093,10 @@ export function getAgentRuntimeImpl(
     // supervision/child-entry.ts) is built here.
     ...(processSupervision === true ||
     (processSupervision === undefined &&
-      resolveDefaultProcessSupervision(logger ?? noopLogger, params.hostServices?.provider.credentialEnvironment))
+      resolveDefaultProcessSupervision(
+        logger ?? noopLogger,
+        params.hostServices?.provider.credentialEnvironment,
+      ))
       ? {
           processSupervision: true,
           spawnSupervised:
@@ -679,7 +1111,10 @@ export function getAgentRuntimeImpl(
             // every bridged request; scoped client deps (sendAction,
             // requestToolCall, ...) flow through unchanged.
             buildDefaultSpawnSupervised(
-              buildSupervisedChildEnvSeedFromSystemEnv(params.hostServices?.provider.credentialEnvironment, params.hostServices !== undefined),
+              buildSupervisedChildEnvSeedFromSystemEnv(
+                params.hostServices?.provider.credentialEnvironment,
+                params.hostServices !== undefined,
+              ),
               // P2-T8b lazy-load discipline: the handler table is supplied as
               // a THUNK, so this composition root never statically imports
               // parent-bridge-server.ts (node:net + zod-from-json-schema);
@@ -688,23 +1123,46 @@ export function getAgentRuntimeImpl(
               // supervised-spawn.ts ParentBridgeHandlersSource).
               async (request) => {
                 const executionContext = supervisedExecutionForRequest(request)
-                if (executionContext && (!params.onExecutionActionStart || !params.registerExecutionActor))
-                  throw new Error('Supervised execution actor registration is unavailable')
-                const executionScope = executionContext ? createSupervisedExecutionScope({ request, executionContext,
-                  onExecutionActionStart: params.onExecutionActionStart!, registerExecutionActor: params.registerExecutionActor!,
-                  onNativeToolObservation: params.onNativeToolObservation,
-                  synchronizeWorkspace: params.synchronizeWorkspace,
-                  prepareRepositoryContext: params.prepareRepositoryContext,
-                  resolveMemoryAuthority: params.resolveMemoryAuthority,
-                  readContextArchiveBodyPage: params.readContextArchiveBodyPage,
-                  searchContextArchive: params.searchContextArchive,
-                  classifyPlaybookTerminalActions: params.classifyPlaybookTerminalActions,
-                  getPlaybookValidationEvidence: params.getPlaybookValidationEvidence,
-                  executionForAction: params.executionForAction, executionForActorOperation: params.executionForActorOperation,
-                  startAgentRun: localStartAgentRun, requestToolCall, requestMcpToolData,
-                  requestFiles, requestOptionalFile, authorizeToolRead: params.authorizeToolRead }) : undefined
+                if (
+                  executionContext &&
+                  (!params.onExecutionActionStart ||
+                    !params.registerExecutionActor)
+                )
+                  throw new Error(
+                    'Supervised execution actor registration is unavailable',
+                  )
+                const executionScope = executionContext
+                  ? createSupervisedExecutionScope({
+                      request,
+                      executionContext,
+                      onExecutionActionStart: params.onExecutionActionStart!,
+                      registerExecutionActor: params.registerExecutionActor!,
+                      onNativeToolObservation: params.onNativeToolObservation,
+                      synchronizeWorkspace: params.synchronizeWorkspace,
+                      prepareRepositoryContext: params.prepareRepositoryContext,
+                      resolveMemoryAuthority: params.resolveMemoryAuthority,
+                      readContextArchiveBodyPage:
+                        params.readContextArchiveBodyPage,
+                      searchContextArchive: params.searchContextArchive,
+                      classifyPlaybookTerminalActions:
+                        params.classifyPlaybookTerminalActions,
+                      getPlaybookValidationEvidence:
+                        params.getPlaybookValidationEvidence,
+                      executionForAction: params.executionForAction,
+                      executionForActorOperation:
+                        params.executionForActorOperation,
+                      startAgentRun: localStartAgentRun,
+                      requestToolCall,
+                      requestMcpToolData,
+                      requestFiles,
+                      requestOptionalFile,
+                      authorizeToolRead: params.authorizeToolRead,
+                    })
+                  : undefined
                 if (params.resolveMemoryAuthority && !executionScope)
-                  throw new Error('Supervised memory source selection requires registered actor lineage')
+                  throw new Error(
+                    'Supervised memory source selection requires registered actor lineage',
+                  )
                 const { buildSupervisedBridgeHandlers } =
                   await import('@codebuff/agent-runtime/supervision/parent-bridge-server')
                 const { createMcpBridgeScope } =
@@ -715,25 +1173,39 @@ export function getAgentRuntimeImpl(
                     promptAiSdk: boundPlain,
                     promptAiSdkStructured: boundStructured,
                     sendAction,
-                    requestToolCall: executionScope?.requestToolCall ?? requestToolCall,
-                    onExecutionActionStart: executionScope?.onExecutionActionStart,
-                    onNativeToolObservation: executionScope?.onNativeToolObservation,
+                    requestToolCall:
+                      executionScope?.requestToolCall ?? requestToolCall,
+                    onExecutionActionStart:
+                      executionScope?.onExecutionActionStart,
+                    onNativeToolObservation:
+                      executionScope?.onNativeToolObservation,
                     synchronizeWorkspace: executionScope?.synchronizeWorkspace,
-                    authorizeToolRead: executionScope?.authorizeToolRead ?? params.authorizeToolRead,
-                    prepareRepositoryContext: executionScope?.prepareRepositoryContext,
-                    resolveMemoryAuthority: executionScope?.resolveMemoryAuthority,
-                    readContextArchiveBodyPage: executionScope?.readContextArchiveBodyPage,
+                    authorizeToolRead:
+                      executionScope?.authorizeToolRead ??
+                      params.authorizeToolRead,
+                    prepareRepositoryContext:
+                      executionScope?.prepareRepositoryContext,
+                    resolveMemoryAuthority:
+                      executionScope?.resolveMemoryAuthority,
+                    readContextArchiveBodyPage:
+                      executionScope?.readContextArchiveBodyPage,
                     searchContextArchive: executionScope?.searchContextArchive,
-                    classifyPlaybookTerminalActions: executionScope?.classifyPlaybookTerminalActions,
-                    getPlaybookValidationEvidence: executionScope?.getPlaybookValidationEvidence,
+                    classifyPlaybookTerminalActions:
+                      executionScope?.classifyPlaybookTerminalActions,
+                    getPlaybookValidationEvidence:
+                      executionScope?.getPlaybookValidationEvidence,
                     requestFiles: executionScope?.requestFiles ?? requestFiles,
-                    requestOptionalFile: executionScope?.requestOptionalFile ?? requestOptionalFile,
-                    requestMcpToolData: executionScope?.requestMcpToolData ?? requestMcpToolData,
+                    requestOptionalFile:
+                      executionScope?.requestOptionalFile ??
+                      requestOptionalFile,
+                    requestMcpToolData:
+                      executionScope?.requestMcpToolData ?? requestMcpToolData,
                     handleStepsLogChunk,
                     sendSubagentChunk,
                     trackEvent: trackSdkRuntimeEvent,
                     fetch: globalThis.fetch,
-                    startAgentRun: executionScope?.startAgentRun ?? localStartAgentRun,
+                    startAgentRun:
+                      executionScope?.startAgentRun ?? localStartAgentRun,
                     finishAgentRun: localFinishAgentRun,
                     addAgentStep: localAddAgentStep,
                     fetchAgentFromDatabase: localFetchAgentFromDatabase,
@@ -743,7 +1215,11 @@ export function getAgentRuntimeImpl(
                   },
                   {
                     mcpScope: createMcpBridgeScope(request),
-                    readCapabilityProjectId: (request.fileContext as { projectRoot?: string } | undefined)?.projectRoot,
+                    readCapabilityProjectId: (
+                      request.fileContext as
+                        | { projectRoot?: string }
+                        | undefined
+                    )?.projectRoot,
                   },
                 )
               },
@@ -757,18 +1233,29 @@ export function getAgentRuntimeImpl(
                 // only — the flag-off seam never calls buildDefaultSpawnSupervised
                 // and stays byte-identical.
                 restart: { maxAttempts: 3 },
-                prepareSelfExecTarget: params.hostServices?.prepareSupervisedSelfExec,
-                executionForRequest: params.hostServices || params.supervisedExecutionForRequest ? request => {
-                  const context = supervisedExecutionForRequest(request)
-                  if (!context) throw new Error('Supervised execution requires a registered parent action')
-                  return context
-                } : undefined,
+                prepareSelfExecTarget:
+                  params.hostServices?.prepareSupervisedSelfExec,
+                executionForRequest:
+                  params.hostServices || params.supervisedExecutionForRequest
+                    ? (request) => {
+                        const context = supervisedExecutionForRequest(request)
+                        if (!context)
+                          throw new Error(
+                            'Supervised execution requires a registered parent action',
+                          )
+                        return context
+                      }
+                    : undefined,
               },
             ),
         }
       : {}),
 
-    playbookGateMode: params.playbookGateMode ?? resolvePlaybookGateMode(params.hostServices?.provider.snapshot.inputs.environment ?? clientEnv),
+    playbookGateMode:
+      params.playbookGateMode ??
+      resolvePlaybookGateMode(
+        params.hostServices?.provider.snapshot.inputs.environment ?? clientEnv,
+      ),
     prepareRepositoryContext: params.prepareRepositoryContext,
     resolveMemoryAuthority: params.resolveMemoryAuthority,
     readContextArchiveBodyPage: params.readContextArchiveBodyPage,

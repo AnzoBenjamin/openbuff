@@ -2,7 +2,7 @@ import z from 'zod/v4'
 
 import { jsonToolResultSchema } from '../utils'
 
-import { lspUnavailableSchema } from './go-to-definition'
+import { lspRangeSchema, lspUnavailableSchema } from './go-to-definition'
 
 import type { $ToolParams } from '../../constants'
 import { jsonValueSchema } from '../../../types/json'
@@ -12,7 +12,8 @@ import { jsonValueSchema } from '../../../types/json'
  *
  * Positions follow the human-friendly 1-based line convention (editors and
  * `read_files` ranges number lines from 1); the SDK converts to the 0-based
- * LSP position internally. `character` is already 0-based, matching LSP.
+ * LSP position internally. `character` is a 0-based UTF-16 offset.
+ * A returned range tagged `positionEncoding: 'utf-8'` counts bytes.
  */
 export const hoverTypeParams = {
   toolName: 'hover_type',
@@ -32,25 +33,16 @@ export const hoverTypeParams = {
       .int()
       .min(0)
       .max(100_000)
-      .describe('0-based character offset within the line (LSP convention).'),
+      .describe(
+        '0-based UTF-16 offset within the line; do not copy an unconverted UTF-8 byte offset.',
+      ),
   }),
   outputSchema: jsonToolResultSchema(
     z.object({
       hover: z
         .object({
           contents: jsonValueSchema,
-          range: z
-            .object({
-              start: z.object({
-                line: z.number().int().nonnegative(),
-                character: z.number().int().nonnegative(),
-              }),
-              end: z.object({
-                line: z.number().int().nonnegative(),
-                character: z.number().int().nonnegative(),
-              }),
-            })
-            .optional(),
+          range: lspRangeSchema.optional(),
         })
         .optional(),
       unavailable: lspUnavailableSchema.optional(),

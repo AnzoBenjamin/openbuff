@@ -14,10 +14,9 @@ import type { LspRequestContext } from '../services/lsp-multiplexer'
  * spliced `changedFiles` (or an honest structured unavailable/errorMessage);
  * this layer applies them through `changeFiles` and reduces the commit result
  * into the tool's published shape. `destination_path` passes through VERBATIM
- * — the service owns the destination gate and refuses servers whose extract
- * refactor does not create the destination file. An unsupported extract
- * refactor never reaches here as a splicable edit: the service degrades it
- * to a typed unavailable, which this wrapper returns verbatim.
+ * — the built-in service requires a concrete, command-free WorkspaceEdit
+ * that creates exactly that destination and updates its source. It never
+ * runs an unverified server command to obtain an edit.
  */
 export async function extractSymbol(
   service: LanguageIntelligenceService,

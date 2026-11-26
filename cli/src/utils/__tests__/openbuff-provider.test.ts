@@ -4,12 +4,17 @@ import path from 'path'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
-import { clearProviderConfigCacheForTest } from '@openbuff/sdk'
+import {
+  clearProviderConfigCacheForTest,
+  setModelDiscoveryCachePathForTest,
+  writeModelDiscoveryCache,
+} from '@openbuff/sdk'
 
 import { setProjectRoot } from '../../project-files'
 import {
   addCustomOpenbuffProvider,
   configureOpenbuffModelFromArgs,
+  getKnownModelOptions,
   handleOpenbuffProviderCommand,
 } from '../openbuff-provider'
 
@@ -32,10 +37,14 @@ describe('openbuff-provider custom setup', () => {
     setProjectRoot(tempDir)
     // Select the fixture config even when the runner supplies an explicit path.
     process.chdir(tempDir)
+    setModelDiscoveryCachePathForTest(
+      path.join(tempDir, 'model-discovery-cache.json'),
+    )
     clearProviderConfigCacheForTest()
   })
 
   afterEach(() => {
+    setModelDiscoveryCachePathForTest(undefined)
     setProjectRoot(originalProjectRoot)
     process.chdir(originalCwd)
     if (originalProviderConfig === undefined)
@@ -140,6 +149,48 @@ describe('openbuff-provider custom setup', () => {
       failoverModels: ['local/fallback-model'],
       maxAgentSteps: 42,
       indexing: { enabled: false },
+    })
+  })
+
+  test('keeps OpenRouter seller-qualified discovery ids bound to the OpenRouter route', () => {
+    fs.writeFileSync(
+      path.join(tempDir!, 'openbuff.json'),
+      JSON.stringify({
+        providers: {
+          openrouter: {
+            type: 'openai-compatible',
+            baseURL: 'https://openrouter.ai/api/v1',
+            models: [],
+          },
+          anthropic: {
+            type: 'anthropic-compatible',
+            baseURL: 'https://api.anthropic.com',
+            models: [],
+          },
+        },
+      }),
+    )
+    clearProviderConfigCacheForTest()
+    writeModelDiscoveryCache({
+      providerId: 'openrouter',
+      fetchedAt: '2026-11-25T00:00:00.000Z',
+      schemaVersion: 1,
+      strategy: 'openrouter',
+      endpoint: 'https://openrouter.ai/api/v1/models',
+      responseSha256: 'a'.repeat(64),
+      models: [{ id: 'anthropic/claude-sonnet-4.5' }],
+      partial: false,
+      cacheUpdated: true,
+    })
+
+    const option = getKnownModelOptions().find(
+      (candidate) => candidate.discovered,
+    )
+    expect(option).toMatchObject({
+      model: 'openrouter/anthropic/claude-sonnet-4.5',
+      providerId: 'openrouter',
+      providerModelId: 'anthropic/claude-sonnet-4.5',
+      discovered: true,
     })
   })
 

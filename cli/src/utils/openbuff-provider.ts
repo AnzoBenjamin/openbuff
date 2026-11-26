@@ -67,7 +67,12 @@ export type ModelRouteTarget =
   | { type: 'agent'; agentId: string }
 
 export type KnownModelOption = {
+  /** Full Openbuff route id: <configured-provider>/<provider-model-id>. */
   model: string
+  /** Configured provider that owns this option, retained structurally for ids that contain '/'. */
+  providerId: string
+  /** Model id sent to that provider, which may itself contain '/'. */
+  providerModelId: string
   capabilitiesSummary?: string
   /** True if this model was discovered from a provider endpoint but is not yet in the user's config. */
   discovered?: boolean
@@ -360,6 +365,12 @@ export function persistModelToProviderConfig(
   })
 }
 
+/** Prefix exactly once; provider-side IDs such as `anthropic/claude-*` retain their seller namespace. */
+function routableModelId(providerId: string, modelId: string): string {
+  const prefix = `${providerId}/`
+  return modelId.startsWith(prefix) ? modelId : `${prefix}${modelId}`
+}
+
 export function getKnownModelOptions(): KnownModelOption[] {
   const loadedConfig = loadProviderConfigSync()
   const models: KnownModelOption[] = []
@@ -373,49 +384,50 @@ export function getKnownModelOptions(): KnownModelOption[] {
     }
 
     if (Array.isArray(providerModels)) {
-      for (const model of providerModels) {
-        if (typeof model !== 'string') continue
-        const routableModel = model.includes('/')
-          ? model
-          : `${providerId}/${model}`
-        seen.add(routableModel)
+      for (const configuredModel of providerModels) {
+        if (typeof configuredModel !== 'string') continue
+        const prefix = `${providerId}/`
+        const providerModelId = configuredModel.startsWith(prefix)
+          ? configuredModel.slice(prefix.length)
+          : configuredModel
+        const model = routableModelId(providerId, providerModelId)
+        seen.add(model)
         models.push({
-          model: routableModel,
-          capabilitiesSummary: formatCapabilitiesForModel(
-            routableModel,
-            loadedConfig,
-          ),
+          model,
+          providerId,
+          providerModelId,
+          capabilitiesSummary: formatCapabilitiesForModel(model, loadedConfig),
         })
       }
     } else {
-      for (const requestedModel of Object.keys(providerModels)) {
-        const routableModel = requestedModel.includes('/')
-          ? requestedModel
-          : `${providerId}/${requestedModel}`
-        seen.add(routableModel)
+      for (const [requestedModel, providerModelId] of Object.entries(
+        providerModels,
+      )) {
+        const model = routableModelId(providerId, requestedModel)
+        seen.add(model)
         models.push({
-          model: routableModel,
-          capabilitiesSummary: formatCapabilitiesForModel(
-            routableModel,
-            loadedConfig,
-          ),
+          model,
+          providerId,
+          providerModelId,
+          capabilitiesSummary: formatCapabilitiesForModel(model, loadedConfig),
         })
       }
     }
 
-    // Append cached discovered models not yet in config
+    // Append cached discovered models not yet in config. Keep provider
+    // identity separate from the model string: OpenRouter model IDs commonly
+    // contain their own seller prefix (for example `anthropic/claude-*`).
     for (const discovered of getCachedProviderModels(providerId)) {
-      const routableModel = discovered.id.includes('/')
-        ? discovered.id
-        : `${providerId}/${discovered.id}`
-      if (seen.has(routableModel)) continue
-      seen.add(routableModel)
+      const model = routableModelId(providerId, discovered.id)
+      if (seen.has(model)) continue
+      seen.add(model)
       models.push({
-        model: routableModel,
+        model,
+        providerId,
+        providerModelId: discovered.id,
         capabilitiesSummary: discovered.capabilities
           ? formatModelCapabilitiesSummary(discovered.capabilities)
-          : formatCapabilitiesForModel(routableModel, loadedConfig) ||
-            undefined,
+          : formatCapabilitiesForModel(model, loadedConfig) || undefined,
         discovered: true,
       })
     }

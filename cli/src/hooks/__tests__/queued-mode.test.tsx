@@ -25,6 +25,11 @@ renderTest(
       current: async (request: Parameters<SendMessageFn>[0]) => {
         chain.current = true
         sent.push(request)
+        return {
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        } as const
       },
     }
     let queue!: UseChatStreamingReturn

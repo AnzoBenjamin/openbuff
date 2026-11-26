@@ -10,6 +10,10 @@ import { createEventHandlerState } from '../utils/create-event-handler-state'
 import { createRunConfig } from '../utils/create-run-config'
 import { loadAgentDefinitions } from '../utils/local-agent-registry'
 import { logger } from '../utils/logger'
+import {
+  getPromptAttachmentBlockReason,
+  restorePendingAttachments,
+} from '../utils/pending-attachments'
 import { getOpenbuffProviderReadiness } from '../utils/openbuff-provider'
 import {
   clearCheckpoint,
@@ -27,7 +31,6 @@ import {
 } from '../utils/send-message-helpers'
 import { createSendMessageTimerController } from '../utils/send-message-timer'
 import {
-  cleanupProviderReadinessFailure,
   createRunOwnership,
   finalizeQueueState,
   handleRunCompletion,
@@ -38,14 +41,16 @@ import {
 } from './helpers/send-message'
 import { whenRegistriesReady } from '../services/deferred-registries'
 import { hydrateContextArchiveSnapshots } from '../services/memory-v2/context-archive-sync'
-import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
 import { yieldToEventLoop } from '../utils/yield-to-event-loop'
 
 import type { ElapsedTimeTracker } from './use-elapsed-time'
 import type { StreamStatus } from './use-message-queue'
 import type { PendingAttachment } from '../types/store'
 import type { ChatMessage } from '../types/chat'
-import type { SendMessageFn } from '../types/contracts/send-message'
+import type {
+  PromptAdmissionResult,
+  SendMessageFn,
+} from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
 import type { SendMessageTimerEvent } from '../utils/send-message-timer'
 import type {
@@ -117,6 +122,45 @@ const buildPromptWithContext = (
   return ''
 }
 
+const USER_MESSAGE_OPEN = '<user_message>'
+const USER_MESSAGE_CLOSE = '</user_message>'
+const isWrappedUserText = (text: string) =>
+  text.startsWith(USER_MESSAGE_OPEN) && text.endsWith(USER_MESSAGE_CLOSE)
+const unwrapUserText = (text: string) =>
+  isWrappedUserText(text)
+    ? text.slice(USER_MESSAGE_OPEN.length, -USER_MESSAGE_CLOSE.length)
+    : text
+
+function isSeparateCheckpointPrompt(
+  checkpoint: TurnCheckpoint,
+  effectivePrompt: string,
+  content: MessageContent[] | undefined,
+): boolean {
+  const history = checkpoint.mainAgentState.messageHistory
+  if (!Array.isArray(history)) return false
+  const tagged = history.findLast(
+    (message) => message.role === 'user' && message.tags?.includes('USER_PROMPT'),
+  )
+  const lastUser = tagged ?? history.findLast((message) => message.role === 'user')
+  let savedText: string | undefined
+  if (typeof lastUser?.content === 'string') {
+    savedText = unwrapUserText(lastUser.content)
+  } else if (tagged && Array.isArray(tagged.content)) {
+    const text = tagged.content.find((part) => part.type === 'text')
+    if (text?.type === 'text' && isWrappedUserText(text.text)) {
+      savedText = unwrapUserText(text.text)
+    }
+  }
+  const textPart = content?.find((part) => part.type === 'text')
+  const suppliedText = textPart?.type === 'text' && textPart.text.trim()
+    ? unwrapUserText(textPart.text)
+    : effectivePrompt
+  // An undecodable checkpoint or the same text with different attachments
+  // is not evidence of an explicit separate turn.
+  return savedText !== undefined && savedText !== suppliedText &&
+    !(typeof lastUser?.content === 'string' && lastUser.content === suppliedText)
+}
+
 export const useSendMessage = ({
   inputRef,
   activeSubagentsRef,
@@ -154,10 +198,8 @@ export const useSendMessage = ({
   const previousRunStateRef = useRef<RunState | null>(
     useChatStore.getState().runState,
   )
-  // P2-3: If a mid-turn checkpoint was loaded on chat restore (interrupted
-  // turn), it's stored here. On the next sendMessage, we check whether the
-  // prompt matches the checkpoint's last user message — if so, we resume the
-  // interrupted turn from the checkpointed state; otherwise we discard it.
+  // An interrupted checkpoint remains available for inspection if exact
+  // replay is refused. Only a clearly different prompt takes the new-turn path.
   const resumableCheckpointRef = useRef<TurnCheckpoint | null>(null)
   // Memoize stream controller to maintain referential stability across renders
   const streamRefsRef = useRef<ReturnType<
@@ -200,15 +242,30 @@ export const useSendMessage = ({
       activeRestoreController = controller
       restoreAbortRef.current = controller
       restoreBlockedRef.current = true
-      useChatStore.getState().setSessionRestore({ status: 'loading', chatId: continueChatId, owner: restoreOwnerRef.current })
+      useChatStore.getState().setSessionRestore({
+        status: 'loading',
+        chatId: continueChatId,
+        owner: restoreOwnerRef.current,
+      })
       const loadedState = await loadMostRecentChatStateAsync(
         continueChatId ?? undefined,
         controller.signal,
       )
-      if (cancelled || controller.signal.aborted || useChatStore.getState().sessionRestore?.owner !== restoreOwnerRef.current) return
+      if (
+        cancelled ||
+        controller.signal.aborted ||
+        useChatStore.getState().sessionRestore?.owner !==
+          restoreOwnerRef.current
+      )
+        return
       if (!loadedState) {
-        useChatStore.getState().setSessionRestore({ status: 'error', chatId: continueChatId, owner: restoreOwnerRef.current,
-          message: 'The selected saved session is missing, corrupt, or unreadable. Retry restoration or cancel to start a new session; your draft is preserved.' })
+        useChatStore.getState().setSessionRestore({
+          status: 'error',
+          chatId: continueChatId,
+          owner: restoreOwnerRef.current,
+          message:
+            'The selected saved session is missing, corrupt, or unreadable. Retry restoration or cancel to start a new session; your draft is preserved.',
+        })
         return
       }
       // The effect's own one-shot cancellation token: effect cleanup sets
@@ -342,10 +399,21 @@ export const useSendMessage = ({
     const launchRestore = () => {
       if (cancelled) return
       const pending = restore().catch(() => {
-        if (cancelled || restorePromiseRef.current !== pending || useChatStore.getState().sessionRestore?.owner !== restoreOwnerRef.current) return
+        if (
+          cancelled ||
+          restorePromiseRef.current !== pending ||
+          useChatStore.getState().sessionRestore?.owner !==
+            restoreOwnerRef.current
+        )
+          return
         restoreBlockedRef.current = true
-        useChatStore.getState().setSessionRestore({ status: 'error', chatId: continueChatId, owner: restoreOwnerRef.current,
-          message: 'Saved-session restoration failed. Retry or cancel to start a new session; your draft is preserved.' })
+        useChatStore.getState().setSessionRestore({
+          status: 'error',
+          chatId: continueChatId,
+          owner: restoreOwnerRef.current,
+          message:
+            'Saved-session restoration failed. Retry or cancel to start a new session; your draft is preserved.',
+        })
       })
       latestRestorePromise = pending
       restorePromiseRef.current = pending
@@ -355,10 +423,17 @@ export const useSendMessage = ({
     return () => {
       cancelled = true
       activeRestoreController?.abort()
-      if (restoreRetryRef.current === launchRestore) restoreRetryRef.current = null
-      if (restoreAbortRef.current === activeRestoreController) restoreAbortRef.current = null
-      if (restorePromiseRef.current === latestRestorePromise) restorePromiseRef.current = null
-      if (useChatStore.getState().sessionRestore?.owner === restoreOwnerRef.current) useChatStore.getState().setSessionRestore(null)
+      if (restoreRetryRef.current === launchRestore)
+        restoreRetryRef.current = null
+      if (restoreAbortRef.current === activeRestoreController)
+        restoreAbortRef.current = null
+      if (restorePromiseRef.current === latestRestorePromise)
+        restorePromiseRef.current = null
+      if (
+        useChatStore.getState().sessionRestore?.owner ===
+        restoreOwnerRef.current
+      )
+        useChatStore.getState().setSessionRestore(null)
       if (scrollTimer !== undefined) clearTimeout(scrollTimer)
     }
     // Deps intentionally exclude scrollToLatest (reached through
@@ -422,14 +497,18 @@ export const useSendMessage = ({
     setCanProcessQueue(!stillCancelling && !isQueuePausedRef?.current)
     restoreAbortRef.current?.abort()
     restoreBlockedRef.current = false
-    if (useChatStore.getState().sessionRestore?.owner === restoreOwnerRef.current) useChatStore.getState().setSessionRestore(null)
+    if (
+      useChatStore.getState().sessionRestore?.owner === restoreOwnerRef.current
+    )
+      useChatStore.getState().setSessionRestore(null)
     previousRunStateRef.current = runState
     resumableCheckpointRef.current = null
     useChatStore.getState().setRunState(runState)
   }
 
   const retryRestore = useCallback(() => {
-    if (restoreBlockedRef.current && sdkExecutionRef.current === null) restoreRetryRef.current?.()
+    if (restoreBlockedRef.current && sdkExecutionRef.current === null)
+      restoreRetryRef.current?.()
   }, [])
   const cancelRestore = useCallback(() => {
     restoreRetryRef.current = null
@@ -514,101 +593,22 @@ export const useSendMessage = ({
       // reports compactions that happened during the turn in progress.
       setCompactionNotice(() => null)
 
-      // Prepare user message (bash context, images, text attachments, mode divider)
+      // No transcript/context is committed until validation, client creation,
+      // provider readiness and attachment preflight have all succeeded.
       let userMessageId: string
       let messageContent: MessageContent[] | undefined
       let bashContextForPrompt: string | undefined
       let finalContent: string
 
-      try {
-        // A prompt submitted during restore must fork from the restored state
-        // and append after its messages, rather than being overwritten by it.
-        await restorePromiseRef.current
-        if (!isCurrentRunOwner()) return
-        if (restoreBlockedRef.current) {
-          resetEarlyReturnState({ setCanProcessQueue: () => setCanProcessQueue(false), updateChainInProgress,
-            isProcessingQueueRef, isQueuePausedRef })
-          releaseRunOwner()
-          return
-        }
-        // A replaced conversation can bypass the queue while the previous
-        // turn is still staging its tracked-tree snapshot.
-        await snapshotCompletionRef.current
-        if (!isCurrentRunOwner()) return
-        const prepared = await prepareUserMessage({
-          content,
-          agentMode,
-          postUserMessage,
-          attachments,
-          isCurrent: isCurrentRunOwner,
-        })
-        if (!isCurrentRunOwner()) return
-        userMessageId = prepared.userMessageId
-        messageContent = prepared.messageContent
-        bashContextForPrompt = prepared.bashContextForPrompt
-        finalContent = prepared.finalContent
-      } catch (error) {
-        if (!isCurrentRunOwner()) return
-        logger.error(
-          { error },
-          '[send-message] prepareUserMessage failed with exception',
-        )
-        setMessages((prev) => [
-          ...prev,
-          createErrorChatMessage(
-            '⚠️ Failed to prepare message. Please try again.',
-          ),
-        ])
-        resetEarlyReturnState({
-          setCanProcessQueue,
-          updateChainInProgress,
-          isProcessingQueueRef,
-          isQueuePausedRef,
-        })
-        releaseRunOwner()
-        return
-      }
-
-      // Validate before sending (e.g., agent config checks)
-      try {
-        // P1-T9 gating: onBeforeMessageSend (agent validation) reads the
-        // agent registry via loadAgentDefinitions, so the deferred registry
-        // loads must have settled BEFORE it runs — otherwise mid-startup
-        // validation observes an empty/partial registry. This is the same
-        // gate the run below uses for its own loadAgentDefinitions read.
-        await whenRegistriesReady()
-        if (!isCurrentRunOwner()) return
-        const validationResult = await onBeforeMessageSend()
-        if (!isCurrentRunOwner()) return
-
-        if (!validationResult.success) {
-          logger.warn(
-            { errors: validationResult.errors },
-            '[send-message] Validation failed',
-          )
-          const errorsToAttach =
-            validationResult.errors.length === 0
-              ? [
-                  // Hide this for now, as validate endpoint may be flaky and we don't want to bother users.
-                  // {
-                  //   id: NETWORK_ERROR_ID,
-                  //   message:
-                  //     'Agent validation failed. This may be due to a network issue or temporary server problem. Please try again.',
-                  // },
-                ]
-              : validationResult.errors
-
-          setMessages((prev) =>
-            prev.map((msg) => {
-              if (msg.id !== userMessageId) {
-                return msg
-              }
-              return {
-                ...msg,
-                validationErrors: errorsToAttach,
-              }
-            }),
-          )
+      const rejectAdmission = (
+        reason: string,
+        visibleMessage: string,
+      ): PromptAdmissionResult => {
+        if (isCurrentRunOwner()) {
+          setMessages((prev) => [
+            ...prev,
+            createErrorChatMessage(visibleMessage),
+          ])
           resetEarlyReturnState({
             setCanProcessQueue,
             updateChainInProgress,
@@ -616,72 +616,174 @@ export const useSendMessage = ({
             isQueuePausedRef,
           })
           releaseRunOwner()
-          return
+        }
+        return { status: 'rejected', reason, retryable: true }
+      }
+
+      try {
+        await restorePromiseRef.current
+      } catch (error) {
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        logger.error(
+          { error },
+          '[send-message] Session restore failed before admission',
+        )
+        return rejectAdmission(
+          error instanceof Error ? error.message : String(error),
+          '⚠️ Unable to restore the conversation before sending. Please retry.',
+        )
+      }
+      if (!isCurrentRunOwner())
+        return { status: 'not-started', reason: 'superseded-owner' }
+      if (restoreBlockedRef.current) {
+        resetEarlyReturnState({
+          setCanProcessQueue: () => setCanProcessQueue(false),
+          updateChainInProgress,
+          isProcessingQueueRef,
+          isQueuePausedRef,
+        })
+        releaseRunOwner()
+        return { status: 'not-started', reason: 'restore-blocked' }
+      }
+      await snapshotCompletionRef.current
+      if (!isCurrentRunOwner())
+        return { status: 'not-started', reason: 'superseded-owner' }
+
+      const attachmentCandidates =
+        attachments ?? useChatStore.getState().pendingAttachments
+      const attachmentBlock =
+        getPromptAttachmentBlockReason(attachmentCandidates)
+      if (attachmentBlock) {
+        resetEarlyReturnState({
+          setCanProcessQueue,
+          updateChainInProgress,
+          isProcessingQueueRef,
+          isQueuePausedRef,
+        })
+        releaseRunOwner()
+        return { status: 'not-started', reason: attachmentBlock }
+      }
+
+      try {
+        await whenRegistriesReady()
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        const validationResult = await onBeforeMessageSend()
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        if (!validationResult.success) {
+          const reason =
+            validationResult.errors.map((error) => error.message).join('; ') ||
+            'Agent validation could not be completed.'
+          logger.warn(
+            { errors: validationResult.errors },
+            '[send-message] Validation failed',
+          )
+          return rejectAdmission(
+            reason,
+            `⚠️ ${reason} Fix the agent configuration or retry validation.`,
+          )
         }
       } catch (error) {
-        if (!isCurrentRunOwner()) return
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
         logger.error(
           { error },
           '[send-message] Validation before message send failed with exception',
         )
-
-        setMessages((prev) => [
-          ...prev,
-          createErrorChatMessage(
-            '⚠️ Agent validation failed unexpectedly. Please try again.',
-          ),
-        ])
+        // Yield before settlement so a conversation replacement/new owner can
+        // supersede this failed attempt; the stale attempt must not clear the
+        // newer owner's occupancy.
         await yieldToEventLoop()
-        if (!isCurrentRunOwner()) return
-        setTimeout(() => {
-          if (isCurrentRunOwner()) scrollToLatest()
-        }, 0)
-
-        resetEarlyReturnState({
-          setCanProcessQueue,
-          updateChainInProgress,
-          isProcessingQueueRef,
-          isQueuePausedRef,
-        })
-        releaseRunOwner()
-        return
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        return rejectAdmission(
+          error instanceof Error ? error.message : String(error),
+          '⚠️ Agent validation failed unexpectedly. Please try again.',
+        )
       }
 
-      // Reset UI focus state
+      let client: Awaited<ReturnType<typeof getCodebuffClient>>
+      try {
+        client = await getCodebuffClient()
+      } catch (error) {
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        logger.error({ error }, '[send-message] SDK client factory failed')
+        return rejectAdmission(
+          error instanceof Error ? error.message : String(error),
+          '⚠️ Unable to initialize the provider client. Check provider configuration and retry.',
+        )
+      }
+      if (!isCurrentRunOwner())
+        return { status: 'not-started', reason: 'superseded-owner' }
+      if (!client) {
+        return rejectAdmission(
+          'No provider client is available.',
+          '⚠️ Unable to initialize the provider client. Check provider configuration and retry.',
+        )
+      }
+
+      let agentDefinitions: ReturnType<typeof loadAgentDefinitions>
+      let resolvedAgent: ReturnType<typeof resolveAgent>
+      try {
+        agentDefinitions = loadAgentDefinitions()
+        resolvedAgent = resolveAgent(agentMode, agentId, agentDefinitions)
+        const providerReadiness = getOpenbuffProviderReadiness({
+          agent: resolvedAgent,
+          agentMode,
+        })
+        if (!providerReadiness.ok) {
+          return rejectAdmission(
+            providerReadiness.message,
+            providerReadiness.message,
+          )
+        }
+      } catch (error) {
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        logger.error({ error }, '[send-message] Provider readiness failed')
+        return rejectAdmission(
+          error instanceof Error ? error.message : String(error),
+          '⚠️ Unable to resolve provider readiness. Check provider configuration and retry.',
+        )
+      }
+
+      const admittedAttachments =
+        attachments ?? useChatStore.getState().drainPendingAttachments()
+      try {
+        const prepared = await prepareUserMessage({
+          content,
+          agentMode,
+          postUserMessage,
+          attachments: admittedAttachments,
+          isCurrent: isCurrentRunOwner,
+        })
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        userMessageId = prepared.userMessageId
+        messageContent = prepared.messageContent
+        bashContextForPrompt = prepared.bashContextForPrompt
+        finalContent = prepared.finalContent
+      } catch (error) {
+        if (!isCurrentRunOwner())
+          return { status: 'not-started', reason: 'superseded-owner' }
+        logger.error(
+          { error },
+          '[send-message] prepareUserMessage failed with exception',
+        )
+        if (attachments === undefined)
+          restorePendingAttachments(admittedAttachments)
+        return rejectAdmission(
+          error instanceof Error ? error.message : String(error),
+          '⚠️ Failed to prepare message. Please try again.',
+        )
+      }
+
       setFocusedAgentId(null)
       setInputFocused(true)
       inputRef.current?.focus()
-
-      // Get SDK client
-      const client = await getCodebuffClient()
-      if (!isCurrentRunOwner()) return
-
-      if (!client) {
-        logger.error(
-          {},
-          '[send-message] No client available. Please check your provider configuration.',
-        )
-        // Show error to user instead of silently failing
-        setMessages((prev) => [
-          ...prev,
-          createErrorChatMessage(
-            '⚠️ Unable to connect. Please check your provider configuration and try again.',
-          ),
-        ])
-        await yieldToEventLoop()
-        if (!isCurrentRunOwner()) return
-        setTimeout(() => {
-          if (isCurrentRunOwner()) scrollToLatest()
-        }, 0)
-        resetEarlyReturnState({
-          setCanProcessQueue,
-          updateChainInProgress,
-          isProcessingQueueRef,
-          isQueuePausedRef,
-        })
-        releaseRunOwner()
-        return
-      }
 
       // Create AI message shell and setup streaming context
       const aiMessageId = generateAiMessageId()
@@ -725,275 +827,246 @@ export const useSendMessage = ({
       let runJournal: ReturnType<typeof openRunJournalForRun> = undefined
       let executionToken: symbol | undefined
 
-      // Execute SDK run with streaming handlers
-      try {
-        // P1-T9: agent/skill registries load post-first-frame; wait for them
-        // here so the first send never reads a not-yet-loaded registry. This
-        // resolves immediately once ready (or when no deferred load ran).
-        await whenRegistriesReady()
-        if (!isCurrentRunOwner()) return
-        const agentDefinitions = loadAgentDefinitions()
-        const resolvedAgent = resolveAgent(agentMode, agentId, agentDefinitions)
-        const providerReadiness = getOpenbuffProviderReadiness({
-          agent: resolvedAgent,
-          agentMode,
-        })
-        if (!providerReadiness.ok) {
-          cleanupProviderReadinessFailure({
-            message: providerReadiness.message,
-            updater,
-            timerController,
-            setStreamStatus,
-            setCanProcessQueue,
-            updateChainInProgress,
-            releaseRunOwner,
-            isProcessingQueueRef,
-            isQueuePausedRef,
+      // Admission is now settled. Execution continues on its own lifecycle
+      // promise so router/queue callers can distinguish acceptance from run
+      // completion without weakening run ownership or cleanup.
+      const completion = (async (): Promise<void> => {
+        try {
+          // P2-T7: open the run journal ONLY now that the run is actually
+          // starting (never at TUI startup, never on a validation failure, and
+          // never on a providerReadiness failure early-return above).
+          runJournal = openRunJournalForRun({
+            path: resolveRunJournalPath(),
+            warn: (message) => {
+              logger.warn({ message }, '[send-message] Run journal unavailable')
+            },
           })
-          return
-        }
 
-        onAccepted?.()
-        if (!isCurrentRunOwner()) return
+          const promptWithBashContext = bashContextForPrompt
+            ? bashContextForPrompt + finalContent
+            : finalContent
+          const effectivePrompt = buildPromptWithContext(
+            promptWithBashContext,
+            messageContent,
+          )
 
-        // P2-T7: open the run journal ONLY now that the run is actually
-        // starting (never at TUI startup, never on a validation failure, and
-        // never on a providerReadiness failure early-return above).
-        runJournal = openRunJournalForRun({
-          path: resolveRunJournalPath(),
-          warn: (message) => {
-            logger.warn({ message }, '[send-message] Run journal unavailable')
-          },
-        })
-
-        const promptWithBashContext = bashContextForPrompt
-          ? bashContextForPrompt + finalContent
-          : finalContent
-        const effectivePrompt = buildPromptWithContext(
-          promptWithBashContext,
-          messageContent,
-        )
-
-        // P2-3: Determine whether we're resuming an interrupted turn from a
-        // checkpoint. We resume only if the checkpoint's last user message
-        // matches the effective prompt — otherwise the user typed a new
-        // (different) message and we start fresh, discarding the stale
-        // checkpoint state.
-        const checkpoint = resumableCheckpointRef.current
-        let resumeInterruptedTurn = false
-        let previousRunState = useChatStore.getState().runState
-        if (checkpoint && previousRunState?.sessionState) {
-          const lastUserMessage = [...checkpoint.mainAgentState.messageHistory]
-            .reverse()
-            .find((msg) => msg.role === 'user')
-          const lastUserText =
-            lastUserMessage && typeof lastUserMessage.content === 'string'
-              ? lastUserMessage.content
-              : null
-          if (lastUserText === effectivePrompt) {
-            previousRunState = {
-              ...previousRunState,
-              sessionState: {
-                ...previousRunState.sessionState,
-                mainAgentState: checkpoint.mainAgentState,
-              },
+          const checkpoint = resumableCheckpointRef.current
+          let resumeInterruptedTurn = false
+          let previousRunState = useChatStore.getState().runState
+          if (checkpoint) {
+            if (isSeparateCheckpointPrompt(checkpoint, effectivePrompt, messageContent)) {
+              resumableCheckpointRef.current = null
+              await clearCheckpoint()
+              if (!isCurrentRunOwner()) return
+            } else {
+              // Ask for exact replay even when the old session is incomplete:
+              // the SDK must refuse an unverified prefix, never start it afresh.
+              if (previousRunState?.sessionState) {
+                previousRunState = {
+                  ...previousRunState,
+                  sessionState: {
+                    ...previousRunState.sessionState,
+                    mainAgentState: checkpoint.mainAgentState,
+                  },
+                }
+              }
+              resumeInterruptedTurn = true
+              logger.info('[send-message] Checking interrupted-turn replay eligibility')
             }
-            resumeInterruptedTurn = true
-            logger.info(
-              '[send-message] Resuming interrupted turn from mid-turn checkpoint',
+          }
+
+          const eventHandlerState = createEventHandlerState({
+            streamRefs,
+            setStreamingAgents,
+            setStreamStatus,
+            setContextWindowUsage,
+            setCompactionNotice,
+            aiMessageId,
+            updater,
+            hasReceivedContentRef,
+            addActiveSubagent,
+            removeActiveSubagent,
+            agentMode,
+            setHasReceivedPlanResponse,
+            logger,
+            setIsRetrying,
+            onTotalCost: (cost: number) => {
+              actualCredits = cost
+              onTotalCost?.(cost)
+            },
+          })
+
+          const runConfig = createRunConfig({
+            logger,
+            agent: resolvedAgent,
+            prompt: effectivePrompt,
+            content: messageContent,
+            previousRunState,
+            agentDefinitions,
+            eventHandlerState,
+            signal: abortController.signal,
+            costMode: AGENT_MODE_TO_COST_MODE[agentMode],
+            onCheckpoint: (agentState) => {
+              if (isCurrentRunActive(abortController.signal)) {
+                saveCheckpoint(userMessageId, agentState)
+              }
+            },
+            resumeInterruptedTurn,
+          })
+
+          // Size digest only: most fields of the run config carry per-run
+          // transcript state, so the config is never stringified into the log
+          // — top-level fields are measured, not logged, and the
+          // [send-message] prefix is kept for grep-ability.
+          logger.info(
+            describeRunConfigForLog(runConfig),
+            '[send-message] Sending message with sdk run config',
+          )
+          executionToken = Symbol('sdk-execution')
+          sdkExecutionRef.current = executionToken
+          let runState = await client.run({
+            ...runConfig,
+            // P2-T7: thread the live run journal into the SDK run so tool
+            // calls/results, spawns, and step boundaries are journaled for
+            // crash-safe resume + `openbuff dash`/replay. Conditional spread:
+            // an unjournalable run carries no journal fields at all (the
+            // additive-optional contract).
+            ...(runJournal
+              ? { journalWriter: runJournal, journalReader: runJournal }
+              : {}),
+          })
+
+          // Accept an aborted run's preserved state while it still owns the send.
+          // This serializes cancel-A/send-B and prevents continuation from forking
+          // from what the user sees in the TUI.
+          if (!isCurrentRunOwner()) {
+            logger.debug(
+              {
+                aborted: abortController.signal.aborted,
+                isCurrentRunOwner: isCurrentRunOwner(),
+              },
+              '[send-message] Ignoring run completion from superseded send',
             )
-          } else {
-            // Prompt doesn't match — user typed a new message. Discard the
-            // stale checkpoint so it can't interfere with future turns.
-            resumableCheckpointRef.current = null
-            // Serialize the clear with any in-flight queued checkpoint write
-            // BEFORE the next save can enqueue (see clearCheckpoint).
+            return
+          }
+
+          setIsRetrying(false)
+          const replayRefused = resumeInterruptedTurn && runState.runOutcome?.cause?.code === 'replay_unavailable'
+          if (!replayRefused) {
+            runState = stampRunPromptBoundary(runState, userMessageId)
+            previousRunStateRef.current = runState
+            setRunState(runState)
+            setMessages((currentMessages) => {
+              saveChatState(runState, currentMessages)
+              return currentMessages
+            })
+            // Serialize the clear with any in-flight checkpoint write.
             await clearCheckpoint()
             if (!isCurrentRunOwner()) return
+            resumableCheckpointRef.current = null
           }
-        }
-
-        const eventHandlerState = createEventHandlerState({
-          streamRefs,
-          setStreamingAgents,
-          setStreamStatus,
-          setContextWindowUsage,
-          setCompactionNotice,
-          aiMessageId,
-          updater,
-          hasReceivedContentRef,
-          addActiveSubagent,
-          removeActiveSubagent,
-          agentMode,
-          setHasReceivedPlanResponse,
-          logger,
-          setIsRetrying,
-          onTotalCost: (cost: number) => {
-            actualCredits = cost
-            onTotalCost?.(cost)
-          },
-        })
-
-        const runConfig = createRunConfig({
-          logger,
-          agent: resolvedAgent,
-          prompt: effectivePrompt,
-          content: messageContent,
-          previousRunState,
-          agentDefinitions,
-          eventHandlerState,
-          signal: abortController.signal,
-          costMode: AGENT_MODE_TO_COST_MODE[agentMode],
-          onCheckpoint: (agentState) => {
-            if (isCurrentRunActive(abortController.signal)) {
-              saveCheckpoint(userMessageId, agentState)
-            }
-          },
-          resumeInterruptedTurn,
-        })
-
-        // Size digest only: most fields of the run config carry per-run
-        // transcript state, so the config is never stringified into the log
-        // — top-level fields are measured, not logged, and the
-        // [send-message] prefix is kept for grep-ability.
-        logger.info(
-          describeRunConfigForLog(runConfig),
-          '[send-message] Sending message with sdk run config',
-        )
-        executionToken = Symbol('sdk-execution')
-        sdkExecutionRef.current = executionToken
-        let runState = await client.run({
-          ...runConfig,
-          // P2-T7: thread the live run journal into the SDK run so tool
-          // calls/results, spawns, and step boundaries are journaled for
-          // crash-safe resume + `openbuff dash`/replay. Conditional spread:
-          // an unjournalable run carries no journal fields at all (the
-          // additive-optional contract).
-          ...(runJournal
-            ? { journalWriter: runJournal, journalReader: runJournal }
-            : {}),
-        })
-
-        // Accept an aborted run's preserved state while it still owns the send.
-        // This serializes cancel-A/send-B and prevents continuation from forking
-        // from what the user sees in the TUI.
-        if (!isCurrentRunOwner()) {
-          logger.debug(
-            {
-              aborted: abortController.signal.aborted,
-              isCurrentRunOwner: isCurrentRunOwner(),
-            },
-            '[send-message] Ignoring run completion from superseded send',
-          )
-          return
-        }
-
-        runState = stampRunPromptBoundary(runState, userMessageId)
-        previousRunStateRef.current = runState
-        setRunState(runState)
-        setIsRetrying(false)
-
-        setMessages((currentMessages) => {
-          saveChatState(runState, currentMessages)
-          return currentMessages
-        })
-        // The SDK state is authoritative for both success and cooperative abort.
-        // Awaited so the checkpoint clear (cancel + drain + unlink) is fully
-        // serialized before anything else enqueues for this target.
-        await clearCheckpoint()
-        if (!isCurrentRunOwner()) return
-        resumableCheckpointRef.current = null
-        await handleRunCompletion({
-          runState,
-          actualCredits,
-          agentMode,
-          timerController,
-          updater,
-          aiMessageId,
-          wasAbortedByUser: abortController.signal.aborted,
-          setStreamStatus,
-          setCanProcessQueue,
-          updateChainInProgress,
-          setHasReceivedPlanResponse,
-          resumeQueue,
-          isProcessingQueueRef,
-          isQueuePausedRef,
-          isCurrentRunOwner,
-          onSnapshotStarted: (completion) => {
-            snapshotCompletionRef.current = completion
-            void completion.then(() => {
-              if (snapshotCompletionRef.current === completion)
-                snapshotCompletionRef.current = null
-            })
-          },
-        })
-      } catch (error) {
-        if (isCurrentRunOwner() && !abortController.signal.aborted) {
-          handleRunError({
-            error,
+          // A replay refusal is visible to the user, but it isn't a new
+          // completed turn and must not overwrite the saved checkpoint.
+          await handleRunCompletion({
+            runState,
+            actualCredits,
+            agentMode,
             timerController,
             updater,
-            setIsRetrying,
+            aiMessageId,
+            wasAbortedByUser: abortController.signal.aborted,
             setStreamStatus,
             setCanProcessQueue,
             updateChainInProgress,
+            setHasReceivedPlanResponse,
+            resumeQueue,
             isProcessingQueueRef,
             isQueuePausedRef,
+            isCurrentRunOwner,
+            onSnapshotStarted: (completion) => {
+              snapshotCompletionRef.current = completion
+              void completion.then(() => {
+                if (snapshotCompletionRef.current === completion)
+                  snapshotCompletionRef.current = null
+              })
+            },
           })
-        } else {
-          logger.debug({ error }, '[send-message] Run rejected after abort')
-          if (isCurrentRunOwner()) {
-            finalizeQueueState({
+        } catch (error) {
+          if (isCurrentRunOwner() && !abortController.signal.aborted) {
+            handleRunError({
+              error,
+              timerController,
+              updater,
+              setIsRetrying,
               setStreamStatus,
               setCanProcessQueue,
               updateChainInProgress,
               isProcessingQueueRef,
               isQueuePausedRef,
-              resumeQueue,
+            })
+          } else {
+            logger.debug({ error }, '[send-message] Run rejected after abort')
+            if (isCurrentRunOwner()) {
+              finalizeQueueState({
+                setStreamStatus,
+                setCanProcessQueue,
+                updateChainInProgress,
+                isProcessingQueueRef,
+                isQueuePausedRef,
+                resumeQueue,
+              })
+            }
+          }
+        } finally {
+          const abandoned = !isCurrentRunOwner()
+          if (isCurrentRunOwner()) {
+            if (isChainInProgressRef.current) {
+              logger.warn(
+                {},
+                '[send-message] Chain still in progress after try/catch, forcing reset',
+              )
+              updateChainInProgress(false)
+              setStreamStatus('idle')
+              setCanProcessQueue(!isQueuePausedRef?.current)
+            }
+            // Safety net: ensure lock is always released even if handleRunCompletion/handleRunError
+            // didn't run (e.g., due to unexpected early return). Redundant releases are safe (idempotent).
+            if (isProcessingQueueRef) {
+              isProcessingQueueRef.current = false
+            }
+          }
+          releaseRunOwner()
+          updater.dispose()
+          if (executionToken && sdkExecutionRef.current === executionToken) {
+            sdkExecutionRef.current = null
+            if (abandoned && activeRunOwnerRef.current === null) {
+              updateChainInProgress(false)
+              setStreamStatus('idle')
+              setCanProcessQueue(!isQueuePausedRef?.current)
+              if (isProcessingQueueRef) isProcessingQueueRef.current = false
+            }
+          }
+          if (runJournal) {
+            // P2-T7: the run's promise-chain end is the journal's cleanup seam.
+            // Best-effort (the turn's outcome is already decided): a close
+            // failure logs and must never break the TUI.
+            void runJournal.close().catch((closeError) => {
+              logger.warn(
+                { error: closeError },
+                '[send-message] Run journal close failed',
+              )
             })
           }
         }
-      } finally {
-        const abandoned = !isCurrentRunOwner()
-        if (isCurrentRunOwner()) {
-          if (isChainInProgressRef.current) {
-            logger.warn(
-              {},
-              '[send-message] Chain still in progress after try/catch, forcing reset',
-            )
-            updateChainInProgress(false)
-            setStreamStatus('idle')
-            setCanProcessQueue(!isQueuePausedRef?.current)
-          }
-          // Safety net: ensure lock is always released even if handleRunCompletion/handleRunError
-          // didn't run (e.g., due to unexpected early return). Redundant releases are safe (idempotent).
-          if (isProcessingQueueRef) {
-            isProcessingQueueRef.current = false
-          }
-        }
-        releaseRunOwner()
-        updater.dispose()
-        if (executionToken && sdkExecutionRef.current === executionToken) {
-          sdkExecutionRef.current = null
-          if (abandoned && activeRunOwnerRef.current === null) {
-            updateChainInProgress(false)
-            setStreamStatus('idle')
-            setCanProcessQueue(!isQueuePausedRef?.current)
-            if (isProcessingQueueRef) isProcessingQueueRef.current = false
-          }
-        }
-        if (runJournal) {
-          // P2-T7: the run's promise-chain end is the journal's cleanup seam.
-          // Best-effort (the turn's outcome is already decided): a close
-          // failure logs and must never break the TUI.
-          void runJournal.close().catch((closeError) => {
-            logger.warn(
-              { error: closeError },
-              '[send-message] Run journal close failed',
-            )
-          })
-        }
+      })()
+      try {
+        onAccepted?.()
+      } catch (error) {
+        // Compatibility notification only: callback failures cannot revoke an
+        // accepted run, leak its occupancy, or hide its completion handle.
+        logger.warn({ error }, '[send-message] onAccepted callback failed')
       }
+      return { status: 'accepted', disposition: 'started', completion }
     },
     [
       addActiveSubagent,

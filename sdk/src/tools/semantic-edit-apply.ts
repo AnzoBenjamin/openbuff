@@ -1,7 +1,9 @@
 import { changeFiles } from './change-file'
 import { findFileMutationResult } from './write-audit-findings'
 import { getConfirmedAppliedActionsV1 } from '@codebuff/common/tools/results/filesystem'
+import { resolveProjectPathForFileSystemRead } from '@codebuff/common/util/project-path-containment'
 
+import type { FileChange } from '@codebuff/common/actions'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { FileMutationResultV1 } from '@codebuff/common/tools/results/filesystem'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -71,18 +73,24 @@ function jsonOutput(
  */
 function buildApplyOutput(
   mutation: FileMutationResultV1,
-  serviceError: string | undefined,
+  planned: Extract<
+    RenameCodeActionResult,
+    { changedFiles: unknown }
+  >['changedFiles'],
 ): SemanticEditOutputValue {
   const confirmedActionIds = new Set(
     getConfirmedAppliedActionsV1(mutation).map((action) => action.actionId),
   )
-  const results = mutation.actions.map((action) => {
+  const results = mutation.actions.map((action, index) => {
+    const annotations = planned[index]?.annotations
+    const metadata = annotations?.length ? { annotations } : {}
     if (confirmedActionIds.has(action.actionId)) {
-      return { path: action.path, applied: true }
+      return { path: action.path, applied: true, ...metadata }
     }
     return {
       path: action.path,
       applied: false,
+      ...metadata,
       errorMessage:
         action.error?.message ??
         mutation.errors[0]?.message ??
@@ -90,7 +98,6 @@ function buildApplyOutput(
     }
   })
   const errorMessages = new Set<string>()
-  if (serviceError) errorMessages.add(serviceError)
   if (mutation.outcome !== 'applied') {
     for (const error of mutation.errors) {
       errorMessages.add(error.message)
@@ -126,31 +133,91 @@ export async function applySemanticEdit(
     return { output: jsonOutput(serviceValue) }
   }
   const changedFiles = serviceValue.changedFiles
-  const serviceError =
-    typeof serviceValue.errorMessage === 'string'
-      ? serviceValue.errorMessage
-      : undefined
-  if (changedFiles.length === 0) {
-    // Defensive fail-closed: the service contract never yields an empty
-    // list here, and an empty transaction is an honest failure, not a no-op.
+  if (serviceValue.errorMessage !== undefined || changedFiles.length === 0) {
     return {
       output: jsonOutput({
+        applied: false,
         errorMessage:
-          serviceError ?? 'the language server returned no applicable edits',
+          serviceValue.errorMessage ??
+          'the language server returned no applicable edits',
       }),
     }
   }
 
-  // Unguarded full-file writes: changeFiles resolves each path (the service
-  // returns absolute in-project paths), snapshots the current bytes under the
-  // path lock, and refuses a mutation whose freshness changed between the
-  // service splice and the commit — so no pre-computed hash is needed here.
+  const targets = new Set<string>()
+  const parameters: FileChange[] = []
+  const claimPath = async (target: string, requireIdentity: boolean) => {
+    const contained = await resolveProjectPathForFileSystemRead(
+      deps.cwd,
+      target,
+      deps.fs,
+      deps.fs.hostReadPolicy,
+    )
+    if (
+      contained?.scope !== 'project' ||
+      targets.has(contained.realFullPath) ||
+      (requireIdentity && contained.fullPath !== contained.realFullPath)
+    )
+      return undefined
+    targets.add(contained.realFullPath)
+    return contained.realFullPath
+  }
+  const pathRefused = () => ({
+    output: jsonOutput({
+      applied: false,
+      errorMessage:
+        'The semantic edit contains an outside, aliased or duplicate target; no files were changed.',
+    }),
+  })
+  for (const file of changedFiles) {
+    const basis = file.expectedRawHash
+    if (
+      basis !== null &&
+      (typeof basis !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(basis))
+    ) {
+      return {
+        output: jsonOutput({
+          applied: false,
+          errorMessage:
+            'Missing exact semantic edit basis; no files were changed.',
+        }),
+      }
+    }
+    const resource = file.kind === 'delete' || file.kind === 'move'
+    const path = await claimPath(file.path, resource || basis === null)
+    if (!path) return pathRefused()
+    if (file.kind === 'move') {
+      const destinationPath = await claimPath(file.destinationPath, true)
+      if (!destinationPath) return pathRefused()
+      parameters.push({
+        type: 'move',
+        path,
+        destinationPath,
+        expectedHash: file.expectedHash,
+        expectedRawHash: file.expectedRawHash,
+        destinationExpectedHash: null,
+      })
+    } else if (file.kind === 'delete') {
+      parameters.push({
+        type: 'delete',
+        path,
+        expectedHash: file.expectedHash,
+        expectedRawHash: file.expectedRawHash,
+      })
+    } else {
+      parameters.push({
+        type: 'file',
+        path,
+        content: file.newContent,
+        expectedRawHash: basis,
+        ...(basis === null ? { expectedHash: null } : {}),
+      })
+    }
+  }
+  // Bind to the exact splice input. Taking a new basis under the lock would
+  // silently clobber concurrent appends, BOM changes and EOL-only drift.
   const mutationOutput = await changeFiles({
-    parameters: changedFiles.map((file) => ({
-      type: 'file' as const,
-      path: file.path,
-      content: file.newContent,
-    })),
+    parameters,
     cwd: deps.cwd,
     fs: deps.fs,
     signal: deps.signal,
@@ -173,7 +240,7 @@ export async function applySemanticEdit(
     }
   }
   return {
-    output: jsonOutput(buildApplyOutput(mutation, serviceError)),
+    output: jsonOutput(buildApplyOutput(mutation, changedFiles)),
     mutation,
   }
 }

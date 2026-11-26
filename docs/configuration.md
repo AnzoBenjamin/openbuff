@@ -287,6 +287,131 @@ removed. Declare capabilities explicitly:
 }
 ```
 
+#### Usage negotiation and pricing
+
+Openbuff bundles a bounded, checked-in capability snapshot derived from
+[models.dev](https://models.dev). Runtime requests never fetch that service.
+The catalog matches only an exact provider model ID on these exact canonical
+routes:
+
+- `openai-compatible` at `https://api.openai.com/v1`
+- `anthropic-compatible` at `https://api.anthropic.com` (or `/v1`)
+- `openai-compatible` at `https://openrouter.ai/api/v1`
+
+A custom gateway, ChatGPT subscription route, unknown ID, punctuation/date
+variant, or model on the wrong seller remains unknown. OpenRouter records never
+borrow direct OpenAI or Anthropic prices. The catalog is the lowest-precedence
+capability layer; explicit `defaultCapabilities` and `modelCapabilities` still
+win. An explicit pricing object is atomic: missing rates are not filled from a
+different catalog/discovery schedule.
+
+The generated snapshot records the models.dev API payload hash, a separately
+observed upstream revision, generated catalog hash, timestamp, and MIT license.
+The API does not attest its Git revision, so the manifest says so rather than
+claiming a cryptographic link. Upstream conditional/tiered price schedules are
+not flattened: those records can still supply context/output limits and
+reasoning support, but pricing remains unknown until tier-aware accounting is
+implemented. Verify the checked-in artifact offline with:
+
+```sh
+bun run check:model-catalog
+```
+
+OpenAI-compatible endpoints differ on whether they accept
+`stream_options.include_usage`. Canonical OpenAI and OpenRouter routes request
+it by default so late usage after `finish_reason: "tool_calls"` is retained.
+Set `compatibility.includeUsage: false` to opt out. For another endpoint known
+to support it, set the field to `true`; omission keeps it out of unknown/custom
+endpoint requests.
+
+Manual pricing remains available under `defaultCapabilities.pricing` or
+`modelCapabilities[modelId].pricing`:
+
+```jsonc
+{
+  "compatibility": { "includeUsage": true },
+  "defaultCapabilities": {
+    "pricing": {
+      "inputPerMillionTokens": 3,
+      "outputPerMillionTokens": 15,
+      "cachedInputPerMillionTokens": 0.3,
+      "cacheWriteInputPerMillionTokens": 3.75,
+      "currency": "USD",
+    },
+  },
+}
+```
+
+Canonical input is split into uncached, cache-read and cache-write buckets.
+Anthropic-compatible usage is normalized from its raw cache fields; a positive
+cache-write bucket without `cacheWriteInputPerMillionTokens` stays unknown
+instead of being charged at the ordinary input rate. Missing or contradictory
+counts, impossible bucket totals, positive unpriced components and missing or
+non-USD currency also stay unknown. These values are per-request estimates,
+not provider invoices.
+
+#### Provider-request spending admission
+
+Top-level `spending` selects one root-shared policy for the run and every
+foreground, background, retried, failed-over, or supervised-child provider
+attempt:
+
+```jsonc
+{
+  "spending": {
+    "mode": "strict-capped",
+    "capCents": 250,
+    "currency": "USD",
+  },
+}
+```
+
+`strict-capped` reserves before dispatch from the model's full context-window
+input bound, enforced output-token ceiling, and worst enabled input/cache rate.
+Unknown currency/pricing, a missing context/output bound, subscription routes,
+or missing cache-write pricing where writes are possible refuse before the HTTP
+request. Explicit zero USD prices remain valid.
+
+For a route that cannot supply such a bound, the opt-in degraded alternative is
+explicit and fixed before execution:
+
+```jsonc
+{
+  "spending": {
+    "mode": "estimated-capped",
+    "capCents": 250,
+    "currency": "USD",
+    "estimator": {
+      "id": "team-conservative-v1",
+      "reservationCents": 25,
+      "maxConcurrentAttempts": 2,
+    },
+  },
+}
+```
+
+Each unknown/incomplete/failed attempt keeps its whole reservation. Complete
+validated usage plus configured USD pricing, or provider-reported cost, can
+reconcile it; observed overshoot is retained and blocks later admissions.
+Active attempts become held uncertainty after restart. The owner-only authority
+record is stored under the configured harness state directory and is shared
+across processes with atomic locking. A capped policy fails closed if durable
+storage is unavailable or corrupt. `{"mode":"uncapped"}` preserves full-access
+execution and reports unknown costs without a local cap. A legacy root agent
+`maxCostCents` maps to `strict-capped` when no top-level/run policy is selected;
+child caps do not create independent balances. This is local admission, not an
+exact remote-billing guarantee: already admitted in-flight requests can still
+overshoot.
+
+`/provider models <provider> --refresh` retains discovery provenance in the
+owner-only local cache. The bounded response and normalized capability payload
+have separate hashes; entries are keyed by endpoint/strategy/extraction
+identity and atomically replaced under a cross-process lock. Adding exactly one
+matching discovered model persists its complete context/reasoning/pricing
+capabilities. Existing provider-default or per-model fields remain
+authoritative; duplicate, missing, or partial price records do not fabricate a
+complete schedule.
+
 #### Output token ceiling
 
 `context.outputTokens` declares the model's per-response output token ceiling.
@@ -673,7 +798,11 @@ execution trust. An untrusted execution declaration fails startup.
     "profile": {
       "policy": "workspace-write",
       "preferredBackend": "native-exec",
-      "required": ["exact-env", "filesystem-isolation", "process-tree-containment"],
+      "required": [
+        "exact-env",
+        "filesystem-isolation",
+        "process-tree-containment"
+      ],
       "optional": ["network-isolation"],
       "allowBackendFallback": false
     },

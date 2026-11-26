@@ -134,6 +134,7 @@ describe('check-ci-local helpers', () => {
     expect(formatSuccessMessage()).toContain('project-root')
     expect(formatSuccessMessage()).toContain('byok-wording')
     expect(formatSuccessMessage()).toContain('dependency-provenance')
+    expect(formatSuccessMessage()).toContain('model-catalog')
     expect(formatSuccessMessage()).toContain('full agents + common suites')
   })
 
@@ -367,11 +368,16 @@ describe('runCiLocalChecks orchestration', () => {
       args: ['--cwd=scripts', 'run', 'guard:types-declaration'],
       cwdDir: '',
     },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:model-catalog'],
+      cwdDir: '',
+    },
     { command: 'bun', args: ['test'], cwdDir: 'agents' },
     { command: 'bun', args: ['test'], cwdDir: 'common' },
   ]
 
-  test('runs steps A-K in order and exits 0 when all pass', () => {
+  test('runs steps A-L in order and exits 0 when all pass', () => {
     withQuietConsole(() => {
       const { calls, run } = recordingStepRunner(0)
       expect(runCiLocalChecks(tmpRoot, run)).toBe(0)
@@ -380,14 +386,14 @@ describe('runCiLocalChecks orchestration', () => {
         const expected = expectedSteps[i]
         expect(call.command).toBe(expected.command)
         expect(call.args.slice(0, expected.args.length)).toEqual(expected.args)
-        // Steps A-J run at the repo root; Step K cds into each package dir.
+        // Steps A-K run at the repo root; Step L cds into each package dir.
         const expectedCwd = expected.cwdDir
           ? join(tmpRoot, expected.cwdDir)
           : tmpRoot
         expect(call.cwd).toBe(expectedCwd)
       })
       // Step E runs the determinism gate at the repo root before the
-      // full suites (Step K) — a hard gate step, not suite-internal.
+      // full suites (Step L) — a hard gate step, not suite-internal.
       expect(calls[4].args).toEqual([
         '--cwd=scripts',
         'run',
@@ -395,7 +401,7 @@ describe('runCiLocalChecks orchestration', () => {
       ])
       expect(calls[4].cwd).toBe(tmpRoot)
       // Step F runs the mock-module guard at the repo root, still before
-      // the full suites (Step K) — a hard gate step, not suite-internal.
+      // the full suites (Step L) — a hard gate step, not suite-internal.
       expect(calls[5].args).toEqual([
         '--cwd=scripts',
         'run',
@@ -403,7 +409,7 @@ describe('runCiLocalChecks orchestration', () => {
       ])
       expect(calls[5].cwd).toBe(tmpRoot)
       // Step G runs the project-root guard at the repo root, still before the
-      // full suites (Step K) — a hard gate step, not suite-internal, so an
+      // full suites (Step L) — a hard gate step, not suite-internal, so an
       // unguarded fileContext.projectRoot deref cannot silently land.
       expect(calls[6].args).toEqual([
         '--cwd=scripts',
@@ -412,7 +418,7 @@ describe('runCiLocalChecks orchestration', () => {
       ])
       expect(calls[6].cwd).toBe(tmpRoot)
       // Step H runs the byok-wording guard at the repo root, still before the
-      // full suites (Step K) — a hard gate step, not suite-internal.
+      // full suites (Step L) — a hard gate step, not suite-internal.
       expect(calls[7].args).toEqual([
         '--cwd=scripts',
         'run',
@@ -429,7 +435,7 @@ describe('runCiLocalChecks orchestration', () => {
       ])
       expect(calls[8].cwd).toBe(tmpRoot)
       // Step J enforces the runtime-dependency / typings co-declaration
-      // invariant from manifests alone, still before the suites (Step K), so a
+      // invariant from manifests alone, still before the suites (Step L), so a
       // dropped @types sibling fails the gate rather than a suite.
       expect(calls[9].args).toEqual([
         '--cwd=scripts',
@@ -437,6 +443,13 @@ describe('runCiLocalChecks orchestration', () => {
         'guard:types-declaration',
       ])
       expect(calls[9].cwd).toBe(tmpRoot)
+      // Step K checks the checked-in offline model catalog before suites.
+      expect(calls[10].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:model-catalog',
+      ])
+      expect(calls[10].cwd).toBe(tmpRoot)
       // Step B diffs tracked files against git HEAD (staged drift included).
       expect(calls[1].args[2]).toBe('HEAD')
       // Lock is released after success.
@@ -466,7 +479,7 @@ describe('runCiLocalChecks orchestration', () => {
       }
       expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
       // Steps A-E ran; the mock-module/project-root guards (Steps F-G) and
-      // the full suites (Step K) were skipped.
+      // the full suites (Step L) were skipped.
       expect(calls).toHaveLength(5)
       expect(calls[4].args).toEqual([
         '--cwd=scripts',
@@ -489,7 +502,7 @@ describe('runCiLocalChecks orchestration', () => {
       }
       expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
       // Steps A-F ran; the project-root guard (Step G) and the full suites
-      // (Step K) were skipped.
+      // (Step L) were skipped.
       expect(calls).toHaveLength(6)
       expect(calls[5].args).toEqual([
         '--cwd=scripts',
@@ -511,7 +524,7 @@ describe('runCiLocalChecks orchestration', () => {
         return calls.length === 7 ? { status: 1 } : result
       }
       expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
-      // Steps A-H ran; the full suites (Step K) were skipped.
+      // Steps A-G ran; the full suites (Step L) were skipped.
       expect(calls).toHaveLength(7)
       expect(calls[6].args).toEqual([
         '--cwd=scripts',
@@ -533,8 +546,7 @@ describe('runCiLocalChecks orchestration', () => {
         return calls.length === 8 ? { status: 1 } : result
       }
       expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
-      // Steps A-J ran; the types-declaration guard (Step J) passed and the
-      // full suites (Step K) were skipped.
+      // Steps A-H ran; later guards and the full suites (Step L) were skipped.
       expect(calls).toHaveLength(8)
       expect(calls[7].args).toEqual([
         '--cwd=scripts',

@@ -26,6 +26,11 @@ for (const enqueueDuringAbort of [false, true]) {
         current: async (message: Parameters<SendMessageFn>[0]) => {
           chain.current = true
           sent.push(message)
+          return {
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          } as const
         },
       }
       function Host() {

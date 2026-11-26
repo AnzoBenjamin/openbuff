@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
+import { open, type FileHandle } from 'node:fs/promises'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1167,6 +1168,7 @@ describe('changeFile', () => {
         cwd: '/repo',
       })
       const fs = createMockFs({
+        directories: { '/repo/src': [] },
         files: {
           '/repo/src/one.ts': 'const one = 1\n',
           '/repo/src/two.ts': 'const two = 1\n',
@@ -1205,8 +1207,11 @@ describe('changeFile', () => {
         .map((line) => JSON.parse(line) as Record<string, unknown>)
       expect(events.map((event) => event.kind)).toEqual([
         'tx_begin',
+        'tx_dispatch',
+        'tx_dispatch',
         'tx_commit',
       ])
+      expect(events.slice(1, 3).map((event) => event.through)).toEqual([0, 1])
       expect(events[0]).toMatchObject({
         transactionId: stampedId,
         operationId: mutation.operationId,
@@ -1218,23 +1223,25 @@ describe('changeFile', () => {
         beforeHash: string | null
         beforeBytes?: string
         beforeMode?: number
+        afterHash?: string | null
       }>
-      expect(entries).toEqual([
+      expect(entries).toMatchObject([
         {
           path: 'src/one.ts',
-          beforeHash: expect.any(String),
+          beforeHash: getExactContentHash('const one = 1\n'),
           beforeBytes: 'const one = 1\n',
-          // The file's permission bits are part of the durable pre-image.
-          beforeMode: 0o644,
+          ...(process.platform === 'win32' ? {} : { beforeMode: 0o644 }),
+          afterHash: getExactContentHash('const one = 2\n'),
         },
         {
           path: 'src/two.ts',
-          beforeHash: expect.any(String),
+          beforeHash: getExactContentHash('const two = 1\n'),
           beforeBytes: 'const two = 1\n',
-          beforeMode: 0o644,
+          ...(process.platform === 'win32' ? {} : { beforeMode: 0o644 }),
+          afterHash: getExactContentHash('const two = 2\n'),
         },
       ])
-      expect(events[1]).toMatchObject({ transactionId: stampedId })
+      expect(events[3]).toMatchObject({ transactionId: stampedId })
     } finally {
       rmSync(stateDir, { recursive: true, force: true })
     }
@@ -1253,6 +1260,7 @@ describe('changeFile', () => {
       }
       let failedWrite = false
       const fs = createMockFs({
+        directories: { '/repo/src': [] },
         files,
         readFileImpl: async (path) => {
           const content = files[path]
@@ -1306,9 +1314,12 @@ describe('changeFile', () => {
         .map((line) => JSON.parse(line) as Record<string, unknown>)
       expect(events.map((event) => event.kind)).toEqual([
         'tx_begin',
+        'tx_dispatch',
+        'tx_dispatch',
+        'tx_recovery_required',
         'tx_abort',
       ])
-      expect(events[1]).toMatchObject({
+      expect(events[4]).toMatchObject({
         transactionId: mutation.authorityReceipt?.transactionId,
       })
     } finally {
@@ -1352,7 +1363,7 @@ describe('changeFile', () => {
     }
   })
 
-  test('an intent-log failure never breaks the commit path', async () => {
+  test('refuses a multi-file commit when durable intent admission fails', async () => {
     const failingIntentLog = {
       filePath: '/nonexistent/intents.jsonl',
       beginTransaction: async () => ({ ok: false, error: 'disk exploded' }),
@@ -1364,12 +1375,14 @@ describe('changeFile', () => {
       }),
       revertTransaction: async () => ({
         ok: false as const,
-        status: 'revert_failed' as const,
+        status: 'recovery_required' as const,
         error: 'disk exploded',
+        unresolvedPaths: [],
         revertedPaths: 0,
       }),
     }
     const fs = createMockFs({
+      directories: { '/repo/src': [] },
       files: {
         '/repo/src/one.ts': 'const one = 1\n',
         '/repo/src/two.ts': 'const two = 1\n',
@@ -1394,19 +1407,133 @@ describe('changeFile', () => {
       intentLog: failingIntentLog,
     })
 
-    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
-      kind: 'file_mutation_result',
-      outcome: 'applied',
-    })
-    // A tx_begin that failed means no durable intent record exists, so the
-    // committed receipt carries NO transactionId (no dangling id).
     const mutation = fileMutationResultV1Schema.parse(
       result[0]?.type === 'json' ? result[0].value : null,
     )
+    expect(mutation).toMatchObject({
+      outcome: 'not_applied',
+      errors: [
+        expect.objectContaining({
+          code: 'io_error',
+          message: expect.stringContaining('disk exploded'),
+        }),
+      ],
+    })
     expect(mutation.authorityReceipt?.transactionId).toBeUndefined()
     expect(await fs.readFile('/repo/src/one.ts', 'utf-8')).toBe(
-      'const one = 2\n',
+      'const one = 1\n',
     )
+    expect(await fs.readFile('/repo/src/two.ts', 'utf-8')).toBe(
+      'const two = 1\n',
+    )
+  })
+
+  test.each(['log', 'directory'] as const)(
+    'refuses before file effects when the intent %s fsync fails',
+    async (syncTarget) => {
+      if (syncTarget === 'directory' && process.platform !== 'linux') return
+      const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-sync-fault-'))
+      const log = createTransactionIntentLogForWorkspace({
+        stateDir,
+        cwd: '/repo',
+      })
+      const probe = await open(join(stateDir, 'probe'), 'w')
+      const prototype = Object.getPrototypeOf(probe) as FileHandle
+      const sync = prototype.sync
+      await probe.close()
+      let injected = 0
+      const save = spyOn(prototype, 'sync').mockImplementation(async function (
+        this: FileHandle,
+      ) {
+        const info = await this.stat()
+        if (
+          (syncTarget === 'directory' && info.isDirectory()) ||
+          (syncTarget === 'log' && existsSync(log.filePath))
+        ) {
+          injected++
+          throw new Error('intent fsync fault')
+        }
+        await sync.call(this)
+      })
+      try {
+        const fs = createMockFs({
+          directories: { '/repo': [] },
+          files: { '/repo/one.txt': 'before', '/repo/two.txt': 'before' },
+        })
+        const parameters = ['one.txt', 'two.txt'].map((path) => ({
+          type: 'file',
+          path,
+          content: 'after',
+          expectedHash: getContentHash('before'),
+        }))
+        const result = await changeFiles({
+          parameters,
+          cwd: '/repo',
+          fs,
+          intentLog: log,
+        })
+        expect(injected).toBeGreaterThan(0)
+        expect(
+          result[0]?.type === 'json' ? result[0].value : null,
+        ).toMatchObject({
+          outcome: 'not_applied',
+          errors: [
+            expect.objectContaining({
+              code: 'io_error',
+              message: expect.stringContaining('intent fsync fault'),
+            }),
+          ],
+        })
+        expect(await fs.readFile('/repo/one.txt', 'utf8')).toBe('before')
+        expect(await fs.readFile('/repo/two.txt', 'utf8')).toBe('before')
+      } finally {
+        save.mockRestore()
+        rmSync(stateDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('refuses an otherwise valid group with more than 8 MiB of pre-images before any file effects', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-capacity-'))
+    try {
+      const intentLog = createTransactionIntentLogForWorkspace({
+        stateDir,
+        cwd: '/repo',
+      })
+      const before = 'é'.repeat((9 * 1024 * 1024) / 4)
+      const fs = createMockFs({
+        directories: { '/repo': [] },
+        files: { '/repo/one.txt': before, '/repo/two.txt': before },
+      })
+      const changes = ['one.txt', 'two.txt'].map((path) => ({
+        type: 'file',
+        path,
+        content: 'after',
+        expectedHash: getContentHash(before),
+      }))
+      const result = await changeFiles({
+        parameters: changes,
+        cwd: '/repo',
+        fs,
+        intentLog,
+      })
+      expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject(
+        {
+          outcome: 'not_applied',
+          errors: [
+            expect.objectContaining({
+              code: 'resource_limit',
+              recovery: 'split_transaction',
+            }),
+          ],
+        },
+      )
+      expect(await fs.readFile('/repo/one.txt', 'utf8')).toBe(before)
+      expect(await fs.readFile('/repo/two.txt', 'utf8')).toBe(before)
+      expect(existsSync(intentLog.filePath)).toBe(false)
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
   })
 
   test('an abort mid-commit stops the loop, rolls back applied changes, and reports a cancelled outcome', async () => {

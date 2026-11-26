@@ -1,4 +1,15 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import { describe, expect, it } from 'bun:test'
 
 import { handleEditTransaction } from '../tools/handlers/tool/edit-transaction'
@@ -64,6 +75,165 @@ async function readWholeFiles(
 }
 
 describe('edit_transaction multi-file no-match recovery loop', () => {
+  it('retains SDK recovery-required through the runtime and allows a real retry after repair', async () => {
+    const { handleToolCall } = await import('../../../../sdk/src/run')
+    const { createNodeFileSystem } =
+      await import('../../../../sdk/src/tools/node-filesystem')
+    const { changeFiles } =
+      await import('../../../../sdk/src/tools/change-file')
+    const { WorkspaceMutationBroker } =
+      await import('../../../../sdk/src/services/workspace-mutation-broker')
+    const { createTransactionIntentLogForWorkspace } =
+      await import('../../../../sdk/src/tools/transaction-intent-log')
+    const root = mkdtempSync(path.join(tmpdir(), 'openbuff-runtime-tx-'))
+    const cwd = path.join(realpathSync(root), 'project')
+    const stateDir = path.join(root, 'state')
+    mkdirSync(cwd)
+    const target = path.join(cwd, 'target.txt')
+    const later = path.join(cwd, 'later.txt')
+    writeFileSync(target, 'original\r\n')
+    writeFileSync(later, 'unchanged\n')
+    try {
+      const fs = createNodeFileSystem({
+        mutationBroker: await WorkspaceMutationBroker.create({ cwd, stateDir }),
+      })
+      const intentLog = createTransactionIntentLogForWorkspace({
+        cwd,
+        stateDir,
+      })
+      const commit = fs.conditionalCommit!
+      fs.conditionalCommit = async (file, bytes, options) => {
+        if (String(file) === later) {
+          writeFileSync(target, 'foreign\n')
+          throw new Error('fixture: second commit failed')
+        }
+        return commit(file, bytes, options)
+      }
+      const failed = await changeFiles({
+        cwd,
+        fs,
+        intentLog,
+        parameters: [
+          {
+            type: 'file',
+            path: 'target.txt',
+            content: 'owned\n',
+            expectedHash: getContentHash('original\r\n'),
+          },
+          {
+            type: 'file',
+            path: 'later.txt',
+            content: 'after\n',
+            expectedHash: getContentHash('unchanged\n'),
+          },
+        ],
+      })
+      fs.conditionalCommit = commit
+      expect(failed[0]?.type === 'json' ? failed[0].value : null).toMatchObject(
+        { outcome: 'rollback_incomplete' },
+      )
+      const pending = await intentLog.recoverInterruptedTransactions()
+      expect(pending.ok ? pending.transactions : []).toHaveLength(1)
+      const transactionId = pending.ok
+        ? pending.transactions[0]?.transactionId
+        : undefined
+      const runId = 'transaction-runtime-retry'
+      const fileProcessingState = createFileProcessingState()
+      const dispatch = (id: string) =>
+        handleEditTransaction({
+          fileContext: { ...mockFileContext, projectRoot: cwd },
+          runId,
+          previousToolCallFinished: Promise.resolve(),
+          toolCall: {
+            toolCallId: id,
+            toolName: 'edit_transaction',
+            input: {
+              edits: [
+                { type: 'create', path: 'created-a.txt', content: 'created A' },
+                { type: 'create', path: 'created-b.txt', content: 'created B' },
+              ],
+            },
+          },
+          fileProcessingState,
+          logger,
+          requestOptionalFile: async ({ filePath }) =>
+            fs.readFile(path.join(cwd, filePath), 'utf8').catch((error) => {
+              if (error?.code === 'ENOENT') return null
+              throw error
+            }),
+          requestClientToolCall: async ({ input, toolCallId }) => {
+            const response = await handleToolCall({
+              action: {
+                type: 'tool-call-request',
+                requestId: toolCallId,
+                userInputId: 'fixture',
+                toolName: 'edit_transaction',
+                input,
+              },
+              overrides: {},
+              customToolDefinitions: {},
+              cwd,
+              fs,
+              intentLog,
+              logger,
+              capabilityIssuer: { projectId: cwd, runId },
+              trustedJobOwner: {
+                clientSessionId: 'fixture',
+                rootRunId: runId,
+                parentRunId: runId,
+                parentAgentId: 'fixture',
+              },
+              approvalReceiptIds: [],
+              approvalMode: 'balanced',
+              getWorkspaceState: () => undefined,
+              setWorkspaceState: () => {},
+            })
+            return response.output as CodebuffToolOutput<'edit_transaction'>
+          },
+        })
+      const blocked = (await dispatch('blocked')).output[0]
+      expect(blocked?.type === 'json' ? blocked.value : null).toMatchObject({
+        errorCode: 'recovery_required',
+        errorMessage: expect.stringContaining(
+          'No edits from this call were applied',
+        ),
+        recovery: {
+          kind: 'transaction_intent',
+          transactionIds: [transactionId],
+        },
+      })
+      expect(readFileSync(target, 'utf8')).toBe('foreign\n')
+      await expect(
+        fs.readFile(path.join(cwd, 'created-a.txt'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(
+        fs.readFile(path.join(cwd, 'created-b.txt'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' })
+
+      // Operator re-establishes the exact owned postimage. A retry first
+      // compensates the interrupted group, then admits the new files.
+      writeFileSync(target, 'owned\n')
+      const retried = (await dispatch('retry')).output[0]
+      expect(retried?.type === 'json' ? retried.value : null).toMatchObject({
+        kind: 'file_mutation_result',
+        outcome: 'applied',
+      })
+      expect(readFileSync(target, 'utf8')).toBe('original\r\n')
+      expect(readFileSync(later, 'utf8')).toBe('unchanged\n')
+      expect(readFileSync(path.join(cwd, 'created-a.txt'), 'utf8')).toBe(
+        'created A',
+      )
+      expect(readFileSync(path.join(cwd, 'created-b.txt'), 'utf8')).toBe(
+        'created B',
+      )
+      expect(await intentLog.recoverInterruptedTransactions()).toMatchObject({
+        ok: true,
+        transactions: [],
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
   it('aborts with recovery.paths for the failing target only, then applies after re-reading it', async () => {
     const pathA = 'src/recovery-a.ts'
     const pathB = 'src/recovery-b.ts'

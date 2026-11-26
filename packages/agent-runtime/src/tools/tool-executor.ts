@@ -125,6 +125,8 @@ import type {
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
+  JournalEvent,
+  JournalWriter,
   NativeToolObservation,
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -2767,6 +2769,7 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
   repoId: string | undefined
   repoUrl: string | undefined
   runId: string
+  stepNumber?: number
   signal: AbortSignal
   system: string
   tools: ToolSet
@@ -2840,7 +2843,11 @@ type ToolAttemptParams = {
   userInputId: string
   agentState: AgentState
   runId: string
+  stepNumber?: number
   signal: AbortSignal
+  toolResults: ToolMessage[]
+  journalWriter?: JournalWriter
+  logger: Logger
   onResponseChunk: (chunk: string | PrintModeEvent) => void
   requestToolCall?: import('@codebuff/common/types/contracts/client').RequestToolCallFn
   requestFiles?: import('@codebuff/common/types/contracts/client').RequestFilesFn
@@ -2859,6 +2866,20 @@ type ToolAttemptParams = {
 const originalToolRequest = new WeakMap<NonNullable<ToolAttemptParams['requestToolCall']>, NonNullable<ToolAttemptParams['requestToolCall']>>()
 const originalFileRequest = new WeakMap<NonNullable<ToolAttemptParams['requestFiles']>, NonNullable<ToolAttemptParams['requestFiles']>>()
 const originalOptionalFileRequest = new WeakMap<NonNullable<ToolAttemptParams['requestOptionalFile']>, NonNullable<ToolAttemptParams['requestOptionalFile']>>()
+
+// An executor may publish an error for display after its handler throws. That
+// is not a recovered tool result and must not settle the journaled effect.
+const uncertainJournalHandlers = new WeakSet<object>()
+
+async function persistToolBoundary(writer: JournalWriter, runId: string, event: JournalEvent): Promise<void> {
+  if (writer.appendDurable) {
+    await writer.appendDurable(runId, event)
+    return
+  }
+  writer.append(runId, event)
+  if (writer.forceFlush) await writer.forceFlush()
+  else if (writer.flush) await writer.flush()
+}
 
 /** Keep failed attempts after recovery, including refusals before dispatch. */
 async function trackToolAttempt<P extends ToolAttemptParams>(
@@ -2957,6 +2978,14 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
     ...request, executionActor: actor, executionIdentity,
   }) : undefined
   if (trackedOptional && originalOptional) originalOptionalFileRequest.set(trackedOptional, originalOptional)
+  const journal = params.journalWriter
+  const journalPayload = { toolName: params.toolName, attemptId, basis }
+  const journalBoundary = (eventType: 'tool_call' | 'tool_result', value: Record<string, unknown>) => {
+    return journal ? persistToolBoundary(journal, params.runId, {
+      eventType, stepNumber: params.stepNumber ?? 0, correlation: toolCallId,
+      payload: { ...journalPayload, ...value },
+    }) : undefined
+  }
   const tracked = {
     ...params,
     toolCallId,
@@ -3000,7 +3029,33 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
       unavailable('refused', 'strict_project_reads_unavailable', readAccess.reason)
       params.onResponseChunk({ type: 'error', message: readAccess.reason })
     } else {
+      const firstResult = params.toolResults.length
+      if (journal) {
+        try {
+          await journalBoundary('tool_call', { input: capturedInput })
+        } catch (error) {
+          const message = 'Cannot dispatch this tool: the run journal could not retain its request.'
+          unavailable('refused', 'journal_request_unconfirmed', message)
+          throw new Error(message, { cause: error })
+        }
+      }
+      params.signal.throwIfAborted()
       await execute(tracked)
+      params.signal.throwIfAborted()
+      const result = journal ? params.toolResults.slice(firstResult)
+        .findLast((message) => message.toolCallId === toolCallId) : undefined
+      const outcome = result && (retained?.outcome ?? (!dispatched && refusal ? 'refused' : classifyActionOutput(params.toolName, result.content).outcome))
+      if (result && !uncertainJournalHandlers.has(tracked) && outcome !== 'uncertain') {
+        try {
+          await journalBoundary('tool_result', { result: result.content, outcome })
+        } catch (error) {
+          // The live result remains visible; lack of a durable result must
+          // not trigger a new execution or pretend the effect was undone.
+          try {
+            params.logger.warn({ error, toolCallId, runId: params.runId }, 'Tool result could not be retained in the journal')
+          } catch { /* Diagnostic observers cannot change the effect. */ }
+        }
+      }
     }
     params.signal.throwIfAborted()
   } catch (error) {
@@ -4151,30 +4206,6 @@ async function executeNativeToolCall<T extends ToolName>(
     toolCallsToAddToMessageHistory.push(finalToolCall)
   }
 
-  // P2-T2 slice-4 hardening: the caller (executeSingleToolCall) appended the
-  // tool_call completion marker BEFORE this seam runs, but a batching journal
-  // writer defers that commit — a kill -9 between here and the handler's own
-  // durability point would leave the marker uncommitted and the resume replay
-  // would re-execute the tool (double execution). Force the writer's pending
-  // batch to commit BEFORE the side effect executes. The method is OPTIONAL
-  // on JournalWriter (a per-append writer flushes eagerly and has nothing
-  // buffered), so probing structurally keeps other implementors unaffected;
-  // a forced-flush failure is fail-open (logged, never fails the tool) like
-  // every other journal write point.
-  if (
-    params.journalWriter &&
-    typeof params.journalWriter.forceFlush === 'function'
-  ) {
-    try {
-      await params.journalWriter.forceFlush()
-    } catch (error) {
-      logger.debug(
-        { error, toolName, toolCallId: toolCall.toolCallId },
-        'Failed to force-flush the run journal before tool execution (non-fatal)',
-      )
-    }
-  }
-
   let canonicalReceipt: unknown
   let handlerSucceeded = false
   let clientDelegated = false
@@ -4257,6 +4288,7 @@ async function executeNativeToolCall<T extends ToolName>(
   // `logger.warn({ error, toolName, toolCallId }, ...)` contract or the error
   // becomes silently lost for spawned agents.
   const recoverableToolResultPromise = toolResultPromise.catch((error) => {
+    uncertainJournalHandlers.add(params)
     params.signal.throwIfAborted()
     if (isAbortError(error)) throw error
     logger.warn(
@@ -4891,6 +4923,7 @@ async function executeExternalToolCall(
       return clientToolResult.output satisfies ToolResultOutput[]
     })
     .catch((error) => {
+      uncertainJournalHandlers.add(params)
       params.signal.throwIfAborted()
       if (isAbortError(error) || fromHandleSteps) throw error
       logger.warn(

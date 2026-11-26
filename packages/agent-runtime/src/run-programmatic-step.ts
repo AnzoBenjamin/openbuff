@@ -28,6 +28,7 @@ import { inlineCompactionOutcome } from './util/programmatic-compaction-outcome'
 import type { RuntimeSemanticCompactionOutcome } from './util/runtime-semantic-compaction'
 import { createWarnLatch } from './util/warn-latch'
 import { withSystemTags } from './util/messages'
+import { beginProgrammaticReplayObservation, type ProgrammaticReplayRecorder } from './util/programmatic-replay-observation'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
@@ -173,6 +174,7 @@ class AgentRunContextRegistry {
 }
 
 const agentRunContextRegistry = new AgentRunContextRegistry()
+const replayObservationByGenerator = new WeakMap<StepGenerator, ProgrammaticReplayRecorder>()
 
 // Function to clear the generator cache for testing purposes. Also re-arms the
 // per-template-id "base2 run has no projectRoot" warning latch, so tests
@@ -313,7 +315,8 @@ export async function runProgrammaticStep(
   // (P2-T2) can reproduce identity ids deterministically.
   const idGen = params.idGen ?? realIdGen
 
-  if (!template.handleSteps) {
+  const program = template.handleSteps
+  if (!program) {
     throw new Error('No step handler found for agent template ' + template.id)
   }
 
@@ -400,7 +403,7 @@ export async function runProgrammaticStep(
     // in-process from code the caller already trusted, not deserialized from
     // a stored string.
     if (
-      typeof template.handleSteps === 'string' &&
+      typeof program === 'string' &&
       template.executionSource !== undefined &&
       !TRUSTED_STRING_HANDLE_STEPS_EXECUTION_SOURCES.has(
         template.executionSource,
@@ -410,12 +413,6 @@ export async function runProgrammaticStep(
         `Executable handleSteps are disabled for agent ${template.id} loaded from executionSource '${template.executionSource}'. Install and explicitly trust the agent locally, or publish it as a prompt-only agent.`,
       )
     }
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const generatorFn =
-      typeof template.handleSteps === 'string'
-        ? new Function(`return (${template.handleSteps})`)()
-        : template.handleSteps
-
     // The context-pruner generator is serialized and cannot import runtime
     // helpers. Inject the authoritative model-aware policy so production does
     // not depend on a second copy of the budget arithmetic embedded in the
@@ -509,7 +506,23 @@ export async function runProgrammaticStep(
           }
         : toolCallParams
 
-    // Initialize native generator
+    const observation = params.journalWriter?.captureProgrammaticReplay === true
+      ? await beginProgrammaticReplayObservation({
+          writer: params.journalWriter,
+          runId: agentState.runId,
+          agentId: agentState.agentId,
+          templateId: template.id,
+          stepNumber,
+          program,
+          runtimeSource: Function.prototype.toString.call(runProgrammaticStep),
+          configuration: template.programmaticConfig ?? null,
+          input: { prompt: prompt ?? null, params: generatorParams ?? null },
+        })
+      : undefined
+    if (params.journalWriter?.captureProgrammaticReplay) params.signal.throwIfAborted()
+    // Observe the exact retained source before materializing it.
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const generatorFn = typeof program === 'string' ? new Function(`return (${program})`)() : program
     const initializedGenerator = generatorFn({
       agentState,
       prompt,
@@ -518,6 +531,7 @@ export async function runProgrammaticStep(
       config: template.programmaticConfig,
     })
     generator = initializedGenerator
+    if (observation) replayObservationByGenerator.set(initializedGenerator, observation)
     agentRunContextRegistry.setGenerator(
       agentState.runId,
       initializedGenerator,
@@ -605,6 +619,12 @@ export async function runProgrammaticStep(
   let creditsBefore = agentState.directCreditsUsed
   let childrenBefore = agentState.childRunIds.length
 
+  const retainedObservation = replayObservationByGenerator.get(generator!)
+  const observation = retainedObservation && retainedObservation.runId === agentState.runId &&
+    retainedObservation.agentId === agentState.agentId &&
+    retainedObservation.writer === params.journalWriter && params.journalWriter?.captureProgrammaticReplay
+    ? retainedObservation
+    : undefined
   let programmaticIterations = 0
 
   try {
@@ -627,20 +647,26 @@ export async function runProgrammaticStep(
       creditsBefore = agentState.directCreditsUsed
       childrenBefore = agentState.childRunIds.length
 
+      const nextInput = { toolResult: toolResult ?? [], stepsComplete, hitStepCap, nResponses }
+      if (observation) {
+        await observation.beforeNext(stepNumber, nextInput)
+        params.signal.throwIfAborted()
+      }
       const result = generator!.next({
         agentState: getPublicAgentState(
           agentState as AgentState & Required<Pick<AgentState, 'runId'>>,
         ),
-        toolResult: toolResult ?? [],
-        stepsComplete,
-        hitStepCap,
-        nResponses,
+        ...nextInput,
       })
       // A generator can catch its own cancellation or return naturally after
       // an awaited tool aborts. Its return is not authority to complete the run.
       params.signal.throwIfAborted()
 
       if (result.done) {
+        if (observation) {
+          await observation.returned(stepNumber, result.value)
+          params.signal.throwIfAborted()
+        }
         endTurn = true
         break
       }
@@ -655,12 +681,17 @@ export async function runProgrammaticStep(
       // Validate the yield value from handleSteps
       const parseResult = HandleStepsYieldValueSchema.safeParse(result.value)
       if (!parseResult.success) {
+        if (observation) await observation.gap(stepNumber, 'invalid_yield')
         throw new Error(
           `Invalid yield value from handleSteps in agent ${template.id}: ${parseResult.error.message}. ` +
             `Received: ${JSON.stringify(result.value)}`,
         )
       }
 
+      if (observation) {
+        await observation.yielded(stepNumber, result.value)
+        params.signal.throwIfAborted()
+      }
       if (result.value === 'STEP') {
         flushProgrammaticToolResultContext()
         break
@@ -785,6 +816,7 @@ export async function runProgrammaticStep(
       generateN,
     }
   } catch (error) {
+    if (observation) await observation.gap(stepNumber, 'exception')
     endTurn = true
 
     const errorMessage = `Error executing handleSteps for agent ${template.id}: ${
@@ -1052,50 +1084,8 @@ async function executeSingleToolCallInner(
   const idGen = params.idGen ?? realIdGen
   const toolCallId = idGen.uuid()
 
-  // P2-T2 slice 1: replay idempotency short-circuit (P2-T2-DESIGN §4c).
-  // A journaled tool_result is never re-executed on replay: if this exact
-  // tool call already completed before a crash, reuse the recorded result
-  // verbatim as this call's result instead of re-running a side-effecting tool.
-  //
-  // P2-T2-DESIGN §5 (replay requires reproducible ids): the short-circuit must
-  // NOT key on `toolCallId` — it is minted fresh by idGen.uuid() (realIdGen
-  // produces a NEW random id on a resumed run), so a uuid-keyed lookup NEVER
-  // matches the journaled tool_result after a restart and a completed
-  // side-effecting tool would re-execute. Instead key on the journaled
-  // tool_call PAYLOAD (toolName + structurally-equal input), which the
-  // programmatic loop re-derives identically on resume, and consume matches in
-  // order via `nextReplayOccurrence` so the same tool called twice with an
-  // identical input in one run resolves deterministically to distinct results.
-  if (agentState.runId && params.journalReader) {
-    const replayKey = `${toolCallToExecute.toolName}\u0000${JSON.stringify(toolCallToExecute.input) ?? ''}`
-    const occurrence = agentRunContextRegistry.nextReplayOccurrence(
-      agentState.runId,
-      replayKey,
-    )
-    const replayed = params.journalReader.toolResultForInput(
-      agentState.runId,
-      toolCallToExecute.toolName,
-      toolCallToExecute.input,
-      occurrence,
-    )
-    if (replayed !== undefined) {
-      const recordedResult = (
-        replayed as { result?: ToolResultOutput[] | null }
-      ).result
-      const replayedToolMessage: ToolMessage = {
-        role: 'tool',
-        toolCallId,
-        toolName: toolCallToExecute.toolName,
-        content: (recordedResult ?? []) as ToolResultOutput[],
-      }
-      // NOTE(James): agentState.messageHistory is readonly for some reason (?!).
-      agentState.messageHistory = [...agentState.messageHistory]
-      agentState.messageHistory.push(replayedToolMessage)
-      toolResults.push(replayedToolMessage)
-      return replayedToolMessage.content
-    }
-  }
-
+  // This is live dispatch. The journal records evidence; a historical result
+  // with equal input is not authority to substitute for this invocation.
   const includeStructuredToolCall = toolCallToExecute.includeToolCall === true
   const excludeToolFromMessageHistory = !includeStructuredToolCall
 
@@ -1128,23 +1118,8 @@ async function executeSingleToolCallInner(
 
   const toolResultsToAddToMessageHistory: ToolMessage[] = []
 
-  // P2-T2 slice 1: tool_call is the completion-marker boundary (P2-T2-DESIGN
-  // §4) and MUST be journaled before the tool executes, so a crash mid-tool is
-  // classifiable as an in-flight tool call on resume.
-  if (agentState.runId && params.journalWriter) {
-    params.journalWriter.append(agentState.runId, {
-      eventType: 'tool_call',
-      stepNumber: params.stepNumber,
-      correlation: toolCallId,
-      payload: {
-        toolName: toolCallToExecute.toolName,
-        input: toolCallToExecute.input,
-      },
-    })
-  }
-
-  // Programmatic calls share the native/custom authorities used by model
-  // dispatch; a declared custom tool must reach its actual SDK handler.
+  // Programmatic calls share the native/custom authorities and journal
+  // boundary used by model dispatch.
   const execute = toolNames.includes(toolCallToExecute.toolName as any)
     ? executeToolCall
     : executeCustomToolCall
@@ -1228,23 +1203,9 @@ async function executeSingleToolCallInner(
   agentState.messageHistory = [...agentState.messageHistory]
   agentState.messageHistory.push(...toolResultsToAddToMessageHistory)
 
-  // Only this invocation can supply its generator or journal result.
+  // Only this invocation can supply its generator result.
   const latestToolResult = toolResults.slice(firstInvocationResult)
     .findLast(result => result.toolCallId === toolCallId)?.content
-
-  // P2-T2 slice 1: tool_result closes the tool_call boundary; a journaled
-  // result is what the replay short-circuit above later reuses.
-  if (agentState.runId && params.journalWriter) {
-    params.journalWriter.append(agentState.runId, {
-      eventType: 'tool_result',
-      stepNumber: params.stepNumber,
-      correlation: toolCallId,
-      payload: {
-        toolName: toolCallToExecute.toolName,
-        result: latestToolResult ?? null,
-      },
-    })
-  }
 
   if (
     toolCallToExecute.includeToolCall === undefined &&

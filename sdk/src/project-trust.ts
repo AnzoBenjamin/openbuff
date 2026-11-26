@@ -41,6 +41,7 @@ export type ProjectTrustGatedKind =
   | 'fileChangeHooks'
   | 'autoFileChangeHooks'
   | 'approvalMode'
+  | 'spending'
   | 'terminalTimeoutPolicy'
   | 'sandbox'
   | 'semanticIndexing'
@@ -158,7 +159,9 @@ export function getProjectTrustStorePath(configDir: string): string {
   return path.join(configDir, PROJECT_TRUST_FILE_NAME)
 }
 
-export function readProjectTrustStoreSync(configDir: string): ProjectTrustStore {
+export function readProjectTrustStoreSync(
+  configDir: string,
+): ProjectTrustStore {
   try {
     return parseProjectTrustStore(
       fs.readFileSync(getProjectTrustStorePath(configDir), 'utf8'),
@@ -269,7 +272,9 @@ export function needsProjectTrustDecision(
   return state.gated.length > 0 || extra.hasProjectAgentsOrSkills === true
 }
 
-export function formatProjectTrustItems(state: ProjectTrustStateView): string[] {
+export function formatProjectTrustItems(
+  state: ProjectTrustStateView,
+): string[] {
   return state.gated.map((item) => {
     const relative = path.relative(state.projectRoot, item.filePath)
     const file =

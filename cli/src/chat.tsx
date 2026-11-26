@@ -203,12 +203,20 @@ export const Chat = ({
   const readerRequest = useOutputReaderStore((state) => state.request)
   const permissionsOpen = usePermissionsStore((state) => state.isOpen)
   const transcriptHeaderRef = useRef<BoxRenderable | null>(null)
-  const [transcriptTarget, setTranscriptTarget] = useState<{ messageId: string; token: number } | null>(null)
+  const [transcriptTarget, setTranscriptTarget] = useState<{
+    messageId: string
+    token: number
+  } | null>(null)
   const [unreadUpdates, setUnreadUpdates] = useState(0)
   const observedUpdates = useRef<Set<string> | null>(null)
   const wasReading = useRef(false)
   useLayoutEffect(() => {
-    if (readerRequest || queueScreenOpen || attachmentManagerOpen || permissionsOpen) {
+    if (
+      readerRequest ||
+      queueScreenOpen ||
+      attachmentManagerOpen ||
+      permissionsOpen
+    ) {
       useChatStore.getState().setInputFocused(false)
       wasReading.current = true
     } else if (wasReading.current) {
@@ -216,7 +224,13 @@ export const Chat = ({
       useChatStore.getState().setInputFocused(true)
       inputRef.current?.focus()
     }
-  }, [readerRequest, queueScreenOpen, attachmentManagerOpen, permissionsOpen, inputRef])
+  }, [
+    readerRequest,
+    queueScreenOpen,
+    attachmentManagerOpen,
+    permissionsOpen,
+    inputRef,
+  ])
   useEffect(() => () => usePermissionsStore.getState().close(), [])
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const editOriginDraft = useRef<{
@@ -355,13 +369,34 @@ export const Chat = ({
   } = useChatUI({
     messages,
     isUserCollapsing,
-    readingPaused: readerRequest !== null || queueScreenOpen || attachmentManagerOpen || permissionsOpen,
+    readingPaused:
+      readerRequest !== null ||
+      queueScreenOpen ||
+      attachmentManagerOpen ||
+      permissionsOpen,
   })
   const conversationControls = useConversationControls({
     scrollRef,
-    enabled: () => !modeMenuOpenRef.current && !attachmentManagerOpenRef.current && !usePermissionsStore.getState().isOpen && useOutputReaderStore.getState().request === null && !queueScreenOpen && !commandPaletteOpen && !promptHistoryOpen && !modelRoutePickerOpen && !providerPickerOpen && !askUserState && !reviewMode,
-    onEnter: () => { setInputFocused(false); pauseFollowing() },
-    onLeave: () => { setInputFocused(true); inputRef.current?.focus() },
+    enabled: () =>
+      !modeMenuOpenRef.current &&
+      !attachmentManagerOpenRef.current &&
+      !usePermissionsStore.getState().isOpen &&
+      useOutputReaderStore.getState().request === null &&
+      !queueScreenOpen &&
+      !commandPaletteOpen &&
+      !promptHistoryOpen &&
+      !modelRoutePickerOpen &&
+      !providerPickerOpen &&
+      !askUserState &&
+      !reviewMode,
+    onEnter: () => {
+      setInputFocused(false)
+      pauseFollowing()
+    },
+    onLeave: () => {
+      setInputFocused(true)
+      inputRef.current?.focus()
+    },
     onCommands: () => setCommandPaletteOpen(true),
     composerHasFocus: () => inputRef.current?.hasFocus?.() ?? true,
   })
@@ -737,33 +772,35 @@ export const Chat = ({
     }
   }, [isStreaming, pendingBashMessages, setMessages])
 
-  const { sendMessage, clearMessages, retryRestore, cancelRestore } = useSendMessage({
-    inputRef,
-    activeSubagentsRef,
-    isChainInProgressRef,
-    setStreamStatus,
-    setContextWindowUsage,
-    setCompactionNotice,
-    setCanProcessQueue,
-    abortControllerRef,
-    agentId,
-    onBeforeMessageSend: validateAgents,
-    mainAgentTimer,
-    scrollToLatest: (options) => {
-      if (isProcessingQueueRef.current && !isAtBottomNow()) return
-      scrollToLatest(options)
-    },
-    onTotalCost: (costCents) => setSessionCostCents((prev) => prev + costCents),
-    onTimerEvent: () => {},
-    isQueuePausedRef,
-    isProcessingQueueRef,
-    resumeQueue,
-    pauseQueue,
-    continueChat,
-    continueChatId,
-  })
+  const { sendMessage, clearMessages, retryRestore, cancelRestore } =
+    useSendMessage({
+      inputRef,
+      activeSubagentsRef,
+      isChainInProgressRef,
+      setStreamStatus,
+      setContextWindowUsage,
+      setCompactionNotice,
+      setCanProcessQueue,
+      abortControllerRef,
+      agentId,
+      onBeforeMessageSend: validateAgents,
+      mainAgentTimer,
+      scrollToLatest: (options) => {
+        if (isProcessingQueueRef.current && !isAtBottomNow()) return
+        scrollToLatest(options)
+      },
+      onTotalCost: (costCents) =>
+        setSessionCostCents((prev) => prev + costCents),
+      onTimerEvent: () => {},
+      isQueuePausedRef,
+      isProcessingQueueRef,
+      resumeQueue,
+      pauseQueue,
+      continueChat,
+      continueChatId,
+    })
 
-  const sessionRestore = useChatStore(state => state.sessionRestore)
+  const sessionRestore = useChatStore((state) => state.sessionRestore)
   sendMessageRef.current = sendMessage
 
   const onSubmitPrompt = useEvent(
@@ -779,7 +816,9 @@ export const Chat = ({
       },
     ) => {
       if (useChatStore.getState().sessionRestore) {
-        showClipboardMessage('Resolve saved-session restoration with Retry or Cancel before submitting. Your draft is preserved.')
+        showClipboardMessage(
+          'Resolve saved-session restoration with Retry or Cancel before submitting. Your draft is preserved.',
+        )
         return
       }
       let preserveInput = options?.preserveInputValue === true
@@ -884,18 +923,38 @@ export const Chat = ({
   )
 
   const handleFollowupClick = useEvent((event: Event) => {
-    const request = event as CustomEvent<import('./utils/followup-request').FollowupSubmissionDetail>
+    const request = event as CustomEvent<
+      import('./utils/followup-request').FollowupSubmissionDetail
+    >
     const detail = request.detail
     if (!detail || typeof detail.complete !== 'function') return
     event.preventDefault()
-    if (typeof detail.prompt !== 'string' || !Number.isInteger(detail.index) || typeof detail.toolCallId !== 'string') {
+    if (
+      typeof detail.prompt !== 'string' ||
+      !Number.isInteger(detail.index) ||
+      typeof detail.toolCallId !== 'string'
+    ) {
       detail.complete(false, 'This followup has invalid captured content.')
       return
     }
-    if (modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current ||
-      useOutputReaderStore.getState().request !== null || queueScreenOpen || commandPaletteOpen ||
-      promptHistoryOpen || modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand) {
-      detail.complete(false, 'Return to the conversation before sending this followup.')
+    if (
+      modeMenuOpenRef.current ||
+      attachmentManagerOpenRef.current ||
+      conversationControls.activeRef.current ||
+      useOutputReaderStore.getState().request !== null ||
+      queueScreenOpen ||
+      commandPaletteOpen ||
+      promptHistoryOpen ||
+      modelRoutePickerOpen ||
+      providerPickerOpen ||
+      askUserState ||
+      reviewMode ||
+      planSessionPickerCommand
+    ) {
+      detail.complete(
+        false,
+        'Return to the conversation before sending this followup.',
+      )
       return
     }
     let accepted = false
@@ -906,21 +965,40 @@ export const Chat = ({
       onAccepted: () => {
         if (accepted) return
         accepted = true
-        useChatStore.getState().markFollowupClicked(detail.toolCallId, detail.index)
+        useChatStore
+          .getState()
+          .markFollowupClicked(detail.toolCallId, detail.index)
         trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
-          promptLength: detail.prompt.length, index: detail.index, agentMode,
+          promptLength: detail.prompt.length,
+          index: detail.index,
+          agentMode,
         })
         detail.complete(true)
       },
-    }).then(() => {
-      if (!accepted) detail.complete(false, 'The followup was not accepted. Check the conversation for the readiness or validation issue, then retry.')
-    }).catch((error) => {
-      detail.complete(false, error instanceof Error ? error.message : 'Failed to send this followup. Try again.')
     })
+      .then(() => {
+        if (!accepted)
+          detail.complete(
+            false,
+            'The followup was not accepted. Check the conversation for the readiness or validation issue, then retry.',
+          )
+      })
+      .catch((error) => {
+        detail.complete(
+          false,
+          error instanceof Error
+            ? error.message
+            : 'Failed to send this followup. Try again.',
+        )
+      })
   })
   useEffect(() => {
     globalThis.addEventListener('codebuff:send-followup', handleFollowupClick)
-    return () => globalThis.removeEventListener('codebuff:send-followup', handleFollowupClick)
+    return () =>
+      globalThis.removeEventListener(
+        'codebuff:send-followup',
+        handleFollowupClick,
+      )
   }, [handleFollowupClick])
 
   // handleSlashItemClick is defined later after feedback/publish stores are available
@@ -1015,7 +1093,7 @@ export const Chat = ({
 
   const handleCommandResult = useCallback(
     (result?: CommandResult) => {
-      if (!result) return
+      if (!result || 'status' in result) return
 
       if (result.openFeedbackMode) {
         // Save the feedback text that was set by the command handler before opening feedback mode
@@ -1275,30 +1353,71 @@ export const Chat = ({
 
   // Focus the composer only while its conversation scope is visible.
   useEffect(() => {
-    if (permissionsOpen || readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen ||
-      modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand || modeMenuOpen ||
-      conversationControls.activeRef.current) return
+    if (
+      permissionsOpen ||
+      readerRequest ||
+      queueScreenOpen ||
+      attachmentManagerOpen ||
+      commandPaletteOpen ||
+      promptHistoryOpen ||
+      modelRoutePickerOpen ||
+      providerPickerOpen ||
+      askUserState ||
+      reviewMode ||
+      planSessionPickerCommand ||
+      modeMenuOpen ||
+      conversationControls.activeRef.current
+    )
+      return
     inputRef.current?.focus()
-  }, [feedbackMode, askUserState, permissionsOpen, readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen,
-    promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, reviewMode, planSessionPickerCommand, modeMenuOpen, inputRef])
-
-  const handleSubmit = useCallback(async (latest?: InputValue) => {
-    if (modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || usePermissionsStore.getState().isOpen || useOutputReaderStore.getState().request !== null) return
-    // Update terminal title with truncated user input
-    if (inputValue.trim()) {
-      setTerminalTitle(inputValue)
-    }
-    const result = await onSubmitPrompt(latest?.text ?? useChatStore.getState().inputValue, agentMode, {
-      editMessageId: editingMessageId ?? undefined,
-    })
-    handleCommandResult(result)
   }, [
-    onSubmitPrompt,
-    inputValue,
-    agentMode,
-    handleCommandResult,
-    editingMessageId,
+    feedbackMode,
+    askUserState,
+    permissionsOpen,
+    readerRequest,
+    queueScreenOpen,
+    attachmentManagerOpen,
+    commandPaletteOpen,
+    promptHistoryOpen,
+    modelRoutePickerOpen,
+    providerPickerOpen,
+    reviewMode,
+    planSessionPickerCommand,
+    modeMenuOpen,
+    inputRef,
   ])
+
+  const handleSubmit = useCallback(
+    async (latest?: InputValue) => {
+      if (
+        modeMenuOpenRef.current ||
+        attachmentManagerOpenRef.current ||
+        conversationControls.activeRef.current ||
+        usePermissionsStore.getState().isOpen ||
+        useOutputReaderStore.getState().request !== null
+      )
+        return
+      // Update terminal title with truncated user input
+      if (inputValue.trim()) {
+        setTerminalTitle(inputValue)
+      }
+      const result = await onSubmitPrompt(
+        latest?.text ?? useChatStore.getState().inputValue,
+        agentMode,
+        {
+          editMessageId: editingMessageId ?? undefined,
+        },
+      )
+      handleCommandResult(result)
+    },
+    [
+      onSubmitPrompt,
+      inputValue,
+      agentMode,
+      handleCommandResult,
+      editingMessageId,
+    ],
+  )
 
   const totalMentionMatches = agentMatches.length + fileMatches.length
   const historyNavUpEnabled =
@@ -1648,7 +1767,13 @@ export const Chat = ({
   useChatKeyboard({
     state: chatKeyboardState,
     handlers: chatKeyboardHandlers,
-    isDisabled: () => modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || usePermissionsStore.getState().isOpen || inputRef.current?.hasFocus?.() === false || useOutputReaderStore.getState().request !== null,
+    isDisabled: () =>
+      modeMenuOpenRef.current ||
+      attachmentManagerOpenRef.current ||
+      conversationControls.activeRef.current ||
+      usePermissionsStore.getState().isOpen ||
+      inputRef.current?.hasFocus?.() === false ||
+      useOutputReaderStore.getState().request !== null,
     disabled:
       modeMenuOpen ||
       permissionsOpen ||
@@ -1665,9 +1790,35 @@ export const Chat = ({
       planSessionPickerCommand !== null,
   })
   useLayoutEffect(() => {
-    if ((permissionsOpen || readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen || modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand) && conversationControls.activeRef.current)
+    if (
+      (permissionsOpen ||
+        readerRequest ||
+        queueScreenOpen ||
+        attachmentManagerOpen ||
+        commandPaletteOpen ||
+        promptHistoryOpen ||
+        modelRoutePickerOpen ||
+        providerPickerOpen ||
+        askUserState ||
+        reviewMode ||
+        planSessionPickerCommand) &&
+      conversationControls.activeRef.current
+    )
       conversationControls.leave(false)
-  }, [permissionsOpen, readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen, promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, askUserState, reviewMode, planSessionPickerCommand, conversationControls.leave])
+  }, [
+    permissionsOpen,
+    readerRequest,
+    queueScreenOpen,
+    attachmentManagerOpen,
+    commandPaletteOpen,
+    promptHistoryOpen,
+    modelRoutePickerOpen,
+    providerPickerOpen,
+    askUserState,
+    reviewMode,
+    planSessionPickerCommand,
+    conversationControls.leave,
+  ])
 
   // Sync message block context to zustand store for child components
   const setMessageBlockContext = useMessageBlockStore(
@@ -1677,7 +1828,9 @@ export const Chat = ({
     (state) => state.setCallbacks,
   )
   useEffect(() => {
-    useMessageBlockStore.getState().pruneViews(messages.map((message) => message.id))
+    useMessageBlockStore
+      .getState()
+      .pruneViews(messages.map((message) => message.id))
   }, [messages])
 
   // Update context when values change - useLayoutEffect ensures synchronous updates
@@ -1843,7 +1996,9 @@ export const Chat = ({
   useEffect(() => {
     const keys = conversationUpdateKeys(messages)
     const observed = observedUpdates.current
-    const unseen = observed ? [...keys].filter((key) => !observed.has(key)).length : 0
+    const unseen = observed
+      ? [...keys].filter((key) => !observed.has(key)).length
+      : 0
     observedUpdates.current = keys
     if (isAtBottom && !readerRequest && !queueScreenOpen) setUnreadUpdates(0)
     else if (unseen) setUnreadUpdates((previous) => previous + unseen)
@@ -1865,19 +2020,19 @@ export const Chat = ({
       if (selection.type === 'test-connections') return
 
       let message: string
-        if (selection.type === 'preset') {
-          message = setupOpenbuffProviderFromArgs(selection.preset)
-        } else if (selection.type === 'connect-codex') {
-          const setupMessage = setupOpenbuffProviderFromArgs('codex')
-          const connectResult =
-            await handleOpenbuffProviderCommand('connect codex')
-          message = `${setupMessage}\n\n${connectResult.message}`
-          if (connectResult.connectCodex) {
-            setInputMode('connect:chatgpt')
-          }
-        } else {
-          message = addCustomOpenbuffProvider(selection.provider)
+      if (selection.type === 'preset') {
+        message = setupOpenbuffProviderFromArgs(selection.preset)
+      } else if (selection.type === 'connect-codex') {
+        const setupMessage = setupOpenbuffProviderFromArgs('codex')
+        const connectResult =
+          await handleOpenbuffProviderCommand('connect codex')
+        message = `${setupMessage}\n\n${connectResult.message}`
+        if (connectResult.connectCodex) {
+          setInputMode('connect:chatgpt')
         }
+      } else {
+        message = addCustomOpenbuffProvider(selection.provider)
+      }
       setProviderPickerOpen(false)
       setInputFocused(true)
       setMessages((prev) => [...prev, getSystemMessage(message)])
@@ -1929,7 +2084,13 @@ export const Chat = ({
   )
 
   if (sessionRestore) {
-    return <SessionRestoreScreen state={sessionRestore} onRetry={retryRestore} onCancel={cancelRestore} />
+    return (
+      <SessionRestoreScreen
+        state={sessionRestore}
+        onRetry={retryRestore}
+        onCancel={cancelRestore}
+      />
+    )
   }
 
   if (permissionsOpen) {
@@ -1967,7 +2128,9 @@ export const Chat = ({
         fileInventoryState={fileInventoryState}
         actions={[
           {
-            id: 'attachments', label: 'Attachments', description: 'Inspect, retry and recover composer attachments',
+            id: 'attachments',
+            label: 'Attachments',
+            description: 'Inspect, retry and recover composer attachments',
             onSelect: () => {
               setCommandPaletteOpen(false)
               attachmentManagerOpenRef.current = true
@@ -1975,33 +2138,71 @@ export const Chat = ({
             },
           },
           {
-            id: 'activity', label: 'Activity', description: 'Inspect active agents, queued work and failures',
+            id: 'activity',
+            label: 'Activity',
+            description: 'Inspect active agents, queued work and failures',
             onSelect: () => {
               setCommandPaletteOpen(false)
               const state = useChatStore.getState()
-              useOutputReaderStore.getState().open({ document: createJsonDocument('activity', 'Activity · captured now', {
-                capturedAt: new Date().toISOString(), run: isStreaming ? 'Running' : 'Idle',
-                agents: [...state.streamingAgents].map((id) => state.activeAgentTypes.get(id) ?? 'Agent'),
-                queue: queuedMessages.map((message) => ({ prompt: message.content, mode: message.agentMode, attachments: message.attachments.length })),
-                queuePaused, lastQueueFailure: queueError,
-              }) })
+              useOutputReaderStore.getState().open({
+                document: createJsonDocument(
+                  'activity',
+                  'Activity · captured now',
+                  {
+                    capturedAt: new Date().toISOString(),
+                    run: isStreaming ? 'Running' : 'Idle',
+                    agents: [...state.streamingAgents].map(
+                      (id) => state.activeAgentTypes.get(id) ?? 'Agent',
+                    ),
+                    queue: queuedMessages.map((message) => ({
+                      prompt: message.content,
+                      mode: message.agentMode,
+                      attachments: message.attachments.length,
+                    })),
+                    queuePaused,
+                    lastQueueFailure: queueError,
+                  },
+                ),
+              })
             },
           },
           {
-            id: 'changes', label: 'Changes', description: 'Browse captured files, hunks and mutation receipts',
-            onSelect: () => { setCommandPaletteOpen(false); useOutputReaderStore.getState().open({ kindFilter: ['diff', 'receipt'] }) },
-          },
-          {
-            id: 'session-details', label: 'Session details', description: 'Inspect configured routing, context and source health',
+            id: 'changes',
+            label: 'Changes',
+            description: 'Browse captured files, hunks and mutation receipts',
             onSelect: () => {
               setCommandPaletteOpen(false)
-              useOutputReaderStore.getState().open({ document: createJsonDocument('session-details', 'Session details · captured now', {
-                capturedAt: new Date().toISOString(), workspace: getProjectRoot(), selectedMode: agentMode,
-                configuredModelForSelectedMode: modelName ?? 'Not resolved', run: statusIndicatorState.kind,
-                context: contextWindowUsage ?? 'Not reported', compaction: compactionNotice ?? 'Not reported',
-                sessionCostCents, index: indexStatus ?? 'No source status reported',
-                freshness: 'This is a retained UI snapshot; reopen Session details to refresh it.',
-              }) })
+              useOutputReaderStore
+                .getState()
+                .open({ kindFilter: ['diff', 'receipt'] })
+            },
+          },
+          {
+            id: 'session-details',
+            label: 'Session details',
+            description:
+              'Inspect configured routing, context and source health',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              useOutputReaderStore.getState().open({
+                document: createJsonDocument(
+                  'session-details',
+                  'Session details · captured now',
+                  {
+                    capturedAt: new Date().toISOString(),
+                    workspace: getProjectRoot(),
+                    selectedMode: agentMode,
+                    configuredModelForSelectedMode: modelName ?? 'Not resolved',
+                    run: statusIndicatorState.kind,
+                    context: contextWindowUsage ?? 'Not reported',
+                    compaction: compactionNotice ?? 'Not reported',
+                    sessionCostCents,
+                    index: indexStatus ?? 'No source status reported',
+                    freshness:
+                      'This is a retained UI snapshot; reopen Session details to refresh it.',
+                  },
+                ),
+              })
             },
           },
           {
@@ -2036,7 +2237,10 @@ export const Chat = ({
         onClose={() => setCommandPaletteOpen(false)}
         onInsertText={(text) => {
           setInputValue((previous) => ({
-            text: previous.text.slice(0, previous.cursorPosition) + text + previous.text.slice(previous.cursorPosition),
+            text:
+              previous.text.slice(0, previous.cursorPosition) +
+              text +
+              previous.text.slice(previous.cursorPosition),
             cursorPosition: previous.cursorPosition + text.length,
             lastEditDueToNav: false,
           }))
@@ -2167,11 +2371,17 @@ export const Chat = ({
           },
         }}
       >
-        <box ref={transcriptHeaderRef} style={{ flexDirection: 'column', flexShrink: 0, width: '100%' }}>
+        <box
+          ref={transcriptHeaderRef}
+          style={{ flexDirection: 'column', flexShrink: 0, width: '100%' }}
+        >
           <TopBanner gitRoot={gitRoot} onSwitchToGitRoot={onSwitchToGitRoot} />
           {headerContent}
           {hiddenMessageCount > 0 && (
-            <LoadPreviousButton hiddenCount={hiddenMessageCount} onLoadMore={handleLoadPreviousMessages} />
+            <LoadPreviousButton
+              hiddenCount={hiddenMessageCount}
+              onLoadMore={handleLoadPreviousMessages}
+            />
           )}
         </box>
         {/* P1-T10: viewport-windowed message list. Only the messages
@@ -2223,7 +2433,11 @@ export const Chat = ({
             timerStartTime={timerStartTime}
             isAtBottom={isAtBottom}
             unreadUpdates={unreadUpdates}
-            scrollToLatest={() => { if (conversationControls.activeRef.current) conversationControls.leave(); scrollToLatest() }}
+            scrollToLatest={() => {
+              if (conversationControls.activeRef.current)
+                conversationControls.leave()
+              scrollToLatest()
+            }}
             statusIndicatorState={statusIndicatorState}
             notice={statusMessage}
             runActive={isStreaming || isChainInProgressRef.current}
@@ -2299,8 +2513,19 @@ export const Chat = ({
               attachmentManagerOpenRef.current = true
               setAttachmentManagerOpen(true)
             }}
-            pasteEnabled={!readerRequest && !queueScreenOpen && !modeMenuOpen && !attachmentManagerOpen}
-            isInputActive={() => !modeMenuOpenRef.current && !attachmentManagerOpenRef.current && !conversationControls.activeRef.current && useOutputReaderStore.getState().request === null && !queueScreenOpen}
+            pasteEnabled={
+              !readerRequest &&
+              !queueScreenOpen &&
+              !modeMenuOpen &&
+              !attachmentManagerOpen
+            }
+            isInputActive={() =>
+              !modeMenuOpenRef.current &&
+              !attachmentManagerOpenRef.current &&
+              !conversationControls.activeRef.current &&
+              useOutputReaderStore.getState().request === null &&
+              !queueScreenOpen
+            }
             onPaste={createPasteHandler({
               text: inputValue,
               cursorPosition,
@@ -2345,11 +2570,23 @@ export const Chat = ({
         </box>
       )}
       {attachmentManagerOpen && (
-        <box style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, backgroundColor: theme.surface }}>
-          <AttachmentRecoveryScreen onClose={() => {
-            attachmentManagerOpenRef.current = false
-            setAttachmentManagerOpen(false)
-          }} />
+        <box
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            zIndex: 100,
+            backgroundColor: theme.surface,
+          }}
+        >
+          <AttachmentRecoveryScreen
+            onClose={() => {
+              attachmentManagerOpenRef.current = false
+              setAttachmentManagerOpen(false)
+            }}
+          />
         </box>
       )}
       {queueScreenOpen && (
@@ -2376,7 +2613,15 @@ export const Chat = ({
             cancelQueuedAttachmentRetry={cancelQueuedAttachmentRetry}
             removeQueuedAttachment={removeQueuedAttachment}
             undoQueuedAttachmentRemoval={undoQueuedAttachmentRemoval}
-            retryAttachment={(_id, attachment, signal) => retryPendingAttachment(attachment, ('sourceRoot' in attachment ? attachment.sourceRoot : undefined) ?? getProjectRoot(), signal)}
+            retryAttachment={(_id, attachment, signal) =>
+              retryPendingAttachment(
+                attachment,
+                ('sourceRoot' in attachment
+                  ? attachment.sourceRoot
+                  : undefined) ?? getProjectRoot(),
+                signal,
+              )
+            }
             queueRemovalCount={queueRemovalCount}
             cancelQueuedMessages={cancelQueuedMessages}
             updateQueuedMessage={updateQueuedMessage}

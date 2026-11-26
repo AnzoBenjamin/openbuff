@@ -1029,6 +1029,32 @@ describe('runProgrammaticStep', () => {
 
 
   describe('current invocation result ownership', () => {
+    it('B15 live generator calls never consume retained results merely because their inputs match', async () => {
+      const staleLookup = mock(() => ({ result: jsonToolResult({ marker: 'old retained result' }) }))
+      mockParams.journalReader = {
+        lastEvent: () => undefined,
+        events: () => [],
+        toolResultFor: () => undefined,
+        toolResultForInput: staleLookup,
+      }
+      mockTemplate.toolNames = ['read_files']
+      const results: unknown[] = []
+      mockTemplate.handleSteps = () => (function* () {
+        for (let index = 0; index < 2; index++) {
+          results.push((yield { toolName: 'read_files', input: { paths: ['owned.txt'] } }).toolResult)
+        }
+        yield 'STEP'
+      })() as StepGenerator
+      let dispatches = 0
+      executeToolCallSpy.mockImplementation(async options => {
+        options.toolResults.push({ role: 'tool', toolName: options.toolName,
+          toolCallId: options.toolCallId!, content: jsonToolResult({ live: ++dispatches }) })
+      })
+      await runProgrammaticStep(mockParams)
+      expect(staleLookup).not.toHaveBeenCalled()
+      expect(dispatches).toBe(2)
+      expect(results).toEqual([jsonToolResult({ live: 1 }), jsonToolResult({ live: 2 })])
+    })
     it.each(['absent', 'foreign'] as const)('does not return or journal a preceding result when the current result is %s', async mode => {
       const first = jsonToolResult({ marker: 'preceding-result' })
       const events: Parameters<NonNullable<typeof mockParams.journalWriter>['append']>[1][] = []
@@ -1052,8 +1078,9 @@ describe('runProgrammaticStep', () => {
       const result = await runProgrammaticStep(mockParams)
       expect(result.endTurn).toBe(false)
       expect(current).toEqual([])
-      expect(events.filter(event => event.eventType === 'tool_result').map(event => event.payload))
-        .toEqual([{ toolName: 'read_files', result: first }, { toolName: 'code_search', result: null }])
+      // The executor was replaced by a fake. The programmatic wrapper must
+      // not invent a journal pair for either fake invocation.
+      expect(events.filter(event => event.eventType === 'tool_call' || event.eventType === 'tool_result')).toEqual([])
       const context = result.agentState.messageHistory
         .filter(message => message.role === 'user')
         .flatMap(message => message.content)
@@ -1097,13 +1124,19 @@ describe('runProgrammaticStep', () => {
       if (mode === 'missing') expect(current).toEqual(jsonToolResult({ errorMessage: `Tool ${name} not found` }))
       expect(JSON.stringify(current)).not.toContain('preceding-result')
       const resultEvents = events.filter(event => event.eventType === 'tool_result')
-      expect(resultEvents.map(event => event.payload)).toEqual([
-        { toolName: 'read_files', result: first }, { toolName: name, result: current },
-      ])
+      const requestEvents = events.filter(event => event.eventType === 'tool_call')
+      // The native read executor is mocked; only the real external
+      // refusal supplies a journal pair, never the preceding fake result.
+      expect(requestEvents).toHaveLength(1)
+      expect(resultEvents).toHaveLength(1)
+      expect(resultEvents[0]).toMatchObject({
+        correlation: requestEvents[0]!.correlation,
+        payload: { toolName: name, result: current, attemptId: (requestEvents[0]!.payload as { attemptId: string }).attemptId },
+      })
       if (includeToolCall) {
         expect(mockAgentState.messageHistory.filter(message => message.role === 'tool'))
           .toContainEqual(expect.objectContaining({ toolName: name, content: current,
-            toolCallId: resultEvents[1]!.correlation }))
+            toolCallId: resultEvents[0]!.correlation }))
       } else {
         const context = mockAgentState.messageHistory
           .filter(message => message.role === 'user')

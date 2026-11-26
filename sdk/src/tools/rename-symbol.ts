@@ -16,7 +16,8 @@ import type { LspRequestContext } from '../services/lsp-multiplexer'
  * CommitReceiptV1s, P2-T5 intent log, rollback).
  *
  * `unavailable` / `errorMessage` service outputs are returned verbatim as the
- * tool's own published shape; anything the service could splice is committed.
+ * tool's own published shape. The apply core refuses partial plans and
+ * binds each replacement to the exact bytes used by the splice.
  * Positions pass through VERBATIM — the service owns the 1-based→0-based
  * conversion.
  */

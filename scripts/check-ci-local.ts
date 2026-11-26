@@ -19,7 +19,7 @@ export const TOOL_DEF_TRACKED_PATHS = [
   'cli/src/data/initial-agent-type-sources.generated.ts',
 ] as const
 
-/** Packages whose full test suites run as Step K of check:ci-local. */
+/** Packages whose full test suites run as Step L of check:ci-local. */
 export const FULL_SUITE_STEPS = [
   { label: 'agents', cwd: 'agents' },
   { label: 'common', cwd: 'common' },
@@ -61,7 +61,7 @@ export function formatSuiteFailedMessage(
 }
 
 export function formatSuccessMessage(): string {
-  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, byok-wording, dependency-provenance, types-declaration, full agents + common suites).'
+  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, byok-wording, dependency-provenance, types-declaration, model-catalog, full agents + common suites).'
 }
 
 export function ciLocalLockPath(root: string): string {
@@ -466,9 +466,7 @@ export function runCiLocalChecks(
     // offline. It runs before the full suites so a pin whose upstream identity
     // cannot be reconciled fails this gate rather than surfacing later as a
     // dependency graph nobody can resolve without registry access.
-    console.log(
-      '→ Step I: bun --cwd=scripts run guard:dependency-provenance',
-    )
+    console.log('→ Step I: bun --cwd=scripts run guard:dependency-provenance')
     const dependencyProvenance = runStep(
       'bun',
       ['--cwd=scripts', 'run', 'guard:dependency-provenance'],
@@ -505,7 +503,20 @@ export function runCiLocalChecks(
       return 1
     }
 
-    console.log('→ Step K: full agents + common test suites')
+    console.log('→ Step K: bun --cwd=scripts run guard:model-catalog')
+    const modelCatalog = runStep(
+      'bun',
+      ['--cwd=scripts', 'run', 'guard:model-catalog'],
+      root,
+    )
+    if (modelCatalog.status !== 0) {
+      console.error(
+        formatStepFailedMessage('guard:model-catalog', modelCatalog.status),
+      )
+      return 1
+    }
+
+    console.log('→ Step L: full agents + common test suites')
     for (const step of FULL_SUITE_STEPS) {
       const suite = runStep('bun', ['test'], join(root, step.cwd))
       if (suite.status !== 0) {

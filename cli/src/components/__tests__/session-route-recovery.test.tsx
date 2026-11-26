@@ -35,6 +35,8 @@ renderTest(
       models: () =>
         Array.from({ length: 250 }, (_, index) => ({
           model: `p/model-${index + 1}`,
+          providerId: 'p',
+          providerModelId: `model-${index + 1}`,
         })),
       agents: () => [] as AgentDefinition[],
       writeConfig: (value: ProviderConfigFileInput) => {
@@ -181,7 +183,9 @@ renderTest(
     let failWrite = true
     const dependencies = {
       readConfig: () => structuredClone(config),
-      models: () => [{ model: 'p/override' }],
+      models: () => [
+        { model: 'p/override', providerId: 'p', providerModelId: 'override' },
+      ],
       agents: () => [{ id: 'reviewer' }] as AgentDefinition[],
       writeConfig: (next: ProviderConfigFileInput) => {
         if (failWrite) throw new Error('Disk denied')
@@ -228,7 +232,9 @@ renderTest(
     }
     const dependencies = {
       readConfig: () => structuredClone(config),
-      models: () => [{ model: 'p/new' }],
+      models: () => [
+        { model: 'p/new', providerId: 'p', providerModelId: 'new' },
+      ],
       agents: () => [] as AgentDefinition[],
       writeConfig: (next: ProviderConfigFileInput) => {
         config = structuredClone(next)

@@ -122,9 +122,13 @@ export const printModeUsageSchema = z.object({
   /** Missing/invalid provider counts remain absent, never a manufactured zero. */
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
+  cacheWriteInputTokens: z.number().int().nonnegative().optional(),
   cachedInputTokens: z.number().int().nonnegative().optional(),
   totalTokens: z.number().int().nonnegative().optional(),
-  /** True only when input and output usage were explicitly reported and valid. */
+  /**
+   * True only when canonical input/output and any adapter-required cache
+   * buckets were explicitly reported with valid relationships.
+   */
   complete: z.boolean(),
   /** Cost telemetry is separate from count completeness and request metadata stripping. */
   costCents: z.number().nonnegative().optional(),

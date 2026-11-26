@@ -33,6 +33,11 @@ function createHarness(inputValue: string, isStreaming = false) {
     inputRef: { current: null },
     sendMessage: async (request) => {
       sent.push(request)
+      return {
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      }
     },
     addToQueue: (content) => {
       queued.push(content)
@@ -84,9 +89,7 @@ describe('/compact', () => {
   test('bare /compact reaches the runtime', async () => {
     const harness = createHarness('/compact')
     await routeUserPrompt(harness.params)
-    expect(harness.sent.map((request) => request.content)).toEqual([
-      '/compact',
-    ])
+    expect(harness.sent.map((request) => request.content)).toEqual(['/compact'])
   })
 
   test('is queued while a turn is streaming', async () => {

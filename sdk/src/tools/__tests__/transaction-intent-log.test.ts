@@ -1,27 +1,27 @@
+import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test'
 import {
-  describe,
-  expect,
-  test,
-  beforeEach,
-  afterEach,
-  spyOn,
-} from 'bun:test'
-import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
+  symlinkSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { open, utimes, type FileHandle } from 'node:fs/promises'
 
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import { createNodeFileSystem } from '../node-filesystem'
+import { WorkspaceMutationBroker } from '../../services/workspace-mutation-broker'
 
 import {
   TRANSACTION_INTENT_LOG_MAX_ENTRIES_PER_TRANSACTION,
@@ -42,11 +42,58 @@ beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-intent-'))
   projectDir = join(stateDir, 'project')
   mkdirSync(projectDir, { recursive: true })
+  projectDir = realpathSync(projectDir)
 })
 
 afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true })
 })
+
+function intent(
+  path: string,
+  before: string | null,
+  after: string | null,
+): TransactionIntentEntry {
+  return {
+    path,
+    beforeHash: before === null ? null : getExactContentHash(before),
+    ...(before === null ? {} : { beforeBytes: before }),
+    afterHash: after === null ? null : getExactContentHash(after),
+  }
+}
+
+function diskIntent(
+  path: string,
+  before: string | null,
+  after: string | null,
+): TransactionIntentEntry {
+  const canonicalPath = dirname(join(projectDir, path))
+  const { dev, ino } = statSync(canonicalPath, { bigint: true })
+  return {
+    ...intent(path, before, after),
+    parent: { canonicalPath, dev: String(dev), ino: String(ino) },
+  }
+}
+
+const brokerFileSystem = async () =>
+  createNodeFileSystem({
+    mutationBroker: await WorkspaceMutationBroker.create({
+      cwd: projectDir,
+      stateDir,
+    }),
+  })
+
+const mockIntent = (
+  path: string,
+  before: string | null,
+  after: string | null,
+): TransactionIntentEntry => ({
+  ...intent(path, before, after),
+  parent: { canonicalPath: projectDir, dev: '0', ino: '0' },
+})
+
+const mockProjectFs = (files: Record<string, string>) =>
+  createMockFs({ files, directories: { [projectDir]: [] } })
 
 const begin = (
   log: ReturnType<typeof createTransactionIntentLog>,
@@ -117,162 +164,444 @@ describe('transaction intent log round-trips', () => {
 })
 
 describe('transaction intent log crash simulation', () => {
-  test('a crash after tx_begin leaves a recoverable half-applied transaction whose bytes revert', async () => {
-    // Phase 1: simulate a process that wrote tx_begin for an update and a
-    // creation, committed the update, then crashed BEFORE the creation was
-    // written and before the tx_commit marker — a genuinely HALF-APPLIED
-    // transaction (one staged path diverges from its pre-image, one still
-    // matches it), which must keep reverting.
-    const files: Record<string, string> = {
-      [join(projectDir, 'updated.ts')]: 'updated by the crashed run',
-    }
-    const fs = createMockFs({ files })
+  test.each([0, 1, 2, 3, 4])(
+    'recovers a killed coordinator after %i actual group commits',
+    async (boundary) => {
+      if (process.platform === 'win32') return
+      const initial = {
+        'first.txt': 'before\r\n',
+        'delete.txt': 'retained 🌱\r\n',
+        'move.txt': 'move bytes\n',
+      }
+      for (const [file, content] of Object.entries(initial))
+        writeFileSync(join(projectDir, file), content)
+      chmodSync(join(projectDir, 'delete.txt'), 0o751)
+      const src = resolve(import.meta.dir, '..', '..')
+      const intentModule = join(src, 'tools', 'transaction-intent-log.ts')
+      const helper = join(stateDir, 'transaction-worker.ts')
+      writeFileSync(
+        helper,
+        `
+      import { changeFiles } from ${JSON.stringify(join(src, 'tools', 'change-file.ts'))}
+      import { createNodeFileSystem } from ${JSON.stringify(join(src, 'tools', 'node-filesystem.ts'))}
+      import { WorkspaceMutationBroker } from ${JSON.stringify(join(src, 'services', 'workspace-mutation-broker.ts'))}
+      import { createTransactionIntentLogForWorkspace } from ${JSON.stringify(intentModule)}
+      import { getContentHash } from ${JSON.stringify(resolve(src, '../../common/src/util/content-hash.ts'))}
+      const [cwd, stateDir, rawBoundary] = process.argv.slice(2)
+      const boundary = Number(rawBoundary)
+      const stop = async () => {
+        const keepAlive = setInterval(() => {}, 1000)
+        try {
+          process.stdout.write('READY\\n')
+          await new Promise(() => {})
+        } finally { clearInterval(keepAlive) }
+      }
+      const fs = createNodeFileSystem({ mutationBroker: await WorkspaceMutationBroker.create({ cwd, stateDir }) })
+      const log = createTransactionIntentLogForWorkspace({ cwd, stateDir })
+      const begin = log.beginTransaction
+      log.beginTransaction = async (params) => {
+        const result = await begin(params)
+        if (result.ok && boundary === 0) await stop()
+        return result
+      }
+      let reached = 0
+      for (const kind of ['conditionalCommit', 'createFileExclusive', 'conditionalDelete', 'conditionalMove']) {
+        const operation = fs[kind].bind(fs)
+        fs[kind] = async (...args) => {
+          const result = await operation(...args)
+          if (kind !== 'createFileExclusive' && !result.applied) throw new Error('Expected commit did not land: ' + kind)
+          if (++reached === boundary) await stop()
+          return result
+        }
+      }
+      const result = await changeFiles({ cwd, fs, intentLog: log, parameters: [
+        { type: 'file', path: 'first.txt', content: 'after\\n', expectedHash: getContentHash('before\\r\\n') },
+        { type: 'file', path: 'created.txt', content: 'created\\n', expectedHash: null },
+        { type: 'delete', path: 'delete.txt', expectedHash: getContentHash('retained 🌱\\r\\n') },
+        { type: 'move', path: 'move.txt', destinationPath: 'moved.txt', expectedHash: getContentHash('move bytes\\n'), destinationExpectedHash: null },
+      ] })
+      throw new Error('Coordinator should stop at the selected commit boundary: ' + JSON.stringify(result))
+    `,
+      )
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          '--no-env-file',
+          helper,
+          projectDir,
+          stateDir,
+          String(boundary),
+        ],
+        {
+          env: { PATH: '/usr/bin:/bin' },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        const marker = await Promise.race([
+          (async () => {
+            let received = ''
+            const reader = child.stdout.getReader()
+            try {
+              for (;;) {
+                const { value, done } = await reader.read()
+                if (done) break
+                received += Buffer.from(value).toString('utf8')
+                if (received.includes('READY\n')) return received
+              }
+            } finally {
+              reader.releaseLock()
+            }
+            throw new Error(
+              `Helper exited before its commit boundary: ${await new Response(child.stderr).text()}`,
+            )
+          })(),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error('Commit boundary timed out')),
+              4_000,
+            )
+          }),
+        ])
+        expect(marker).toContain('READY\n')
+        const log = createTransactionIntentLogForWorkspace({
+          cwd: projectDir,
+          stateDir,
+        })
+        const events = () =>
+          readFileSync(log.filePath, 'utf8')
+            .trim()
+            .split('\n')
+            .map(
+              (line) =>
+                JSON.parse(line) as {
+                  kind: string
+                  through?: number
+                  entries?: unknown[]
+                  recovered?: boolean
+                },
+            )
+        expect(events().map((event) => event.kind)).toEqual([
+          'tx_begin',
+          ...Array<string>(boundary).fill('tx_dispatch'),
+        ])
+        expect(events()[0]?.entries).toEqual([
+          expect.objectContaining({
+            path: 'first.txt',
+            beforeHash: getExactContentHash(initial['first.txt']),
+            afterHash: getExactContentHash('after\n'),
+            parent: expect.any(Object),
+          }),
+          expect.objectContaining({
+            path: 'created.txt',
+            beforeHash: null,
+            afterHash: getExactContentHash('created\n'),
+          }),
+          expect.objectContaining({
+            path: 'delete.txt',
+            beforeHash: getExactContentHash(initial['delete.txt']),
+            afterHash: null,
+          }),
+          expect.objectContaining({
+            path: 'moved.txt',
+            beforeHash: null,
+            afterHash: getExactContentHash(initial['move.txt']),
+          }),
+          expect.objectContaining({
+            path: 'move.txt',
+            beforeHash: getExactContentHash(initial['move.txt']),
+            afterHash: null,
+          }),
+        ])
+        expect(
+          events()
+            .slice(1)
+            .map((event) => event.through),
+        ).toEqual([0, 1, 2, 4].slice(0, boundary))
+        const live = await log.recoverInterruptedTransactions()
+        expect(live.ok ? live.liveTransactionIds : []).toHaveLength(1)
+        child.kill('SIGKILL')
+        await child.exited
+        expect(child.signalCode).toBe('SIGKILL')
+        const broker = await WorkspaceMutationBroker.create({
+          cwd: projectDir,
+          stateDir,
+        })
+        const fs = createNodeFileSystem({ mutationBroker: broker })
+        const runRecovery = () =>
+          recoverAndRevertInterruptedTransactions({
+            intentLog: createTransactionIntentLogForWorkspace({
+              cwd: projectDir,
+              stateDir,
+            }),
+            cwd: projectDir,
+            fs,
+          })
+        const outcome = await runRecovery()
+        if (boundary < 4) {
+          expect(outcome).toMatchObject({
+            ok: true,
+            revertedPaths: boundary,
+            recoveredCommittedTransactions: 0,
+          })
+          for (const [file, content] of Object.entries(initial))
+            expect(readFileSync(join(projectDir, file), 'utf8')).toBe(content)
+          expect(statSync(join(projectDir, 'delete.txt')).mode & 0o777).toBe(
+            0o751,
+          )
+          expect(existsSync(join(projectDir, 'created.txt'))).toBe(false)
+          expect(existsSync(join(projectDir, 'moved.txt'))).toBe(false)
+          expect(events().at(-1)?.kind).toBe('tx_abort')
+        } else {
+          expect(outcome).toMatchObject({
+            ok: true,
+            revertedPaths: 0,
+            recoveredCommittedTransactions: 1,
+          })
+          expect(readFileSync(join(projectDir, 'first.txt'), 'utf8')).toBe(
+            'after\n',
+          )
+          expect(readFileSync(join(projectDir, 'created.txt'), 'utf8')).toBe(
+            'created\n',
+          )
+          expect(readFileSync(join(projectDir, 'moved.txt'), 'utf8')).toBe(
+            initial['move.txt'],
+          )
+          expect(existsSync(join(projectDir, 'delete.txt'))).toBe(false)
+          expect(existsSync(join(projectDir, 'move.txt'))).toBe(false)
+          expect(events().at(-1)).toMatchObject({
+            kind: 'tx_commit',
+            recovered: true,
+          })
+        }
+        expect(await runRecovery()).toMatchObject({
+          ok: true,
+          revertedPaths: 0,
+          recoveredCommittedTransactions: 0,
+        })
+        if (process.env.OPENBUFF_CAPTURE_B07_BOUNDARIES === '1') {
+          console.log(
+            'B07_BOUNDARY ' +
+              JSON.stringify({
+                boundary,
+                outcome,
+                signal: child.signalCode,
+                transitions: events().map(({ kind, through, recovered }) => ({
+                  kind,
+                  through,
+                  recovered,
+                })),
+                intent: (events()[0]!.entries as TransactionIntentEntry[]).map(
+                  ({ path, beforeHash, afterHash, parent }) => ({
+                    path,
+                    beforeHash,
+                    afterHash,
+                    parent,
+                  }),
+                ),
+                receipts: (await broker.listReceipts()).map(
+                  ({
+                    action,
+                    path,
+                    destinationPath,
+                    beforeHash,
+                    afterHash,
+                    sourceIdentity,
+                    stagingIdentity,
+                    state,
+                  }) => ({
+                    action,
+                    path,
+                    destinationPath,
+                    beforeHash,
+                    afterHash,
+                    sourceIdentity,
+                    stagingIdentity,
+                    state,
+                  }),
+                ),
+              }),
+          )
+        }
+      } finally {
+        if (timeout) clearTimeout(timeout)
+        if (child.signalCode === null && child.exitCode === null)
+          child.kill('SIGKILL')
+        await child.exited
+      }
+    },
+    10_000,
+  )
+  test('a partial commit restores exact bytes and leaves the never-created path alone', async () => {
+    const target = join(projectDir, 'updated.ts')
     const log = createTransactionIntentLog({ stateDir })
+    const fs = await brokerFileSystem()
     expect(
       (
-        await log.beginTransaction({
-          transactionId: 'tx-crash',
-          operationId: 'op-crash',
-          callId: 'call-crash',
-          entries: [
-            {
-              path: 'updated.ts',
-              beforeHash: 'sha256:old',
-              beforeBytes: 'original updated\n',
-            },
-            {
-              path: 'created-by-tx.ts',
-              beforeHash: null,
-            },
-          ],
-        })
+        await begin(log, 'tx-crash', [
+          diskIntent('updated.ts', 'original\r\n', 'applied\n'),
+          diskIntent('created-by-tx.ts', null, 'future'),
+        ])
       ).ok,
     ).toBe(true)
-    // No commit marker: the process died mid-loop.
+    writeFileSync(target, 'applied\n')
 
-    // Phase 2: startup recovery runs against a fresh fs. The recorded
-    // ownerPid is this process's own pid, so the transaction is its own
-    // half-applied work and is reverted (the liveness guard defers only
-    // transactions owned by a live OTHER process).
-    const recoveryFs = createMockFs({ files })
     const newLog = createTransactionIntentLog({ stateDir })
-    const recovery = await recoverAndRevertInterruptedTransactions({
-      intentLog: newLog,
-      cwd: projectDir,
-      fs: recoveryFs,
-    })
-    expect(recovery).toMatchObject({
+    expect(
+      await recoverAndRevertInterruptedTransactions({
+        intentLog: newLog,
+        cwd: projectDir,
+        fs,
+      }),
+    ).toMatchObject({
       ok: true,
       revertedTransactions: 1,
-      // Only the DIVERGED path (the applied update) needed restoring; the
-      // not-yet-created path still matches its pre-image and is untouched.
       revertedPaths: 1,
     })
-
-    // The update was undone to its durable pre-image...
-    expect(
-      await recoveryFs.readFile(join(projectDir, 'updated.ts'), 'utf-8'),
-    ).toBe('original updated\n')
-    // ...and the not-yet-created file stays absent: it still matches its
-    // pre-image, so the lossless-aware classification leaves it untouched.
+    expect(readFileSync(target, 'utf8')).toBe('original\r\n')
     expect(existsSync(join(projectDir, 'created-by-tx.ts'))).toBe(false)
-
-    // The abort marker prevents a second recovery pass from re-reverting.
-    const second = await recoverAndRevertInterruptedTransactions({
-      intentLog: newLog,
-      cwd: projectDir,
-      fs: recoveryFs,
+    expect(
+      await recoverAndRevertInterruptedTransactions({
+        intentLog: newLog,
+        cwd: projectDir,
+        fs,
+      }),
+    ).toMatchObject({
+      ok: true,
+      revertedTransactions: 0,
     })
-    expect(second).toMatchObject({ ok: true, revertedTransactions: 0 })
   })
 
-  test('revert of a nonexistent path is tolerated', async () => {
-    const files: Record<string, string> = {
-      [join(projectDir, 'kept.ts')]: 'content',
-    }
-    writeFileSync(join(projectDir, 'kept.ts'), 'content', 'utf8')
+  test('recovery removes only the exact postimage of a creation', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
-        await log.beginTransaction({
-          transactionId: 'tx-gone',
-          operationId: 'op-gone',
-          callId: 'call-gone',
-          entries: [
-            // The file was already removed externally after the crash.
-            { path: 'gone.ts', beforeHash: null },
-            { path: 'kept.ts', beforeHash: null },
-          ],
-        })
+        await begin(log, 'tx-cancel', [
+          diskIntent('gone.ts', null, 'missing'),
+          diskIntent('created.ts', null, 'created'),
+        ])
       ).ok,
     ).toBe(true)
-
-    const fs = createMockFs({ files })
-    const recovery = await recoverAndRevertInterruptedTransactions({
-      intentLog: log,
-      cwd: projectDir,
-      fs,
-    })
-    // The missing path does not fail the recovery; the present one is undone
-    // on the injected (mock) filesystem the recovery operates on.
-    expect(recovery).toMatchObject({ ok: true, revertedTransactions: 1 })
+    writeFileSync(join(projectDir, 'created.ts'), 'created')
+    const fs = await brokerFileSystem()
     expect(
-      await fs.readFile(join(projectDir, 'kept.ts')).catch(() => 'gone'),
-    ).toBe('gone')
-  })
-
-  test('reverting to a pre-image recreates a deleted parent directory', async () => {
-    const nested = join(projectDir, 'dir', 'file.ts')
-    const log = createTransactionIntentLog({ stateDir })
-    expect(
-      (
-        await log.beginTransaction({
-          transactionId: 'tx-nested',
-          operationId: 'op-nested',
-          callId: 'call-nested',
-          // Half-applied shape for the lossless-aware classification: the
-          // nested path diverges from its pre-image (it was applied and its
-          // directory was later removed externally) while the second staged
-          // path still matches its pre-image (never applied), so the
-          // divergent path is restored instead of being marked
-          // ambiguous-committed.
-          entries: [
-            {
-              path: 'dir/file.ts',
-              beforeHash: 'sha256:nested',
-              beforeBytes: 'nested original\n',
-            },
-            {
-              path: 'untouched.ts',
-              beforeHash: 'sha256:same',
-              beforeBytes: 'same',
-            },
-          ],
-        })
-      ).ok,
-    ).toBe(true)
-
-    const fs = createMockFs({
-      files: { [join(projectDir, 'untouched.ts')]: 'same' },
-    })
-    const recovery = await recoverAndRevertInterruptedTransactions({
-      intentLog: log,
-      cwd: projectDir,
-      fs,
-    })
-    expect(recovery).toMatchObject({
+      await recoverAndRevertInterruptedTransactions({
+        intentLog: log,
+        cwd: projectDir,
+        fs,
+      }),
+    ).toMatchObject({
       ok: true,
       revertedTransactions: 1,
       revertedPaths: 1,
-      ambiguousCommittedTransactions: 0,
     })
-    // The pre-image is restored on the injected (mock) filesystem; the mkdir
-    // before the write recreates the deleted parent directory there.
-    expect(await fs.readFile(nested, 'utf8')).toBe('nested original\n')
-    // The never-applied path still matches its pre-image and is untouched.
-    expect(await fs.readFile(join(projectDir, 'untouched.ts'), 'utf8')).toBe(
-      'same',
-    )
+    expect(existsSync(join(projectDir, 'created.ts'))).toBe(false)
+    expect(existsSync(join(projectDir, 'gone.ts'))).toBe(false)
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'replaced or missing parents block recovery; retry uses the original parent',
+    async () => {
+      const parent = join(projectDir, 'dir')
+      const held = join(projectDir, 'original-parent')
+      const outside = join(stateDir, 'outside')
+      mkdirSync(parent)
+      mkdirSync(outside)
+      writeFileSync(join(outside, 'file.ts'), 'applied')
+      const fs = await brokerFileSystem()
+      const log = createTransactionIntentLog({ stateDir })
+      expect(
+        (
+          await begin(log, 'tx-parent', [
+            diskIntent('dir/file.ts', 'original', 'applied'),
+            diskIntent('pending.ts', null, 'pending'),
+          ])
+        ).ok,
+      ).toBe(true)
+      writeFileSync(join(parent, 'file.ts'), 'applied')
+      renameSync(parent, held)
+      const recover = () =>
+        recoverAndRevertInterruptedTransactions({
+          intentLog: log,
+          cwd: projectDir,
+          fs,
+        })
+      expect(await recover()).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+      })
+      expect(existsSync(parent)).toBe(false)
+      symlinkSync(outside, parent, 'dir')
+      expect(await recover()).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+      })
+      expect(readFileSync(join(outside, 'file.ts'), 'utf8')).toBe('applied')
+      unlinkSync(parent)
+      mkdirSync(parent)
+      writeFileSync(join(parent, 'file.ts'), 'applied')
+      expect(await recover()).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+      })
+      expect(readFileSync(join(parent, 'file.ts'), 'utf8')).toBe('applied')
+      rmSync(parent, { recursive: true })
+      renameSync(held, parent)
+      expect(await recover()).toMatchObject({
+        ok: true,
+        revertedTransactions: 1,
+        revertedPaths: 1,
+      })
+      expect(readFileSync(join(parent, 'file.ts'), 'utf8')).toBe('original')
+      expect(readFileSync(join(outside, 'file.ts'), 'utf8')).toBe('applied')
+    },
+  )
+
+  test('read and conditional-write faults leave the intent pending for a fresh retry', async () => {
+    const log = createTransactionIntentLog({ stateDir })
+    const target = join(projectDir, 'target.txt')
+    expect(
+      (
+        await begin(log, 'faults', [
+          diskIntent('target.txt', 'before', 'after'),
+          diskIntent('future.txt', null, 'future'),
+        ])
+      ).ok,
+    ).toBe(true)
+    writeFileSync(target, 'after')
+    const fs = await brokerFileSystem()
+    const readFile = fs.readFile
+    const conditionalCommit = fs.conditionalCommit
+    fs.readFile = (async () => {
+      throw new Error('read failed')
+    }) as typeof fs.readFile
+    const recover = () =>
+      recoverAndRevertInterruptedTransactions({
+        intentLog: createTransactionIntentLog({ stateDir }),
+        cwd: projectDir,
+        fs,
+      })
+    expect(await recover()).toMatchObject({
+      ok: false,
+      error: 'read failed',
+      transactionIds: ['faults'],
+    })
+    expect(readFileSync(target, 'utf8')).toBe('after')
+    fs.readFile = readFile
+    fs.conditionalCommit = async () => {
+      throw new Error('write failed')
+    }
+    expect(await recover()).toMatchObject({
+      ok: false,
+      error: 'write failed',
+      transactionIds: ['faults'],
+    })
+    expect(readFileSync(target, 'utf8')).toBe('after')
+    fs.conditionalCommit = conditionalCommit
+    expect(await recover()).toMatchObject({ ok: true, revertedPaths: 1 })
+    expect(readFileSync(target, 'utf8')).toBe('before')
   })
 
   test('revertPathToPreImage deletes only when the file still exists', async () => {
@@ -345,9 +674,8 @@ describe('transaction intent log crash simulation', () => {
         startedAt: new Date().toISOString(),
         entries: [
           {
+            ...diskIntent('inside.ts', 'before', 'original outside bytes'),
             path: '../outside-victim.ts',
-            beforeHash: 'sha256:tampered',
-            beforeBytes: 'tampered bytes',
           },
         ],
       })}\n`,
@@ -357,17 +685,14 @@ describe('transaction intent log crash simulation', () => {
     const recovery = await recoverAndRevertInterruptedTransactions({
       intentLog: log,
       cwd: projectDir,
-      fs: createMockFs({}),
+      fs: await brokerFileSystem(),
     })
-    // Fail closed: the escaping entry is a structured revert failure, never
-    // a write outside the workspace.
-    expect(recovery.ok).toBe(false)
+    expect(recovery).toMatchObject({ ok: false, status: 'recovery_required' })
     expect(readFileSync(victimPath, 'utf8')).toBe('original outside bytes')
-
-    // The abort marker was still written, so recovery never replays the
-    // refused transaction.
     const after = await log.recoverInterruptedTransactions()
-    expect(after.ok ? after.transactions : []).toEqual([])
+    expect(
+      after.ok ? after.transactions.map((value) => value.transactionId) : [],
+    ).toEqual(['tx-escape'])
   })
 })
 
@@ -385,11 +710,11 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
           operationId: 'op-lost',
           callId: 'call-lost',
           entries: [
-            {
-              path: 'updated.ts',
-              beforeHash: 'sha256:old',
-              beforeBytes: 'original\n',
-            },
+            diskIntent(
+              'updated.ts',
+              'original\n',
+              'committed by the crashed run',
+            ),
           ],
         })
       ).ok,
@@ -410,14 +735,12 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
     // Release the simulated holder so recovery can append its terminal marker.
     unlinkSync(`${log.filePath}.lock`)
 
-    // Startup recovery inspects the CURRENT bytes: the staged path diverges
-    // from its recorded pre-image, so the work is treated as
-    // ambiguous-committed and NEVER reverted.
-    const fs = createMockFs({
-      files: {
-        [join(projectDir, 'updated.ts')]: 'committed by the crashed run',
-      },
-    })
+    // Only exact after-state can resolve a lost commit acknowledgement.
+    writeFileSync(
+      join(projectDir, 'updated.ts'),
+      'committed by the crashed run',
+    )
+    const fs = await brokerFileSystem()
     const recovery = await recoverAndRevertInterruptedTransactions({
       intentLog: log,
       cwd: projectDir,
@@ -426,16 +749,12 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
     expect(recovery).toMatchObject({
       ok: true,
       revertedTransactions: 0,
-      ambiguousCommittedTransactions: 1,
+      recoveredCommittedTransactions: 1,
     })
-    expect(
-      await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8'),
-    ).toBe('committed by the crashed run')
-    // The terminal ambiguous-committed marker resolves the transaction, so a
-    // later pass neither reverts nor re-reports it (idempotence).
-    expect(readFileSync(log.filePath, 'utf8')).toContain(
-      '"tx_ambiguous_commit"',
+    expect(await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8')).toBe(
+      'committed by the crashed run',
     )
+    expect(readFileSync(log.filePath, 'utf8')).toContain('"recovered":true')
     const second = await recoverAndRevertInterruptedTransactions({
       intentLog: log,
       cwd: projectDir,
@@ -444,7 +763,7 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
     expect(second).toMatchObject({
       ok: true,
       revertedTransactions: 0,
-      ambiguousCommittedTransactions: 0,
+      recoveredCommittedTransactions: 0,
     })
   })
 
@@ -482,44 +801,74 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
     expect(recovery.ok ? recovery.transactions : []).toEqual([])
   })
 
-  test('revertTransaction with a readCurrent seam classifies an all-diverged transaction as ambiguous_committed without reverting', async () => {
+  test('modern expected-after proof resolves a fully applied transaction as recovered_committed without reverting', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
-        await begin(log, 'tx-ambiguous', [
-          { path: 'a.ts', beforeHash: 'sha256:a', beforeBytes: 'old a' },
-          { path: 'created.ts', beforeHash: null },
+        await begin(log, 'tx-recovered-commit', [
+          intent('a.ts', 'old a', 'new a'),
+          intent('created.ts', null, 'created'),
         ])
       ).ok,
     ).toBe(true)
     const revertCalls: string[] = []
     const outcome = await log.revertTransaction(
-      'tx-ambiguous',
+      'tx-recovered-commit',
       async (entryPath) => {
         revertCalls.push(entryPath)
       },
       async (entryPath) => (entryPath === 'a.ts' ? 'new a' : 'created'),
     )
-    // Every staged path diverges from its pre-image: the work stays in place.
     expect(outcome).toMatchObject({
       ok: true,
-      status: 'ambiguous_committed',
+      status: 'recovered_committed',
       revertedPaths: 0,
-      divergedPaths: ['a.ts', 'created.ts'],
     })
     expect(revertCalls).toEqual([])
-    // The terminal marker resolves the transaction for later passes.
     const recovery = await log.recoverInterruptedTransactions()
     expect(recovery.ok ? recovery.transactions : []).toEqual([])
   })
 
-  test('revertTransaction with a readCurrent seam reverts only the diverged paths of a half-applied transaction', async () => {
+  test('foreign divergence remains untouched and recovery-required until exact after-state is restored', async () => {
+    const log = createTransactionIntentLog({ stateDir })
+    expect(
+      (await begin(log, 'tx-foreign', [intent('a.ts', 'old', 'owned')])).ok,
+    ).toBe(true)
+    const reverted: string[] = []
+    const first = await log.revertTransaction(
+      'tx-foreign',
+      async (entryPath) => reverted.push(entryPath),
+      async () => 'foreign',
+    )
+    expect(first).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      unresolvedPaths: ['a.ts'],
+    })
+    expect(reverted).toEqual([])
+    const pending = await log.recoverInterruptedTransactions()
+    expect(
+      pending.ok
+        ? pending.transactions.map((entry) => entry.transactionId)
+        : [],
+    ).toContain('tx-foreign')
+
+    const second = await log.revertTransaction(
+      'tx-foreign',
+      async (entryPath) => reverted.push(entryPath),
+      async () => 'owned',
+    )
+    expect(second).toMatchObject({ ok: true, status: 'reverted' })
+    expect(reverted).toEqual(['a.ts'])
+  })
+
+  test('modern half-applied recovery reverts only exact transaction-owned after-state', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
         await begin(log, 'tx-half-applied', [
-          { path: 'applied.ts', beforeHash: 'sha256:a', beforeBytes: 'old a' },
-          { path: 'untouched.ts', beforeHash: 'sha256:b', beforeBytes: 'same' },
+          intent('applied.ts', 'old a', 'new a'),
+          intent('untouched.ts', 'same', 'new b'),
         ])
       ).ok,
     ).toBe(true)
@@ -535,35 +884,127 @@ describe('transaction intent log lossless recovery (lost tx_commit)', () => {
       ok: true,
       status: 'reverted',
       revertedPaths: 1,
-      divergedPaths: ['applied.ts'],
+      ownedPaths: ['applied.ts'],
     })
     expect(reverted).toEqual([['applied.ts', 'old a']])
+  })
+
+  test('legacy entries without expected after-state preserve explicit uncertainty and never mutate', async () => {
+    const log = createTransactionIntentLog({ stateDir })
+    expect(
+      (
+        await begin(log, 'tx-legacy-uncertain', [
+          { path: 'legacy.ts', beforeHash: 'sha256:old', beforeBytes: 'old' },
+        ])
+      ).ok,
+    ).toBe(true)
+    const reverted: string[] = []
+    const outcome = await log.revertTransaction(
+      'tx-legacy-uncertain',
+      async (entryPath) => reverted.push(entryPath),
+      async () => 'different',
+    )
+    expect(outcome).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      unresolvedPaths: ['legacy.ts'],
+      uncertainty: 'legacy_missing_after_state',
+    })
+    expect(reverted).toEqual([])
+    const first = await log.recoverInterruptedTransactions()
+    const second = await log.recoverInterruptedTransactions()
+    expect(first.ok ? first.transactions : []).toHaveLength(1)
+    expect(second.ok ? second.transactions : []).toHaveLength(1)
   })
 })
 
 describe('transaction intent log durability', () => {
+  test('an interleaved commit and later trim cannot evict another unfinished intent', async () => {
+    const log = createTransactionIntentLog({ stateDir, maxTransactions: 2 })
+    expect((await begin(log, 'first')).ok).toBe(true)
+    expect((await begin(log, 'still-active')).ok).toBe(true)
+    expect((await log.commitTransaction('first')).ok).toBe(true)
+    expect((await begin(log, 'third')).ok).toBe(true)
+    const report = await log.recoverInterruptedTransactions()
+    expect(
+      report.ok ? report.transactions.map((value) => value.transactionId) : [],
+    ).toEqual(['still-active', 'third'])
+  })
+
+  test('same-process ownership blocks recovery, and an exact but undispatched postimage stays foreign', async () => {
+    const log = createTransactionIntentLog({ stateDir })
+    const entries = [
+      mockIntent('a', 'before A', 'after A'),
+      mockIntent('b', 'before B', 'after B'),
+    ]
+    expect(
+      (
+        await log.beginTransaction({
+          transactionId: 'active',
+          operationId: 'op',
+          callId: 'call',
+          entries,
+          inFlight: true,
+        })
+      ).ok,
+    ).toBe(true)
+    expect((await log.authorizeDispatch?.('active', 0))?.ok).toBe(true)
+    const fresh = createTransactionIntentLog({ stateDir })
+    const content = { a: 'after A', b: 'after B' }
+    const revert = async (file: string, before: string | null) => {
+      content[file as keyof typeof content] = before!
+    }
+    const read = async (file: string) => content[file as keyof typeof content]
+    try {
+      expect(
+        await fresh.revertTransaction('active', revert, read),
+      ).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+        revertedPaths: 0,
+      })
+      expect(content).toEqual({ a: 'after A', b: 'after B' })
+    } finally {
+      log.releaseTransaction?.('active')
+    }
+    expect(await fresh.revertTransaction('active', revert, read)).toMatchObject(
+      {
+        ok: false,
+        status: 'recovery_required',
+        unresolvedPaths: ['b'],
+        revertedPaths: 1,
+      },
+    )
+    expect(content).toEqual({ a: 'before A', b: 'after B' })
+    expect(await fresh.revertTransaction('active', revert, read)).toMatchObject(
+      { ok: false, unresolvedPaths: ['b'], revertedPaths: 0 },
+    )
+    content.b = 'before B'
+    expect(await fresh.revertTransaction('active', revert, read)).toMatchObject(
+      { ok: true, status: 'reverted', revertedPaths: 0 },
+    )
+  })
   test('the 101st transaction drops the oldest finished one', async () => {
     const log = createTransactionIntentLog({ stateDir })
-    for (let index = 0; index < TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS; index++) {
+    for (
+      let index = 0;
+      index < TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS;
+      index++
+    ) {
       expect((await begin(log, `tx-${index}`)).ok).toBe(true)
       expect((await log.commitTransaction(`tx-${index}`)).ok).toBe(true)
     }
-    // Everything is resolved, so nothing is recoverable. The commit of the
-    // 100th transaction (tx-99) is itself the 101st candidate event group,
-    // so the count cap already trimmed the OLDEST FINISHED transaction
-    // (tx-0) at that commit: 99 tx_begin groups survive the loop, and the
-    // just-appended terminal event is never the dropped one.
+    // Terminal events count against their own transaction, not as new groups.
     let recovery = await log.recoverInterruptedTransactions()
     expect(recovery.ok ? recovery.transactions : []).toEqual([])
     let raw = readFileSync(log.filePath, 'utf8')
-    expect(raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')))
-      .toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS - 1)
-    expect(raw).not.toContain('"tx-0"')
+    expect(
+      raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')),
+    ).toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS)
+    expect(raw).toContain('"tx-0"')
     expect(raw).toContain('"tx-1"')
 
-    // The 101st transaction fills the freed slot back up to the cap: its
-    // begin stays half-applied and recoverable, and only FINISHED
-    // transactions are ever droppable.
+    // One new transaction evicts exactly the oldest resolved group.
     expect((await begin(log, 'tx-100')).ok).toBe(true)
     recovery = await log.recoverInterruptedTransactions()
     expect(
@@ -573,8 +1014,9 @@ describe('transaction intent log durability', () => {
     expect(raw).not.toContain('"tx-0"')
     expect(raw).toContain('"tx-1"')
     expect(raw).toContain('"tx-100"')
-    expect(raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')))
-      .toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS)
+    expect(
+      raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')),
+    ).toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS)
   })
 
   test('the byte cap drops the oldest finished transactions, never unresolved ones', async () => {
@@ -712,7 +1154,7 @@ describe('transaction intent log durability', () => {
     expect(outcome).toMatchObject({ ok: true, status: 'already_resolved' })
   })
 
-  test('revertTransaction keeps the abort marker even when a revert step fails', async () => {
+  test('revertTransaction keeps failed restoration recovery-required for a later retry', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
@@ -720,23 +1162,34 @@ describe('transaction intent log durability', () => {
           transactionId: 'tx-fail',
           operationId: 'op-fail',
           callId: 'call-fail',
-          entries: [{ path: 'a.ts', beforeHash: null }],
+          entries: [
+            intent('a.ts', null, 'created'),
+            intent('b.ts', null, 'not yet created'),
+          ],
         })
       ).ok,
     ).toBe(true)
 
-    const outcome = await log.revertTransaction('tx-fail', async () => {
-      throw new Error('disk exploded')
-    })
+    const outcome = await log.revertTransaction(
+      'tx-fail',
+      async () => {
+        throw new Error('disk exploded')
+      },
+      async (file) => (file === 'a.ts' ? 'created' : null),
+    )
     expect(outcome).toMatchObject({
       ok: false,
-      status: 'revert_failed',
+      status: 'recovery_required',
       error: 'disk exploded',
       revertedPaths: 0,
+      unresolvedPaths: ['a.ts'],
     })
-    // The abort marker was still written, so a later recovery does not retry.
     const recovery = await log.recoverInterruptedTransactions()
-    expect(recovery.ok ? recovery.transactions : []).toEqual([])
+    expect(
+      recovery.ok
+        ? recovery.transactions.map((entry) => entry.transactionId)
+        : [],
+    ).toContain('tx-fail')
   })
 
   test('per-transaction entry cap is enforced with a structured outcome', async () => {
@@ -958,8 +1411,9 @@ describe('transaction intent log concurrent appenders', () => {
 
     // Both tx_begin lines are present in the file, in some order.
     const raw = readFileSync(logA.filePath, 'utf8')
-    expect(raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')))
-      .toHaveLength(2)
+    expect(
+      raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')),
+    ).toHaveLength(2)
 
     // Both half-applied transactions are recoverable: neither begin was
     // silently dropped by a concurrent rewrite.
@@ -988,8 +1442,9 @@ describe('transaction intent log concurrent appenders', () => {
     expect(beginC.ok).toBe(true)
 
     const raw = readFileSync(logA.filePath, 'utf8')
-    expect(raw.split('\n').filter((line) => line.includes('"kind":"tx_commit"')))
-      .toHaveLength(1)
+    expect(
+      raw.split('\n').filter((line) => line.includes('"kind":"tx_commit"')),
+    ).toHaveLength(1)
     // tx-a is committed (not recoverable); the two half-applied begins were
     // neither dropped nor misclassified as committed.
     const recovery = await logA.recoverInterruptedTransactions()
@@ -1077,10 +1532,15 @@ describe('transaction intent log recovery liveness guard', () => {
         fs,
       })
       // Liveness guard: nothing is reverted while the foreign owner is alive.
-      expect(recovery).toMatchObject({ ok: true, revertedTransactions: 0 })
-      expect(
-        await fs.readFile(join(projectDir, 'a.ts'), 'utf-8'),
-      ).toBe('committed by the live sibling')
+      expect(recovery).toMatchObject({
+        ok: false,
+        status: 'recovery_required',
+        revertedTransactions: 0,
+        transactionIds: ['tx-sibling-live'],
+      })
+      expect(await fs.readFile(join(projectDir, 'a.ts'), 'utf-8')).toBe(
+        'committed by the live sibling',
+      )
       // The live-owned transaction stays pending (skipped, not aborted), so a
       // later recovery pass can still act on it once the owner dies.
       const pending = await log.recoverInterruptedTransactions()
@@ -1102,31 +1562,21 @@ describe('transaction intent log recovery liveness guard', () => {
           transactionId: 'tx-sibling-dead',
           operationId: 'op-dead',
           callId: 'call-dead',
-          // Half-applied shape: the applied update diverges from its
-          // pre-image while the second staged path still matches its own, so
-          // the transaction is half-applied (not ambiguous-committed) and is
-          // reverted once its owner is gone.
           entries: [
-            {
-              path: 'updated.ts',
-              beforeHash: 'sha256:old',
-              beforeBytes: 'original\n',
-            },
-            {
-              path: 'untouched.ts',
-              beforeHash: 'sha256:same',
-              beforeBytes: 'same',
-            },
+            mockIntent(
+              'updated.ts',
+              'original\n',
+              'committed by the dead sibling',
+            ),
+            mockIntent('untouched.ts', 'same', 'future'),
           ],
         })
       ).ok,
     ).toBe(true)
 
-    const fs = createMockFs({
-      files: {
-        [join(projectDir, 'updated.ts')]: 'committed by the dead sibling',
-        [join(projectDir, 'untouched.ts')]: 'same',
-      },
+    const fs = mockProjectFs({
+      [join(projectDir, 'updated.ts')]: 'committed by the dead sibling',
+      [join(projectDir, 'untouched.ts')]: 'same',
     })
     const recovery = await recoverAndRevertInterruptedTransactions({
       intentLog: log,
@@ -1140,11 +1590,11 @@ describe('transaction intent log recovery liveness guard', () => {
       ok: true,
       revertedTransactions: 1,
       revertedPaths: 1,
-      ambiguousCommittedTransactions: 0,
+      recoveredCommittedTransactions: 0,
     })
-    expect(
-      await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8'),
-    ).toBe('original\n')
+    expect(await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8')).toBe(
+      'original\n',
+    )
     expect(await fs.readFile(join(projectDir, 'untouched.ts'), 'utf-8')).toBe(
       'same',
     )
@@ -1175,19 +1625,13 @@ describe('transaction intent log recovery liveness guard', () => {
             transactionId: 'tx-recycled-pid',
             operationId: 'op-recycled',
             callId: 'call-recycled',
-            // Half-applied shape (see the dead-owner test): the applied
-            // update diverges, the second staged path still matches.
             entries: [
-              {
-                path: 'updated.ts',
-                beforeHash: 'sha256:old',
-                beforeBytes: 'original\n',
-              },
-              {
-                path: 'untouched.ts',
-                beforeHash: 'sha256:same',
-                beforeBytes: 'same',
-              },
+              mockIntent(
+                'updated.ts',
+                'original\n',
+                'committed by the dead writer',
+              ),
+              mockIntent('untouched.ts', 'same', 'future'),
             ],
           })
         ).ok,
@@ -1200,14 +1644,13 @@ describe('transaction intent log recovery liveness guard', () => {
         'utf8',
       )
 
-      const fs = createMockFs({
-        files: {
-          [join(projectDir, 'updated.ts')]: 'committed by the dead writer',
-          [join(projectDir, 'untouched.ts')]: 'same',
-        },
+      const freshLog = createTransactionIntentLog({ stateDir })
+      const fs = mockProjectFs({
+        [join(projectDir, 'updated.ts')]: 'committed by the dead writer',
+        [join(projectDir, 'untouched.ts')]: 'same',
       })
       const recovery = await recoverAndRevertInterruptedTransactions({
-        intentLog: log,
+        intentLog: freshLog,
         cwd: projectDir,
         fs,
       })
@@ -1217,20 +1660,17 @@ describe('transaction intent log recovery liveness guard', () => {
         ok: true,
         revertedTransactions: 1,
         revertedPaths: 1,
-        ambiguousCommittedTransactions: 0,
+        recoveredCommittedTransactions: 0,
       })
-      expect(
-        await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8'),
-      ).toBe('original\n')
+      expect(await fs.readFile(join(projectDir, 'updated.ts'), 'utf-8')).toBe(
+        'original\n',
+      )
     } finally {
       sibling.kill()
     }
   })
 
-  test('a live pid whose owner token file went missing no longer defers the revert', async () => {
-    // A missing token file means no live process instance currently claims
-    // this pid with the recorded identity — fail open toward reverting the
-    // durable pre-image rather than deferring indefinitely.
+  test('a live coordinator with a missing token must not authorize recovery', async () => {
     const sibling = spawn(
       process.execPath,
       ['-e', 'setInterval(() => {}, 1_000)'],
@@ -1244,43 +1684,43 @@ describe('transaction intent log recovery liveness guard', () => {
         stateDir,
         ownerPid: sibling.pid,
       })
-      // Half-applied shape: the applied creation diverges from its pre-image
-      // (a delete) while the second staged path still matches its own.
       expect(
         (
-          await begin(log, 'tx-missing-token', [
-            { path: 'a.ts', beforeHash: null },
-            {
-              path: 'kept.ts',
-              beforeHash: 'sha256:kept',
-              beforeBytes: 'kept content',
-            },
-          ])
+          await log.beginTransaction({
+            transactionId: 'tx-missing-token',
+            operationId: 'op-missing',
+            callId: 'call-missing',
+            entries: [
+              mockIntent('a.ts', null, 'half-applied'),
+              mockIntent('kept.ts', 'kept content', 'future'),
+            ],
+            inFlight: true,
+          })
         ).ok,
       ).toBe(true)
+      log.releaseTransaction?.('tx-missing-token')
       unlinkSync(`${log.filePath}.live-${sibling.pid}`)
 
-      const fs = createMockFs({
-        files: {
-          [join(projectDir, 'a.ts')]: 'half-applied by the vanished writer',
-          [join(projectDir, 'kept.ts')]: 'kept content',
-        },
+      const fs = mockProjectFs({
+        [join(projectDir, 'a.ts')]: 'half-applied',
+        [join(projectDir, 'kept.ts')]: 'kept content',
       })
+      const freshLog = createTransactionIntentLog({ stateDir })
       const recovery = await recoverAndRevertInterruptedTransactions({
-        intentLog: log,
+        intentLog: freshLog,
         cwd: projectDir,
         fs,
       })
       expect(recovery).toMatchObject({
-        ok: true,
-        revertedTransactions: 1,
-        revertedPaths: 1,
-        ambiguousCommittedTransactions: 0,
+        ok: false,
+        status: 'recovery_required',
+        revertedPaths: 0,
+        transactionIds: ['tx-missing-token'],
       })
-      // The pre-image for a beforeHash null entry is a delete; the kept path
-      // still matches its pre-image and is untouched.
-      expect(existsSync(join(projectDir, 'a.ts'))).toBe(false)
-      expect(await fs.readFile(join(projectDir, 'kept.ts'), 'utf-8')).toBe(
+      expect(await fs.readFile(join(projectDir, 'a.ts'), 'utf8')).toBe(
+        'half-applied',
+      )
+      expect(await fs.readFile(join(projectDir, 'kept.ts'), 'utf8')).toBe(
         'kept content',
       )
     } finally {
@@ -1288,9 +1728,7 @@ describe('transaction intent log recovery liveness guard', () => {
     }
   })
 
-  test('a legacy tx_begin without a recorded owner still reverts', async () => {
-    // Logs written before the liveness guard carried no ownerPid; their owner
-    // cannot be probed, so the old always-revert behavior is preserved.
+  test('an unowned legacy begin stays uncertain, even with an old ambiguous commit marker', async () => {
     const log = createTransactionIntentLog({ stateDir })
     writeFileSync(
       log.filePath,
@@ -1314,7 +1752,7 @@ describe('transaction intent log recovery liveness guard', () => {
             beforeBytes: 'same',
           },
         ],
-      })}\n`,
+      })}\n${JSON.stringify({ kind: 'tx_ambiguous_commit', transactionId: 'tx-legacy', ambiguousAt: new Date().toISOString(), divergedPaths: ['legacy.ts'] })}\n`,
       'utf8',
     )
 
@@ -1330,14 +1768,14 @@ describe('transaction intent log recovery liveness guard', () => {
       fs,
     })
     expect(recovery).toMatchObject({
-      ok: true,
-      revertedTransactions: 1,
-      revertedPaths: 1,
-      ambiguousCommittedTransactions: 0,
+      ok: false,
+      status: 'recovery_required',
+      revertedPaths: 0,
+      transactionIds: ['tx-legacy'],
     })
-    expect(
-      await fs.readFile(join(projectDir, 'legacy.ts'), 'utf-8'),
-    ).toBe('before\n')
+    expect(await fs.readFile(join(projectDir, 'legacy.ts'), 'utf8')).toBe(
+      'after',
+    )
   })
 
   test('tx_begin records the owning process id for the recovery liveness guard', async () => {
@@ -1349,119 +1787,65 @@ describe('transaction intent log recovery liveness guard', () => {
 })
 
 describe('transaction intent log pre-image file mode', () => {
-  test('a durable beforeMode is restored through fs.setMode on revert', async () => {
+  test.skipIf(process.platform === 'win32')(
+    'crash restoration recreates a deleted file with its recorded mode',
+    async () => {
+      const fs = await brokerFileSystem()
+      const log = createTransactionIntentLog({ stateDir })
+      expect(
+        (
+          await begin(log, 'tx-mode', [
+            { ...diskIntent('app.sh', 'old\r\n', null), beforeMode: 0o751 },
+            diskIntent('future.txt', null, 'not yet created'),
+          ])
+        ).ok,
+      ).toBe(true)
+      const report = await recoverAndRevertInterruptedTransactions({
+        intentLog: log,
+        cwd: projectDir,
+        fs,
+      })
+      expect(report).toMatchObject({
+        ok: true,
+        revertedTransactions: 1,
+        revertedPaths: 1,
+      })
+      const target = join(projectDir, 'app.sh')
+      expect(readFileSync(target, 'utf8')).toBe('old\r\n')
+      expect(statSync(target).mode & 0o777).toBe(0o751)
+      expect(existsSync(join(projectDir, 'future.txt'))).toBe(false)
+    },
+  )
+
+  test('a postimage with a foreign mode does not prove ownership', async () => {
     const log = createTransactionIntentLog({ stateDir })
     expect(
       (
-        await log.beginTransaction({
-          transactionId: 'tx-mode',
-          operationId: 'op-mode',
-          callId: 'call-mode',
-          // Half-applied shape: app.sh diverges from its pre-image (applied)
-          // while the second staged path still matches its own (never
-          // applied), so the divergent path is restored — with its recorded
-          // permission bits — instead of being marked ambiguous-committed.
-          entries: [
-            {
-              path: 'app.sh',
-              beforeHash: 'sha256:old',
-              beforeBytes: 'old\n',
-              beforeMode: 0o755,
-            },
-            {
-              path: 'untouched.sh',
-              beforeHash: 'sha256:same',
-              beforeBytes: 'same',
-            },
-          ],
-        })
+        await begin(log, 'tx-mode-conflict', [
+          {
+            ...intent('plain.txt', 'before', 'after'),
+            beforeMode: 0o644,
+            afterMode: 0o644,
+          },
+        ])
       ).ok,
     ).toBe(true)
-
-    const restoredModes: Array<{ path: string; mode: number }> = []
-    const fs = createMockFs({
-      files: {
-        [join(projectDir, 'app.sh')]: 'new\n',
-        [join(projectDir, 'untouched.sh')]: 'same',
-      },
-    })
-    fs.setMode = async (filePath, mode) => {
-      restoredModes.push({ path: String(filePath), mode })
-    }
-
-    const recovery = await recoverAndRevertInterruptedTransactions({
-      intentLog: log,
-      cwd: projectDir,
-      fs,
-    })
-    expect(recovery).toMatchObject({
-      ok: true,
-      revertedTransactions: 1,
-      revertedPaths: 1,
-      ambiguousCommittedTransactions: 0,
-    })
-    expect(await fs.readFile(join(projectDir, 'app.sh'), 'utf-8')).toBe('old\n')
-    // The crash-restored file keeps its original permission bits (+x),
-    // matching what the in-memory rollback preserves; the never-applied path
-    // gets no setMode call at all.
-    expect(restoredModes).toEqual([
-      { path: join(projectDir, 'app.sh'), mode: 0o755 },
-    ])
-  })
-
-  test('an entry without a recorded beforeMode skips setMode (legacy logs)', async () => {
-    const log = createTransactionIntentLog({ stateDir })
+    const reversed: string[] = []
     expect(
-      (
-        await log.beginTransaction({
-          transactionId: 'tx-legacy-mode',
-          operationId: 'op-legacy-mode',
-          callId: 'call-legacy-mode',
-          // Half-applied shape: plain.txt diverges from its pre-image while
-          // the second staged path still matches its own.
-          entries: [
-            {
-              path: 'plain.txt',
-              beforeHash: 'sha256:old',
-              beforeBytes: 'old\n',
-            },
-            {
-              path: 'untouched.txt',
-              beforeHash: 'sha256:same',
-              beforeBytes: 'same',
-            },
-          ],
-        })
-      ).ok,
-    ).toBe(true)
-
-    const restoredModes: Array<{ path: string; mode: number }> = []
-    const fs = createMockFs({
-      files: {
-        [join(projectDir, 'plain.txt')]: 'new\n',
-        [join(projectDir, 'untouched.txt')]: 'same',
-      },
+      await log.revertTransaction(
+        'tx-mode-conflict',
+        async (file) => reversed.push(file),
+        async () => ({
+          hash: getExactContentHash('after'),
+          mode: 0o755,
+        }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      status: 'recovery_required',
+      unresolvedPaths: ['plain.txt'],
     })
-    fs.setMode = async (filePath, mode) => {
-      restoredModes.push({ path: String(filePath), mode })
-    }
-
-    const recovery = await recoverAndRevertInterruptedTransactions({
-      intentLog: log,
-      cwd: projectDir,
-      fs,
-    })
-    expect(recovery).toMatchObject({
-      ok: true,
-      revertedTransactions: 1,
-      revertedPaths: 1,
-      ambiguousCommittedTransactions: 0,
-    })
-    expect(await fs.readFile(join(projectDir, 'plain.txt'), 'utf-8')).toBe(
-      'old\n',
-    )
-    // No recorded mode: nothing to restore, setMode is never invoked.
-    expect(restoredModes).toEqual([])
+    expect(reversed).toEqual([])
   })
 
   test('the log and its identity artifacts are written owner-only (0o600)', async () => {
@@ -1471,9 +1855,9 @@ describe('transaction intent log pre-image file mode', () => {
     // not be readable by group/other.
     expect(statSync(log.filePath).mode & 0o777).toBe(0o600)
     // The liveness-token file is a pre-image-adjacent artifact: owner-only.
-    expect(
-      statSync(`${log.filePath}.live-${process.pid}`).mode & 0o777,
-    ).toBe(0o600)
+    expect(statSync(`${log.filePath}.live-${process.pid}`).mode & 0o777).toBe(
+      0o600,
+    )
   })
 })
 

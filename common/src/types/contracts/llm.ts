@@ -9,6 +9,7 @@ import type { Logger } from './logger'
 import type { Model } from '../../old-constants'
 import type { Message } from '../messages/codebuff-message'
 import type { RequestContextTrimInfo } from '../print-mode'
+import type { SpendingPolicy } from '../request-admission'
 import type { PromptResult } from '../../util/error'
 import type { FinishReason, generateText, streamText, ToolCallPart } from 'ai'
 import type z from 'zod/v4'
@@ -127,6 +128,14 @@ export type StreamChunk =
 export type CacheDebugUsageData = {
   inputTokens: number
   outputTokens: number
+  /**
+   * True when `inputTokens` is already the canonical total input, including
+   * cache-read and cache-write buckets. Absent preserves the legacy contract
+   * where callers reported uncached input separately from cache reads.
+   */
+  inputTokensIncludesCache?: boolean
+  /** Provider-reported cache-write input tokens, when that adapter exposes them. */
+  cacheWriteInputTokens?: number
   cachedInputTokens: number
   totalTokens: number
   /**
@@ -160,6 +169,10 @@ export type PromptAiSdkStreamFn = (
   params: {
     apiKey: string
     runId: string
+    /** Root-shared provider-request admission policy captured by the host. */
+    spendingPolicy?: SpendingPolicy
+    /** Durable authority shared by this root and every descendant attempt. */
+    requestAdmissionAuthorityId?: string
     messages: Message[]
     clientSessionId: string
     fingerprintId: string
@@ -211,6 +224,8 @@ export type PromptAiSdkFn = (
   params: {
     apiKey: string
     runId: string
+    spendingPolicy?: SpendingPolicy
+    requestAdmissionAuthorityId?: string
     messages: Message[]
     clientSessionId: string
     fingerprintId: string
@@ -245,6 +260,8 @@ export type PromptAiSdkFn = (
 export type PromptAiSdkStructuredInput<T> = {
   apiKey: string
   runId: string
+  spendingPolicy?: SpendingPolicy
+  requestAdmissionAuthorityId?: string
   messages: Message[]
   schema: z.ZodType<T>
   clientSessionId: string

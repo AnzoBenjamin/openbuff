@@ -323,7 +323,7 @@ describe('Error preserves in-progress message history', () => {
     expect(finalReadCall).toBeDefined()
   })
 
-  it('resets cache counters for new turns and preserves checkpoint counters', async () => {
+  it('resets cache counters for new turns without using refused checkpoint counters', async () => {
     setupDatabaseMocks()
 
     const countersAtRuntime: Array<{
@@ -367,17 +367,19 @@ describe('Error preserves in-progress message history', () => {
     checkpointState.mainAgentState.cacheInputTokens = 7
     checkpointState.mainAgentState.cacheTotalInputTokens = 12
     checkpointState.mainAgentState.cacheUsageComplete = true
-    await client.run({
+    const preserved = await client.run({
       agent: 'base2',
       prompt: 'Resume checkpoint',
       previousRun: continuedRun,
       resumeInterruptedTurn: true,
     })
-    expect(countersAtRuntime[2]).toEqual({
-      input: 7,
-      total: 12,
-      complete: true,
+    expect(preserved.runOutcome?.cause?.code).toBe('replay_unavailable')
+    expect(preserved.sessionState?.mainAgentState).toMatchObject({
+      cacheInputTokens: 7,
+      cacheTotalInputTokens: 12,
+      cacheUsageComplete: true,
     })
+    expect(countersAtRuntime).toHaveLength(2)
 
     const legacyMainAgentState = {
       ...continuedRun.sessionState!.mainAgentState,
@@ -385,7 +387,7 @@ describe('Error preserves in-progress message history', () => {
     Reflect.deleteProperty(legacyMainAgentState, 'cacheInputTokens')
     Reflect.deleteProperty(legacyMainAgentState, 'cacheTotalInputTokens')
     Reflect.deleteProperty(legacyMainAgentState, 'cacheUsageComplete')
-    await client.run({
+    const legacy = await client.run({
       agent: 'base2',
       prompt: 'Resume legacy checkpoint',
       previousRun: {
@@ -397,11 +399,8 @@ describe('Error preserves in-progress message history', () => {
       },
       resumeInterruptedTurn: true,
     })
-    expect(countersAtRuntime[3]).toEqual({
-      input: 0,
-      total: 0,
-      complete: false,
-    })
+    expect(legacy.runOutcome?.cause?.code).toBe('replay_unavailable')
+    expect(countersAtRuntime).toHaveLength(2)
 
     const malformedMainAgentState = {
       ...continuedRun.sessionState!.mainAgentState,
@@ -409,7 +408,7 @@ describe('Error preserves in-progress message history', () => {
       cacheTotalInputTokens: 10,
       cacheUsageComplete: true,
     }
-    await client.run({
+    const malformed = await client.run({
       agent: 'base2',
       prompt: 'Resume malformed checkpoint',
       previousRun: {
@@ -421,10 +420,7 @@ describe('Error preserves in-progress message history', () => {
       },
       resumeInterruptedTurn: true,
     })
-    expect(countersAtRuntime[4]).toEqual({
-      input: 0,
-      total: 10,
-      complete: false,
-    })
+    expect(malformed.runOutcome?.cause?.code).toBe('replay_unavailable')
+    expect(countersAtRuntime).toHaveLength(2)
   })
 })

@@ -8,6 +8,9 @@ import { getLanguageToolSpecs } from '@codebuff/common/util/language-capabilitie
 import { LANGUAGE_CAPABILITY_REGISTRY } from '@codebuff/common/util/language-capabilities'
 
 import { lspInstallHint } from './lsp-install-hints'
+import { captureTextDocument } from '@codebuff/common/util/byte-text'
+import { compileVersionedSemanticEdit, convertSemanticPosition } from './semantic-workspace-text'
+import type { SemanticDocumentBasis, VersionedSemanticOperation } from './semantic-workspace-text'
 
 import type { ChildProcess } from 'node:child_process'
 import type {
@@ -44,9 +47,14 @@ const RESTART_BACKOFF_MS = 200
 /** Poll interval while an evictor waits for reserved-but-starting slots to settle. */
 const EVICT_WAIT_POLL_MS = 25
 const INITIALIZE_REQUEST_ID = 1
+const MAX_SEMANTIC_DOCUMENT_BYTES = 1024 * 1024
+const MAX_SEMANTIC_BASIS_BYTES = 8 * MAX_SEMANTIC_DOCUMENT_BYTES
+const MAX_SEMANTIC_BASIS_DOCUMENTS = 64
 
+export type LspPositionEncoding = 'utf-16' | 'utf-8'
+/** Positions passed into the SDK use UTF-16; returned byte ranges are tagged. */
 export type LspPosition = { line: number; character: number }
-export type LspRange = { start: LspPosition; end: LspPosition }
+export type LspRange = { start: LspPosition; end: LspPosition; positionEncoding?: 'utf-8' }
 export type LspLocation = { uri: string; range: LspRange }
 
 export type LspHover = {
@@ -91,6 +99,12 @@ export type LspTextEdit = {
  * than throwing for the whole workspace edit.
  */
 export type LspWorkspaceEditChanges = Record<string, LspTextEdit[]>
+
+/** Prepared replacements from exact documents sent before the rename request. */
+export type LspVersionedWorkspaceIntent = {
+  encoding: LspPositionEncoding
+  operations: VersionedSemanticOperation[]
+}
 
 /**
  * P4-T2 (extract_symbol): a fully normalized WorkspaceEdit including what
@@ -314,6 +328,72 @@ function filePathToUri(filePath: string): string {
     .join('/')}`
 }
 
+type SemanticCodeActionPurpose = 'organize-imports' | 'extract'
+const ORGANIZE_IMPORTS = 'source.organizeImports'
+
+/** Choose an alternative, never execute a command or project a partial action. */
+function selectConcreteCodeAction(raw: unknown, purpose: SemanticCodeActionPurpose): unknown {
+  if (raw !== null && !Array.isArray(raw)) {
+    throw new LspServerError('Malformed code action response.', { reason: 'protocol' })
+  }
+  let commandOffered = false
+  for (const action of raw ?? []) {
+    if (!isRecord(action) || Array.isArray(action) || 'disabled' in action) continue
+    const kind = action.kind
+    const matches = purpose === 'organize-imports'
+      ? typeof kind === 'string' && (kind === ORGANIZE_IMPORTS || kind.startsWith(`${ORGANIZE_IMPORTS}.`))
+      : typeof kind === 'string'
+        ? kind === 'refactor.extract' || kind.startsWith('refactor.extract.')
+        : kind === undefined && typeof action.title === 'string' && /\bextract\b/i.test(action.title)
+    if (!matches) continue
+    if ('command' in action) {
+      commandOffered = true
+      continue
+    }
+    if ('edit' in action) {
+      if (!isRecord(action.edit) || Array.isArray(action.edit)) {
+        throw new LspServerError('Malformed concrete code action edit.', { reason: 'protocol' })
+      }
+      return action.edit
+    }
+  }
+  if (commandOffered) {
+    throw new LspServerError('A command-bearing code action cannot be verified as an edit-only operation; no command was sent.', { reason: 'protocol' })
+  }
+  if (purpose === 'organize-imports') {
+    throw new LspServerUnavailableError('The language server offered no concrete organize-imports edit.', { reason: 'no organize-imports action available' })
+  }
+  throw new LspServerUnavailableError('The language server offered no concrete extract edit.', { reason: 'no extract action available' })
+}
+
+function annotateReadOnlyRanges(method: string, raw: unknown, encoding: LspPositionEncoding | null) {
+  if (encoding === null || ![
+    'textDocument/definition', 'textDocument/references', 'textDocument/hover',
+    'textDocument/prepareRename', 'textDocument/documentSymbol', 'workspace/symbol',
+  ].includes(method)) return
+  const annotate = (range: unknown) => {
+    if (!isRecord(range) || !isRecord(range.start) || !isRecord(range.end)) return
+    if (encoding === 'utf-8') range.positionEncoding = 'utf-8'
+    else delete range.positionEncoding // Never trust an encoding tag supplied in JSON.
+  }
+  const stack: unknown[] = Array.isArray(raw) ? [...raw] : [raw]
+  while (stack.length) {
+    const value = stack.pop()
+    if (!isRecord(value)) continue
+    annotate(value.range)
+    if (method === 'textDocument/prepareRename') annotate(value)
+    if (method === 'textDocument/definition') {
+      annotate(value.targetRange)
+      annotate(value.targetSelectionRange)
+    }
+    if (isRecord(value.location)) annotate(value.location.range)
+    if (method === 'textDocument/documentSymbol') {
+      annotate(value.selectionRange)
+      if (Array.isArray(value.children)) for (const child of value.children) stack.push(child)
+    }
+  }
+}
+
 /**
  * One warm language-server connection: owns the framed transport, the
  * initialize handshake, per-request correlation/timeouts, and the document
@@ -326,6 +406,10 @@ class LspServerConnection {
   private frameBuffer: Buffer = Buffer.alloc(0)
   private running = false
   private readonly opened = new Map<string, number>()
+  private readonly semanticBasis = new Map<string, SemanticDocumentBasis>()
+  private semanticBasisBytes = 0
+  private semanticEditPending = false
+  private encoding: LspPositionEncoding | null = 'utf-16'
   private readonly admitSpawn: AdmitLspSpawn
   private readonly spawner: LspSpawner
   private readonly spawnSpec: LspSpawnSpec
@@ -367,9 +451,13 @@ class LspServerConnection {
   }
 
   async start(rootUri: string): Promise<void> {
-    if (this.stopRequested) throw new LspServerError('LSP start was stopped.', { reason: 'stopped' })
+    if (this.stopRequested)
+      throw new LspServerError('LSP start was stopped.', { reason: 'stopped' })
     const admitted = await this.admitSpawn(this.spawnSpec)
-    if (this.stopRequested) throw new LspServerError('LSP start was stopped during admission.', { reason: 'stopped' })
+    if (this.stopRequested)
+      throw new LspServerError('LSP start was stopped during admission.', {
+        reason: 'stopped',
+      })
     if (!admitted.ok) throw new LspExecutionError(admitted)
     let child: LspChildHandle
     try {
@@ -389,7 +477,9 @@ class LspServerConnection {
     this.frameBuffer = Buffer.alloc(0)
     child.stdout.on('data', (chunk) => this.consume(chunk))
     child.on('exit', (code, signal) => {
-      this.handleGone(`exit code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`)
+      this.handleGone(
+        `exit code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`,
+      )
     })
     child.on('error', (error) => {
       // A missing binary is not a crash: reject with a typed not-installed
@@ -406,7 +496,7 @@ class LspServerConnection {
           : undefined,
       )
     })
-    await this.send(
+    const initialization = await this.send(
       INITIALIZE_REQUEST_ID,
       {
         jsonrpc: '2.0',
@@ -416,12 +506,22 @@ class LspServerConnection {
           processId: null,
           rootUri,
           capabilities: {
+            general: { positionEncodings: ['utf-16', 'utf-8'] },
+            workspace: { workspaceEdit: {
+              documentChanges: true,
+              resourceOperations: ['create', 'rename', 'delete'],
+              changeAnnotationSupport: { groupsOnLabel: false },
+              failureHandling: 'abort', // Sequential edits are not filesystem-wide atomic.
+            } },
             textDocument: {
               synchronization: { didSave: false, dynamicRegistration: false },
               definition: { dynamicRegistration: false },
               references: { dynamicRegistration: false },
               hover: { dynamicRegistration: false },
-              documentSymbol: { dynamicRegistration: false, hierarchicalDocumentSymbolSupport: true },
+              documentSymbol: {
+                dynamicRegistration: false,
+                hierarchicalDocumentSymbolSupport: true,
+              },
             },
           },
         },
@@ -438,15 +538,23 @@ class LspServerConnection {
             cause: error,
           })
     })
+    const encoding =
+      isRecord(initialization) && isRecord(initialization.capabilities)
+        ? initialization.capabilities.positionEncoding
+        : undefined
+    this.encoding = encoding === undefined || encoding === 'utf-16' ? 'utf-16' : encoding === 'utf-8' ? 'utf-8' : null
     this.notify('initialized', {})
     this.running = true
   }
 
   async request(method: string, params: unknown): Promise<unknown> {
     if (!this.running || !this.child) {
-      throw new LspServerError(`LSP server is not running; '${method}' rejected.`, {
-        reason: 'stopped',
-      })
+      throw new LspServerError(
+        `LSP server is not running; '${method}' rejected.`,
+        {
+          reason: 'stopped',
+        },
+      )
     }
     if (this.pending.size >= this.maxPendingRequests) {
       throw new LspServerError(
@@ -455,38 +563,188 @@ class LspServerConnection {
       )
     }
     const id = this.nextRequestId++
-    return this.send(id, { jsonrpc: '2.0', id, method, params }, method, this.requestTimeoutMs)
+    return this.send(
+      id,
+      { jsonrpc: '2.0', id, method, params },
+      method,
+      this.requestTimeoutMs,
+    )
   }
 
-  notify(method: string, params: unknown): void {
+  notify(method: string, params: unknown): boolean {
     const child = this.child
-    if (!child) return
+    if (!child) return false
     try {
       this.write(child, { jsonrpc: '2.0', method, params })
+      return true
     } catch {
-      // A write failure surfaces through the exit/error event which rejects
-      // pending requests; the notification is best-effort by LSP contract.
+      // A transport failure must not produce a semantic basis.
+      return false
     }
   }
 
-  didOpen(uri: string, languageId: string, version: number, text: string): void {
+  private forgetSemanticBasis(uri: string): void {
+    this.semanticBasisBytes -= this.semanticBasis.get(uri)?.byteLength ?? 0
+    this.semanticBasis.delete(uri)
+  }
+
+  private rememberDocument(
+    uri: string,
+    version: number,
+    text: string,
+    sent: boolean,
+  ): void {
+    this.forgetSemanticBasis(uri)
+    if (!sent) {
+      this.opened.delete(uri)
+      return
+    }
     this.opened.set(uri, version)
-    this.notify('textDocument/didOpen', {
+    if (
+      !Number.isSafeInteger(version) ||
+      version < 0 ||
+      Buffer.byteLength(text) > MAX_SEMANTIC_DOCUMENT_BYTES
+    )
+      return
+    try {
+      const { rawText, rawHash, byteLength } = captureTextDocument(text)
+      this.semanticBasis.set(uri, { version, rawText, rawHash, byteLength })
+      this.semanticBasisBytes += byteLength
+      while (
+        this.semanticBasisBytes > MAX_SEMANTIC_BASIS_BYTES ||
+        this.semanticBasis.size > MAX_SEMANTIC_BASIS_DOCUMENTS
+      ) {
+        this.forgetSemanticBasis(this.semanticBasis.keys().next().value!)
+      }
+    } catch {
+      // Still let read-only requests work; a lossy text view is not edit authority.
+    }
+  }
+
+  didOpen(
+    uri: string,
+    languageId: string,
+    version: number,
+    text: string,
+  ): void {
+    const previous = this.opened.get(uri)
+    const sent = this.notify('textDocument/didOpen', {
       textDocument: { uri, languageId, version, text },
     })
+    this.rememberDocument(uri, version, text, sent)
+    if (previous !== undefined) this.forgetSemanticBasis(uri)
   }
 
   didChange(uri: string, version: number, text: string): void {
-    this.opened.set(uri, version)
-    this.notify('textDocument/didChange', {
+    const previous = this.opened.get(uri)
+    const sent = this.notify('textDocument/didChange', {
       textDocument: { uri, version },
       contentChanges: [{ text }],
     })
+    this.rememberDocument(uri, version, text, sent)
+    if (previous !== undefined && version <= previous)
+      this.forgetSemanticBasis(uri)
   }
 
   didClose(uri: string): void {
     this.opened.delete(uri)
+    this.forgetSemanticBasis(uri)
     this.notify('textDocument/didClose', { textDocument: { uri } })
+  }
+
+  get positionEncoding(): LspPositionEncoding | null {
+    return this.encoding
+  }
+
+  preparePositionedRequest(params: unknown): { params: unknown; assertBasisCurrent(): void } {
+    if (!this.encoding) {
+      throw new LspServerError('Unsupported LSP position encoding.', { reason: 'protocol' })
+    }
+    const unchanged = { params, assertBasisCurrent() {} }
+    if (this.encoding === 'utf-16' || !isRecord(params) ||
+        (!('position' in params) && !('range' in params))) return unchanged
+    const uri = isRecord(params.textDocument) ? params.textDocument.uri : undefined
+    const basis = typeof uri === 'string' ? this.semanticBasis.get(uri) : undefined
+    if (typeof uri !== 'string' || !basis) {
+      throw new LspServerError('UTF-8 positions require the matching document basis.', { reason: 'protocol' })
+    }
+    const convert = (position: unknown) => convertSemanticPosition(basis.rawText, position, 'utf-16', 'utf-8')
+    const wire = { ...params }
+    try {
+      if ('position' in params) wire.position = convert(params.position)
+      if ('range' in params) {
+        if (!isRecord(params.range)) throw new Error('malformed LSP range')
+        wire.range = { start: convert(params.range.start), end: convert(params.range.end) }
+      }
+    } catch (error) {
+      throw new LspServerError(`Cannot convert LSP position: ${error instanceof Error ? error.message : String(error)}`, { reason: 'protocol' })
+    }
+    return { params: wire, assertBasisCurrent: () => {
+      if (this.semanticBasis.get(uri) !== basis) {
+        throw new LspServerError('The document changed before its UTF-8 request was sent.', { reason: 'protocol' })
+      }
+    } }
+  }
+
+  async workspaceEditWithBasis(
+    uri: string,
+    method: 'textDocument/rename' | 'textDocument/codeAction',
+    params: unknown,
+    selectEdit: (raw: unknown) => unknown = (raw) => raw,
+  ): Promise<LspVersionedWorkspaceIntent> {
+    const encoding = this.encoding
+    if (!encoding) {
+      throw new LspServerError('Unsupported semantic edit position encoding.', { reason: 'protocol' })
+    }
+    if (this.semanticEditPending) {
+      throw new LspServerError(
+        'A semantic edit is already awaiting its captured basis.',
+        { reason: 'pending-limit' },
+      )
+    }
+    if (!this.semanticBasis.has(uri)) {
+      throw new LspServerError(
+        'A semantic edit requires a pre-request document basis.',
+        { reason: 'protocol' },
+      )
+    }
+    // Retain only one in-flight semantic snapshot per connection. Each entry
+    // object identifies the exact notification, even if the version is reused.
+    const captured = new Map(this.semanticBasis)
+    this.semanticEditPending = true
+    try {
+      const raw = await this.request(method, params)
+      const edit = selectEdit(raw)
+      try {
+        const operations = compileVersionedSemanticEdit(edit, captured, encoding)
+        const touched = [
+          uri,
+          ...operations.flatMap((operation) =>
+            operation.kind === 'move'
+              ? [operation.uri, operation.destinationUri]
+              : [operation.uri],
+          ),
+        ]
+        if (
+          !this.isRunning ||
+          touched.some(
+            (target) => this.semanticBasis.get(target) !== captured.get(target),
+          )
+        ) {
+          throw new Error(
+            'semantic document changed while the edit request was in flight',
+          )
+        }
+        return { encoding, operations }
+      } catch (error) {
+        throw new LspServerError(
+          `WorkspaceEdit refused: ${error instanceof Error ? error.message : String(error)}`,
+          { reason: 'protocol' },
+        )
+      }
+    } finally {
+      this.semanticEditPending = false
+    }
   }
 
   versionOf(uri: string): number | undefined {
@@ -511,6 +769,8 @@ class LspServerConnection {
     await this.killChild()
     this.frameBuffer = Buffer.alloc(0)
     this.opened.clear()
+    this.semanticBasis.clear()
+    this.semanticBasisBytes = 0
   }
 
   private send(
@@ -567,12 +827,16 @@ class LspServerConnection {
 
   private write(child: LspChildHandle, message: Record<string, unknown>): void {
     const body = JSON.stringify(message)
-    child.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`)
+    child.stdin.write(
+      `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`,
+    )
   }
 
   private consume(chunk: Buffer): void {
     this.frameBuffer =
-      this.frameBuffer.length === 0 ? chunk : Buffer.concat([this.frameBuffer, chunk])
+      this.frameBuffer.length === 0
+        ? chunk
+        : Buffer.concat([this.frameBuffer, chunk])
     // Fail closed on a runaway peer before parsing further.
     if (this.frameBuffer.length > this.maxFrameBytes) {
       this.handleGone(`frame buffer exceeded ${this.maxFrameBytes} bytes`)
@@ -592,7 +856,11 @@ class LspServerConnection {
         return
       }
       const length = Number(match[1])
-      if (!Number.isFinite(length) || length < 0 || length > this.maxFrameBytes) {
+      if (
+        !Number.isFinite(length) ||
+        length < 0 ||
+        length > this.maxFrameBytes
+      ) {
         this.handleGone(`invalid Content-Length ${match[1]}`)
         return
       }
@@ -668,7 +936,9 @@ class LspServerConnection {
     this.child = null
     this.rejectAll(
       rejection ??
-        new LspServerError(`LSP server died (${reason}).`, { reason: 'crashed' }),
+        new LspServerError(`LSP server died (${reason}).`, {
+          reason: 'crashed',
+        }),
     )
     if (wasRunning && !this.stopRequested) {
       this.onCrash(reason)
@@ -794,35 +1064,63 @@ export function defaultRootResolver(params: {
  * directly.
  */
 export type LspMultiplexer = {
-  definition(params: {
-    filePath: string
-    position: LspPosition
-  }, executionContext?: LspRequestContext): Promise<LspLocation | LspLocation[] | null>
-  references(params: {
-    filePath: string
-    position: LspPosition
-  }, executionContext?: LspRequestContext): Promise<LspLocation[] | null>
-  hover(params: { filePath: string; position: LspPosition }, executionContext?: LspRequestContext): Promise<LspHover | null>
+  definition(
+    params: {
+      filePath: string
+      position: LspPosition
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<LspLocation | LspLocation[] | null>
+  references(
+    params: {
+      filePath: string
+      position: LspPosition
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<LspLocation[] | null>
+  hover(
+    params: { filePath: string; position: LspPosition },
+    executionContext?: LspRequestContext,
+  ): Promise<LspHover | null>
   /**
    * P4-T2 (rename_symbol / code_action v1): rename and codeAction issue the
    * request WITHOUT gating on server capability advertisements — an incapable
    * server's error response becomes the caller's honest LspServerError, the
    * same contract unclean capability matches get on references().
    */
-  prepareRenameParams(params: {
-    filePath: string
-    position: LspPosition
-  }, executionContext?: LspRequestContext): Promise<{ range: LspRange } | null>
-  rename(params: {
-    filePath: string
-    position: LspPosition
-    newName: string
-  }, executionContext?: LspRequestContext): Promise<LspWorkspaceEditChanges>
-  codeAction(params: {
-    filePath: string
-    position: LspPosition
-    only?: string[]
-  }, executionContext?: LspRequestContext): Promise<
+  prepareRenameParams(
+    params: {
+      filePath: string
+      position: LspPosition
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<{ range: LspRange } | null>
+  rename(
+    params: {
+      filePath: string
+      position: LspPosition
+      newName: string
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<LspWorkspaceEditChanges>
+  /** Strict ordered workspace edit used by the built-in rename applicator. */
+  renameIntent?(
+    params: { filePath: string; position: LspPosition; newName: string },
+    executionContext?: LspRequestContext,
+  ): Promise<LspVersionedWorkspaceIntent>
+  /** Concrete edit-only built-in code actions, using the same request basis as rename. */
+  codeActionIntent?(
+    params: { filePath: string; position: LspPosition; purpose: SemanticCodeActionPurpose },
+    executionContext?: LspRequestContext,
+  ): Promise<LspVersionedWorkspaceIntent>
+  codeAction(
+    params: {
+      filePath: string
+      position: LspPosition
+      only?: string[]
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<
     Array<{
       title: string
       changesByUri: LspWorkspaceEditChanges
@@ -843,14 +1141,20 @@ export type LspMultiplexer = {
    * null / `{ applied: true }` after applying through their own channel),
    * while a server error response throws LspServerError honestly.
    */
-  executeCommand(params: {
-    filePath: string
-    command: string
-    arguments?: unknown[]
-  }, executionContext?: LspRequestContext): Promise<LspNormalizedEdit>
-  documentSymbol(params: {
-    filePath: string
-  }, executionContext?: LspRequestContext): Promise<LspDocumentSymbol[] | null>
+  executeCommand(
+    params: {
+      filePath: string
+      command: string
+      arguments?: unknown[]
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<LspNormalizedEdit>
+  documentSymbol(
+    params: {
+      filePath: string
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<LspDocumentSymbol[] | null>
   /**
    * P3 audit note: `filePath` is a reserved-for-future-use seam. Production
    * callers (language-intelligence.ts -> run.ts) pass only a `query` today,
@@ -869,13 +1173,16 @@ export type LspMultiplexer = {
     filePath?: string,
     executionContext?: LspRequestContext,
   ): Promise<LspWorkspaceSymbol[] | null>
-  syncFile(params: {
-    filePath: string
-    version: number
-    text: string
-    open?: boolean
-    close?: boolean
-  }, executionContext?: LspRequestContext): Promise<void>
+  syncFile(
+    params: {
+      filePath: string
+      version: number
+      text: string
+      open?: boolean
+      close?: boolean
+    },
+    executionContext?: LspRequestContext,
+  ): Promise<void>
   warmServerCount(): number
   dispose(): Promise<void>
 }
@@ -1186,9 +1493,14 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     method: string,
     params: unknown,
     executionContext?: LspRequestContext,
+    use?: (connection: LspServerConnection, wireParams: unknown) => Promise<T>,
   ): Promise<T | null> {
-    const entry = await raceAbort(acquire(filePath, executionContext), executionContext?.signal)
-    if (entry.restarting) await raceAbort(entry.restarting, executionContext?.signal)
+    const entry = await raceAbort(
+      acquire(filePath, executionContext),
+      executionContext?.signal,
+    )
+    if (entry.restarting)
+      await raceAbort(entry.restarting, executionContext?.signal)
     // P4-T2 (real-server seam): auto-open an unopened document before a
     // document-scoped request when the caller supplied bytes for it. Version
     // 1 is correct here: versionOf is connection-local and the connection
@@ -1197,10 +1509,32 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       const uri = filePathToUri(filePath)
       if (entry.connection.versionOf(uri) === undefined) {
         const text = await options.openFile({ filePath })
-        await withResourceUse(entry, executionContext, 'textDocument/didOpen', { uri, text }, () => entry.connection.didOpen(uri, entry.languageId, 1, text))
+        await withResourceUse(
+          entry,
+          executionContext,
+          'textDocument/didOpen',
+          { uri, text },
+          () => {
+            if (entry.connection.versionOf(uri) === undefined)
+              entry.connection.didOpen(uri, entry.languageId, 1, text)
+          },
+        )
       }
     }
-    const result = (await withResourceUse(entry, executionContext, method, params, () => entry.connection.request(method, params))) as T | null
+    const connection = entry.connection
+    if (connection.positionEncoding === 'utf-8' && !use &&
+        (method === 'textDocument/rename' || method === 'textDocument/codeAction' || method === 'workspace/executeCommand')) {
+      throw new LspServerError('Legacy edit projection is not available on a UTF-8 connection; use the versioned edit path.', { reason: 'protocol' })
+    }
+    // Bind the permit to the exact encoded payload, then reject if the
+    // conversion's document changed while admission was pending.
+    const wire = connection.preparePositionedRequest(params)
+    const result = (await withResourceUse(entry, executionContext, method, wire.params, () => {
+      if (entry.connection !== connection) throw new LspServerError('The language server changed before dispatch.', { reason: 'stopped' })
+      wire.assertBasisCurrent()
+      return use ? use(connection, wire.params) : connection.request(method, wire.params)
+    })) as T | null
+    if (!use) annotateReadOnlyRanges(method, result, connection.positionEncoding)
     return result ?? null
   }
 
@@ -1403,7 +1737,13 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     // typed unavailable ('workspace-symbol-unsupported'), distinct from the
     // no-warm-server null and from a real empty answer.
     try {
-      const result = (await withResourceUse(entry, executionContext, 'workspace/symbol', { query }, () => entry.connection.request('workspace/symbol', { query }))) as LspWorkspaceSymbol[] | null
+      const connection = entry.connection
+      const wire = connection.preparePositionedRequest({ query })
+      const result = (await withResourceUse(entry, executionContext, 'workspace/symbol', wire.params, () => {
+        if (entry.connection !== connection) throw new LspServerError('The language server changed before dispatch.', { reason: 'stopped' })
+        return connection.request('workspace/symbol', wire.params)
+      })) as LspWorkspaceSymbol[] | null
+      annotateReadOnlyRanges('workspace/symbol', result, connection.positionEncoding)
       // A warm server that answered null found nothing: that is an empty
       // answer, not "unavailable". `null` from this function is reserved for
       // "no server could answer" (language-intel-02).
@@ -1435,10 +1775,15 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         executionContext,
       ),
     references: ({ filePath, position }, executionContext) =>
-      withServer<LspLocation[]>(filePath, 'textDocument/references', {
-        ...positionParams(filePath, position),
-        context: { includeDeclaration: true },
-      }, executionContext),
+      withServer<LspLocation[]>(
+        filePath,
+        'textDocument/references',
+        {
+          ...positionParams(filePath, position),
+          context: { includeDeclaration: true },
+        },
+        executionContext,
+      ),
     // P4-T2 rename/codeAction: the same request seam as definition/references
     // (prepare-file via acquire + withServer, 0-based LSP positions verbatim —
     // the service layer is the ONLY owner of the 1-based→0-based shift).
@@ -1469,6 +1814,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       }
       return {
         range: {
+          ...(candidate.positionEncoding === 'utf-8' ? { positionEncoding: 'utf-8' as const } : {}),
           start: {
             line: candidate['start']['line'],
             character: candidate['start']['character'],
@@ -1481,21 +1827,63 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       }
     },
     rename: async ({ filePath, position, newName }, executionContext) => {
-      const result = await withServer<unknown>(filePath, 'textDocument/rename', {
-        ...positionParams(filePath, position),
-        newName,
-      }, executionContext)
+      const result = await withServer<unknown>(
+        filePath,
+        'textDocument/rename',
+        {
+          ...positionParams(filePath, position),
+          newName,
+        },
+        executionContext,
+      )
       // The raw WorkspaceEdit is normalized exactly once, here.
       return normalizeWorkspaceEdit(result).changesByUri
     },
-    codeAction: async ({ filePath, position, only }, executionContext) => {
+    renameIntent: async ({ filePath, position, newName }, executionContext) => {
+      const params = { ...positionParams(filePath, position), newName }
+      const intent = await withServer<LspVersionedWorkspaceIntent>(
+        filePath,
+        'textDocument/rename',
+        params,
+        executionContext,
+        (connection, wireParams) =>
+          connection.workspaceEditWithBasis(params.textDocument.uri, 'textDocument/rename', wireParams),
+      )
+      if (!intent)
+        throw new LspServerError(
+          'The language server returned no semantic edit intent.',
+          { reason: 'protocol' },
+        )
+      return intent
+    },
+    codeActionIntent: async ({ filePath, position, purpose }, executionContext) => {
       const { textDocument } = positionParams(filePath, position)
-      const result = await withServer<unknown>(filePath, 'textDocument/codeAction', {
+      const params = {
         textDocument,
         range: { start: position, end: position },
-        context: { diagnostics: [] },
-        ...(only !== undefined ? { only } : {}),
-      }, executionContext)
+        context: { diagnostics: [], only: [purpose === 'organize-imports' ? ORGANIZE_IMPORTS : 'refactor.extract'] },
+      }
+      const intent = await withServer<LspVersionedWorkspaceIntent>(
+        filePath, 'textDocument/codeAction', params, executionContext,
+        (connection, wireParams) => connection.workspaceEditWithBasis(textDocument.uri, 'textDocument/codeAction', wireParams,
+          raw => selectConcreteCodeAction(raw, purpose)),
+      )
+      if (!intent) throw new LspServerError('The language server returned no code action edit intent.', { reason: 'protocol' })
+      return intent
+    },
+    codeAction: async ({ filePath, position, only }, executionContext) => {
+      const { textDocument } = positionParams(filePath, position)
+      const result = await withServer<unknown>(
+        filePath,
+        'textDocument/codeAction',
+        {
+          textDocument,
+          range: { start: position, end: position },
+          context: { diagnostics: [] },
+          ...(only !== undefined ? { only } : {}),
+        },
+        executionContext,
+      )
       // Edit-carrying AND command-carrying actions are returned; the command
       // is surfaced verbatim so the caller (extractSymbol) can resolve it
       // through executeCommand. Resolution stays the CALLER's choice — this
@@ -1524,7 +1912,9 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         if (!isRecord(edit) && !command) continue
         normalized.push({
           title:
-            typeof action['title'] === 'string' ? action['title'] : '(untitled action)',
+            typeof action['title'] === 'string'
+              ? action['title']
+              : '(untitled action)',
           changesByUri: isRecord(edit)
             ? normalizeWorkspaceEdit(edit).changesByUri
             : {},
@@ -1533,11 +1923,10 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       }
       return normalized
     },
-    executeCommand: async ({
-      filePath,
-      command,
-      arguments: commandArguments,
-    }, executionContext) => {
+    executeCommand: async (
+      { filePath, command, arguments: commandArguments },
+      executionContext,
+    ) => {
       const result = await withServer<unknown>(
         filePath,
         'workspace/executeCommand',
@@ -1560,11 +1949,21 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       }
     },
     hover: ({ filePath, position }, executionContext) =>
-      withServer<LspHover>(filePath, 'textDocument/hover', positionParams(filePath, position), executionContext),
+      withServer<LspHover>(
+        filePath,
+        'textDocument/hover',
+        positionParams(filePath, position),
+        executionContext,
+      ),
     documentSymbol: ({ filePath }, executionContext) =>
-      withServer<LspDocumentSymbol[]>(filePath, 'textDocument/documentSymbol', {
-        textDocument: { uri: filePathToUri(filePath) },
-      }, executionContext),
+      withServer<LspDocumentSymbol[]>(
+        filePath,
+        'textDocument/documentSymbol',
+        {
+          textDocument: { uri: filePathToUri(filePath) },
+        },
+        executionContext,
+      ),
     // workspace/symbol is issued against an already-warm server. When a
     // `filePath` context is provided, the language is derived from its
     // extension via the registry mapping and the query is routed to THAT
@@ -1593,22 +1992,46 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         if (!entry) return null
         return requestWorkspaceSymbols(entry, query, executionContext)
       }
-      const entry = await raceAbort(warmEntryForWorkspaceSymbol(), executionContext?.signal)
+      const entry = await raceAbort(
+        warmEntryForWorkspaceSymbol(),
+        executionContext?.signal,
+      )
       if (!entry) return null
       return requestWorkspaceSymbols(entry, query, executionContext)
     },
     async syncFile({ filePath, version, text, open, close }, executionContext) {
-      const entry = await raceAbort(acquire(filePath, executionContext), executionContext?.signal)
+      const entry = await raceAbort(
+        acquire(filePath, executionContext),
+        executionContext?.signal,
+      )
       const uri = filePathToUri(filePath)
       if (close) {
-        await withResourceUse(entry, executionContext, 'textDocument/didClose', { uri }, () => entry.connection.didClose(uri))
+        await withResourceUse(
+          entry,
+          executionContext,
+          'textDocument/didClose',
+          { uri },
+          () => entry.connection.didClose(uri),
+        )
         return
       }
       const known = entry.connection.versionOf(uri)
       if (open || known === undefined) {
-        await withResourceUse(entry, executionContext, 'textDocument/didOpen', { uri, version, text }, () => entry.connection.didOpen(uri, entry.languageId, version, text))
+        await withResourceUse(
+          entry,
+          executionContext,
+          'textDocument/didOpen',
+          { uri, version, text },
+          () => entry.connection.didOpen(uri, entry.languageId, version, text),
+        )
       } else {
-        await withResourceUse(entry, executionContext, 'textDocument/didChange', { uri, version, text }, () => entry.connection.didChange(uri, version, text))
+        await withResourceUse(
+          entry,
+          executionContext,
+          'textDocument/didChange',
+          { uri, version, text },
+          () => entry.connection.didChange(uri, version, text),
+        )
       }
     },
     warmServerCount: () => servers.size,

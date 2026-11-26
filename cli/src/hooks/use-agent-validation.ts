@@ -186,9 +186,15 @@ export const useAgentValidation = (): UseAgentValidationResult => {
         }
       } catch (error) {
         logger.error({ error }, 'Agent validation failed with exception')
-        // Don't update validation errors on exception - keep previous state
-        // Return failure to block message sending on validation errors
-        return { success: false, errors: [] }
+        const failure = {
+          id: 'agent_validation_unavailable',
+          message: `Agent validation failed unexpectedly: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+        setValidationErrors([failure])
+        // Transient failures are deliberately not cached; retry re-runs the pass.
+        return { success: false, errors: [failure] }
       } finally {
         inFlightPassesRef.current -= 1
         // Only the LAST in-flight pass clears the flag: a newer-epoch pass

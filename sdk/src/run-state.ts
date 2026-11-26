@@ -58,6 +58,7 @@ import type {
   TaskAcceptance,
 } from '@codebuff/common/types/run-outcome'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { RequestAdmissionSnapshot } from '@codebuff/common/types/request-admission'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type {
   AgentOutput,
@@ -96,6 +97,8 @@ export type RunState = {
   runOutcome?: RunOutcome
   taskAcceptance?: TaskAcceptance
   actionOutcomes?: ActionOutcome[]
+  /** Final root-shared provider-request admission snapshot, when capped. */
+  requestAdmission?: RequestAdmissionSnapshot
   /** Physical root-owned cleanup observations, collected after logical completion. */
   executionCleanup?: readonly CleanupResult[]
 }

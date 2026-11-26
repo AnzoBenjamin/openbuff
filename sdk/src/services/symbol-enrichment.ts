@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { LRUCache } from '@codebuff/common/util/lru-cache'
 
 import { LspServerError, LspServerUnavailableError } from './lsp-multiplexer'
+import { convertSemanticPosition } from './semantic-workspace-text'
 
 import type {
   LspDocumentSymbol,
@@ -327,11 +328,18 @@ export async function enrichFileSymbols(params: {
       async () => {
         while (nextHoverIndex < hoverTargets.length) {
           const index = nextHoverIndex++
-          hovers[index] = await safeHover(
-            multiplexer,
-            filePath,
-            hoverTargets[index]!.selectionRange.start,
-          )
+          const range = hoverTargets[index]!.selectionRange
+          let position = range.start
+          if (range.positionEncoding === 'utf-8') {
+            try {
+              position = convertSemanticPosition(fileText, position, 'utf-8', 'utf-16')
+            } catch {
+              // An unresolvable display range cannot justify an enrichment query.
+              hovers[index] = null
+              continue
+            }
+          }
+          hovers[index] = await safeHover(multiplexer, filePath, position)
         }
       },
     ),

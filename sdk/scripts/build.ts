@@ -11,7 +11,11 @@ import { generateDtsBundle } from 'dts-bundle-generator'
 import { resolveGrammarWasmSource } from '../../packages/code-map/src/grammar-wasm-repair'
 import { TAG_QUERY_FILES } from '../../packages/code-map/src/languages'
 import { LANGUAGE_WASM_FILES } from '../../packages/code-map/src/wasm-files'
-import { normalizeEntryReexports, repairCjsExportGetters, repairEsmExportRenames } from './esm-export-fixup'
+import {
+  normalizeEntryReexports,
+  repairCjsExportGetters,
+  repairEsmExportRenames,
+} from './esm-export-fixup'
 import { verifyPublicDeclarations } from './verify-public-declarations'
 
 const workspaceNodeModules = join(import.meta.dir, '..', 'node_modules')
@@ -68,7 +72,10 @@ async function build() {
     setup(builder) {
       builder.onLoad({ filter: /[/\\]src[/\\]index\.ts$/ }, async (args) => {
         if (args.path !== sdkEntry) return undefined
-        return { contents: normalizeEntryReexports(await readFile(args.path, 'utf8')), loader: 'ts' }
+        return {
+          contents: normalizeEntryReexports(await readFile(args.path, 'utf8')),
+          loader: 'ts',
+        }
       })
     },
   }
@@ -199,6 +206,8 @@ async function build() {
     'supportsStreamDirectory',
     'isMemoryArtifactPersistenceAllowed',
     'ToolHelpers',
+    'MODELS_DEV_CATALOG_PROVENANCE',
+    'MODELS_DEV_UPSTREAM_LICENSE_NOTICE',
   ]
   for (const [format, expression] of [
     ['ESM', "import('./dist/index.mjs')"],
@@ -290,15 +299,21 @@ async function fixCjsImportVars() {
   const cjsPath = 'dist/index.cjs'
   const result = repairCjsExportGetters(await readFile(cjsPath, 'utf8'))
   await writeFile(cjsPath, result.content)
-  console.log(`  ✓ CJS import vars fixup: replaced ${result.fixCount} broken export getters`)
+  console.log(
+    `  ✓ CJS import vars fixup: replaced ${result.fixCount} broken export getters`,
+  )
 }
 
 /** Repair declared dedup aliases; unresolved exports fail instead of disappearing. */
 async function fixEsmExportRenames() {
   const esmPath = 'dist/index.mjs'
-  const { content, fixCount } = repairEsmExportRenames(await readFile(esmPath, 'utf8'))
+  const { content, fixCount } = repairEsmExportRenames(
+    await readFile(esmPath, 'utf8'),
+  )
   await writeFile(esmPath, content)
-  console.log(`  ✓ ESM export renames fixup: replaced ${fixCount} dedup renames`)
+  console.log(
+    `  ✓ ESM export renames fixup: replaced ${fixCount} dedup renames`,
+  )
 }
 
 /**

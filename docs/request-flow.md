@@ -176,6 +176,40 @@ If routing fails to match a provider entry, Openbuff fails closed with a
 clear config error. There is no hosted-backend fallback and no credit
 deduction.
 
+When a top-level or per-run `spending` policy is capped, the SDK binds one
+host-owned authority to the root and all descendants. Every retry/failover
+attempt reserves fixed-point USD capacity after route resolution and before the
+provider call. Strict mode needs known USD prices plus context/output bounds;
+estimated mode uses its explicit degraded fixed reservation; uncapped mode adds
+no admission gate. Missing/failed usage remains held, complete known usage can
+reconcile, and interrupted active attempts become held on resume. The durable
+record is separate from `AgentState.creditsUsed` telemetry and from the prunable
+run-event journal. Already admitted requests can overshoot remotely, so this is
+not a billing guarantee.
+
+A host that supplies a run journal can opt into bounded generator observations
+with `createRunJournal({ path, captureProgrammaticReplay: true })`. The journal
+retains the exact serialized `handleSteps` digest (a live callable is opaque),
+identified runtime component, configuration and input digests where those values
+are plain data, and the ordered yields and explicit inputs offered to `next()`.
+The producer observes a generator return separately from a completed run. The
+capture is opt-in because reply values can include private tool results; it
+contains no duplicate copy of generator source. Unrecordable inputs and limits
+stop the tape rather than inventing a completion. A tape does not capture the
+JS heap, arbitrary host I/O, or the full dependency closure. These rows are
+observations, not permission for exact replay; unverified re-entry still fails
+closed before new effects.
+
+The SDK's separate Linux/Bun `runReplayableReads` entry point can resume an
+explicit built-in plan of project-relative `read_files` batches, without model
+or effectful tool calls. The host opens the journal with
+`openReplayableReadJournal` using an absolute file path in a private directory
+it controls (mode `0700`). The SQLite journal can contain original file text;
+keep it private and use the same SDK artifact and workspace on restart. A
+fresh process must verify the retained prefix and claim it once before reusing
+confirmed reads and executing the remaining batches. Generic agent, terminal,
+and MCP re-entry are not enabled by this API.
+
 ### 6. Response Flow Back to CLI
 
 1. The provider streams tokens back to the local AI SDK client.
@@ -401,7 +435,6 @@ When the user presses Escape:
 The upstream Codebuff project routed inference and authentication through a hosted server with product billing, run records, and provider proxying. That path is not part of Openbuff and the hosted web, billing, BigQuery, and free-mode product surfaces have been removed from the active workspace.
 
 Openbuff replaces that entire hop with direct, BYOK provider calls from the local process. No Openbuff credits are deducted, no run records are written to a hosted database, and no telemetry is uploaded.
-
 
 ## Repository context and validation evidence
 

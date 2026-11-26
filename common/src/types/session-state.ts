@@ -33,6 +33,7 @@ import type {
   TaskStatus,
 } from './memory-v2'
 import type { MemoryPlaybook } from './memory-playbook'
+import type { RequestAdmissionReference } from './request-admission'
 
 export const toolCallSchema = z.object({
   toolName: z.string(),
@@ -448,11 +449,10 @@ export type AgentState = {
    */
   cacheUsageComplete?: boolean
   /**
-   * Optional per-run cost cap in US cents. Lazy-initialized from the agent
-   * template's maxCostCents on the first step, then enforced after each step's
-   * cost accumulation: if creditsUsed exceeds this cap, the turn ends with a
-   * budget-exceeded system message. Gives BYOK users a hard spend guardrail.
-   * Undefined = no cap (default, preserves existing behavior).
+   * Legacy per-agent cost cap in US cents. A root template maps this to the
+   * durable strict-capped request authority when no newer policy is selected;
+   * this field remains a secondary post-step stop signal for compatibility.
+   * Undefined = no legacy cap.
    */
   maxCostCents?: number
   /**
@@ -462,6 +462,8 @@ export type AgentState = {
    * cap, the turn ends. Undefined = no cap.
    */
   maxTokensPerTurn?: number
+  /** Root-only durable admission reference; checkpoints carry no ledger bytes. */
+  requestAdmission?: RequestAdmissionReference
   output?: Record<string, any>
   parentId?: string
   systemPrompt: string
@@ -754,6 +756,8 @@ export type AgentTemplateType =
 export type SessionState = {
   fileContext: ProjectFileContext
   mainAgentState: AgentState
+  /** Durable root-shared provider-request admission authority for interrupted resume. */
+  requestAdmission?: RequestAdmissionReference
 }
 
 export function getInitialAgentState(): AgentState {
@@ -772,6 +776,7 @@ export function getInitialAgentState(): AgentState {
     cacheInputTokens: 0,
     cacheTotalInputTokens: 0,
     cacheUsageComplete: true,
+    requestAdmission: undefined,
     output: undefined,
     parentId: undefined,
     systemPrompt: '',

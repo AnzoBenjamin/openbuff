@@ -55,6 +55,8 @@ export interface JournalEvent {
     | 'llm_replay_boundary'
     | 'tool_call'
     | 'tool_result'
+    | 'programmatic_observation'
+    | 'read_plan_basis'
     | 'spawn'
     | 'step_boundary'
     | 'error'
@@ -66,6 +68,10 @@ export interface JournalEvent {
 /** Append-only journal writer (P2-T2). Mints `seq` monotonically per runId. */
 export interface JournalWriter {
   append(runId: string, event: JournalEvent): void
+  /** Optional acknowledgement for an effect boundary. Refuses closed or unavailable storage. */
+  appendDurable?(runId: string, event: JournalEvent): void | Promise<void>
+  /** Retain bounded programmatic observations, not permission to replay them. */
+  readonly captureProgrammaticReplay?: true
   /**
    * P2-T2 slice 4 (optional): drain any hot-path-batched events so every
    * event appended so far is durably committed. Optional so existing
@@ -410,6 +416,8 @@ export type AgentRuntimeDeps = {
     observation: NativeToolObservation,
   ) => void | Promise<void>
   /** Select the host's canonical terminal outcome before journal publication. */
+  /** Host-owned cursor for the selected read-only replay adapter. */
+  readPlanStepOffset?: (runId: string) => number
   resolveRunOutcome?: (params: {
     runId: string
     ancestorRunIds: readonly string[]

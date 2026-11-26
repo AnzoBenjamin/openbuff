@@ -1,110 +1,12 @@
 /**
- * P2-T5: durable transaction-intent log for crash-atomic multi-file
- * transactions.
+ * Workspace-scoped, owner-only write-ahead log for sequential file groups.
+ * A durable begin records exact pre-images and expected after-state before
+ * effects. A matching pre-image is already safe; only a contained matching
+ * postimage can be restored. Legacy, foreign and unreadable state stays pending.
  *
- * A tiny JSON-lines log, colocated with the harness state dir (never inside
- * the project tree it guards), that records the pre-image of every staged
- * path BEFORE the first file of a multi-file transaction commits:
- *
- *   {"kind":"tx_begin","transactionId":...,"operationId":...,"callId":...,"startedAt":...,"entries":[{"path":...,"beforeHash":...,"beforeBytes":...}]}
- *   {"kind":"tx_commit","transactionId":...,"committedAt":...}
- *   {"kind":"tx_abort","transactionId":...,"abortedAt":...,"reason":...}
- *   {"kind":"tx_ambiguous_commit","transactionId":...,"ambiguousAt":...,"divergedPaths":[...]}
- *
- * The point is making rollback bytes DURABLE: the in-memory rollback already
- * holds pre-images, but a crash between the first and last file commit loses
- * them. With an intent log, a later process sees a transaction whose LAST
- * event is tx_begin (half-applied) and can revert each path from the recorded
- * before-bytes (null = the path did not exist before, so undo = delete).
- * Recovery is LIVENESS-GUARDED: every tx_begin records the owning process id
- * AND that process instance's liveness token (a random per-process-lifetime
- * id also published to a `.live-<pid>` file next to the log BEFORE the
- * tx_begin is appended), and a half-applied transaction whose owner is a
- * live process OTHER than this one is left alone — a sibling process sharing
- * this state dir may be mid multi-file commit (its tx_commit has not been
- * appended yet), so startup recovery must never revert files that
- * transaction already committed. A transaction whose ownerPid is THIS
- * process is the process's own half-applied work and stays recoverable by
- * its own recovery and revertTransaction path. The pid alone is NOT a
- * sufficient liveness identity — operating systems recycle pids, so a dead
- * writer's recycled pid would make every later recovery skip the revert
- * forever. Recovery therefore treats the recorded owner as alive only when
- * the pid is alive AND the `.live-<pid>` token file still carries the exact
- * token the tx_begin recorded; a missing or different token means the pid
- * now belongs to a different (recycled) process and the half-applied
- * transaction is reverted. Residual window: a recycled pid whose new
- * occupant never touches this log still publishes no fresh token, so its
- * predecessor's stale token keeps deferring the revert until the occupant
- * touches the log or dies. A legacy tx_begin without a recorded token keeps
- * the old conservative skip-while-pid-alive behavior. Once the owner dies, a
- * later recovery reverts the transaction.
- *
- * Recovery is also LOSSLESS-AWARE: a tx_begin-only record normally means
- * half-applied, but it is also exactly what a LOST tx_commit leaves behind —
- * the commit-marker append (a lock timeout or IO failure) happens AFTER the
- * files were committed, and a dead owner never blocks the revert, so a naive
- * recovery would DESTROY applied work. Fail-open is therefore correct for
- * tx_begin/tx_abort but LOSSY for tx_commit: the tx_commit append retries a
- * bounded number of times on transient lock/IO failure, and before any
- * revert each staged path's CURRENT content is compared with its recorded
- * pre-image. Every staged path diverging from its pre-image is treated as
- * evidence the operations actually applied: the transaction is marked with a
- * terminal tx_ambiguous_commit event and left in place, never reverted. A
- * mix of divergent and matching paths is the half-applied shape: only the
- * divergent paths are restored from their pre-images and the ambiguity is
- * reported in the outcome.
- *
- * Invariants:
- * - only before-images are stored (never after-bytes), and no cap.v3 secrets:
- *   paths, hashes and pre-images only. RESIDUAL PLAINTEXT RISK: the recorded
- *   pre-images ARE the plaintext bytes of user files, persisted unencrypted
- *   in the state dir. The log and every artifact file around it (tmp file,
- *   lock file, liveness-token file) are therefore written with mode 0o600 so
- *   only the owning user can read them — but any process running as that
- *   user can still read the pre-images, so the state dir must never be
- *   shared or world-readable.
- * - appends are APPEND-ONLY JSONL writes: each event line is appended to the
- *   existing log (opened with the 'a' flag) and fsynced before the append is
- *   reported durable; when the append creates the log file, the containing
- *   directory is fsynced best-effort too. A crash mid-append can tear the
- *   final line; the next append first closes the torn line off with a
- *   newline so the reader skips the fragment instead of concatenating it
- *   onto (and dropping) the new event. The whole-file read-rewrite
- *   (tmp+rename, tmp fsynced before the rename and the directory fsynced
- *   after) is reserved for the bounded trim, so a plain append costs one
- *   line write instead of a full-file rewrite per event.
- * - appends are serialized by an exclusive-create lock file next to the log,
- *   so concurrent appenders (a parallel changeFiles transaction, or a second
- *   openbuff process sharing the harness state dir) can never interleave an
- *   append or trim and silently drop another transaction's tx_begin or
- *   tx_commit/tx_abort line; the lock file records its holder's process id
- *   AND that process instance's liveness token, so a lock whose holder is
- *   PROVABLY DEAD is broken immediately, a lock whose recorded pid was
- *   RECYCLED to a different process (the token file that pid publishes no
- *   longer carries the recorded token) is broken instead of wedging every
- *   later append, and a lock with no parsable holder identity is broken once
- *   stale — a LIVE holder's lock is never broken by a waiter (waiting callers
- *   fail with a structured timeout error instead), so a crash can never
- *   permanently wedge the log. Before breaking, the waiter re-reads the lock
- *   file and unlinks only when the recorded pid AND instance token still
- *   match what it observed at break-decision time, so a lock that was
- *   released and re-acquired by a fresh holder in between is never deleted
- *   (which would allow dual writers).
- * - the file is bounded: at most MAX_TRANSACTIONS transactions and MAX_BYTES
- *   total, oldest DROPPABLE transactions dropped first — a transaction whose
- *   tx_begin is present but whose terminal tx_commit/tx_abort has not been
- *   seen is NEVER evicted, even when it is the oldest, because it may be a
- *   live sibling's mid-commit transaction whose durable pre-image must
- *   survive. An appended event that still cannot fit the caps after every
- *   droppable transaction was dropped is REJECTED (ok:false), never silently
- *   dropped: dropping a just-appended tx_begin while reporting success would
- *   leave the durable pre-image unwritten while the commit path believes it
- *   exists.
- * - corrupted lines are tolerated (skipped) on read.
- * - no ambient process.env reads: the state dir is injected.
- * - every operation is a never-reject helper returning a structured outcome;
- *   intent-log failures must never break the commit path (fail-open on
- *   logging, fail-closed on the existing in-memory rollback).
+ * Appends and trims are serialized. Active and unresolved intents cannot be
+ * evicted. Before-images contain private source bytes: keep the state directory
+ * private. No code here makes arbitrary external filesystem writers cooperate.
  */
 
 import path from 'node:path'
@@ -119,10 +21,15 @@ import {
   type FileHandle,
 } from 'node:fs/promises'
 
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type {
+  CodebuffFileSystem,
+  CodebuffTransactionParentIdentity,
+} from '@codebuff/common/types/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import { observeTransactionPath } from './transaction-path-identity'
 
 export const TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS = 100
 export const TRANSACTION_INTENT_LOG_MAX_BYTES = 8 * 1024 * 1024
@@ -157,18 +64,27 @@ const TRANSACTION_INTENT_LOG_COMMIT_RETRY_DELAY_MS = 50
  * recycled pid occupying its former slot.
  */
 const PROCESS_INSTANCE_TOKEN = crypto.randomUUID()
+const activeCoordinators = new Map<string, Set<string>>()
+// Reserve space for a bounded recovery marker and terminal acknowledgement.
+const MODERN_TRANSACTION_HEADROOM = 2048
 
 export type TransactionIntentEntry = {
   path: string
   beforeHash: string | null
-  /** Durable pre-image used for undo; omitted means the path did not exist. */
+  /** Exact UTF-8 pre-image; absent only for a path that did not exist. */
   beforeBytes?: string
-  /**
-   * Permission bits (the stat mode) of the pre-image, restored on revert so
-   * a crash-restored executable keeps its +x bit; omitted for paths that did
-   * not exist before the transaction (their undo is a delete).
-   */
   beforeMode?: number
+  /** Exact byte hash or confirmed absence. Omission denotes legacy uncertainty. */
+  afterHash?: string | null
+  afterMode?: number
+  parent?: CodebuffTransactionParentIdentity
+}
+
+type OwnedIntentEntry = TransactionIntentEntry & { afterHash: string | null }
+
+export type TransactionCurrentState = {
+  hash: string | null
+  mode?: number
 }
 
 export type BeginTransactionParams = {
@@ -176,6 +92,8 @@ export type BeginTransactionParams = {
   operationId: string
   callId: string
   entries: readonly TransactionIntentEntry[]
+  /** Coordinator owns the group until releaseTransaction, including during awaits. */
+  inFlight?: true
 }
 
 type TransactionBeginEvent = {
@@ -205,6 +123,7 @@ type TransactionBeginEvent = {
    * skip-while-pid-alive behavior).
    */
   ownerToken?: string
+  inFlight?: true
   entries: TransactionIntentEntry[]
 }
 
@@ -212,6 +131,7 @@ type TransactionCommitEvent = {
   kind: 'tx_commit'
   transactionId: string
   committedAt: string
+  recovered?: true
 }
 
 type TransactionAbortEvent = {
@@ -221,15 +141,7 @@ type TransactionAbortEvent = {
   reason: string
 }
 
-/**
- * Terminal marker for a transaction whose commit outcome is ambiguous: its
- * tx_commit append was lost (it failed after the files were committed), yet
- * every staged path's current content diverges from the recorded pre-image —
- * evidence the operations actually applied. Recovery must never revert such
- * a transaction; this event resolves it so no later pass replays the
- * decision. Additive event kind: readers of older builds skip the unknown
- * kind, which is safe (they simply keep the conservative revert behavior).
- */
+/** Historical ambiguous terminal marker; not evidence of a committed group. */
 type TransactionAmbiguousCommitEvent = {
   kind: 'tx_ambiguous_commit'
   transactionId: string
@@ -238,43 +150,65 @@ type TransactionAmbiguousCommitEvent = {
   divergedPaths: string[]
 }
 
+type RecoveryRequiredEvent = {
+  kind: 'tx_recovery_required'
+  transactionId: string
+  /** Bounded stage indices, not unconstrained path/error text. */
+  unresolved: number[]
+  /** Entries known not to have acquired forward authority. */
+  unowned: number[]
+}
+
+type TransactionDispatchEvent = {
+  kind: 'tx_dispatch'
+  transactionId: string
+  /** Highest staged path index authorized to enter the sequential commit loop. */
+  through: number
+}
+
 type TransactionIntentEvent =
   | TransactionBeginEvent
+  | TransactionDispatchEvent
   | TransactionCommitEvent
   | TransactionAbortEvent
   | TransactionAmbiguousCommitEvent
+  | RecoveryRequiredEvent
 
-export type IntentOutcome = { ok: true } | { ok: false; error: string }
+export type IntentOutcome =
+  | { ok: true }
+  | { ok: false; error: string; code?: 'capacity' | 'recovery_required' }
 
 export type RecoveredInterruptedTransaction = {
   transactionId: string
   operationId: string
   entries: TransactionIntentEntry[]
   startedAt: string
+  dispatchedThrough?: number
+  recovery?: { unresolved: number[]; unowned: number[] }
 }
 
 export type RecoveryOutcome =
-  | { ok: true; transactions: RecoveredInterruptedTransaction[] }
+  | {
+      ok: true
+      transactions: RecoveredInterruptedTransaction[]
+      liveTransactionIds?: string[]
+    }
   | { ok: false; error: string }
 
 export type RevertTransactionOutcome =
   | {
       ok: true
-      status: 'reverted' | 'already_resolved' | 'ambiguous_committed'
+      status: 'reverted' | 'already_resolved' | 'recovered_committed'
       revertedPaths: number
-      /**
-       * Staged paths whose current content diverged from the recorded
-       * pre-image when lossless-aware classification ran (a readCurrent seam
-       * was supplied). status 'ambiguous_committed' means EVERY staged path
-       * diverged — the work was left in place, never reverted.
-       */
-      divergedPaths?: string[]
+      ownedPaths?: string[]
     }
   | {
       ok: false
-      status: 'revert_failed'
+      status: 'recovery_required'
       error: string
       revertedPaths: number
+      unresolvedPaths: string[]
+      uncertainty?: 'legacy_missing_after_state'
     }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -290,7 +224,10 @@ function isIntentEntryArray(value: unknown): value is TransactionIntentEntry[] {
     if (record.beforeHash !== null && typeof record.beforeHash !== 'string') {
       return false
     }
-    if (record.beforeBytes !== undefined && typeof record.beforeBytes !== 'string') {
+    if (
+      record.beforeBytes !== undefined &&
+      typeof record.beforeBytes !== 'string'
+    ) {
       return false
     }
     if (
@@ -304,6 +241,66 @@ function isIntentEntryArray(value: unknown): value is TransactionIntentEntry[] {
     return true
   })
 }
+
+function isMode(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 0o777
+  )
+}
+
+function isExactHash(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value)
+}
+
+function isParentIdentity(
+  value: unknown,
+): value is CodebuffTransactionParentIdentity {
+  if (!value || typeof value !== 'object') return false
+  const parent = value as Record<string, unknown>
+  return (
+    typeof parent.canonicalPath === 'string' &&
+    path.isAbsolute(parent.canonicalPath) &&
+    typeof parent.dev === 'string' &&
+    /^\d+$/.test(parent.dev) &&
+    typeof parent.ino === 'string' &&
+    /^\d+$/.test(parent.ino)
+  )
+}
+
+function validateOwnership(
+  entries: readonly TransactionIntentEntry[],
+): entries is readonly OwnedIntentEntry[] {
+  return (
+    entries.length > 0 &&
+    new Set(entries.map((entry) => entry.path)).size === entries.length &&
+    entries.every(
+      (entry) =>
+        (entry.beforeHash === null
+          ? entry.beforeBytes === undefined && entry.beforeMode === undefined
+          : typeof entry.beforeBytes === 'string' &&
+            entry.beforeHash === getExactContentHash(entry.beforeBytes) &&
+            (entry.beforeMode === undefined || isMode(entry.beforeMode))) &&
+        (entry.afterHash === null
+          ? entry.afterMode === undefined
+          : isExactHash(entry.afterHash) &&
+            (entry.afterMode === undefined || isMode(entry.afterMode))) &&
+        (entry.parent === undefined || isParentIdentity(entry.parent)),
+    )
+  )
+}
+
+const isRecoveryIndexList = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.length <= TRANSACTION_INTENT_LOG_MAX_ENTRIES_PER_TRANSACTION &&
+  value.every(
+    (index) =>
+      Number.isInteger(index) &&
+      index >= 0 &&
+      index < TRANSACTION_INTENT_LOG_MAX_ENTRIES_PER_TRANSACTION,
+  )
 
 /**
  * Read-side event validation. Corrupted or unrecognized lines are skipped by
@@ -324,7 +321,9 @@ function isIntentEvent(value: unknown): value is TransactionIntentEvent {
         (typeof record.ownerPid === 'number' &&
           Number.isInteger(record.ownerPid) &&
           record.ownerPid > 0)) &&
-      (record.ownerToken === undefined || isNonEmptyString(record.ownerToken))
+      (record.ownerToken === undefined ||
+        isNonEmptyString(record.ownerToken)) &&
+      (record.inFlight === undefined || record.inFlight === true)
     )
   }
   if (record.kind === 'tx_commit') {
@@ -340,6 +339,19 @@ function isIntentEvent(value: unknown): value is TransactionIntentEvent {
       typeof record.reason === 'string'
     )
   }
+  if (record.kind === 'tx_dispatch') {
+    return (
+      isNonEmptyString(record.transactionId) &&
+      isRecoveryIndexList([record.through])
+    )
+  }
+  if (record.kind === 'tx_recovery_required') {
+    return (
+      isNonEmptyString(record.transactionId) &&
+      isRecoveryIndexList(record.unresolved) &&
+      isRecoveryIndexList(record.unowned)
+    )
+  }
   if (record.kind === 'tx_ambiguous_commit') {
     return (
       isNonEmptyString(record.transactionId) &&
@@ -351,23 +363,15 @@ function isIntentEvent(value: unknown): value is TransactionIntentEvent {
   return false
 }
 
-/**
- * Groups events into transactions in file order: a transaction starts at its
- * tx_begin and runs until the next tx_begin. Terminal events without a
- * preceding begin (e.g. leftovers after a trim) are dropped.
- */
+/** Other processes can append between begin and terminal; group by ID. */
 function groupTransactionEvents(
   events: readonly TransactionIntentEvent[],
-): TransactionIntentEvent[][] {
-  const groups: TransactionIntentEvent[][] = []
-  let current: TransactionIntentEvent[] | undefined
+): Map<string, TransactionIntentEvent[]> {
+  const groups = new Map<string, TransactionIntentEvent[]>()
   for (const event of events) {
-    if (event.kind === 'tx_begin') {
-      current = [event]
-      groups.push(current)
-      continue
-    }
-    current?.push(event)
+    const group = groups.get(event.transactionId)
+    if (group) group.push(event)
+    else groups.set(event.transactionId, [event])
   }
   return groups
 }
@@ -375,8 +379,25 @@ function groupTransactionEvents(
 function measuredBytes(groups: readonly TransactionIntentEvent[][]): number {
   let total = 0
   for (const group of groups) {
-    for (const event of group) {
-      total += Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8')
+    const groupBytes = group.reduce(
+      (sum, event) =>
+        sum + Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8'),
+      0,
+    )
+    const begin = group[0]
+    if (
+      begin?.kind === 'tx_begin' &&
+      begin.inFlight &&
+      !isFinishedTransactionGroup(group)
+    ) {
+      // One small dispatch event per action, plus rollback/terminal records.
+      const reserved =
+        Buffer.byteLength(`${JSON.stringify(begin)}\n`, 'utf8') +
+        MODERN_TRANSACTION_HEADROOM +
+        256 * begin.entries.length
+      total += Math.max(groupBytes, reserved)
+    } else {
+      total += groupBytes
     }
   }
   return total
@@ -391,7 +412,11 @@ function measuredBytes(groups: readonly TransactionIntentEvent[][]): number {
 function isFinishedTransactionGroup(
   group: readonly TransactionIntentEvent[],
 ): boolean {
-  return group.some((event) => event.kind !== 'tx_begin')
+  const last = group.at(-1)
+  return (
+    last?.kind === 'tx_commit' ||
+    (last?.kind === 'tx_abort' && !last.reason.startsWith('revert incomplete:'))
+  )
 }
 
 /**
@@ -407,6 +432,7 @@ function isFinishedTransactionGroup(
  */
 function boundTransactionGroups(
   groups: readonly TransactionIntentEvent[][],
+  protectedId: string,
   maxTransactions: number,
   maxBytes: number,
 ): TransactionIntentEvent[][] {
@@ -415,35 +441,38 @@ function boundTransactionGroups(
     bounded.length > 1 &&
     (bounded.length > maxTransactions || measuredBytes(bounded) > maxBytes)
   ) {
-    const droppableIndex = bounded
-      .slice(0, -1)
-      .findIndex(isFinishedTransactionGroup)
+    const droppableIndex = bounded.findIndex(
+      (group) =>
+        group[0]?.transactionId !== protectedId &&
+        (group[0]?.kind !== 'tx_begin' || isFinishedTransactionGroup(group)),
+    )
     if (droppableIndex === -1) break
     bounded.splice(droppableIndex, 1)
   }
   return bounded
 }
 
-/**
- * Lossless-aware evidence: which of a half-applied transaction's staged
- * paths DIVERGE from their recorded pre-images right now. A path whose
- * current content differs from its pre-image — changed or created bytes, or
- * a pre-image path that is now absent (a delete-style operation applied) —
- * is evidence the operation touched it; a path whose current content still
- * EQUALS its pre-image was not applied and must be left untouched.
- */
-const findDivergedPaths = async (
-  entries: readonly TransactionIntentEntry[],
-  readCurrent: (path: string) => Promise<string | null>,
-): Promise<string[]> => {
-  const divergedPaths: string[] = []
-  for (const entry of entries) {
-    if ((await readCurrent(entry.path)) === (entry.beforeBytes ?? null)) {
-      continue
-    }
-    divergedPaths.push(entry.path)
-  }
-  return divergedPaths
+const errorText = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+const recoveryRequired = (
+  error: string,
+  unresolvedPaths: string[],
+  revertedPaths = 0,
+): Extract<RevertTransactionOutcome, { ok: false }> => ({
+  ok: false,
+  status: 'recovery_required',
+  error,
+  unresolvedPaths,
+  revertedPaths,
+})
+
+function stateMatches(
+  state: TransactionCurrentState,
+  hash: string | null,
+  mode?: number,
+): boolean {
+  return state.hash === hash && (mode === undefined || state.mode === mode)
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -653,7 +682,20 @@ export type TransactionIntentLog = {
   readonly filePath: string
   beginTransaction(params: BeginTransactionParams): Promise<IntentOutcome>
   commitTransaction(transactionId: string): Promise<IntentOutcome>
-  abortTransaction(transactionId: string, reason: string): Promise<IntentOutcome>
+  abortTransaction(
+    transactionId: string,
+    reason: string,
+  ): Promise<IntentOutcome>
+  authorizeDispatch?(
+    transactionId: string,
+    through: number,
+  ): Promise<IntentOutcome>
+  markRecoveryRequired?(
+    transactionId: string,
+    unresolved: number[],
+    unowned?: number[],
+  ): Promise<IntentOutcome>
+  releaseTransaction?(transactionId: string): void
   recoverInterruptedTransactions(): Promise<RecoveryOutcome>
   revertTransaction(
     transactionId: string,
@@ -661,14 +703,13 @@ export type TransactionIntentLog = {
       path: string,
       beforeBytes: string | null,
       beforeMode?: number,
-    ) => Promise<void>,
-    /**
-     * Lossless-aware recovery seam: reads a staged path's CURRENT content
-     * (null = absent) so revertTransaction can tell an applied transaction
-     * from a half-applied one before destroying anything. When omitted, the
-     * historical unconditional per-path pre-image restore runs.
-     */
-    readCurrent?: (path: string) => Promise<string | null>,
+      entry?: TransactionIntentEntry,
+    ) => Promise<unknown>,
+    /** No reader means no ownership proof, never unconditional restoration. */
+    readCurrent?: (
+      path: string,
+      entry: TransactionIntentEntry,
+    ) => Promise<string | null | TransactionCurrentState>,
   ): Promise<RevertTransactionOutcome>
 }
 
@@ -741,23 +782,32 @@ export function createTransactionIntentLog(params: {
     }
   }
 
-  /**
-   * Publish this process instance's liveness identity BEFORE appending a
-   * tx_begin, so any tx_begin that exists durably has a matching token file
-   * on disk. Best-effort: a failed publication leaves the tx_begin without a
-   * matching token, which recovery treats as a recycled pid (revert) — the
-   * fail-open direction for reverting the durable pre-image.
-   */
-  const publishOwnerToken = async (): Promise<void> => {
+  const publishOwnerToken = async (
+    pid = ownerPid,
+    token = ownerToken,
+  ): Promise<void> => {
+    if ((await readOwnerTokenFile(pid)) === token) return
+    const tokenPath = ownerTokenFilePath(pid)
+    const nextPath = `${tokenPath}.${crypto.randomUUID()}.new`
     try {
-      // 0o600: identity artifacts in the shared state dir stay owner-only.
-      await writeFile(ownerTokenFilePath(ownerPid), `${ownerToken}\n`, {
-        encoding: 'utf8',
-        mode: 0o600,
-      })
-    } catch {
-      // Best-effort identity publication; see above.
+      await writeFile(nextPath, `${token}\n`, { mode: 0o600, flag: 'wx' })
+      await rename(nextPath, tokenPath)
+    } finally {
+      await unlink(nextPath).catch(() => undefined)
     }
+  }
+
+  const lockSeams = {
+    ownerPid,
+    ownerToken,
+    publishOwnerToken,
+    readOwnerToken: readOwnerTokenFile,
+  }
+
+  const releaseTransaction = (transactionId: string) => {
+    const ids = activeCoordinators.get(filePath)
+    ids?.delete(transactionId)
+    if (ids?.size === 0) activeCoordinators.delete(filePath)
   }
 
   const readEvents = async (): Promise<TransactionIntentEvent[]> => {
@@ -779,12 +829,24 @@ export function createTransactionIntentLog(params: {
     for (const line of raw.split('\n')) {
       const trimmed = line.trim()
       if (!trimmed) continue
+      let parsed: unknown
       try {
-        const parsed: unknown = JSON.parse(trimmed)
-        if (isIntentEvent(parsed)) events.push(parsed)
-        // A corrupted line is tolerated: skipped, never fatal.
+        parsed = JSON.parse(trimmed)
       } catch {
-        // Corrupted line tolerated.
+        continue // An interrupted append can leave a torn line.
+      }
+      if (isIntentEvent(parsed)) events.push(parsed)
+      else if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'kind' in parsed &&
+        (parsed.kind === 'tx_begin' ||
+          parsed.kind === 'tx_dispatch' ||
+          parsed.kind === 'tx_recovery_required')
+      ) {
+        throw new Error(
+          'Invalid durable transaction intent; recovery cannot prove the workspace state.',
+        )
       }
     }
     return events
@@ -797,7 +859,7 @@ export function createTransactionIntentLog(params: {
    * (e.g. Windows) degrade to file-level durability and must not fail the
    * append.
    */
-  const fsyncDirectoryBestEffort = async (): Promise<void> => {
+  const fsyncDirectory = async (): Promise<void> => {
     try {
       const dirHandle = await open(params.stateDir, 'r')
       try {
@@ -805,8 +867,9 @@ export function createTransactionIntentLog(params: {
       } finally {
         await dirHandle.close().catch(() => undefined)
       }
-    } catch {
-      // Directory fsync unsupported here: file-level durability stands.
+    } catch (error) {
+      // Our Linux durability lane must not acknowledge a failed directory sync.
+      if (process.platform === 'linux') throw error
     }
   }
 
@@ -822,7 +885,10 @@ export function createTransactionIntentLog(params: {
    * containing directory is fsynced best-effort so the new directory entry
    * survives a power cycle too.
    */
-  const appendEventLine = async (line: string): Promise<void> => {
+  const appendEventLine = async (
+    line: string,
+    ensureDirectory: boolean,
+  ): Promise<void> => {
     let previousSize = 0
     let created = false
     try {
@@ -860,14 +926,12 @@ export function createTransactionIntentLog(params: {
           await readHandle.close().catch(() => undefined)
         }
       }
-      await handle.write(`${line}\n`, 0, 'utf8')
+      await handle.writeFile(`${line}\n`, 'utf8')
       await handle.sync()
     } finally {
       await handle.close().catch(() => undefined)
     }
-    if (created) {
-      await fsyncDirectoryBestEffort()
-    }
+    if (created || ensureDirectory) await fsyncDirectory()
   }
 
   const writeAtomic = async (content: string): Promise<void> => {
@@ -883,9 +947,9 @@ export function createTransactionIntentLog(params: {
       // pre-image a half-applied transaction needs to be recovered.
       // 0o600: the tmp file becomes the log on rename, and the log carries
       // plaintext pre-images of user files (see the module header).
-      const handle = await open(tmpPath, 'w', 0o600)
+      const handle = await open(tmpPath, 'wx', 0o600)
       try {
-        await handle.write(content, 0, 'utf8')
+        await handle.writeFile(content, 'utf8')
         await handle.sync()
       } finally {
         await handle.close().catch(() => undefined)
@@ -895,7 +959,7 @@ export function createTransactionIntentLog(params: {
       // the rename itself is not durable until the containing directory is
       // flushed, so a power cycle could otherwise lose the just-appended
       // tx_begin while the caller was told it persisted.
-      await fsyncDirectoryBestEffort()
+      await fsyncDirectory()
     } catch (error) {
       await unlink(tmpPath).catch(() => undefined)
       throw error
@@ -914,71 +978,110 @@ export function createTransactionIntentLog(params: {
       // tx_abort line is silently dropped. A lost tx_begin leaves a
       // half-applied transaction unrecoverable; a lost terminal marker makes
       // startup recovery revert already-committed user changes.
-      return await withIntentLogLock(
+      return await withIntentLogLock<IntentOutcome>(
         `${filePath}.lock`,
         async () => {
           const existing = await readEvents()
-          const appendedGroup: TransactionIntentEvent[] = [event]
-          const candidate = [
-            ...groupTransactionEvents(existing),
-            appendedGroup,
-          ]
-          // Drop whatever the caps require — but never an unresolved
-          // transaction, whose durable pre-image a live sibling may still
-          // need (see boundTransactionGroups).
+          const groups = groupTransactionEvents(existing)
+          const previous = groups.get(event.transactionId) ?? []
+          if (event.kind === 'tx_begin' && previous.length) {
+            return { ok: false, error: 'Transaction intent ID already exists' }
+          }
+          if (
+            event.kind === 'tx_begin' &&
+            event.inFlight &&
+            [...groups.values()].some(
+              (group) =>
+                group[0]?.kind === 'tx_begin' &&
+                !isFinishedTransactionGroup(group),
+            )
+          ) {
+            return {
+              ok: false,
+              code: 'recovery_required',
+              error:
+                'An unresolved workspace transaction requires reconciliation.',
+            }
+          }
+          if (event.kind === 'tx_dispatch') {
+            const begin = previous[0]
+            const lastDispatch = previous.findLast(
+              (value) => value.kind === 'tx_dispatch',
+            )
+            if (
+              begin?.kind !== 'tx_begin' ||
+              !begin.inFlight ||
+              event.through >= begin.entries.length ||
+              event.through <= (lastDispatch?.through ?? -1) ||
+              (previous.at(-1)?.kind !== 'tx_begin' &&
+                previous.at(-1)?.kind !== 'tx_dispatch')
+            ) {
+              return {
+                ok: false,
+                error: 'Dispatch cannot advance this transaction intent',
+              }
+            }
+          }
+          const replaceRecovery =
+            event.kind === 'tx_recovery_required' &&
+            previous.some((value) => value.kind === 'tx_recovery_required')
+          if (
+            event.kind === 'tx_recovery_required' &&
+            (previous[0]?.kind !== 'tx_begin' ||
+              isFinishedTransactionGroup(previous))
+          ) {
+            return {
+              ok: false,
+              error: 'No unfinished intent can accept this recovery marker',
+            }
+          }
+          groups.set(event.transactionId, [
+            ...previous.filter(
+              (value) =>
+                !replaceRecovery || value.kind !== 'tx_recovery_required',
+            ),
+            event,
+          ])
           const bounded = boundTransactionGroups(
-            candidate,
+            [...groups.values()],
+            event.transactionId,
             maxTransactions,
             maxBytes,
           )
-          // Whatever the trim could not drop (unresolved transactions are
-          // protected) can leave the candidate over the caps. The append is
-          // then a structured failure and the log is left byte-identical:
-          // reporting ok:true with the event unwritten would leave the
-          // commit path believing a durable pre-image exists (and startup
-          // recovery would find no intent for a half-applied transaction),
-          // and existing recoverable transactions are never destroyed to
-          // make room for an event that cannot be persisted.
           if (
             bounded.length > maxTransactions ||
             measuredBytes(bounded) > maxBytes
           ) {
             return {
               ok: false,
+              code: 'capacity',
               error: `transaction intent event for ${event.transactionId} exceeds the ${maxBytes}-byte intent-log cap (max ${maxTransactions} transactions); the log was left unchanged`,
             }
           }
-          await mkdir(params.stateDir, { recursive: true })
-          const candidateLines = candidate.reduce(
-            (total, group) => total + group.length,
-            0,
+          const line = JSON.stringify(event)
+          const logSize = await stat(filePath).then(
+            (value) => value.size,
+            (error) => {
+              if (error?.code === 'ENOENT') return 0
+              throw error
+            },
           )
-          const boundedLines = bounded.reduce(
-            (total, group) => total + group.length,
-            0,
-          )
-          if (boundedLines === candidateLines) {
-            // Nothing was trimmed: the common path is an append-only JSONL
-            // write of exactly one line. Rewriting (and re-fsyncing) the
-            // whole log on every append would cost O(n^2) cumulative under
-            // the 8 MiB cap.
-            await appendEventLine(JSON.stringify(event))
+          if (
+            !replaceRecovery &&
+            bounded.length === groups.size &&
+            logSize + Buffer.byteLength(line, 'utf8') + 2 <= maxBytes
+          ) {
+            await appendEventLine(
+              line,
+              event.kind === 'tx_begin' && event.inFlight === true,
+            )
           } else {
-            // The trim rewrote the surviving events; the just-appended event
-            // lands in that atomic tmp+rename rewrite.
-            const lines = bounded
-              .flat()
-              .map((surviving) => JSON.stringify(surviving))
+            const lines = bounded.flat().map((value) => JSON.stringify(value))
             await writeAtomic(`${lines.join('\n')}\n`)
           }
           return { ok: true }
         },
-        {
-          ownerPid,
-          ownerToken,
-          publishOwnerToken,
-          readOwnerToken: readOwnerTokenFile,
-        },
+        lockSeams,
         params.lockTimeoutMs,
         params.lockBreakConfirmDelayMs,
       )
@@ -1020,11 +1123,34 @@ export function createTransactionIntentLog(params: {
         error: `beginTransaction exceeds the ${TRANSACTION_INTENT_LOG_MAX_ENTRIES_PER_TRANSACTION}-entry-per-transaction limit`,
       }
     }
-    // Publish our instance identity BEFORE the tx_begin is appended so a
-    // durable tx_begin always has a matching `.live-<ownerPid>` token file
-    // for the recovery guard to verify against.
-    await publishOwnerToken()
-    return appendEvent({
+    if (
+      (transaction.inFlight ||
+        transaction.entries.some((entry) => entry.afterHash !== undefined)) &&
+      !validateOwnership(transaction.entries)
+    ) {
+      return {
+        ok: false,
+        error: 'Invalid before/after ownership in transaction intent',
+      }
+    }
+    if (
+      transaction.inFlight &&
+      (transaction.transactionId.length > 128 ||
+        !transaction.entries.every((entry) => entry.parent !== undefined))
+    ) {
+      return {
+        ok: false,
+        error: 'Missing physical parent identity in transaction intent',
+      }
+    }
+    if (transaction.inFlight) {
+      let active = activeCoordinators.get(filePath)
+      if (!active) activeCoordinators.set(filePath, (active = new Set()))
+      if (active.has(transaction.transactionId))
+        return { ok: false, error: 'Transaction is already active' }
+      active.add(transaction.transactionId)
+    }
+    const result = await appendEvent({
       kind: 'tx_begin',
       transactionId: transaction.transactionId,
       operationId: transaction.operationId,
@@ -1040,8 +1166,15 @@ export function createTransactionIntentLog(params: {
       // from a RECYCLED pid occupying the dead writer's slot — a bare pid
       // match would defer the revert forever.
       ownerToken,
-      entries: transaction.entries.map((entry) => ({ ...entry })),
+      ...(transaction.inFlight ? { inFlight: true as const } : {}),
+      entries: transaction.entries.map((entry) => ({
+        ...entry,
+        ...(entry.parent ? { parent: { ...entry.parent } } : {}),
+      })),
     })
+    if (!result.ok && transaction.inFlight)
+      releaseTransaction(transaction.transactionId)
+    return result
   }
 
   const commitTransaction = async (
@@ -1050,24 +1183,13 @@ export function createTransactionIntentLog(params: {
     if (!isNonEmptyString(transactionId)) {
       return { ok: false, error: 'commitTransaction requires a transactionId' }
     }
-    // LOSSY-FAIL-OPEN REPAIR: the files are already committed by the time
-    // this marker is appended, so a lost tx_commit leaves a tx_begin-only
-    // record that startup recovery would revert — destroying committed work
-    // (a dead owner never blocks the revert). A transient lock timeout or IO
-    // failure is therefore retried a bounded number of times with a tiny
-    // backoff before the structured failure is surfaced. A duplicate append
-    // after a partially-written attempt is harmless: a repeated tx_commit
-    // line for the same transaction is idempotent for recovery (the LAST
-    // event still resolves it) and for the trim.
+    // Retry the acknowledgement; the already-written group is not rolled back
+    // just because a terminal marker failed to persist.
     let lastOutcome: IntentOutcome = {
       ok: false,
       error: 'commitTransaction did not run',
     }
-    for (
-      let attempt = 1;
-      attempt <= commitAppendAttempts;
-      attempt += 1
-    ) {
+    for (let attempt = 1; attempt <= commitAppendAttempts; attempt += 1) {
       lastOutcome = await appendEvent({
         kind: 'tx_commit',
         transactionId,
@@ -1096,198 +1218,267 @@ export function createTransactionIntentLog(params: {
     })
   }
 
-  /**
-   * Whether a half-applied transaction's recorded owner may still be
-   * mid-commit, so recovery must defer the revert. The pid alone is not a
-   * sufficient identity (pids are recycled), so the tx_begin's owner token
-   * is cross-checked against the `.live-<pid>` token file the owner
-   * published before appending:
-   * - no recorded owner, or an ownerPid equal to this process: never blocks
-   *   (legacy always-revert / this process's own recovery path).
-   * - a provably dead owner: does not block; its token file is removed so
-   *   token files for dead pids do not accumulate in the state dir.
-   * - a legacy row without an owner token: blocks while the pid is alive
-   *   (the old conservative behavior — the owner cannot be distinguished
-   *   from a recycled pid).
-   * - a live pid whose token file is missing or carries a DIFFERENT token:
-   *   does not block. The pid was recycled to a different process instance;
-   *   the original writer is gone and its half-applied transaction must be
-   *   reverted instead of deferred forever behind the recycled pid.
-   */
+  const authorizeDispatch = (
+    transactionId: string,
+    through: number,
+  ): Promise<IntentOutcome> =>
+    isRecoveryIndexList([through]) &&
+    activeCoordinators.get(filePath)?.has(transactionId)
+      ? appendEvent({ kind: 'tx_dispatch', transactionId, through })
+      : Promise.resolve({
+          ok: false,
+          error: 'Dispatch has no active coordinator',
+        })
+
+  const markRecoveryRequired = (
+    transactionId: string,
+    unresolved: number[],
+    unowned: number[] = [],
+  ): Promise<IntentOutcome> => {
+    if (!isRecoveryIndexList(unresolved) || !isRecoveryIndexList(unowned)) {
+      return Promise.resolve({
+        ok: false,
+        error: 'Invalid transaction recovery indices',
+      })
+    }
+    return appendEvent({
+      kind: 'tx_recovery_required',
+      transactionId,
+      unresolved: [...unresolved],
+      unowned: [...unowned],
+    })
+  }
+
   const ownerBlocksRevert = async (
     begin: TransactionBeginEvent,
   ): Promise<boolean> => {
-    if (begin.ownerPid === undefined || begin.ownerPid === process.pid) {
-      return false
+    if (begin.ownerPid === undefined) return false
+    if (begin.ownerPid === process.pid) {
+      return activeCoordinators.get(filePath)?.has(begin.transactionId) ?? false
     }
-    if (!isProcessAlive(begin.ownerPid)) {
-      await unlink(ownerTokenFilePath(begin.ownerPid)).catch(() => undefined)
-      return false
-    }
-    if (begin.ownerToken === undefined) {
-      return true
-    }
+    if (!isProcessAlive(begin.ownerPid)) return false
+    if (begin.ownerToken === undefined) return true
     const liveToken = await readOwnerTokenFile(begin.ownerPid)
-    return liveToken !== undefined && liveToken === begin.ownerToken
+    return (
+      liveToken === begin.ownerToken ||
+      (begin.inFlight === true && liveToken === undefined)
+    )
   }
 
-  const recoverInterruptedTransactions =
-    async (): Promise<RecoveryOutcome> => {
-      try {
-        const events = await readEvents()
-        const begins = new Map<string, TransactionBeginEvent>()
-        const lastEvents = new Map<string, TransactionIntentEvent>()
-        for (const event of events) {
-          if (
-            event.kind === 'tx_begin' &&
-            !begins.has(event.transactionId)
-          ) {
-            begins.set(event.transactionId, event)
-          }
-          lastEvents.set(event.transactionId, event)
+  const recoverInterruptedTransactions = async (): Promise<RecoveryOutcome> => {
+    try {
+      const transactions: RecoveredInterruptedTransaction[] = []
+      const liveTransactionIds: string[] = []
+      for (const [transactionId, group] of groupTransactionEvents(
+        await readEvents(),
+      )) {
+        const begin = group[0]
+        if (begin?.kind !== 'tx_begin' || isFinishedTransactionGroup(group))
+          continue
+        if (await ownerBlocksRevert(begin)) {
+          liveTransactionIds.push(transactionId)
+          continue
         }
-        const transactions: RecoveredInterruptedTransaction[] = []
-        for (const [transactionId, begin] of begins) {
-          // A transaction whose LAST event is tx_begin was interrupted between
-          // its first and last file commit (half-applied). Completed, aborted,
-          // or ambiguous-committed transactions are skipped. LIVENESS GUARD
-          // (see ownerBlocksRevert):
-          // the revert is deferred only while the recorded owner is provably
-          // the SAME live process instance — the pid is alive AND the
-          // `.live-<pid>` token file still carries the tx_begin's owner
-          // token. A dead owner, or a live pid whose token no longer matches
-          // (the pid was recycled to a different process), is reverted from
-          // the durable pre-image instead of being deferred forever.
-          if (lastEvents.get(transactionId)?.kind !== 'tx_begin') continue
-          if (await ownerBlocksRevert(begin)) continue
-          transactions.push({
-            transactionId,
-            operationId: begin.operationId,
-            entries: begin.entries,
-            startedAt: begin.startedAt,
-          })
-        }
-        return { ok: true, transactions }
-      } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        }
+        const marker = group.at(-1)
+        transactions.push({
+          transactionId,
+          operationId: begin.operationId,
+          entries: begin.entries,
+          startedAt: begin.startedAt,
+          ...(begin.inFlight
+            ? {
+                dispatchedThrough:
+                  group.findLast((value) => value.kind === 'tx_dispatch')
+                    ?.through ?? -1,
+              }
+            : {}),
+          ...(marker?.kind === 'tx_recovery_required'
+            ? {
+                recovery: {
+                  unresolved: marker.unresolved,
+                  unowned: marker.unowned,
+                },
+              }
+            : {}),
+        })
       }
-    }
-
-  const revertTransaction = async (
-    transactionId: string,
-    revert: (
-      path: string,
-      beforeBytes: string | null,
-      beforeMode?: number,
-    ) => Promise<void>,
-    readCurrent?: (path: string) => Promise<string | null>,
-  ): Promise<RevertTransactionOutcome> => {
-    const recovery = await recoverInterruptedTransactions()
-    if (!recovery.ok) {
-      return {
-        ok: false,
-        status: 'revert_failed',
-        error: recovery.error,
-        revertedPaths: 0,
-      }
-    }
-    const transaction = recovery.transactions.find(
-      (candidate) => candidate.transactionId === transactionId,
-    )
-    if (!transaction) {
-      return { ok: true, status: 'already_resolved', revertedPaths: 0 }
-    }
-    // LOSSLESS-AWARE CLASSIFICATION: a tx_begin-only record is normally
-    // half-applied, but it is also what a LOST tx_commit leaves behind after
-    // the files were committed — reverting that would destroy applied work,
-    // because a dead owner never blocks the revert. When the caller can read
-    // the staged paths' current contents, compare them against the recorded
-    // pre-images first. A read that fails (including the containment refusal
-    // for a tampered entry path) leaves the evidence unknown: fall back to
-    // the historical unconditional per-path restore, which fails closed.
-    let divergedPaths: string[] | undefined
-    if (readCurrent !== undefined && transaction.entries.length > 0) {
-      try {
-        divergedPaths = await findDivergedPaths(
-          transaction.entries,
-          readCurrent,
-        )
-      } catch {
-        divergedPaths = undefined
-      }
-    }
-    if (
-      divergedPaths !== undefined &&
-      divergedPaths.length === transaction.entries.length
-    ) {
-      // AMBIGUOUS-COMMITTED: every staged path diverges from its pre-image —
-      // the strongest available evidence the operations actually applied.
-      // NEVER revert; mark the transaction terminally resolved (best-effort:
-      // if the marker append fails too, a later pass re-classifies the same
-      // evidence and reaches the same decision) and surface the outcome.
-      await appendEvent({
-        kind: 'tx_ambiguous_commit',
-        transactionId,
-        ambiguousAt: now(),
-        divergedPaths: [...divergedPaths],
-      })
       return {
         ok: true,
-        status: 'ambiguous_committed',
-        revertedPaths: 0,
-        divergedPaths: [...divergedPaths],
+        transactions,
+        ...(liveTransactionIds.length ? { liveTransactionIds } : {}),
       }
+    } catch (error) {
+      return { ok: false, error: errorText(error) }
     }
-    // Undo in reverse commit order; a failed entry never blocks the remaining
-    // undo steps, and the abort marker is always written so recovery does not
-    // retry the same half-applied transaction forever. When classification
-    // ran, only the DIVERGED paths are restored: a path whose current content
-    // still matches its pre-image was never applied and is left untouched.
-    const entriesToRevert = [...transaction.entries].reverse().filter(
-      (entry) =>
-        divergedPaths === undefined || divergedPaths.includes(entry.path),
-    )
-    let revertedPaths = 0
-    let firstError: string | undefined
-    for (const entry of entriesToRevert) {
-      try {
-        await revert(entry.path, entry.beforeBytes ?? null, entry.beforeMode)
-        revertedPaths += 1
-      } catch (error) {
-        firstError ??= error instanceof Error ? error.message : String(error)
-      }
-    }
-    const aborted = await abortTransaction(
-      transactionId,
-      firstError ? `revert incomplete: ${firstError}` : 'reverted',
-    )
-    if (firstError) {
-      return {
-        ok: false,
-        status: 'revert_failed',
-        error: firstError,
-        revertedPaths,
-      }
-    }
-    if (!aborted.ok) {
-      return {
-        ok: false,
-        status: 'revert_failed',
-        error: aborted.error,
-        revertedPaths,
-      }
-    }
-    if (divergedPaths === undefined) {
-      return { ok: true, status: 'reverted', revertedPaths }
-    }
-    return {
-      ok: true,
-      status: 'reverted',
-      revertedPaths,
-      divergedPaths,
+  }
+
+  const revertTransaction: TransactionIntentLog['revertTransaction'] = async (
+    transactionId,
+    revert,
+    readCurrent,
+  ) => {
+    try {
+      return await withIntentLogLock<RevertTransactionOutcome>(
+        `${filePath}.recovery.lock`,
+        async () => {
+          const recovery = await recoverInterruptedTransactions()
+          if (!recovery.ok) return recoveryRequired(recovery.error, [])
+          if (recovery.liveTransactionIds?.includes(transactionId)) {
+            return recoveryRequired(
+              'Transaction is still owned by a live coordinator.',
+              [],
+            )
+          }
+          const transaction = recovery.transactions.find(
+            (candidate) => candidate.transactionId === transactionId,
+          )
+          if (!transaction)
+            return { ok: true, status: 'already_resolved', revertedPaths: 0 }
+          const { entries } = transaction
+          const paths = entries.map((entry) => entry.path)
+          if (!validateOwnership(entries)) {
+            return {
+              ...recoveryRequired(
+                'Transaction lacks verified before/after ownership.',
+                paths,
+              ),
+              ...(entries.some((entry) => entry.afterHash === undefined)
+                ? { uncertainty: 'legacy_missing_after_state' as const }
+                : {}),
+            }
+          }
+          if (!readCurrent)
+            return recoveryRequired(
+              'Transaction recovery has no current-state reader.',
+              paths,
+            )
+
+          const classify = async (entry: OwnedIntentEntry) => {
+            const read = await readCurrent(entry.path, entry)
+            const state =
+              typeof read === 'object' && read !== null
+                ? read
+                : { hash: read === null ? null : getExactContentHash(read) }
+            return {
+              before: stateMatches(state, entry.beforeHash, entry.beforeMode),
+              after: stateMatches(state, entry.afterHash, entry.afterMode),
+            }
+          }
+          const owned: number[] = []
+          const unresolved: number[] = []
+          const unowned = transaction.recovery?.unowned ?? []
+          const isOwnedIndex = (index: number) =>
+            !unowned.includes(index) &&
+            (transaction.dispatchedThrough === undefined ||
+              index <= transaction.dispatchedThrough)
+          let firstError: string | undefined
+          let allAfter = true
+          const ownedEntries: readonly OwnedIntentEntry[] = entries
+          for (const [index, entry] of ownedEntries.entries()) {
+            try {
+              const match = await classify(entry)
+              allAfter &&= match.after
+              if (match.before) continue
+              if (match.after && isOwnedIndex(index)) {
+                owned.push(index)
+                continue
+              }
+              firstError ??= `Foreign or unowned transaction state at ${entry.path}.`
+            } catch (error) {
+              firstError ??= errorText(error)
+            }
+            unresolved.push(index)
+            allAfter = false
+          }
+          // A lost terminal acknowledgement is not a rollback, unless recovery
+          // or the original coordinator already durably chose compensation.
+          if (
+            !transaction.recovery &&
+            allAfter &&
+            owned.length > 0 &&
+            (transaction.dispatchedThrough === undefined ||
+              transaction.dispatchedThrough === entries.length - 1)
+          ) {
+            const commit = await appendEvent({
+              kind: 'tx_commit',
+              transactionId,
+              committedAt: now(),
+              recovered: true,
+            })
+            return commit.ok
+              ? { ok: true, status: 'recovered_committed', revertedPaths: 0 }
+              : recoveryRequired(commit.error, paths)
+          }
+          if ((owned.length || unresolved.length) && !transaction.recovery) {
+            const marker = await markRecoveryRequired(
+              transactionId,
+              [...owned, ...unresolved].sort((a, b) => a - b),
+              unowned,
+            )
+            if (!marker.ok) return recoveryRequired(marker.error, paths)
+          }
+
+          let revertedPaths = 0
+          for (const index of owned.toReversed()) {
+            const entry = ownedEntries[index]!
+            try {
+              const match = await classify(entry)
+              if (match.before) continue
+              if (!match.after)
+                throw new Error(
+                  `Transaction target changed during recovery: ${entry.path}`,
+                )
+              const changed = await revert(
+                entry.path,
+                entry.beforeBytes ?? null,
+                entry.beforeMode,
+                entry,
+              )
+              if (changed !== false) revertedPaths += 1
+            } catch (error) {
+              firstError ??= errorText(error)
+              unresolved.push(index)
+            }
+          }
+          if (unresolved.length) {
+            const recorded = await markRecoveryRequired(
+              transactionId,
+              unresolved.sort((a, b) => a - b),
+              unowned,
+            )
+            return recoveryRequired(
+              recorded.ok
+                ? (firstError ?? 'Transaction recovery is incomplete.')
+                : `${firstError ?? 'Transaction recovery is incomplete.'} (${recorded.error})`,
+              unresolved.map((index) => paths[index]!),
+              revertedPaths,
+            )
+          }
+          const aborted = await abortTransaction(
+            transactionId,
+            'reverted or already at pre-image',
+          )
+          return aborted.ok
+            ? {
+                ok: true,
+                status: 'reverted',
+                revertedPaths,
+                ownedPaths: owned.map((index) => paths[index]!),
+              }
+            : recoveryRequired(aborted.error, paths, revertedPaths)
+        },
+        {
+          ownerPid: process.pid,
+          ownerToken: PROCESS_INSTANCE_TOKEN,
+          publishOwnerToken: () =>
+            publishOwnerToken(process.pid, PROCESS_INSTANCE_TOKEN),
+          readOwnerToken: readOwnerTokenFile,
+        },
+        params.lockTimeoutMs,
+        params.lockBreakConfirmDelayMs,
+      )
+    } catch (error) {
+      return recoveryRequired(errorText(error), [])
     }
   }
 
@@ -1296,6 +1487,9 @@ export function createTransactionIntentLog(params: {
     beginTransaction,
     commitTransaction,
     abortTransaction,
+    authorizeDispatch,
+    markRecoveryRequired,
+    releaseTransaction,
     recoverInterruptedTransactions,
     revertTransaction,
   }
@@ -1391,144 +1585,135 @@ export async function revertPathToPreImage(params: {
   }
 }
 
-/**
- * Startup recovery (P2-T5): reverts every half-applied transaction (its last
- * intent event is tx_begin) using the durable pre-images, then marks each one
- * aborted so it is never replayed. Best-effort per transaction and never
- * throws — a failed revert is reported in the outcome and logged, never fatal
- * to startup.
- *
- * LOSSLESS-AWARE: before reverting, each staged path's current content is
- * compared with its recorded pre-image. A transaction whose staged paths ALL
- * diverge is treated as ambiguous-committed (its tx_commit append was
- * probably lost after the files were committed): it is never reverted, is
- * marked with a terminal tx_ambiguous_commit event, and is counted in the
- * outcome. A mixed (half-applied) transaction has only its divergent paths
- * restored.
- */
+/** Restore through the captured adapter with a second parent/after-state check. */
+export async function restoreOwnedTransactionPath(
+  cwd: string,
+  fs: CodebuffFileSystem,
+  entry: TransactionIntentEntry,
+): Promise<boolean> {
+  const { parent, afterHash, beforeHash, beforeBytes, beforeMode } = entry
+  if (!parent || afterHash === undefined || !validateOwnership([entry])) {
+    throw new Error('Missing transaction recovery guard.')
+  }
+  const observe = () => observeTransactionPath(cwd, fs, entry.path, parent)
+  const live = await observe()
+  if (stateMatches(live, beforeHash, beforeMode)) return false
+  if (!stateMatches(live, afterHash, entry.afterMode)) {
+    throw new Error(
+      `Transaction path changed before restoration: ${entry.path}.`,
+    )
+  }
+  const guard = { parent, expectedMode: entry.afterMode }
+  const restored =
+    beforeBytes === undefined
+      ? afterHash === null
+        ? null
+        : await fs.conditionalDelete?.(live.fullPath, {
+            expectedHash: afterHash,
+            recovery: guard,
+          })
+      : await fs.conditionalCommit?.(live.fullPath, beforeBytes, {
+          expectedHash: afterHash,
+          recovery: {
+            ...guard,
+            ...(beforeMode === undefined ? {} : { mode: beforeMode }),
+          },
+        })
+  if (
+    !restored?.applied ||
+    !stateMatches(await observe(), beforeHash, beforeMode)
+  ) {
+    throw new Error(
+      `Conditional restoration could not verify the pre-image of ${entry.path}.`,
+    )
+  }
+  return true
+}
+
+/** Conditional, retryable recovery of workspace-scoped intents. */
 export async function recoverAndRevertInterruptedTransactions(params: {
   intentLog: TransactionIntentLog
   cwd: string
-  fs: Pick<CodebuffFileSystem, 'mkdir' | 'unlink' | 'writeFile' | 'setMode'>
+  fs: CodebuffFileSystem
   logger?: Pick<Logger, 'debug' | 'warn'>
 }): Promise<
-  | {
-      ok: true
-      revertedTransactions: number
-      revertedPaths: number
-      /**
-       * Transactions whose commit outcome was ambiguous (every staged path
-       * diverged from its pre-image): left in place and marked with a
-       * terminal tx_ambiguous_commit event instead of being reverted.
-       */
-      ambiguousCommittedTransactions: number
-    }
-  | {
-      ok: false
-      error: string
-      revertedTransactions: number
-      revertedPaths: number
-    }
+  {
+    revertedTransactions: number
+    revertedPaths: number
+    recoveredCommittedTransactions: number
+  } & (
+    | { ok: true }
+    | {
+        ok: false
+        status: 'recovery_required'
+        error: string
+        transactionIds: string[]
+      }
+  )
 > {
   const { intentLog, cwd, fs, logger } = params
+  const report = {
+    revertedTransactions: 0,
+    revertedPaths: 0,
+    recoveredCommittedTransactions: 0,
+  }
   const recovery = await intentLog.recoverInterruptedTransactions()
   if (!recovery.ok) {
-    logger?.warn?.(
+    logger?.warn(
       { error: recovery.error },
-      'Transaction intent log could not be read; skipping startup recovery of interrupted transactions',
+      'Transaction recovery could not read the intent log',
     )
     return {
+      ...report,
       ok: false,
+      status: 'recovery_required',
       error: recovery.error,
-      revertedTransactions: 0,
-      revertedPaths: 0,
+      transactionIds: [],
     }
   }
-  let revertedTransactions = 0
-  let revertedPaths = 0
-  let ambiguousCommittedTransactions = 0
-  let firstError: string | undefined
-  // Inspection seam for the lossless-aware classification: reads a staged
-  // path's CURRENT content through the same containment guard the revert
-  // uses, so a tampered entry path cannot be probed outside the workspace
-  // either (a refusal throws and the revert falls back to its fail-closed
-  // per-path restore). The fs Pick above stays unchanged for backward
-  // compatibility; an adapter whose readFile is absent degrades to the
-  // legacy unconditional per-path restore (no classification).
-  const fsReadFile = (fs as Partial<CodebuffFileSystem>).readFile
-  const readCurrentAtEntry = fsReadFile
-    ? async (entryPath: string): Promise<string | null> => {
-        const fullPath = resolveContainedEntryPath(cwd, entryPath).realFullPath
-        try {
-          return await fsReadFile(fullPath, 'utf8')
-        } catch (error) {
-          if (
-            typeof error === 'object' &&
-            error !== null &&
-            'code' in error &&
-            (error as { code?: unknown }).code === 'ENOENT'
-          ) {
-            return null
-          }
-          throw error
-        }
-      }
-    : undefined
+  const blocked = [...(recovery.liveTransactionIds ?? [])]
+  let failure: string | undefined
+  const observe = (entryPath: string, entry: TransactionIntentEntry) => {
+    if (!entry.parent)
+      throw new Error(
+        `Missing physical parent proof for transaction path ${entryPath}.`,
+      )
+    return observeTransactionPath(cwd, fs, entryPath, entry.parent)
+  }
   for (const transaction of recovery.transactions) {
     const outcome = await intentLog.revertTransaction(
       transaction.transactionId,
-      async (entryPath, beforeBytes, beforeMode) =>
-        revertPathToPreImage({ cwd, fs, entryPath, beforeBytes, beforeMode }),
-      readCurrentAtEntry,
-    )
-    if (outcome.ok) {
-      if (outcome.status === 'reverted') {
-        revertedTransactions += 1
-        revertedPaths += outcome.revertedPaths
-        logger?.debug?.(
-          {
-            transactionId: transaction.transactionId,
-            operationId: transaction.operationId,
-            revertedPaths: outcome.revertedPaths,
-          },
-          'Reverted an interrupted multi-file transaction from the durable intent log',
-        )
-      }
-      if (outcome.status === 'ambiguous_committed') {
-        ambiguousCommittedTransactions += 1
-        logger?.warn?.(
-          {
-            transactionId: transaction.transactionId,
-            operationId: transaction.operationId,
-            divergedPaths: outcome.divergedPaths ?? [],
-          },
-          'An interrupted transaction\'s staged paths all diverge from their recorded pre-images: the work very likely committed, so it was NOT reverted and was marked ambiguous-committed',
-        )
-      }
-      continue
-    }
-    firstError ??= outcome.error
-    logger?.warn?.(
-      {
-        transactionId: transaction.transactionId,
-        error: outcome.error,
-        revertedPaths: outcome.revertedPaths,
+      async (_entryPath, _beforeBytes, _beforeMode, entry) => {
+        if (!entry) throw new Error('Missing transaction recovery entry.')
+        return restoreOwnedTransactionPath(cwd, fs, entry)
       },
-      'Best-effort revert of an interrupted multi-file transaction failed; the abort marker still records the attempt',
+      observe,
     )
-  }
-  if (firstError) {
-    return {
-      ok: false,
-      error: firstError,
-      revertedTransactions,
-      revertedPaths,
+    report.revertedPaths += outcome.revertedPaths
+    if (outcome.ok) {
+      if (outcome.status === 'reverted') report.revertedTransactions++
+      if (outcome.status === 'recovered_committed')
+        report.recoveredCommittedTransactions++
+      logger?.debug(
+        { transactionId: transaction.transactionId, outcome },
+        'Reconciled transaction intent',
+      )
+    } else {
+      blocked.push(transaction.transactionId)
+      failure ??= outcome.error
+      logger?.warn(
+        { transactionId: transaction.transactionId, outcome },
+        'Transaction recovery is required; intent retained',
+      )
     }
   }
-  return {
-    ok: true,
-    revertedTransactions,
-    revertedPaths,
-    ambiguousCommittedTransactions,
-  }
+  return blocked.length
+    ? {
+        ...report,
+        ok: false,
+        status: 'recovery_required',
+        transactionIds: blocked,
+        error: failure ?? 'A live coordinator owns an unfinished transaction.',
+      }
+    : { ...report, ok: true }
 }

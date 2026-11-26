@@ -1,5 +1,9 @@
 import { resolveClientBackend } from './client/backend'
 import { projectRunOutcomes } from './run-state'
+import {
+  prepareReplayableReads,
+  type ReplayableReadsOptions,
+} from './services/replayable-reads'
 
 import type { ClientBackend } from './client/backend'
 import type { RunOptions, OpenbuffClientOptions } from './run'
@@ -63,6 +67,39 @@ export class OpenbuffClient {
     // otherwise resolveClientBackend returns the in-process default.
     const backend = resolveClientBackend(merged)
     return projectRunOutcomes(await backend.run(merged))
+  }
+
+  /** Run or exactly resume an immutable, read-only plan on the local SDK. */
+  public async runReplayableReads(
+    request: ReplayableReadsOptions,
+  ): Promise<RunState> {
+    try {
+      const client = { ...this.options }
+      const options = {
+        ...client,
+        ...(await prepareReplayableReads(client, request)),
+      }
+      return projectRunOutcomes(
+        await resolveClientBackend(options).run(options),
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return projectRunOutcomes(
+        { output: { type: 'error', message } },
+        {
+          runOutcome: {
+            termination: request.signal?.aborted ? 'cancelled' : 'failed',
+            cause: {
+              code: request.signal?.aborted
+                ? 'run_cancelled'
+                : 'replay_unavailable',
+              message,
+            },
+          },
+          taskAcceptance: { status: 'unknown' },
+        },
+      )
+    }
   }
 }
 

@@ -292,6 +292,19 @@ resubmitted, because nothing was applied. Pure syntax preflight failures do
 This is **not** an always-on force-read before the first multi-file attempt. Fresh
 reads of the failing paths are abort-time / capability / match recovery only.
 
+Crash recovery is separate. With a workspace intent log configured, a multi-file
+commit needs a durably saved pre-image, exact expected postimage, and existing
+physical parent for each path. A log admission failure (including the 8 MiB
+encoded-log limit) refuses the group before any file writes. The log records
+which staged paths entered dispatch; it never infers ownership just because bytes
+differ from the pre-image. Incomplete compensation, foreign bytes or permissions,
+replaced parents, and legacy intents without ownership evidence remain
+`recovery_required`. Participating mutation tools report the condition while
+read-only tools remain available. After repair, startup or a later mutation can
+retry recovery. These are cooperative checks, not filesystem-wide atomicity or
+isolation from external writers. The private log contains unencrypted source
+pre-images; keep its state directory outside the workspace and private.
+
 On those aborts the model-visible result is additive and machine-readable:
 
 - `requiresFreshRead: true`

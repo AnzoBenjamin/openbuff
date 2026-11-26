@@ -1,12 +1,39 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { withFilesystemSandbox, type FilesystemSandboxPolicy } from '@codebuff/common/util/filesystem-sandbox'
+import {
+  withFilesystemSandbox,
+  type FilesystemSandboxPolicy,
+} from '@codebuff/common/util/filesystem-sandbox'
 import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 
-import { captureWorkspaceBootstrapExecution, resolveBootstrapWorkspaceIdentity } from './workspace-bootstrap'
+import {
+  captureWorkspaceBootstrapExecution,
+  resolveBootstrapWorkspaceIdentity,
+} from './workspace-bootstrap'
+import {
+  errorCode,
+  exactHash,
+  fileIdentity,
+  hasParentIdentity,
+  holdMutationDirectory,
+  matchesFileIdentity,
+  permissions,
+  readMutationEntry,
+  reconcileMutation,
+  refuseRecovery,
+  stagingName,
+  WorkspaceMutationBrokerRecoveryError,
+} from './workspace-mutation-recovery'
+
 import type { WorkspaceIdentitySource } from './workspace-bootstrap'
+import type {
+  MutationDirectory,
+  MutationEntry,
+  MutationFileIdentity,
+  MutationParentIdentity,
+} from './workspace-mutation-recovery'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 import type {
@@ -14,8 +41,12 @@ import type {
   CodebuffConditionalDeleteResult,
   CodebuffConditionalMoveResult,
   CodebuffFileContent,
+  CodebuffTransactionRestoreGuard,
 } from '@codebuff/common/types/filesystem'
-import type { PathLike } from 'node:fs'
+import type { BigIntStats, PathLike } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
+
+export { WorkspaceMutationBrokerRecoveryError } from './workspace-mutation-recovery'
 
 const DEFAULT_LOCK_TIMEOUT_MS = 10_000
 const DEFAULT_LOCK_POLL_MS = 20
@@ -52,15 +83,22 @@ export type WorkspaceMutationReceipt = {
   workspaceId: string
   action: BrokerAction
   path: string
+  /** Optional on disk so legacy pending receipts remain inspectable, not writable. */
+  parent?: MutationParentIdentity
+  sourceIdentity?: MutationFileIdentity
   destinationPath?: string
+  destinationParent?: MutationParentIdentity
+  destinationBeforeHash?: string | null
   expectedHash: string | null
   expectedDestinationHash?: null
   beforeHash: string | null
   afterHash: string | null
+  afterMode?: number
   state: FinalReceiptState | PendingReceiptState
   createdAt: string
   updatedAt: string
   stagingPath?: string
+  stagingIdentity?: MutationFileIdentity
   errorCode?: string
 }
 
@@ -105,21 +143,26 @@ type LockOwner = {
   acquiredAt: string
 }
 
-function exactHash(content: Uint8Array): string {
-  return `sha256:${createHash('sha256').update(content).digest('hex')}`
+type MutationPath = { absolutePath: string; relativePath: string }
+
+function assertRecoveryMode(
+  stat: BigIntStats | null,
+  expectedMode?: number,
+): void {
+  if (
+    expectedMode !== undefined &&
+    (!stat || permissions(stat) !== expectedMode)
+  ) {
+    refuseRecovery(
+      'RECOVERY_MODE_CHANGED',
+      'Workspace transaction postimage permissions changed.',
+    )
+  }
 }
 
 function toBytes(content: CodebuffFileContent): Uint8Array {
   if (typeof content === 'string') return Buffer.from(content)
   return new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
-}
-
-function errorCode(error: unknown): string {
-  return error instanceof Error && 'code' in error
-    ? String((error as NodeJS.ErrnoException).code ?? error.name)
-    : error instanceof Error
-      ? error.name
-      : 'UNKNOWN'
 }
 
 function pathLikeToString(value: PathLike): string {
@@ -150,13 +193,6 @@ function receiptReference(
 
 async function sleep(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
-}
-
-export class WorkspaceMutationBrokerRecoveryError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'WorkspaceMutationBrokerRecoveryError'
-  }
 }
 
 /**
@@ -207,14 +243,21 @@ export class WorkspaceMutationBroker {
     this.lockPath = `${this.brokerDir}.lock`
     this.lockTimeoutMs = params.lockTimeoutMs
     this.lockPollMs = params.lockPollMs
-    this.sandboxPolicy = params.sandboxPolicy && Object.freeze({ ...params.sandboxPolicy,
-      allowPaths: Object.freeze([...params.sandboxPolicy.allowPaths]) })
+    this.sandboxPolicy =
+      params.sandboxPolicy &&
+      Object.freeze({
+        ...params.sandboxPolicy,
+        allowPaths: Object.freeze([...params.sandboxPolicy.allowPaths]),
+      })
   }
 
   static async create(
     options: WorkspaceMutationBrokerOptions,
   ): Promise<WorkspaceMutationBroker> {
-    options = { ...options, executionContext: captureWorkspaceBootstrapExecution(options) }
+    options = {
+      ...options,
+      executionContext: captureWorkspaceBootstrapExecution(options),
+    }
     const resolvedRoot = path.resolve(options.cwd)
     const workspaceRoot = await fs
       .realpath(resolvedRoot)
@@ -250,101 +293,129 @@ export class WorkspaceMutationBroker {
     filePath: PathLike,
     data: CodebuffFileContent,
     expectedHash: string | null,
+    recovery?: CodebuffTransactionRestoreGuard,
   ): Promise<WorkspaceMutationCommitResult> {
-    const target = await this.resolvePath(filePath)
+    const target = this.resolvePath(filePath)
     const bytes = toBytes(data)
     const afterHash = exactHash(bytes)
     return this.withWorkspaceLock(async () => {
-      await this.requireRecoveredWorkspace()
-      const beforeHash = await this.readHash(target.absolutePath)
-      const receipt = await this.prepareReceipt({
-        action: expectedHash === null ? 'create' : 'commit',
-        path: target.relativePath,
-        expectedHash,
-        beforeHash,
-        afterHash,
-        stagingPath: this.stagingRelativePath(target.absolutePath, 'tmp'),
-      })
-      if (beforeHash !== expectedHash) {
-        const rejected = await this.finalizeReceipt(receipt, 'rejected')
-        return {
-          applied: false,
-          actualHash: beforeHash,
-          receipt: receiptReference(rejected),
-        }
+      const parent = this.requireRecoveryParent(recovery)
+      const mode = recovery?.mode
+      if (
+        mode !== undefined &&
+        (!Number.isSafeInteger(mode) || mode < 0 || mode > 0xffffffff)
+      ) {
+        refuseRecovery(
+          'RECOVERY_INVALID_MODE',
+          'Workspace mutation recovery has an invalid preimage mode.',
+        )
       }
+      const restoreMode = mode === undefined ? undefined : mode & 0o7777
+      // Check a caller's recovery guard before any file I/O in this operation.
+      // Also honor outstanding broker receipts before inspecting the CAS basis.
+      return this.withMutationDirectories(
+        [{ target, parent }],
+        async ([directory]) => {
+          await this.requireRecoveredWorkspace()
+          const entry = directory!.entry(path.basename(target.absolutePath))
+          const { stat: before, hash: beforeHash } =
+            await readMutationEntry(entry)
+          assertRecoveryMode(before, recovery?.expectedMode)
+          const stagedMode =
+            restoreMode ?? (before ? permissions(before) & 0o777 : 0o600)
+          const afterMode =
+            restoreMode ??
+            (process.platform === 'win32' ? undefined : stagedMode)
+          let receipt = await this.prepareReceipt({
+            action: expectedHash === null ? 'create' : 'commit',
+            path: target.relativePath,
+            parent: entry.directory.identity,
+            ...(before ? { sourceIdentity: fileIdentity(before) } : {}),
+            expectedHash,
+            beforeHash,
+            afterHash,
+            afterMode,
+          })
+          if (beforeHash !== expectedHash) {
+            const rejected = await this.finalizeReceipt(receipt, 'rejected')
+            return {
+              applied: false,
+              actualHash: beforeHash,
+              receipt: receiptReference(rejected),
+            }
+          }
 
-      let mutationVisible = false
-      try {
-        const stagingPath = this.absoluteFromRelative(receipt.stagingPath!)
-        const mode =
-          expectedHash === null
-            ? 0o600
-            : (await fs.stat(target.absolutePath)).mode & 0o777
-        await this.writeStagedFile(stagingPath, bytes, mode)
-        if (expectedHash === null) {
+          const staging = entry.directory.entry(
+            stagingName(receipt.receiptId, 'tmp'),
+          )
+          let staged: BigIntStats | undefined
+          let mutationVisible = false
           try {
-            await fs.link(stagingPath, target.absolutePath)
+            staged = await this.writeStagedFile(
+              staging,
+              bytes,
+              stagedMode,
+              afterMode !== undefined,
+            )
+            receipt = await this.updatePendingReceipt(receipt, {
+              stagingIdentity: fileIdentity(staged),
+            })
+            await staging.validate(staged)
+            // The exclusive link already checks absence without clobbering. For
+            // replacement, recheck the observed basis before the final rename.
+            if (before) await entry.validate(before)
+            if (expectedHash === null) {
+              try {
+                await fs.link(staging.ioPath, entry.ioPath)
+              } catch (error) {
+                if (errorCode(error) !== 'EEXIST') throw error
+                await this.unlinkStagedFile(staging, fileIdentity(staged))
+                staged = undefined
+                const { hash: actualHash } = await readMutationEntry(entry)
+                const rejected = await this.finalizeReceipt(receipt, 'rejected')
+                return {
+                  applied: false,
+                  actualHash,
+                  receipt: receiptReference(rejected),
+                }
+              }
+              mutationVisible = true
+              await this.syncMutationDirectory(entry.directory)
+              await this.unlinkStagedFile(staging, fileIdentity(staged))
+            } else {
+              await fs.rename(staging.ioPath, entry.ioPath)
+              mutationVisible = true
+              await this.syncMutationDirectory(entry.directory)
+            }
+            const { stat, hash } = await readMutationEntry(entry)
+            if (
+              !matchesFileIdentity(stat, receipt.stagingIdentity) ||
+              hash !== afterHash ||
+              (afterMode !== undefined && permissions(stat!) !== afterMode)
+            ) {
+              refuseRecovery(
+                'POST_COMMIT_STATE_MISMATCH',
+                `Mutation ${receipt.receiptId} committed an unexpected workspace state.`,
+              )
+            }
+            const committed = await this.finalizeReceipt(receipt, 'committed')
+            return { applied: true, receipt: receiptReference(committed) }
           } catch (error) {
-            if (errorCode(error) === 'EEXIST') {
-              await this.removeIfExists(stagingPath)
-              const actualHash = await this.readHash(target.absolutePath)
-              const rejected = await this.finalizeReceipt(receipt, 'rejected')
-              return {
-                applied: false,
-                actualHash,
-                receipt: receiptReference(rejected),
+            if (
+              staged &&
+              !mutationVisible &&
+              !(error instanceof WorkspaceMutationBrokerRecoveryError)
+            ) {
+              try {
+                await this.unlinkStagedFile(staging, fileIdentity(staged))
+              } catch (cleanupError) {
+                return this.failReceipt(receipt, cleanupError, true)
               }
             }
-            throw error
+            return this.failReceipt(receipt, error, mutationVisible)
           }
-          mutationVisible = true
-          await this.fsyncDirectory(path.dirname(target.absolutePath))
-          await this.removeIfExists(stagingPath)
-          await this.fsyncDirectory(path.dirname(stagingPath))
-        } else {
-          await fs.rename(stagingPath, target.absolutePath)
-          mutationVisible = true
-          await this.fsyncDirectory(path.dirname(target.absolutePath))
-        }
-        const committedHash = await this.readHash(target.absolutePath)
-        if (committedHash !== afterHash) {
-          const unresolved = await this.updatePendingReceipt(receipt, {
-            state: 'recovery_required',
-            errorCode: 'POST_COMMIT_HASH_MISMATCH',
-          })
-          throw new WorkspaceMutationBrokerRecoveryError(
-            `Mutation ${unresolved.receiptId} committed an unexpected workspace state.`,
-          )
-        }
-        const committed = await this.finalizeReceipt(receipt, 'committed')
-        return { applied: true, receipt: receiptReference(committed) }
-      } catch (error) {
-        if (error instanceof WorkspaceMutationBrokerRecoveryError) throw error
-        if (mutationVisible) {
-          await this.updatePendingReceipt(receipt, {
-            state: 'recovery_required',
-            errorCode: errorCode(error),
-          })
-          throw new WorkspaceMutationBrokerRecoveryError(
-            `Mutation ${receipt.receiptId} requires recovery after a partial commit.`,
-          )
-        }
-        await this.removeIfExists(
-          this.absoluteFromRelative(receipt.stagingPath!),
-        ).catch(() => undefined)
-        const failed = await this.finalizeReceipt(
-          receipt,
-          'failed',
-          errorCode(error),
-        )
-        throw Object.assign(
-          new Error(
-            `Workspace mutation ${failed.receiptId} failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-          { cause: error },
-        )
-      }
+        },
+      )
     })
   }
 
@@ -358,71 +429,68 @@ export class WorkspaceMutationBroker {
   async conditionalDelete(
     filePath: PathLike,
     expectedHash: string,
+    recovery?: Omit<CodebuffTransactionRestoreGuard, 'mode'>,
   ): Promise<WorkspaceMutationDeleteResult> {
-    const target = await this.resolvePath(filePath)
+    const target = this.resolvePath(filePath)
     return this.withWorkspaceLock(async () => {
-      await this.requireRecoveredWorkspace()
-      const beforeHash = await this.readHash(target.absolutePath)
-      const receipt = await this.prepareReceipt({
-        action: 'delete',
-        path: target.relativePath,
-        expectedHash,
-        beforeHash,
-        afterHash: null,
-        stagingPath: this.stagingRelativePath(target.absolutePath, 'delete'),
-      })
-      if (beforeHash !== expectedHash) {
-        const rejected = await this.finalizeReceipt(receipt, 'rejected')
-        return {
-          applied: false,
-          actualHash: beforeHash,
-          receipt: receiptReference(rejected),
-        }
-      }
+      const parent = this.requireRecoveryParent(recovery)
+      return this.withMutationDirectories(
+        [{ target, parent }],
+        async ([directory]) => {
+          await this.requireRecoveredWorkspace()
+          const entry = directory!.entry(path.basename(target.absolutePath))
+          const { stat: before, hash: beforeHash } =
+            await readMutationEntry(entry)
+          assertRecoveryMode(before, recovery?.expectedMode)
+          const receipt = await this.prepareReceipt({
+            action: 'delete',
+            path: target.relativePath,
+            parent: entry.directory.identity,
+            ...(before ? { sourceIdentity: fileIdentity(before) } : {}),
+            expectedHash,
+            beforeHash,
+            afterHash: null,
+          })
+          if (beforeHash !== expectedHash || !before) {
+            const rejected = await this.finalizeReceipt(receipt, 'rejected')
+            return {
+              applied: false,
+              actualHash: beforeHash,
+              receipt: receiptReference(rejected),
+            }
+          }
 
-      const tombstonePath = this.absoluteFromRelative(receipt.stagingPath!)
-      let mutationVisible = false
-      try {
-        await fs.rename(target.absolutePath, tombstonePath)
-        mutationVisible = true
-        await this.fsyncDirectory(path.dirname(target.absolutePath))
-        const tombstoneHash = await this.readHash(tombstonePath)
-        if (tombstoneHash !== expectedHash) {
-          await this.updatePendingReceipt(receipt, {
-            state: 'recovery_required',
-            errorCode: 'DELETE_TOMBSTONE_HASH_MISMATCH',
-          })
-          throw new WorkspaceMutationBrokerRecoveryError(
-            `Delete ${receipt.receiptId} moved unexpected bytes and requires recovery.`,
+          const tombstone = entry.directory.entry(
+            stagingName(receipt.receiptId, 'delete'),
           )
-        }
-        await fs.unlink(tombstonePath)
-        await this.fsyncDirectory(path.dirname(tombstonePath))
-        const committed = await this.finalizeReceipt(receipt, 'committed')
-        return { applied: true, receipt: receiptReference(committed) }
-      } catch (error) {
-        if (error instanceof WorkspaceMutationBrokerRecoveryError) throw error
-        if (mutationVisible) {
-          await this.updatePendingReceipt(receipt, {
-            state: 'recovery_required',
-            errorCode: errorCode(error),
-          })
-          throw new WorkspaceMutationBrokerRecoveryError(
-            `Delete ${receipt.receiptId} requires recovery after a partial mutation.`,
-          )
-        }
-        const failed = await this.finalizeReceipt(
-          receipt,
-          'failed',
-          errorCode(error),
-        )
-        throw Object.assign(
-          new Error(
-            `Workspace delete ${failed.receiptId} failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-          { cause: error },
-        )
-      }
+          let mutationVisible = false
+          try {
+            await tombstone.validate(null)
+            await entry.validate(before)
+            await fs.rename(entry.ioPath, tombstone.ioPath)
+            mutationVisible = true
+            await this.syncMutationDirectory(entry.directory)
+            const { stat, hash } = await readMutationEntry(
+              tombstone,
+              receipt.sourceIdentity,
+            )
+            if (!stat || hash !== expectedHash) {
+              refuseRecovery(
+                'DELETE_TOMBSTONE_HASH_MISMATCH',
+                `Delete ${receipt.receiptId} moved unexpected bytes and requires recovery.`,
+              )
+            }
+            await entry.validate(null)
+            await tombstone.validate(stat)
+            await fs.unlink(tombstone.ioPath)
+            await this.syncMutationDirectory(tombstone.directory)
+            const committed = await this.finalizeReceipt(receipt, 'committed')
+            return { applied: true, receipt: receiptReference(committed) }
+          } catch (error) {
+            return this.failReceipt(receipt, error, mutationVisible)
+          }
+        },
+      )
     })
   }
 
@@ -431,8 +499,8 @@ export class WorkspaceMutationBroker {
     destinationPath: PathLike,
     expectedSourceHash: string,
   ): Promise<WorkspaceMutationMoveResult> {
-    const source = await this.resolvePath(sourcePath)
-    const destination = await this.resolvePath(destinationPath)
+    const source = this.resolvePath(sourcePath)
+    const destination = this.resolvePath(destinationPath)
     if (source.absolutePath === destination.absolutePath) {
       throw new Error(
         'Workspace mutation move source and destination must differ.',
@@ -440,90 +508,121 @@ export class WorkspaceMutationBroker {
     }
     return this.withWorkspaceLock(async () => {
       await this.requireRecoveredWorkspace()
-      const [actualSourceHash, actualDestinationHash] = await Promise.all([
-        this.readHash(source.absolutePath),
-        this.readHash(destination.absolutePath),
-      ])
-      const receipt = await this.prepareReceipt({
-        action: 'move',
-        path: source.relativePath,
-        destinationPath: destination.relativePath,
-        expectedHash: expectedSourceHash,
-        expectedDestinationHash: null,
-        beforeHash: actualSourceHash,
-        afterHash: expectedSourceHash,
-      })
-      if (
-        actualSourceHash !== expectedSourceHash ||
-        actualDestinationHash !== null
-      ) {
-        const rejected = await this.finalizeReceipt(receipt, 'rejected')
-        return {
-          applied: false,
-          actualSourceHash,
-          actualDestinationHash,
-          receipt: receiptReference(rejected),
-        }
-      }
-
-      let destinationLinked = false
-      try {
-        await fs.link(source.absolutePath, destination.absolutePath)
-        destinationLinked = true
-        await this.fsyncDirectory(path.dirname(destination.absolutePath))
-        await fs.unlink(source.absolutePath)
-        await this.fsyncDirectory(path.dirname(source.absolutePath))
-        const committed = await this.finalizeReceipt(receipt, 'committed')
-        return { applied: true, receipt: receiptReference(committed) }
-      } catch (error) {
-        if (errorCode(error) === 'EEXIST' && !destinationLinked) {
-          const currentDestinationHash = await this.readHash(
-            destination.absolutePath,
+      return this.withMutationDirectories(
+        [{ target: source }, { target: destination }],
+        async ([sourceDir, destinationDir]) => {
+          const from = sourceDir!.entry(path.basename(source.absolutePath))
+          const to = destinationDir!.entry(
+            path.basename(destination.absolutePath),
           )
-          const rejected = await this.finalizeReceipt(receipt, 'rejected')
-          return {
-            applied: false,
-            actualSourceHash: await this.readHash(source.absolutePath),
-            actualDestinationHash: currentDestinationHash,
-            receipt: receiptReference(rejected),
-          }
-        }
-        if (destinationLinked) {
-          const [currentSourceHash, currentDestinationHash] = await Promise.all(
-            [
-              this.readHash(source.absolutePath),
-              this.readHash(destination.absolutePath),
-            ],
-          )
+          const { stat: before, hash: actualSourceHash } =
+            await readMutationEntry(from)
+          const { hash: actualDestinationHash } = await readMutationEntry(to)
+          const receipt = await this.prepareReceipt({
+            action: 'move',
+            path: source.relativePath,
+            parent: from.directory.identity,
+            ...(before ? { sourceIdentity: fileIdentity(before) } : {}),
+            destinationPath: destination.relativePath,
+            destinationParent: to.directory.identity,
+            destinationBeforeHash: actualDestinationHash,
+            expectedHash: expectedSourceHash,
+            expectedDestinationHash: null,
+            beforeHash: actualSourceHash,
+            afterHash: expectedSourceHash,
+          })
           if (
-            currentSourceHash === expectedSourceHash &&
-            currentDestinationHash === expectedSourceHash
+            actualSourceHash !== expectedSourceHash ||
+            actualDestinationHash !== null ||
+            !before
           ) {
-            await this.removeIfExists(destination.absolutePath)
-            await this.fsyncDirectory(path.dirname(destination.absolutePath))
-          } else {
-            await this.updatePendingReceipt(receipt, {
-              state: 'recovery_required',
-              errorCode: errorCode(error),
-            })
-            throw new WorkspaceMutationBrokerRecoveryError(
-              `Move ${receipt.receiptId} requires recovery after a partial mutation.`,
-            )
+            const rejected = await this.finalizeReceipt(receipt, 'rejected')
+            return {
+              applied: false,
+              actualSourceHash,
+              actualDestinationHash,
+              receipt: receiptReference(rejected),
+            }
           }
-        }
-        const failed = await this.finalizeReceipt(
-          receipt,
-          'failed',
-          errorCode(error),
-        )
-        throw Object.assign(
-          new Error(
-            `Workspace move ${failed.receiptId} failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-          { cause: error },
-        )
-      }
+
+          let destinationLinked = false
+          try {
+            await to.directory.validate()
+            await from.validate(before)
+            await fs.link(from.ioPath, to.ioPath)
+            destinationLinked = true
+            await this.syncMutationDirectory(to.directory)
+            const { stat: linkedSource, hash: sourceHash } =
+              await readMutationEntry(from, receipt.sourceIdentity)
+            const { stat: linkedDestination, hash: destinationHash } =
+              await readMutationEntry(to, receipt.sourceIdentity)
+            if (
+              !linkedSource ||
+              !linkedDestination ||
+              sourceHash !== expectedSourceHash ||
+              destinationHash !== expectedSourceHash
+            ) {
+              refuseRecovery(
+                'MOVE_LINK_STATE_MISMATCH',
+                `Move ${receipt.receiptId} linked unexpected workspace state.`,
+              )
+            }
+            await to.validate(linkedDestination)
+            await from.validate(linkedSource)
+            await fs.unlink(from.ioPath)
+            await this.syncMutationDirectory(from.directory)
+            const committed = await this.finalizeReceipt(receipt, 'committed')
+            return { applied: true, receipt: receiptReference(committed) }
+          } catch (error) {
+            if (errorCode(error) === 'EEXIST' && !destinationLinked) {
+              const currentDestination = await readMutationEntry(to)
+              const currentSource = await readMutationEntry(from)
+              const rejected = await this.finalizeReceipt(receipt, 'rejected')
+              return {
+                applied: false,
+                actualSourceHash: currentSource.hash,
+                actualDestinationHash: currentDestination.hash,
+                receipt: receiptReference(rejected),
+              }
+            }
+            // Don't undo a potentially foreign replacement by hash alone. Leave
+            // any partial link for the same identity-checked recovery procedure.
+            return this.failReceipt(receipt, error, destinationLinked)
+          }
+        },
+      )
     })
+  }
+
+  private async failReceipt(
+    receipt: WorkspaceMutationReceipt,
+    error: unknown,
+    mutationVisible: boolean,
+  ): Promise<never> {
+    const code = errorCode(error)
+    if (
+      mutationVisible ||
+      error instanceof WorkspaceMutationBrokerRecoveryError
+    ) {
+      await this.updatePendingReceipt(receipt, {
+        state: 'recovery_required',
+        errorCode: code,
+      })
+      throw Object.assign(
+        new WorkspaceMutationBrokerRecoveryError(
+          `Workspace ${receipt.action} ${receipt.receiptId} requires recovery (${code}).`,
+          code,
+        ),
+        { cause: error },
+      )
+    }
+    await this.finalizeReceipt(receipt, 'failed', code)
+    throw Object.assign(
+      new Error(
+        `Workspace ${receipt.action} ${receipt.receiptId} failed (${code}).`,
+      ),
+      { cause: error },
+    )
   }
 
   async listReceipts(): Promise<WorkspaceMutationReceipt[]> {
@@ -694,6 +793,25 @@ export class WorkspaceMutationBroker {
     for (const name of names) {
       const pendingPath = path.join(this.pendingDir, name)
       const receipt = await this.readJson<WorkspaceMutationReceipt>(pendingPath)
+      if (
+        !receipt ||
+        receipt.schemaVersion !== 1 ||
+        receipt.repositoryId !== this.repositoryId ||
+        receipt.workspaceId !== this.workspaceId ||
+        receipt.authorityKind !== this.authorityKind ||
+        !Number.isSafeInteger(receipt.brokerRevision) ||
+        receipt.brokerRevision <= 0 ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+          receipt.receiptId,
+        ) ||
+        this.receiptFileName(receipt) !== name ||
+        !['prepared', 'recovery_required'].includes(receipt.state)
+      ) {
+        refuseRecovery(
+          'RECOVERY_INVALID_RECEIPT',
+          `Invalid pending mutation receipt '${name}'.`,
+        )
+      }
       const finalPath = path.join(this.receiptsDir, name)
       if (await this.exists(finalPath)) {
         await fs.unlink(pendingPath)
@@ -708,86 +826,82 @@ export class WorkspaceMutationBroker {
   private async recoverReceipt(
     receipt: WorkspaceMutationReceipt,
   ): Promise<boolean> {
-    const target = this.absoluteFromRelative(receipt.path)
-    if (receipt.action === 'delete') {
-      const tombstone = receipt.stagingPath
-        ? this.absoluteFromRelative(receipt.stagingPath)
-        : undefined
+    let state: 'recovered_committed' | 'recovered_not_applied'
+    try {
+      const { action } = receipt
       if (
-        tombstone &&
-        (await this.readHash(tombstone)) === receipt.expectedHash
+        !hasParentIdentity(receipt.parent) ||
+        (action === 'move' && !hasParentIdentity(receipt.destinationParent))
       ) {
-        await fs.unlink(tombstone)
-        await this.fsyncDirectory(path.dirname(tombstone))
-        await this.finalizeReceipt(receipt, 'recovered_committed')
-        return true
+        // No current path observation can prove where a legacy receipt was
+        // originally prepared. Don't probe or mutate any workspace entry.
+        refuseRecovery(
+          'RECOVERY_MISSING_PARENT_PROOF',
+          'Pending mutation lacks its original parent identity.',
+        )
       }
-      const current = await this.readHash(target)
-      if (current === null) {
-        await this.finalizeReceipt(receipt, 'recovered_committed')
-        return true
+      const target = this.resolveReceiptPath(receipt.path)
+      const locations = [{ target, parent: receipt.parent }]
+      const destination =
+        action === 'move'
+          ? this.resolveReceiptPath(receipt.destinationPath)
+          : undefined
+      if (destination) {
+        if (
+          target.absolutePath === destination.absolutePath ||
+          receipt.stagingPath !== undefined
+        ) {
+          refuseRecovery(
+            'RECOVERY_INVALID_RECEIPT',
+            'Invalid move receipt paths.',
+          )
+        }
+        locations.push({
+          target: destination,
+          parent: receipt.destinationParent!,
+        })
       }
-      if (current === receipt.expectedHash) {
-        await this.finalizeReceipt(receipt, 'recovered_not_applied')
-        return true
+      const stage =
+        action === 'move'
+          ? undefined
+          : stagingName(
+              receipt.receiptId,
+              action === 'delete' ? 'delete' : 'tmp',
+            )
+      if (
+        stage &&
+        (stage === path.basename(target.absolutePath) ||
+          receipt.stagingPath !==
+            this.relativeFromAbsolute(
+              path.join(path.dirname(target.absolutePath), stage),
+            ))
+      ) {
+        refuseRecovery(
+          'RECOVERY_INVALID_STAGING_PATH',
+          'Pending mutation staging path does not match its role and receipt.',
+        )
       }
+      state = await this.withMutationDirectories(
+        locations,
+        async ([parent, destinationParent]) => {
+          const source = parent!.entry(path.basename(target.absolutePath))
+          const other = destination
+            ? destinationParent!.entry(path.basename(destination.absolutePath))
+            : parent!.entry(stage!)
+          return reconcileMutation(receipt, source, other, (directory) =>
+            this.syncMutationDirectory(directory),
+          )
+        },
+      )
+    } catch (error) {
       await this.updatePendingReceipt(receipt, {
         state: 'recovery_required',
-        errorCode: 'AMBIGUOUS_DELETE_STATE',
+        errorCode: errorCode(error),
       })
       return false
     }
-
-    if (receipt.action === 'move') {
-      const destination = this.absoluteFromRelative(receipt.destinationPath!)
-      const [sourceHash, destinationHash] = await Promise.all([
-        this.readHash(target),
-        this.readHash(destination),
-      ])
-      if (sourceHash === null && destinationHash === receipt.afterHash) {
-        await this.finalizeReceipt(receipt, 'recovered_committed')
-        return true
-      }
-      if (
-        sourceHash === receipt.expectedHash &&
-        destinationHash === receipt.afterHash &&
-        (await this.pathsShareFileIdentity(target, destination))
-      ) {
-        await fs.unlink(target)
-        await this.fsyncDirectory(path.dirname(target))
-        await this.finalizeReceipt(receipt, 'recovered_committed')
-        return true
-      }
-      if (sourceHash === receipt.expectedHash && destinationHash === null) {
-        await this.finalizeReceipt(receipt, 'recovered_not_applied')
-        return true
-      }
-      await this.updatePendingReceipt(receipt, {
-        state: 'recovery_required',
-        errorCode: 'AMBIGUOUS_MOVE_STATE',
-      })
-      return false
-    }
-
-    const current = await this.readHash(target)
-    const staging = receipt.stagingPath
-      ? this.absoluteFromRelative(receipt.stagingPath)
-      : undefined
-    if (current === receipt.afterHash) {
-      if (staging) await this.removeIfExists(staging)
-      await this.finalizeReceipt(receipt, 'recovered_committed')
-      return true
-    }
-    if (current === receipt.expectedHash) {
-      if (staging) await this.removeIfExists(staging)
-      await this.finalizeReceipt(receipt, 'recovered_not_applied')
-      return true
-    }
-    await this.updatePendingReceipt(receipt, {
-      state: 'recovery_required',
-      errorCode: 'AMBIGUOUS_COMMIT_STATE',
-    })
-    return false
+    await this.finalizeReceipt(receipt, state)
+    return true
   }
 
   private async prepareReceipt(
@@ -802,11 +916,17 @@ export class WorkspaceMutationBroker {
       | 'state'
       | 'createdAt'
       | 'updatedAt'
-    >,
+      | 'stagingPath'
+    > & { parent: MutationParentIdentity },
   ): Promise<WorkspaceMutationReceipt> {
     const state = await this.readJson<BrokerState>(this.statePath)
     const now = new Date().toISOString()
     const revision = state.revision + 1
+    const receiptId = randomUUID()
+    const stage =
+      values.action === 'move'
+        ? undefined
+        : stagingName(receiptId, values.action === 'delete' ? 'delete' : 'tmp')
     await this.writeJsonDurable(this.statePath, {
       schemaVersion: 1,
       revision,
@@ -814,7 +934,7 @@ export class WorkspaceMutationBroker {
     } satisfies BrokerState)
     const receipt: WorkspaceMutationReceipt = {
       schemaVersion: 1,
-      receiptId: randomUUID(),
+      receiptId,
       brokerRevision: revision,
       authorityKind: WORKSPACE_MUTATION_AUTHORITY,
       repositoryId: this.repositoryId,
@@ -822,6 +942,14 @@ export class WorkspaceMutationBroker {
       state: 'prepared',
       createdAt: now,
       updatedAt: now,
+      ...(stage
+        ? {
+            stagingPath: path.posix.join(
+              path.posix.dirname(values.path),
+              stage,
+            ),
+          }
+        : {}),
       ...values,
     }
     await this.writeJsonDurable(this.pendingReceiptPath(receipt), receipt)
@@ -830,8 +958,9 @@ export class WorkspaceMutationBroker {
 
   private async updatePendingReceipt(
     receipt: WorkspaceMutationReceipt,
-    update: Pick<WorkspaceMutationReceipt, 'state'> &
-      Partial<Pick<WorkspaceMutationReceipt, 'errorCode'>>,
+    update: Partial<
+      Pick<WorkspaceMutationReceipt, 'state' | 'errorCode' | 'stagingIdentity'>
+    >,
   ): Promise<WorkspaceMutationReceipt> {
     const updated = {
       ...receipt,
@@ -851,7 +980,7 @@ export class WorkspaceMutationBroker {
       ...receipt,
       state,
       updatedAt: new Date().toISOString(),
-      ...(failureCode ? { errorCode: failureCode } : {}),
+      ...(failureCode ? { errorCode: failureCode } : { errorCode: undefined }),
     }
     const pendingPath = this.pendingReceiptPath(receipt)
     const finalPath = this.finalReceiptPath(receipt)
@@ -903,25 +1032,17 @@ export class WorkspaceMutationBroker {
     return path.join(this.receiptsDir, this.receiptFileName(receipt))
   }
 
-  private async resolvePath(value: PathLike): Promise<{
-    absolutePath: string
-    relativePath: string
-  }> {
+  private resolvePath(value: PathLike): MutationPath {
     const raw = pathLikeToString(value)
     const absolutePath = path.resolve(this.workspaceRoot, raw)
     if (
-      !this.isAllowedPath(absolutePath) ||
-      absolutePath === this.workspaceRoot
+      !raw ||
+      raw.includes('\0') ||
+      absolutePath === this.workspaceRoot ||
+      (!this.sandboxPolicy && !isWithin(this.workspaceRoot, absolutePath))
     ) {
       throw new Error(
         `Workspace mutation path is outside the broker root: ${raw}`,
-      )
-    }
-    const parent = path.dirname(absolutePath)
-    const canonicalParent = await fs.realpath(parent)
-    if (!this.isAllowedPath(canonicalParent)) {
-      throw new Error(
-        `Workspace mutation parent escapes the broker root: ${raw}`,
       )
     }
     return {
@@ -937,69 +1058,148 @@ export class WorkspaceMutationBroker {
       .join('/')
   }
 
-  private absoluteFromRelative(relativePath: string): string {
-    const absolute = path.resolve(this.workspaceRoot, relativePath)
+  private resolveReceiptPath(relativePath: unknown): MutationPath {
     if (
-      !this.isAllowedPath(absolute) ||
-      absolute === this.workspaceRoot
+      typeof relativePath === 'string' &&
+      relativePath &&
+      !relativePath.includes('\0')
     ) {
-      throw new WorkspaceMutationBrokerRecoveryError(
-        `Invalid broker receipt path '${relativePath}'.`,
+      const absolutePath = path.resolve(this.workspaceRoot, relativePath)
+      if (
+        absolutePath !== this.workspaceRoot &&
+        this.relativeFromAbsolute(absolutePath) === relativePath &&
+        (this.sandboxPolicy || isWithin(this.workspaceRoot, absolutePath))
+      ) {
+        return { absolutePath, relativePath }
+      }
+    }
+    return refuseRecovery(
+      'RECOVERY_INVALID_RECEIPT_PATH',
+      'Invalid broker receipt path.',
+    )
+  }
+
+  private requireRecoveryParent(
+    recovery: Pick<CodebuffTransactionRestoreGuard, 'parent'> | undefined,
+  ) {
+    if (recovery === undefined) return undefined
+    if (!hasParentIdentity(recovery?.parent)) {
+      refuseRecovery(
+        'RECOVERY_MISSING_PARENT_PROOF',
+        'Workspace mutation recovery lacks its original parent identity.',
       )
     }
-    return absolute
+    return recovery.parent
+  }
+
+  private async withMutationDirectories<T>(
+    locations: readonly {
+      target: MutationPath
+      parent?: MutationParentIdentity
+    }[],
+    operation: (directories: MutationDirectory[]) => Promise<T>,
+  ): Promise<T> {
+    const directories: MutationDirectory[] = []
+    try {
+      for (const { target, parent } of locations) {
+        const directory = await holdMutationDirectory(
+          path.dirname(target.absolutePath),
+          parent,
+        )
+        directories.push(directory)
+        const canonicalTarget = path.join(
+          directory.identity.canonicalPath,
+          path.basename(target.absolutePath),
+        )
+        if (
+          !this.isAllowedPath(target.absolutePath) ||
+          !this.isAllowedPath(canonicalTarget) ||
+          !this.isAllowedPath(directory.identity.canonicalPath)
+        ) {
+          refuseRecovery(
+            'RECOVERY_OUTSIDE_BROKER_ROOT',
+            `Workspace mutation path escapes the broker root: ${target.relativePath}`,
+          )
+        }
+      }
+      for (const directory of directories) await directory.validate()
+      return await operation(directories)
+    } finally {
+      await Promise.all(directories.map((directory) => directory.close()))
+    }
   }
 
   private isAllowedPath(absolutePath: string): boolean {
     return this.sandboxPolicy
-      ? withFilesystemSandbox(this.sandboxPolicy, () => resolveProjectPath(this.workspaceRoot, absolutePath) !== null)
+      ? withFilesystemSandbox(
+          this.sandboxPolicy,
+          () => resolveProjectPath(this.workspaceRoot, absolutePath) !== null,
+        )
       : isWithin(this.workspaceRoot, absolutePath)
   }
 
-  private stagingRelativePath(target: string, suffix: string): string {
-    return this.relativeFromAbsolute(
-      path.join(
-        path.dirname(target),
-        `.openbuff-mutation-${process.pid}-${randomUUID()}.${suffix}`,
-      ),
+  private async syncMutationDirectory(
+    directory: MutationDirectory,
+  ): Promise<void> {
+    await directory.validate()
+    await this.fsyncDirectory(
+      directory.identity.canonicalPath,
+      directory.handle,
     )
+    await directory.validate()
   }
 
-  private async readHash(filePath: string): Promise<string | null> {
-    try {
-      return exactHash(await fs.readFile(filePath))
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') return null
-      throw error
+  private async unlinkStagedFile(
+    staging: MutationEntry,
+    identity: MutationFileIdentity,
+  ): Promise<void> {
+    const stat = await staging.stat()
+    if (!stat?.isFile() || !matchesFileIdentity(stat, identity)) {
+      refuseRecovery(
+        'RECOVERY_FOREIGN_STAGING',
+        'Workspace mutation staging has lost ownership.',
+      )
     }
-  }
-
-  private async pathsShareFileIdentity(
-    firstPath: string,
-    secondPath: string,
-  ): Promise<boolean> {
-    try {
-      const [first, second] = await Promise.all([
-        fs.stat(firstPath),
-        fs.stat(secondPath),
-      ])
-      return first.dev === second.dev && first.ino === second.ino
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') return false
-      throw error
-    }
+    await staging.validate(stat)
+    await fs.unlink(staging.ioPath)
+    await this.syncMutationDirectory(staging.directory)
   }
 
   private async writeStagedFile(
-    filePath: string,
+    staging: MutationEntry,
     bytes: Uint8Array,
     mode: number,
-  ): Promise<void> {
-    const handle = await fs.open(filePath, 'wx', 0o600)
+    requireMode: boolean,
+  ): Promise<BigIntStats> {
+    await staging.directory.validate()
+    const handle = await fs.open(staging.ioPath, 'wx', 0o600)
     try {
+      const created = await handle.stat({ bigint: true })
+      await staging.validate(created)
       await handle.writeFile(bytes)
       await handle.chmod(mode)
       await handle.sync()
+      const staged = await handle.stat({ bigint: true })
+      await staging.validate(staged)
+      if (requireMode && permissions(staged) !== mode) {
+        throw new Error(
+          'The workspace cannot represent the requested preimage mode.',
+        )
+      }
+      return staged
+    } catch (error) {
+      try {
+        await this.unlinkStagedFile(
+          staging,
+          fileIdentity(await handle.stat({ bigint: true })),
+        )
+      } catch (cleanupError) {
+        refuseRecovery(
+          errorCode(cleanupError),
+          'Workspace mutation could not safely remove an incomplete staging file.',
+        )
+      }
+      throw error
     } finally {
       await handle.close()
     }
@@ -1027,7 +1227,14 @@ export class WorkspaceMutationBroker {
     }
   }
 
-  private async fsyncDirectory(directory: string): Promise<void> {
+  private async fsyncDirectory(
+    directory: string,
+    held?: FileHandle,
+  ): Promise<void> {
+    if (held) {
+      await held.sync()
+      return
+    }
     let handle
     try {
       handle = await fs.open(directory, 'r')

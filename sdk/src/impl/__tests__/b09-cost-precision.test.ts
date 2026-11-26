@@ -4,7 +4,11 @@ import {
   calculateProviderCostCents,
   providerCostDollars,
 } from '../cost-accounting'
-const pricing = { inputPerMillionTokens: 3, outputPerMillionTokens: 15 }
+const pricing = {
+  inputPerMillionTokens: 3,
+  outputPerMillionTokens: 15,
+  currency: 'USD',
+}
 describe('B09 cost precision and unknown data', () => {
   test('preserves sub-cent configured prices without per-request rounding', () => {
     expect(
@@ -52,13 +56,32 @@ describe('B09 cost precision and unknown data', () => {
     expect(
       computeCostCentsFromUsage({
         usage: { inputTokens: 1, outputTokens: 0 },
+        pricing: { inputPerMillionTokens: 3 },
+      }),
+    ).toBeUndefined()
+    expect(
+      computeCostCentsFromUsage({
+        usage: { inputTokens: 1, outputTokens: 0 },
+        pricing: {
+          inputPerMillionTokens: 3,
+          outputPerMillionTokens: 15,
+        },
+      }),
+    ).toBeUndefined()
+    expect(
+      computeCostCentsFromUsage({
+        usage: { inputTokens: 1, outputTokens: 0 },
         pricing: { ...pricing, currency: 'EUR' },
       }),
     ).toBeUndefined()
     expect(
       computeCostCentsFromUsage({
         usage: { inputTokens: 0, outputTokens: 0 },
-        pricing: { inputPerMillionTokens: 0, outputPerMillionTokens: 0 },
+        pricing: {
+          inputPerMillionTokens: 0,
+          outputPerMillionTokens: 0,
+          currency: 'USD',
+        },
       }),
     ).toBe(0)
   })

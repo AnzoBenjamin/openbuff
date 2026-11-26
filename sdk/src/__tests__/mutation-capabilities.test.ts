@@ -29,7 +29,15 @@ describe('mutation capabilities', () => {
       return { applied: false, actualHash: getExactContentHash('foreign\n') }
     }
     const result = await applySemanticEdit(
-      { changedFiles: [{ path: '/repo/a.txt', newContent: 'after\n' }] },
+      {
+        changedFiles: [
+          {
+            path: '/repo/a.txt',
+            newContent: 'after\n',
+            expectedRawHash: getExactContentHash('before\n'),
+          },
+        ],
+      },
       { cwd: '/repo', fs },
     )
     expect(result.output[0]?.value).toMatchObject({

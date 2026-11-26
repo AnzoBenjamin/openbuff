@@ -14,6 +14,7 @@ test('B09 usage preserves root/child model observations, fractional costs and pa
     inputTokens: 10,
     outputTokens: 2,
     cachedInputTokens: 4,
+    cacheWriteInputTokens: 2,
     complete: true,
     costCents: 0.0018,
     costStatus: 'estimated',
@@ -31,6 +32,8 @@ test('B09 usage preserves root/child model observations, fractional costs and pa
   expect(snapshot.observations).toBe(2)
   expect(snapshot.inputTokens).toBe(15)
   expect(snapshot.outputTokens).toBe(2)
+  expect(snapshot.cacheWriteInputTokens).toBe(2)
+  expect(snapshot.cacheWriteComplete).toBe(false)
   expect(snapshot.outputComplete).toBe(false)
   expect(snapshot.knownCostCents).toBeCloseTo(0.0018, 12)
   expect(snapshot.unknownCosts).toBe(1)
@@ -70,6 +73,23 @@ test('aggregate overflow retains bounded finite subtotals and explicitly marks i
   expect(snapshot.aggregateOverflow).toBe(true)
   expect(Number.isFinite(snapshot.knownCostCents)).toBe(true)
   expect(Number.isSafeInteger(snapshot.inputTokens)).toBe(true)
+})
+
+test('cache-write aggregate overflow retains the last safe subtotal and marks the report incomplete', () => {
+  for (let index = 0; index < 2; index++)
+    recordUsageObservation('cache-write', 'turn', {
+      type: 'usage',
+      runId: 'root',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheWriteInputTokens: Number.MAX_SAFE_INTEGER,
+      complete: true,
+      costStatus: 'unknown',
+    })
+  const snapshot = usageSnapshot('cache-write')
+  expect(snapshot.cacheWriteInputTokens).toBe(Number.MAX_SAFE_INTEGER)
+  expect(snapshot.cacheWriteComplete).toBe(true)
+  expect(snapshot.aggregateOverflow).toBe(true)
 })
 
 test('unknown legacy and subscription costs never manufacture zero-price completeness', () => {

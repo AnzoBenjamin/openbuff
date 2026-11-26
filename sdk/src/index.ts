@@ -22,7 +22,10 @@ export type {
   RunHostServices,
 } from './host-execution'
 export { createConfiguredDirectHostExecution } from './services/direct-host-execution'
-export type { TerminalTimeoutPolicy, TerminalTimeoutResolution } from './services/terminal-timeout-policy'
+export type {
+  TerminalTimeoutPolicy,
+  TerminalTimeoutResolution,
+} from './services/terminal-timeout-policy'
 export type {
   ConfiguredDirectHostExecution,
   ConfiguredDirectHostExecutionOptions,
@@ -78,6 +81,7 @@ export type {
   RecoveredInterruptedTransaction,
   RecoveryOutcome,
   RevertTransactionOutcome,
+  TransactionCurrentState,
   TransactionIntentEntry,
   TransactionIntentLog,
 } from './tools/transaction-intent-log'
@@ -208,6 +212,11 @@ export type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 export * from './client'
+export {
+  openReplayableReadJournal,
+  type ReplayableReadJournal,
+  type ReplayableReadsOptions,
+} from './services/replayable-reads'
 // P1-T3 backend seam + ACP-remote backend.
 export type { ClientBackend } from './client/backend'
 export { InProcessBackend, resolveClientBackend } from './client/backend'
@@ -274,6 +283,27 @@ export * from './run-state'
 export { ToolHelpers } from './tools'
 export * from './constants'
 export * from './provider-config'
+export {
+  USD_MICROS_PER_CENT,
+  centsToUsdMicros,
+  capCentsToUsdMicros,
+  usdMicrosToCents,
+  computeStrictReservationUsdMicros,
+  createRequestAdmissionStore,
+  requestAdmissionRecordPath,
+  spendingPolicySchema,
+} from './services/request-admission-store'
+export type {
+  RequestAdmissionStore,
+  RequestAdmissionSnapshot,
+  RequestAdmissionReference,
+  SpendingPolicy,
+} from '@codebuff/common/types/request-admission'
+export {
+  MODELS_DEV_CATALOG_PROVENANCE,
+  MODELS_DEV_UPSTREAM_LICENSE_NOTICE,
+} from './model-capability-catalog'
+export type { ModelsDevCatalogProvenance } from './model-capability-catalog'
 export * from './project-trust'
 export * from './model-discovery'
 export { getUserInfoFromApiKey } from './impl/database'
@@ -334,7 +364,10 @@ export type {
   CodebuffRangeReadResult,
   CodebuffConditionalCommitOptions,
   CodebuffConditionalCommitResult,
+  CodebuffConditionalDeleteOptions,
   CodebuffConditionalDeleteResult,
+  CodebuffTransactionParentIdentity,
+  CodebuffTransactionRestoreGuard,
   CodebuffConditionalMoveOptions,
   CodebuffConditionalMoveResult,
   // Required to implement the public `streamDirectory` capability, including
@@ -451,5 +484,13 @@ export type {
 export { createConfiguredEmbedder } from './impl/embeddings'
 export type { EmbedFn } from './impl/embeddings'
 
-export { RepositoryIntelligenceService, createRepositoryIntelligenceSource, createVirtualRepositoryIntelligenceSource } from './services/repository-intelligence'
-export type { RepositoryIntelligenceSource, RepositoryContextPacket, PrepareRepositoryContextRequest } from '@codebuff/common/types/contracts/repository-intelligence'
+export {
+  RepositoryIntelligenceService,
+  createRepositoryIntelligenceSource,
+  createVirtualRepositoryIntelligenceSource,
+} from './services/repository-intelligence'
+export type {
+  RepositoryIntelligenceSource,
+  RepositoryContextPacket,
+  PrepareRepositoryContextRequest,
+} from '@codebuff/common/types/contracts/repository-intelligence'

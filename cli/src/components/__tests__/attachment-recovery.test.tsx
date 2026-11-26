@@ -11,12 +11,60 @@ import type {
   PendingAttachment,
   PendingFileAttachment,
 } from '../../types/store'
+import type { PromptAdmissionResult } from '../../types/contracts/send-message'
 
 initializeThemeStore()
 const renderTest = process.env.NODE_ENV === 'production' ? test.skip : test
 
 renderTest(
-  'removing the only attachment pauses empty queued work until restoration',
+  'queued prompt remains durable until explicit admission acceptance',
+  async () => {
+    let queue!: ReturnType<typeof useMessageQueue>
+    type StartedAdmission = Extract<
+      PromptAdmissionResult,
+      { status: 'accepted'; disposition: 'started' }
+    >
+    let resolveAdmission!: (value: StartedAdmission) => void
+    const admission = new Promise<StartedAdmission>((resolve) => {
+      resolveAdmission = resolve
+    })
+    function Host() {
+      queue = useMessageQueue(
+        async () => admission,
+        { current: false },
+        { current: 0 },
+      )
+      return <text>Queue</text>
+    }
+    const setup = await mount(<Host />)
+    try {
+      await React.act(async () => {
+        queue.addToQueue('durable until admitted', [], 'DEFAULT')
+      })
+      await React.act(async () => Bun.sleep(0))
+      expect(queue.queuedMessages.map((message) => message.content)).toEqual([
+        'durable until admitted',
+      ])
+      expect(queue.isProcessingQueueRef.current).toBe(true)
+
+      await React.act(async () => {
+        resolveAdmission({
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        })
+        await admission
+      })
+      expect(queue.queuedMessages).toEqual([])
+      expect(queue.isProcessingQueueRef.current).toBe(false)
+    } finally {
+      await React.act(async () => setup.renderer.destroy())
+    }
+  },
+)
+
+renderTest(
+  'removing the only attachment pauses empty queued work and a failed restore stays not-started',
   async () => {
     let queue!: ReturnType<typeof useMessageQueue>
     let sent = 0
@@ -25,6 +73,11 @@ renderTest(
       queue = useMessageQueue(
         async () => {
           sent++
+          return {
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }
         },
         chain,
         { current: 0 },
@@ -48,7 +101,9 @@ renderTest(
         queue.undoQueuedAttachmentRemoval()
         queue.resumeQueue()
       })
-      expect(sent).toBe(1)
+      expect(sent).toBe(0)
+      expect(queue.queuePaused).toBe(true)
+      expect(queue.queueError).toContain('failed to load')
     } finally {
       await React.act(async () => setup.renderer.destroy())
     }
@@ -85,7 +140,15 @@ renderTest(
     let queue!: ReturnType<typeof useMessageQueue>
     const resolves: Array<(value: PendingAttachment) => void> = []
     function Host() {
-      queue = useMessageQueue(async () => {}, { current: true }, { current: 0 })
+      queue = useMessageQueue(
+        async () => ({
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        }),
+        { current: true },
+        { current: 0 },
+      )
       return (
         <QueueScreen
           {...queue}

@@ -26,12 +26,25 @@ export const lspUnavailableSchema = z.object({
  *
  * Positions follow the human-friendly 1-based line convention (editors and
  * `read_files` ranges number lines from 1); the SDK converts to the 0-based
- * LSP position internally. `character` is already 0-based, matching LSP.
+ * LSP position internally. `character` is a 0-based UTF-16 offset.
+ * A returned range tagged `positionEncoding: 'utf-8'` counts bytes.
  */
 
-const lspRangeSchema = z.object({
-  start: z.object({ line: z.number().int().nonnegative(), character: z.number().int().nonnegative() }),
-  end: z.object({ line: z.number().int().nonnegative(), character: z.number().int().nonnegative() }),
+export const lspRangeSchema = z.object({
+  positionEncoding: z
+    .literal('utf-8')
+    .optional()
+    .describe(
+      'When present, character offsets in this range count UTF-8 bytes.',
+    ),
+  start: z.object({
+    line: z.number().int().nonnegative(),
+    character: z.number().int().nonnegative(),
+  }),
+  end: z.object({
+    line: z.number().int().nonnegative(),
+    character: z.number().int().nonnegative(),
+  }),
 })
 
 export const lspLocationSchema = z.object({
@@ -58,7 +71,9 @@ export const goToDefinitionParams = {
       .int()
       .min(0)
       .max(100_000)
-      .describe('0-based character offset within the line (LSP convention).'),
+      .describe(
+        '0-based UTF-16 offset within the line; do not copy an unconverted UTF-8 byte offset.',
+      ),
   }),
   outputSchema: jsonToolResultSchema(
     z.object({

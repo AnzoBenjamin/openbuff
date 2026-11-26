@@ -5,7 +5,7 @@
 - `types/context-archive.ts` distinguishes original/excerpt/pointer/unknown fullness and immutable recalled-text SHA-256/UTF-8 lengths from serialized message digests. `util/context-archive-body.ts` validates lossless bodies and UTF-8 byte pages (16 KiB default/64 KiB maximum); an interior-code-point cursor is an explicit error. `recall_context` supports source-run disambiguation, expected hashes and bounded byte offsets; legacy fullness is never inferred original.
 - `AgentRuntimeDeps` exposes host-bound original-body paging and archive search with registered actor/task attribution. Archive results are evidence, not read/edit/execution authority. `AgentState` emission/query receipts restrict memory usage feedback to complete records actually packed into a model request; by-tool read observations retain source/digest/range and unchanged/required-refresh/unknown classification.
 - `util/playbook-scope-glob.ts` supports finite segment wildcards, recursive `**`, bounded comma braces and character classes. Unsupported scope is explicitly degraded/excluded rather than treated global. Quality status `verified` remains enabled; retired/expired procedures do not gate, and inject-only produces no gate outcome.
-- Streaming `PrintModeUsage` carries optional fractional `costCents`, `costStatus` and `costReason`. Unknown price/counts do not become zero; numeric legacy totals are known subtotals, not proof all requests were priced. These telemetry contracts do not implement restart-durable shared spend reservations.
+- Streaming `PrintModeUsage` retains optional fractional `costCents`, `costStatus` and `costReason`, and distinguishes cache reads from cache writes. The normalized input total includes both; unavailable counts or prices do not become zero. Separately, `types/request-admission.ts` defines strict-capped, estimated-capped and uncapped policies, fixed-point reservation/reconciliation and the checkpoint reference for the SDK's host-owned spending authority. Legacy usage totals are observations, not admission authority.
 
 ## Current host-selected authority boundaries
 
@@ -13,7 +13,7 @@
 - Host-selected memory mode is resolved independently per registered actor/task before execution and stays immutable for prompt-source selection. Failed or missing V2 retrieval cannot silently inject V1; retrieved evidence never grants edit or execution authority.
 - Raw `cap.v4` reads now expose short signed host-local handles backed by a bounded registry. Scope/raw-byte/CAS semantics remain unchanged; decoded clones cannot mutate stored authority and tampering refuses. Signature spellings must round-trip canonical base64url, so equivalent padding-bit aliases are refused too. Regenerate all tool mirrors together after schema/default changes.
 - Per-request `usage` events omit unavailable counts instead of inventing zero; provider retry countdowns are observational. Productive roots/children/commands/hooks have no implicit local step/time cap unless explicitly selected; finite host limits, cancellation and I/O/metadata cleanup guards still apply.
-- The append-only run journal records an `llm_replay_boundary` when a background child is re-driven on its original run ID. The classifier retires earlier unfinished model requests and continues to track unresolved tool calls.
+- The run journal records `llm_replay_boundary` when a background child is re-driven on its original run ID. Tool-attempt matching retains correlation and attempt identity; a failed durable append is not an acknowledgement. `programmatic_observation` rows are opt-in evidence, not replay authority. `read_plan_basis` anchors the host-selected read-only adapter; generic exact re-entry still fails closed.
 
 ## Memory reuse receipt contract
 
@@ -41,7 +41,7 @@
 - `byte-text.ts` separates exact UTF-8 bytes from BOM-free, LF-normalized observation text. Fresh `cap.v4` read authority binds both identities; complete scoped reads retain their raw slice scope. Partial or unverifiable reads provide no edit authority.
 - Temporary-path containment rejects every configured root entry, including a root nested under the POSIX `/tmp` fallback. Descendants still undergo containment, realpath and sensitive-path checks.
 - `common/src/types/run-outcome.ts` distinguishes run settlement, task acceptance and action outcome. Consumers retain failed actions after successful recovery and never infer task acceptance from run completion alone.
-- `common/src/tools/results/filesystem.ts` selects confirmed mutations from observed forward effects. Attempted, partial and uncertain receipts remain visible; rollback failure alone grants no applied authority. SDK, runtime and CLI projections consume the same selection.
+- `common/src/tools/results/filesystem.ts` selects confirmed mutations from observed forward effects. Attempted, partial and uncertain receipts remain visible; rollback failure alone grants no applied authority. `recovery_required` distinguishes blocked transaction recovery from ordinary filesystem failures. SDK, runtime and CLI projections consume the same selection.
 - Shared tool types include audit maturity/status fields and hook configuration. The [body checkpoint](../docs/execution/body-roadmap/STATE.md) records their accepted source scope and remaining byte/read and execution-context work.
 
 ## UI-facing state and question contracts

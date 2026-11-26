@@ -8,6 +8,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1_000_000,
@@ -30,6 +31,7 @@ describe('computeCostCentsFromUsage', () => {
   test('returns undefined when pricing has neither input nor output rate', () => {
     const pricing: ModelPricing = {
       cachedInputPerMillionTokens: 0.3,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = { inputTokens: 1_000_000, outputTokens: 0 }
     expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
@@ -40,6 +42,7 @@ describe('computeCostCentsFromUsage', () => {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
       cachedInputPerMillionTokens: 0.3,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1_000_000,
@@ -56,6 +59,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1_000_000,
@@ -70,6 +74,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = { inputTokens: 0, outputTokens: 0 }
     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
@@ -79,6 +84,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {}
     expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
@@ -88,6 +94,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: -100,
@@ -100,6 +107,7 @@ describe('computeCostCentsFromUsage', () => {
   test('handles input-only pricing (no output rate)', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 500_000,
@@ -118,6 +126,7 @@ describe('computeCostCentsFromUsage', () => {
   test('handles output-only pricing (no input rate)', () => {
     const pricing: ModelPricing = {
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 500_000,
@@ -137,6 +146,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1,
@@ -155,6 +165,7 @@ describe('computeCostCentsFromUsage', () => {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
       cachedInputPerMillionTokens: 0.3,
+      currency: 'USD',
     }
     // cachedInputTokens > inputTokens (malformed); chargeableInput clamped to 0
     const usage: UsageTokenCounts = {

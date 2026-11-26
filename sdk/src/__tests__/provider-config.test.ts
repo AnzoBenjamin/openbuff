@@ -4,6 +4,8 @@ import path from 'path'
 
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 
+import type { SpendingPolicy } from '@codebuff/common/types/request-admission'
+
 import {
   PROVIDER_CONFIG_ENV_VAR,
   clearProviderConfigCacheForTest,
@@ -39,6 +41,76 @@ test('reasoning replay defaults for IFM and can be configured for other endpoint
   expect(resolve('https://example.com/v1', 'required')).toBe('required')
   expect(resolve('https://api.ifm.ai.example.com/v1')).toBeUndefined()
 })
+test('preserves compatible usage negotiation and cache pricing fields', () => {
+  const config = providerConfigFileSchema.parse({
+    providers: {
+      example: {
+        type: 'openai-compatible',
+        baseURL: 'https://example.com/v1',
+        models: ['model'],
+        compatibility: { includeUsage: true },
+        defaultCapabilities: {
+          pricing: {
+            inputPerMillionTokens: 3,
+            outputPerMillionTokens: 15,
+            cachedInputPerMillionTokens: 0.3,
+            cacheWriteInputPerMillionTokens: 3.75,
+            currency: 'USD',
+          },
+        },
+      },
+    },
+  })
+  const provider = config.providers.example
+  if (provider.type !== 'openai-compatible')
+    throw new Error('Expected an OpenAI-compatible fixture provider')
+  expect(provider.compatibility.includeUsage).toBe(true)
+  expect(provider.defaultCapabilities?.pricing).toEqual({
+    inputPerMillionTokens: 3,
+    outputPerMillionTokens: 15,
+    cachedInputPerMillionTokens: 0.3,
+    cacheWriteInputPerMillionTokens: 3.75,
+    currency: 'USD',
+  })
+})
+
+test('validates strict, estimated, and uncapped request spending policies', () => {
+  const valid = [
+    { mode: 'uncapped' },
+    { mode: 'strict-capped', capCents: 25, currency: 'USD' },
+    {
+      mode: 'estimated-capped',
+      capCents: 25,
+      currency: 'USD',
+      estimator: {
+        id: 'conservative-v1',
+        reservationCents: 2.5,
+        maxConcurrentAttempts: 2,
+      },
+    },
+  ] satisfies SpendingPolicy[]
+  for (const spending of valid) {
+    const parsed = providerConfigFileSchema.parse({ spending })
+    expect(parsed.spending).toEqual(spending)
+  }
+  for (const spending of [
+    { mode: 'strict-capped', capCents: 1, currency: 'EUR' },
+    { mode: 'strict-capped', capCents: -1, currency: 'USD' },
+    { mode: 'estimated-capped', capCents: 1, currency: 'USD' },
+    {
+      mode: 'estimated-capped',
+      capCents: 1,
+      currency: 'USD',
+      estimator: {
+        id: 'bad',
+        reservationCents: 0,
+        maxConcurrentAttempts: 0,
+      },
+    },
+  ])
+    expect(providerConfigFileSchema.safeParse({ spending }).success).toBe(false)
+})
+
 const originalCwd = process.cwd()
 
 function resetEnv() {

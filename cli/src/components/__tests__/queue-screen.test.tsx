@@ -5,6 +5,7 @@ import { QueueScreen } from '../queue-screen'
 import { useMessageQueue } from '../../hooks/use-message-queue'
 import { initializeThemeStore } from '../../hooks/use-theme'
 import type { QueuedMessage } from '../../hooks/use-message-queue'
+import type { PromptAdmissionResult } from '../../types/contracts/send-message'
 import type { PendingAttachment } from '../../types/store'
 
 initializeThemeStore()
@@ -18,7 +19,13 @@ const attachment: PendingAttachment = {
 }
 
 async function mountQueue(
-  send: (message: QueuedMessage) => Promise<void> = async () => {},
+  send: (
+    message: QueuedMessage,
+  ) => Promise<PromptAdmissionResult> = async () => ({
+    status: 'accepted',
+    disposition: 'started',
+    completion: Promise.resolve(),
+  }),
 ) {
   const { testRender } = await import('@opentui/react/test-utils')
   const chain = { current: true }
@@ -113,6 +120,11 @@ renderTest(
     const sent: QueuedMessage[] = []
     const host = await mountQueue(async (message) => {
       sent.push(message)
+      return {
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      }
     })
     try {
       await React.act(async () => {

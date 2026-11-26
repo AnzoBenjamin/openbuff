@@ -9,6 +9,7 @@ import {
 } from '../use-message-queue'
 
 import type { QueuedMessage } from '../use-message-queue'
+import type { PromptAdmissionResult } from '../../types/contracts/send-message'
 
 describe('createQueueProcessingOwnership', () => {
   test('stale owner cannot release newer queue processing owner', () => {
@@ -53,8 +54,13 @@ describe('createQueueProcessingOwnership', () => {
 describe('runQueuedMessage', () => {
   const createDeferred = () => {
     let resolvePromise!: () => void
-    const promise = new Promise<void>((resolve) => {
-      resolvePromise = resolve
+    const promise = new Promise<PromptAdmissionResult>((resolve) => {
+      resolvePromise = () =>
+        resolve({
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        })
     })
 
     return { promise, resolve: resolvePromise }
@@ -88,7 +94,12 @@ describe('runQueuedMessage', () => {
 
     completeQueuedMessageProcessing({
       messageToProcess: messageToProcess!,
-      sendMessage: () => Promise.resolve(),
+      sendMessage: () =>
+        Promise.resolve({
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        }),
       isProcessingQueueRef,
       queueProcessingRun,
     })
@@ -118,6 +129,35 @@ describe('runQueuedMessage', () => {
     await flushPromises()
 
     expect(restored).toEqual([message])
+    expect(isProcessingQueueRef.current).toBe(false)
+  })
+
+  test('explicit not-started queued outcomes are returned for retention', async () => {
+    const activeQueueProcessingOwnerRef = { current: null as symbol | null }
+    const isProcessingQueueRef = { current: false }
+    const isQueuePausedRef = { current: false }
+    const message = {
+      content: 'retain blocked queue item',
+      attachments: [],
+      agentMode: 'DEFAULT' as const,
+    }
+    const retained: QueuedMessage[] = []
+
+    runQueuedMessage({
+      messageToProcess: message,
+      sendMessage: async () => ({
+        status: 'not-started',
+        reason: 'bisection-active',
+      }),
+      onNotAccepted: (blocked) => retained.push(blocked),
+      isProcessingQueueRef,
+      isQueuePausedRef,
+      queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
+      setCanProcessQueue: () => {},
+    })
+
+    await flushPromises()
+    expect(retained).toEqual([message])
     expect(isProcessingQueueRef.current).toBe(false)
   })
 

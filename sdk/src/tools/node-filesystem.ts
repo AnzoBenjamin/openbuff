@@ -12,6 +12,8 @@ import {
 import type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 
 import type {
+  CodebuffConditionalCommitOptions,
+  CodebuffConditionalDeleteOptions,
   CodebuffFileContent,
   CodebuffFileSystem,
   CodebuffTextRangeReadResult,
@@ -118,20 +120,22 @@ export function createNodeFileSystem(
           conditionalCommit: (
             filePath: PathLike,
             data: CodebuffFileContent,
-            commitOptions: { expectedHash: string | null },
+            commitOptions: CodebuffConditionalCommitOptions,
           ) =>
             mutationBroker.conditionalCommit(
               filePath,
               data,
               commitOptions.expectedHash,
+              commitOptions.recovery,
             ),
           conditionalDelete: (
             filePath: PathLike,
-            deleteOptions: { expectedHash: string },
+            deleteOptions: CodebuffConditionalDeleteOptions,
           ) =>
             mutationBroker.conditionalDelete(
               filePath,
               deleteOptions.expectedHash,
+              deleteOptions.recovery,
             ),
           conditionalMove: (
             source: PathLike,

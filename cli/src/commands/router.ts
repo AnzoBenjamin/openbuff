@@ -28,8 +28,7 @@ import { getSystemProcessEnv } from '../utils/env'
 import { getSystemMessage, getUserMessage } from '../utils/message-history'
 import {} from '../utils/openbuff-provider'
 import {
-  hasProcessingFiles,
-  hasProcessingImages,
+  getPromptAttachmentBlockReason,
   validateAndAddImage,
 } from '../utils/pending-attachments'
 import {
@@ -457,6 +456,14 @@ export async function routeUserPrompt(
   // Handle interview mode input
   if (inputMode === 'interview') {
     if (!trimmed) return
+    const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
+    if (attachmentBlock) {
+      showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+      return { status: 'not-started', reason: attachmentBlock }
+    }
+    if (turnSnapshots.isTurnBisectionRunning()) {
+      return { status: 'not-started', reason: 'bisection-active' }
+    }
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setInputMode('default')
@@ -469,6 +476,14 @@ export async function routeUserPrompt(
   // Handle review mode input
   if (inputMode === 'review') {
     if (!trimmed) return
+    const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
+    if (attachmentBlock) {
+      showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+      return { status: 'not-started', reason: attachmentBlock }
+    }
+    if (turnSnapshots.isTurnBisectionRunning()) {
+      return { status: 'not-started', reason: 'bisection-active' }
+    }
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setInputMode('default')
@@ -541,6 +556,18 @@ export async function routeUserPrompt(
   if (parsedCommand) {
     const commandDef = findCommand(parsedCommand.command)
     if (commandDef) {
+      if (commandDef.producesPrompt(parsedCommand.args)) {
+        const attachmentBlock = getPromptAttachmentBlockReason(
+          useChatStore.getState().pendingAttachments,
+        )
+        if (attachmentBlock) {
+          showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+          return { status: 'not-started', reason: attachmentBlock }
+        }
+        if (turnSnapshots.isTurnBisectionRunning()) {
+          return { status: 'not-started', reason: 'bisection-active' }
+        }
+      }
       const argsLength = parsedCommand.args.length
       const analyticsPayload = {
         command: commandDef.name,
@@ -584,23 +611,16 @@ export async function routeUserPrompt(
     return
   }
 
-  if (
-    !params.preserveInputValue &&
-    (hasProcessingImages() || hasProcessingFiles())
-  ) {
-    showClipboardMessage('processing attachments...', { durationMs: 2000 })
-    return
+  const attachmentBlock = getPromptAttachmentBlockReason(
+    useChatStore.getState().pendingAttachments,
+  )
+  if (attachmentBlock) {
+    showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+    return { status: 'not-started', reason: attachmentBlock }
   }
 
   if (turnSnapshots.isTurnBisectionRunning()) {
-    setMessages((prev) => [
-      ...prev,
-      getUserMessage(trimmed),
-      getSystemMessage(
-        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before sending a new message.',
-      ),
-    ])
-    return
+    return { status: 'not-started', reason: 'bisection-active' }
   }
 
   const prompt = params.preservePromptWhitespace ? inputValue : trimmed

@@ -254,7 +254,7 @@ export type BridgeSuccess = {
 export type BridgeFailure = {
   id: string
   ok: false
-  error: { message: string }
+  error: { message: string; code?: string }
 }
 
 export type BridgeReply = BridgeSuccess | BridgeFailure
@@ -281,7 +281,10 @@ export function isBridgeReply(value: unknown): value is BridgeReply {
       !!error &&
       typeof error === 'object' &&
       !Array.isArray(error) &&
-      typeof (error as Record<string, unknown>).message === 'string'
+      typeof (error as Record<string, unknown>).message === 'string' &&
+      ((error as Record<string, unknown>).code === undefined ||
+        (typeof (error as Record<string, unknown>).code === 'string' &&
+          ((error as Record<string, unknown>).code as string).length <= 128))
     )
   }
   return false

@@ -102,14 +102,12 @@ describe('routeUserPrompt connect:chatgpt mode', () => {
     // registry-wide mocks above cannot leak into other test files in this
     // worker. The dynamic import of '../router' happens inside each test,
     // strictly after these mocks are registered and before this restore.
-    mock.module(
-      '../../components/chatgpt-connect-banner',
-      () => ({ ...realBannerSnapshot }),
-    )
-    mock.module(
-      '@codebuff/common/constants/chatgpt-oauth',
-      () => ({ ...realChatGptOauthModule }),
-    )
+    mock.module('../../components/chatgpt-connect-banner', () => ({
+      ...realBannerSnapshot,
+    }))
+    mock.module('@codebuff/common/constants/chatgpt-oauth', () => ({
+      ...realChatGptOauthModule,
+    }))
   })
 
   test('when in connect:chatgpt mode, it exchanges the auth code and updates messages', async () => {
@@ -127,7 +125,11 @@ describe('routeUserPrompt connect:chatgpt mode', () => {
       clearMessages: () => {},
       saveToHistory,
       scrollToLatest: () => {},
-      sendMessage: async () => {},
+      sendMessage: async () => ({
+        status: 'accepted',
+        disposition: 'started',
+        completion: Promise.resolve(),
+      }),
       setCanProcessQueue: () => {},
       setInputFocused: () => {},
       setInputValue,

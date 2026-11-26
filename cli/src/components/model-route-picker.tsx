@@ -722,16 +722,10 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
                   (opt) => opt.model === focusedItem.id,
                 )
                 if (modelOption?.discovered) {
-                  const slashIndex = focusedItem.id.indexOf('/')
-                  if (
-                    slashIndex > 0 &&
-                    slashIndex < focusedItem.id.length - 1
-                  ) {
-                    persistModelToProviderConfig(
-                      focusedItem.id.slice(0, slashIndex),
-                      focusedItem.id.slice(slashIndex + 1),
-                    )
-                  }
+                  persistModelToProviderConfig(
+                    modelOption.providerId,
+                    modelOption.providerModelId,
+                  )
                 }
                 const chain = getFailoverModels()
                 if (chain.includes(focusedItem.id)) {
@@ -780,12 +774,17 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
 
             try {
               if (selectedModelDiscovered) {
-                const slashIndex = selectedModelId.indexOf('/')
-                if (slashIndex > 0 && slashIndex < selectedModelId.length - 1) {
-                  const providerId = selectedModelId.slice(0, slashIndex)
-                  const modelId = selectedModelId.slice(slashIndex + 1)
-                  persistModelToProviderConfig(providerId, modelId)
-                }
+                const modelOption = availableModels.find(
+                  (option) => option.model === selectedModelId,
+                )
+                if (!modelOption?.discovered)
+                  throw new Error(
+                    `Discovered model provenance is unavailable for '${selectedModelId}'. Refresh the model list and retry.`,
+                  )
+                persistModelToProviderConfig(
+                  modelOption.providerId,
+                  modelOption.providerModelId,
+                )
               }
 
               const editableConfig = dependencies.readConfig()

@@ -36,7 +36,7 @@ export function formatUsageReport(): string {
     `Input: ${tokens(usage.inputTokens, usage.inputComplete && !usage.aggregateOverflow)}`,
     `Output: ${tokens(usage.outputTokens, usage.outputComplete && !usage.aggregateOverflow)}`,
     `Cache read: ${tokens(usage.cachedInputTokens, usage.cacheComplete && !usage.aggregateOverflow)}`,
-    'Cache write: not reported by this telemetry contract.',
+    `Cache write: ${tokens(usage.cacheWriteInputTokens, usage.cacheWriteComplete && !usage.aggregateOverflow)}`,
     `Known cost subtotal: ${cents(usage.knownCostCents)}${usage.unknownCosts ? ` · ${usage.unknownCosts} request cost(s) unknown` : ''}`,
     ...(usage.subscriptionRequests
       ? [
@@ -47,9 +47,9 @@ export function formatUsageReport(): string {
     `Recent ${recent.length}/${usage.observations} observations${usage.omittedRows ? `; ${usage.omittedRows} older detail rows dropped, cumulative totals retained` : ''}:`,
     ...recent.map(
       (row) =>
-        `- ${row.model ?? 'model unavailable'} · run=${row.runId} · in=${row.inputTokens ?? '?'} out=${row.outputTokens ?? '?'} cache=${row.cachedInputTokens ?? '?'} · ${row.costStatus === 'subscription' ? 'subscription' : row.costCents !== undefined && (row.costStatus === 'observed' || row.costStatus === 'estimated') ? `${cents(row.costCents)} ${row.costStatus}` : `unknown: ${row.costReason ?? 'no complete price/cost observation'}`}`,
+        `- ${row.model ?? 'model unavailable'} · run=${row.runId} · in=${row.inputTokens ?? '?'} out=${row.outputTokens ?? '?'} cache-read=${row.cachedInputTokens ?? '?'} cache-write=${row.cacheWriteInputTokens ?? '?'} · ${row.costStatus === 'subscription' ? 'subscription' : row.costCents !== undefined && (row.costStatus === 'observed' || row.costStatus === 'estimated') ? `${cents(row.costCents)} ${row.costStatus}` : `unknown: ${row.costReason ?? 'no complete price/cost observation'}`}`,
     ),
-    'Configured-price totals are estimates, not exact provider bills or durable spending reservations.',
+    'Catalog/configured-price totals are estimates, not exact provider bills or durable spending reservations.',
   ].join('\n')
 }
 export function handleUsageCommand() {

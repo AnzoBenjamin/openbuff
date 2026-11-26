@@ -61,6 +61,7 @@ export const filesystemErrorCodeSchema = z.enum([
   'malformed_result',
   'stale_state',
   'rollback_incomplete',
+  'recovery_required',
   'illegal_transition',
   'unsupported',
   'resource_limit',

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
 
 import {
   createLanguageIntelligence,
@@ -436,6 +437,7 @@ describe('language-intelligence semantic edit splicing', () => {
       {
         path: path.join(root, 'a.ts'),
         newContent: 'const value = 1\nconst otherRenamed = 2\n',
+        expectedRawHash: getExactContentHash('const value = 1\nconst other = 2\n'),
       },
     ])
     // The service reads bytes from disk and returns them; it must NOT write.
@@ -481,6 +483,7 @@ describe('language-intelligence semantic edit splicing', () => {
       {
         path: path.join(root, 'a.ts'),
         newContent: 'const sum = 1\n',
+        expectedRawHash: getExactContentHash('const total = 1\n'),
       },
     ])
   })
@@ -626,11 +629,12 @@ describe('language-intelligence semantic edit splicing', () => {
       {
         path: path.join(root, 'a.ts'),
         newContent: '',
+        expectedRawHash: getExactContentHash('import { b } from "./b"\n'),
       },
     ])
   })
 
-  test('codeAction edits in one file with a failed read in another stays honest', async () => {
+  test('codeAction refuses the entire plan if another file cannot be read', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-ca-'))
     tempRoots.push(root)
     fs.writeFileSync(
@@ -674,15 +678,10 @@ describe('language-intelligence semantic edit splicing', () => {
       character: 0,
       kind: 'source.organizeImports',
     })
-    // The good file still splices; the bad one is recorded per file.
     const value = firstValue(output)
-    expect(value.changedFiles).toEqual([
-      {
-        path: path.join(root, 'a.ts'),
-        newContent: 'export const a = 1\n',
-      },
-    ])
+    expect(value.changedFiles).toBeUndefined()
     expect(value.errorMessage).toContain('gone.ts')
+    expect(fs.readFileSync(path.join(root, 'a.ts'), 'utf8')).toBe('import { b } from "./b"\nexport const a = 1\n')
   })
 
   test('splice reads through the injected filesystem, never raw node disk', async () => {
@@ -718,7 +717,7 @@ describe('language-intelligence semantic edit splicing', () => {
       new_name: 'sum',
     })
     expect(firstValue(output).changedFiles).toEqual([
-      { path: '/repo/src/foo.ts', newContent: 'const sum = 1\n' },
+      { path: '/repo/src/foo.ts', newContent: 'const sum = 1\n', expectedRawHash: getExactContentHash('const total = 1\n') },
     ])
     // Every filesystem read went through the injected adapter.
     expect(fsReadPaths(mockFs)).toEqual(['/repo/src/foo.ts'])
@@ -755,7 +754,7 @@ describe('language-intelligence semantic edit splicing', () => {
       new_name: 'x',
     })
     expect(firstValue(output).errorMessage).toContain(
-      'outside the project and the configured read roots',
+      'outside the project workspace',
     )
     expect(firstValue(output).changedFiles).toBeUndefined()
     // The refused path was NEVER opened, and the in-project file was not
@@ -1175,8 +1174,8 @@ describe('extract_symbol service (command resolution, destination gate, empty-ba
     // Source splice + created file, in that order; destination_path is the
     // CALLER's project-relative path, never the server's uri.
     expect(firstValue(output).changedFiles).toEqual([
-      { path: '/repo/src/foo.ts', newContent: 'const other = 2\n' },
-      { path: 'src/helper.ts', newContent: 'export const helper = 1\n' },
+      { path: '/repo/src/foo.ts', newContent: 'const other = 2\n', expectedRawHash: getExactContentHash('const helper = 1\nconst other = 2\n') },
+      { path: 'src/helper.ts', newContent: 'export const helper = 1\n', expectedRawHash: null },
     ])
   })
 
@@ -1324,6 +1323,66 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
     return { ...overrides } as unknown as LanguageIntelligenceService
   }
 
+  test.each([
+    ['negative', -1, 1],
+    ['fractional', 0.5, 1],
+    ['reversed', 3, 2],
+    ['CRLF terminator', 3, 4],
+    ['surrogate interior', 1, 2],
+    ['out of line', 0, 9],
+  ] as const)('B06 refuses the whole group for a %s UTF-16 range', async (_name, start, end) => {
+    const healthy = '/repo/src/healthy.ts'
+    const invalid = '/repo/src/invalid.ts'
+    const mockFs = createMockFs({ files: { [healthy]: 'keep\n', [invalid]: '😀x\r\n' } })
+    const service = createLanguageIntelligence({ cwd: CWD, fs: mockFs, multiplexer: makeMultiplexer({
+      rename: async () => ({
+        [`file://${healthy}`]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, newText: 'changed' }],
+        [`file://${invalid}`]: [{ range: { start: { line: 0, character: start }, end: { line: 0, character: end } }, newText: 'invalid' }],
+      }),
+    }) })
+    const result = await renameSymbol(
+      service, { path: 'src/healthy.ts', line: 1, character: 0, new_name: 'updated' },
+      { cwd: CWD, fs: mockFs, capabilityIssuer },
+    )
+    expect(result.output[0]?.value).toMatchObject({ errorMessage: expect.stringContaining('range') })
+    expect(result.mutation).toBeUndefined()
+    expect(await mockFs.readFile(healthy, 'utf8')).toBe('keep\n')
+    expect(await mockFs.readFile(invalid, 'utf8')).toBe('😀x\r\n')
+  })
+
+  test.each(['before\r\n', '\uFEFFbefore\n', 'before\nforeign append\n'])(
+    'B06 refuses the whole commit after exact bytes drift from the captured splice basis',
+    async (liveBefore) => {
+      const source = '/repo/src/source.ts'
+      const consumer = '/repo/src/consumer.ts'
+      const fs = createMockFs({ files: { [source]: 'source\n', [consumer]: liveBefore } })
+      const service = makeApplyService({ renameSymbol: async () => [{ type: 'json', value: { changedFiles: [
+        { path: source, newContent: 'updated source\n', expectedRawHash: getExactContentHash('source\n') },
+        { path: consumer, newContent: 'updated consumer\n', expectedRawHash: getExactContentHash('before\n') },
+      ] } }] })
+      const result = await renameSymbol(service, { path: 'src/source.ts', line: 1, character: 0, new_name: 'updated' }, { cwd: CWD, fs })
+      expect(result.mutation?.outcome).toBe('not_applied')
+      expect(result.mutation?.errors[0]?.code).toBe('stale_state')
+      expect(await fs.readFile(source, 'utf8')).toBe('source\n')
+      expect(await fs.readFile(consumer, 'utf8')).toBe(liveBefore)
+    },
+  )
+
+  test('B06 applies boundary-aligned UTF-16 edits without changing BOM, CRLF or CR bytes', async () => {
+    const path = '/repo/src/source.ts'
+    const text = '\uFEFF😀x\r\nsecond\rthird\n'
+    const fs = createMockFs({ files: { [path]: text } })
+    const service = createLanguageIntelligence({ cwd: CWD, fs, multiplexer: makeMultiplexer({
+      rename: async () => ({ [`file://${path}`]: [
+        { range: { start: { line: 0, character: 3 }, end: { line: 0, character: 4 } }, newText: 'first' },
+        { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } }, newText: 'last' },
+      ] }),
+    }) })
+    const result = await renameSymbol(service, { path, line: 1, character: 3, new_name: 'first' }, { cwd: CWD, fs })
+    expect(result.mutation?.outcome).toBe('applied')
+    expect(await fs.readFile(path, 'utf8')).toBe('\uFEFF😀first\r\nsecond\rlast\n')
+  })
+
   test('renameSymbol routes the service splice through changeFiles and reduces the commit result', async () => {
     const executionContext = { execution: {} as import('@codebuff/common/types/contracts/execution-context').ActionExecutionPort }
     let receivedContext: unknown
@@ -1348,6 +1407,7 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
                 {
                   path: '/repo/src/foo.ts',
                   newContent: 'const bar = 1\n',
+                  expectedRawHash: getExactContentHash('const foo = 1\n'),
                 },
               ],
             },
@@ -1435,9 +1495,9 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
               changedFiles: [
                 // The broker-created destination file, verbatim from the
                 // service: the wrapper must NOT pre-write it.
-                { path: '/repo/src/foo-extracted.ts', newContent: 'const extractedHelper = 1\n' },
+                { path: '/repo/src/foo-extracted.ts', newContent: 'const extractedHelper = 1\n', expectedRawHash: null },
                 // The extract source file loses the extracted range.
-                { path: '/repo/src/foo.ts', newContent: '' },
+                { path: '/repo/src/foo.ts', newContent: '', expectedRawHash: getExactContentHash('const foo = 1\n') },
               ],
             },
           },

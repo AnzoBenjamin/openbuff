@@ -141,6 +141,31 @@ bun run install:pre-push
 bun run install:pre-push -- --force
 ```
 
+## Models.dev capability catalog
+
+The published SDK bundles a bounded, exact-ID models.dev capability snapshot;
+runtime requests never fetch the catalog. Refreshing it is an explicit
+maintainer operation:
+
+```bash
+bun -e 'const r = await fetch("https://models.dev/api.json"); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); await Bun.write("/tmp/models-dev-api.json", await r.text())'
+bun scripts/generate-model-capability-catalog.ts --source /tmp/models-dev-api.json --inspect
+# After reviewing the payload, upstream revision/license, and semantic diff,
+# update the pinned source/catalog hashes, revision, and generated timestamp.
+bun scripts/generate-model-capability-catalog.ts --source /tmp/models-dev-api.json --source-revision <reviewed-commit> --generated-at <pinned-ISO-timestamp> --write
+bun run check:model-catalog
+```
+
+`--inspect` is read-only and prints the observed source and normalized-catalog
+hashes without weakening the pins. The write path refuses bytes that do not
+match the reviewed source hash; `--check` then requires the generated artifact,
+pinned timestamp, separately observed revision, catalog hash and complete MIT
+notice to agree. Review the generated semantic diff and remember that the API
+payload does not itself attest the separately observed repository revision.
+Conditional/tiered prices are deliberately omitted until accounting can select
+them truthfully. The offline check and SDK catalog tests validate sorted records,
+finite units, exact route isolation, and the generated hash.
+
 ## Tree-sitter release assets
 
 The compiled CLI and published SDK ship `tree-sitter.wasm`, every language

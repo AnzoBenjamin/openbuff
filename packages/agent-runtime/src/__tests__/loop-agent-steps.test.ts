@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
@@ -21,6 +22,8 @@ import { handleSpawnAgentInline } from '../tools/handlers/tool/spawn-agent-inlin
 import { countTokens } from '../util/token-counter'
 import { buildRuntimeAgentReceipt } from '../tools/handlers/tool/spawn-agent-utils'
 import { commitTaskMemory } from '../util/task-memory'
+import { createRunJournal } from '../util/run-journal'
+import { captureValueSha256 } from '../util/recorded-replay-prefix'
 import { createToolCallChunk, mockFileContext } from './test-utils'
 
 import type { AgentTemplate } from '../templates/types'
@@ -104,6 +107,219 @@ describe('loopAgentSteps', () => {
       signal: new AbortController().signal,
     }
   }
+
+  it.each(['interrupted-turn', 'pinned-child'] as const)(
+    'B15 refuses %s re-entry before live dispatch when a retained tool outcome is unknown',
+    async (mode) => {
+      setup()
+      const journal = createRunJournal({ path: ':memory:' })
+      const oldRunId = 'retained-b15-run'
+      const toolCallId = 'owned-effect-fixture'
+      agentState.runId = oldRunId
+      const startAgentRun = mock(async () => 'a-new-run-must-not-be-created')
+      const resumeDriver = mock(async () => undefined)
+      try {
+        journal.append(oldRunId, {
+          eventType: 'tool_call', stepNumber: 1, correlation: toolCallId,
+          payload: { toolName: 'write_file', input: { path: 'owned-fixture.txt' } },
+        })
+        const retained = journal.events(oldRunId)
+        await expect(loopAgentSteps({
+          ...baseParams,
+          agentTemplate: { ...agentTemplate, outputMode: 'last_message' },
+          startAgentRun,
+          resumeDriver,
+          journalReader: journal,
+          journalWriter: journal,
+          ...(mode === 'interrupted-turn' ? { resumeInterruptedTurn: true } : { pinnedRunId: oldRunId }),
+        })).rejects.toMatchObject({
+          code: 'replay_unavailable', reason: 'unconfirmed_tool_effect', runId: oldRunId, toolCallId,
+        })
+        expect(startAgentRun).not.toHaveBeenCalled()
+        expect(resumeDriver).not.toHaveBeenCalled()
+        expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+        expect(agentState.runId).toBe(oldRunId)
+        expect(journal.events(oldRunId)).toEqual(retained)
+      } finally { journal.close() }
+    },
+  )
+
+  it.each(['missing-reader', 'empty', 'paired', 'pruned', 'pinned'] as const)(
+    'B15 refuses %s re-entry without a verified prefix before any live callbacks',
+    async (kind) => {
+      setup()
+      const journal = createRunJournal({ path: ':memory:', ...(kind === 'pruned' ? { retention: { maxEvents: 1 } } : {}) })
+      const runId = 'not-a-verified-prefix'
+      agentState.runId = runId
+      const startAgentRun = mock(async () => 'unexpected-live-run')
+      const resumeDriver = mock(async () => undefined)
+      const entered = mock(() => {})
+      agentTemplate.handleSteps = function* () {
+        entered()
+        yield 'STEP'
+      }
+      try {
+        if (kind === 'paired' || kind === 'pruned') {
+          journal.append(runId, { eventType: 'tool_call', stepNumber: 1, correlation: 'call', payload: { attemptId: 'attempt', toolName: 'write_file' } })
+          journal.append(runId, { eventType: 'tool_result', stepNumber: 1, correlation: 'call', payload: { attemptId: 'attempt', result: [] } })
+        }
+        const before = journal.events(runId)
+        await expect(loopAgentSteps({
+          ...baseParams,
+          agentTemplate: { ...agentTemplate, outputMode: 'last_message' },
+          startAgentRun, resumeDriver, journalWriter: journal,
+          ...(kind === 'missing-reader' ? {} : { journalReader: journal }),
+          ...(kind === 'pinned' ? { pinnedRunId: runId } : { resumeInterruptedTurn: true }),
+        })).rejects.toMatchObject({ code: 'replay_unavailable', reason: 'prefix_unverified', runId })
+        expect(entered).not.toHaveBeenCalled()
+        expect(startAgentRun).not.toHaveBeenCalled()
+        expect(resumeDriver).not.toHaveBeenCalled()
+        expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+        expect(agentState.runId).toBe(runId)
+        expect(journal.events(runId)).toEqual(before)
+      } finally { await journal.close() }
+    },
+  )
+
+  it('B15 keeps an explicit new turn distinct from an earlier unresolved effect', async () => {
+    setup()
+    const journal = createRunJournal({ path: ':memory:' })
+    const previousRun = 'retained-previous-turn'
+    agentState.runId = previousRun
+    try {
+      journal.append(previousRun, { eventType: 'tool_call', stepNumber: 1, correlation: 'old-fixture', payload: { toolName: 'write_file' } })
+      const result = await loopAgentSteps({
+        ...baseParams,
+        agentTemplate: { ...agentTemplate, outputMode: 'last_message' },
+        journalReader: journal,
+        journalWriter: journal,
+        resumeInterruptedTurn: false,
+        startAgentRun: async () => 'explicit-new-turn',
+      })
+      expect(result.agentState.runId).toBe('explicit-new-turn')
+      expect(runtimeParams.promptAiSdkStream).toHaveBeenCalledTimes(1)
+      expect(journal.events(previousRun).map((event) => [event.eventType, event.correlation])).toEqual([['tool_call', 'old-fixture']])
+    } finally { journal.close() }
+  })
+
+  it.each(['model', 'programmatic', 'custom', 'model-throws'] as const)(
+    'B15 journals the real %s tool dispatch before effects without duplicate events',
+    async (lane) => {
+      setup()
+      const journal = createRunJournal({ path: ':memory:', batching: { maxBatchEvents: 100, maxBatchDelayMs: 60_000 } })
+      const runId = `b15-dispatch-${lane}`
+      const input = { command: 'owned mock effect', process_type: 'SYNC' as const }
+      const toolName = lane === 'custom' ? 'fixture_effect' : 'run_terminal_command'
+      const fileContext = lane === 'custom' ? { ...baseParams.fileContext, customToolDefinitions: {
+        fixture_effect: { description: 'Owned fixture effect', endsAgentStep: false, inputSchema: {
+          type: 'object', properties: { command: { type: 'string' }, process_type: { type: 'string' } },
+          required: ['command'], additionalProperties: false,
+        } },
+      } } : baseParams.fileContext
+      agentTemplate.outputMode = 'last_message'
+      agentTemplate.toolNames = [toolName, 'end_turn']
+      if (lane === 'programmatic') {
+        agentTemplate.handleSteps = function* () {
+          yield { toolName: 'run_terminal_command', input }
+        }
+      }
+      const stream = async function* () {
+        yield createToolCallChunk(toolName, input)
+        yield createToolCallChunk('end_turn', {})
+        return promptSuccess('b15-dispatch-message')
+      }
+      const effect = mock(async () => {
+        const events = journal.eventsOfType(runId, 'tool_call')
+        expect(events.filter(event => (event.payload as { toolName?: string }).toolName === toolName)).toHaveLength(1)
+        if (lane === 'model-throws') throw new Error('fixture handler rejected after reaching its effect boundary')
+        return { output: [{ type: 'json' as const, value: { command: input.command, stdout: 'fixture effect once', exitCode: 0 } }] }
+      })
+      try {
+        await loopAgentSteps({ ...baseParams, fileContext, journalWriter: journal, journalReader: journal,
+          startAgentRun: async () => runId, requestToolCall: effect, promptAiSdkStream: stream })
+        await journal.forceFlush()
+        const toolEvents = journal.events(runId).filter(event =>
+          (event.eventType === 'tool_call' || event.eventType === 'tool_result') &&
+          (event.payload as { toolName?: string }).toolName === toolName,
+        )
+        expect(effect).toHaveBeenCalledTimes(1)
+        if (lane === 'model-throws') {
+          expect(toolEvents.map(event => event.eventType)).toEqual(['tool_call'])
+          expect(journal.toolResultFor(runId, toolEvents[0]!.correlation!)).toBeUndefined()
+        } else {
+          expect(toolEvents.map(event => event.eventType)).toEqual(['tool_call', 'tool_result'])
+          expect(toolEvents[0]?.correlation).toBe(toolEvents[1]?.correlation)
+          expect(toolEvents[1]?.payload).toMatchObject({ result: [{ type: 'json', value: { stdout: 'fixture effect once' } }] })
+        }
+      } finally { await journal.close() }
+    },
+  )
+
+  it('B15 an unavailable request journal refuses the effect before dispatch', async () => {
+    setup()
+    agentTemplate.outputMode = 'last_message'
+    agentTemplate.toolNames = ['run_terminal_command', 'end_turn']
+    const effect = mock(async () => ({ output: [{ type: 'json' as const, value: { stdout: 'effect must not run', exitCode: 0 } }] }))
+    const writer = { append: (_runId: string, event: import('@codebuff/common/types/contracts/agent-runtime').JournalEvent) => {
+      if (event.eventType === 'tool_call') throw new Error('fixture journal refuses write')
+    } }
+    const stream = async function* () {
+      yield createToolCallChunk('run_terminal_command', { command: 'owned mock effect', process_type: 'SYNC' })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('b15-journal-refusal')
+    }
+    await loopAgentSteps({ ...baseParams, journalWriter: writer, requestToolCall: effect, promptAiSdkStream: stream }).catch(() => undefined)
+    expect(effect).not.toHaveBeenCalled()
+  })
+
+  it('B15 binds and orders real programmatic observations without declaring replay eligible', async () => {
+    setup()
+    const journal = createRunJournal({ path: ':memory:', captureProgrammaticReplay: true,
+      batching: { maxBatchEvents: 100, maxBatchDelayMs: 60_000 } })
+    const runId = 'recorded-production-observations'
+    const recipe = function* () {
+      yield { toolName: 'run_terminal_command', input: { command: 'owned fixture', process_type: 'SYNC' } }
+      yield { toolName: 'run_terminal_command', input: { command: 'owned fixture', process_type: 'SYNC' } }
+      return { finished: true }
+    }
+    const source = recipe.toString()
+    const effect = mock(async () => ({ output: [{ type: 'json' as const,
+      value: { command: 'owned fixture', stdout: 'owned result', exitCode: 0 } }] }))
+    try {
+      await loopAgentSteps({ ...baseParams, journalWriter: journal, journalReader: journal,
+        requestToolCall: effect, startAgentRun: async () => runId,
+        agentTemplate: { ...agentTemplate, outputMode: 'last_message', toolNames: ['run_terminal_command'],
+          handleSteps: source as unknown as AgentTemplate['handleSteps'] },
+      })
+      await journal.forceFlush()
+      expect(effect).toHaveBeenCalledTimes(2)
+      const observations = journal.events(runId).filter((event) => event.eventType === 'programmatic_observation')
+      expect(observations.map((event) => event.payload)).toMatchObject([
+        { kind: 'basis', replayPermitted: false, artifact: { kind: 'serialized_handle_steps', sourceSha256: createHash('sha256').update(source).digest('hex') } },
+        { kind: 'yield', ordinal: 0, occurrence: 0, value: { toolName: 'run_terminal_command' } },
+        { kind: 'next_input', ordinal: 0, value: { toolResult: [{ type: 'json', value: { stdout: 'owned result' } }] } },
+        { kind: 'yield', ordinal: 1, occurrence: 1, value: { toolName: 'run_terminal_command' } },
+        { kind: 'next_input', ordinal: 1 },
+        { kind: 'generator_return', value: { kind: 'value', value: { finished: true } } },
+      ])
+      const events = journal.events(runId)
+      expect(observations[1]!.seq).toBeLessThan(events.find((event) => event.eventType === 'tool_call')!.seq)
+      expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+      // Only the independently known pure fixture is reconstructed here.
+      // It reads the actual observed replies without calling an SDK tool.
+      const witness = recipe()
+      let next = witness.next()
+      for (const [yieldIndex, replyIndex] of [[1, 2], [3, 4]] as const) {
+        expect(next.done).toBe(false)
+        expect(captureValueSha256(next.value)).toBe(
+          (observations[yieldIndex]!.payload as { requestSha256: string }).requestSha256,
+        )
+        next = witness.next((observations[replyIndex]!.payload as { value: unknown }).value)
+      }
+      expect(next).toEqual({ done: true, value: { finished: true } })
+      expect(effect).toHaveBeenCalledTimes(2)
+    } finally { await journal.close() }
+  })
 
   it('loads a tool tier between model steps without widening the initial surface', async () => {
     setup()
@@ -2540,9 +2756,9 @@ describe('loopAgentSteps', () => {
       ...baseParams,
       agentState,
       prompt: 'Implement the trusted current root request',
-      // Exercise the restored-history path where the prompt is not appended to
-      // messageHistory. Goal capture must still use the direct loop argument.
-      resumeInterruptedTurn: true,
+      // The saved history is context for an explicit new turn, not replay
+      // authority. Goal capture must still use the direct loop argument.
+      resumeInterruptedTurn: false,
     })
 
     expect(result.agentState.taskMemory?.goal).toBe(
@@ -2612,7 +2828,7 @@ describe('loopAgentSteps', () => {
     expect(agentState.contextBudgetLedger).toBe(ledger)
   })
 
-  it('keeps the saved system prompt when resuming an interrupted turn', async () => {
+  it('leaves the saved system prompt untouched when exact re-entry is refused', async () => {
     setup()
     const fileContext = {
       ...mockFileContext,
@@ -2658,18 +2874,15 @@ describe('loopAgentSteps', () => {
     fileContext.userKnowledgeFiles = {
       'resume-notes.md': 'Guidance changed after checkpoint.',
     }
-    await loopAgentSteps({
+    await expect(loopAgentSteps({
       ...baseParams,
       fileContext,
       prompt: 'Do not replace the interrupted task',
       resumeInterruptedTurn: true,
       promptAiSdkStream: runtimeParams.promptAiSdkStream,
-    })
-
-    expect(capturedSystemPrompts[1]).toBe(checkpointSystemPrompt)
-    expect(capturedSystemPrompts[1]).not.toContain(
-      'Guidance changed after checkpoint.',
-    )
+    })).rejects.toMatchObject({ code: 'replay_unavailable', reason: 'prefix_unverified' })
+    expect(capturedSystemPrompts).toEqual([checkpointSystemPrompt])
+    expect(agentState.systemPrompt).toBe(checkpointSystemPrompt)
     expect(agentState.systemPromptTemplateIdentity).toBe(
       checkpointTemplateIdentity,
     )

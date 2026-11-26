@@ -28,15 +28,19 @@ function createStepAccumulator(initialState: AgentState) {
   let stepCacheUsageComplete = true
 
   const onCacheDebugUsageReceived = (usage: CacheDebugUsageData) => {
+    const cacheDenominator =
+      usage.inputTokensIncludesCache === true
+        ? usage.inputTokens
+        : usage.inputTokens + usage.cachedInputTokens
     if (
       usage.cacheUsageComplete === true &&
       Number.isSafeInteger(usage.inputTokens) &&
       usage.inputTokens >= 0 &&
       Number.isSafeInteger(usage.cachedInputTokens) &&
       usage.cachedInputTokens >= 0 &&
-      Number.isSafeInteger(usage.inputTokens + usage.cachedInputTokens)
+      Number.isSafeInteger(cacheDenominator)
     ) {
-      stepCacheTotalInputTokens += usage.inputTokens + usage.cachedInputTokens
+      stepCacheTotalInputTokens += cacheDenominator
     } else {
       stepCacheUsageComplete = false
     }
@@ -106,7 +110,28 @@ describe('Cache Token Aggregation (P0-3)', () => {
       const result = applyToState()
 
       expect(result.cacheInputTokens).toBe(1100) // 800 + 300
-      expect(result.cacheTotalInputTokens).toBe(2600) // input plus cache reads
+      expect(result.cacheTotalInputTokens).toBe(2600) // legacy input plus cache reads
+    })
+
+    it('does not double count normalized input that already includes cache buckets', () => {
+      const initialState = getInitialAgentState()
+      const { onCacheDebugUsageReceived, applyToState } =
+        createStepAccumulator(initialState)
+
+      onCacheDebugUsageReceived({
+        inputTokens: 1300,
+        cachedInputTokens: 1000,
+        cacheWriteInputTokens: 200,
+        outputTokens: 20,
+        totalTokens: 1320,
+        inputTokensIncludesCache: true,
+        cacheUsageComplete: true,
+      })
+
+      const result = applyToState()
+      expect(result.cacheInputTokens).toBe(1000)
+      expect(result.cacheTotalInputTokens).toBe(1300)
+      expect(result.cacheUsageComplete).toBe(true)
     })
 
     it('should handle zero cachedInputTokens (no cache hits this call)', () => {

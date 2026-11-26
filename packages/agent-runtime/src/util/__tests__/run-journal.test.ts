@@ -248,6 +248,37 @@ describe('createRunJournal (JournalWriter/JournalReader)', () => {
     }
   })
 
+  it('B15 keeps a stamped attempt unsettled even after an out-of-order or legacy result reuses its correlation', () => {
+    const journal = makeJournal()
+    const run = 'attempt-stamped-run'
+    const call = 'reused-provider-id'
+    const input = { path: 'owned-example.txt' }
+    try {
+      for (const attemptId of ['first', 'second']) {
+        journal.append(run, { eventType: 'tool_call', stepNumber: 1, correlation: call, payload: { toolName: 'write_file', input, attemptId } })
+      }
+      journal.append(run, { eventType: 'tool_result', stepNumber: 1, correlation: call, payload: { attemptId: 'first', result: 'first result' } })
+      journal.append(run, { eventType: 'tool_result', stepNumber: 1, correlation: call, payload: { result: 'unbound legacy result' } })
+      expect(classifyRunResume(journal, run)).toEqual({ kind: 'in_flight_tool', toolCallId: call })
+      expect(journal.toolResultFor(run, call)).toBeUndefined()
+      expect(journal.toolResultForInput(run, 'write_file', input, 0)).toMatchObject({ result: 'first result' })
+      expect(journal.toolResultForInput(run, 'write_file', input, 1)).toBeUndefined()
+      journal.append(run, { eventType: 'tool_result', stepNumber: 1, correlation: call, payload: { attemptId: 'second', result: 'second result' } })
+      expect(classifyRunResume(journal, run)).toEqual({ kind: 'clean' })
+      expect(journal.toolResultFor(run, call)).toMatchObject({ result: 'second result' })
+      expect(journal.toolResultForInput(run, 'write_file', input, 1)).toMatchObject({ result: 'second result' })
+    } finally { journal.close() }
+  })
+
+  it('B15 an effect-boundary acknowledgement refuses unavailable or unretained storage', async () => {
+    const event = { eventType: 'tool_call' as const, stepNumber: 1, payload: { input: 'x'.repeat(200) } }
+    const capped = createRunJournal({ path: ':memory:', retention: { maxBytes: 64 } })
+    try {
+      expect(() => capped.appendDurable!('capped-run', event)).toThrow('could not retain')
+    } finally { await capped.close() }
+    expect(() => capped.appendDurable!('closed-run', event)).toThrow('closed run journal')
+  })
+
   it('toolResultFor fails closed when no tool_call with the correlation exists', () => {
     const journal = makeJournal()
     try {

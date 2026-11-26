@@ -43,7 +43,11 @@ for (const stripProviderMetadata of [false, true])
           models: ['model'],
           compatibility: { stripProviderMetadata },
           defaultCapabilities: {
-            pricing: { inputPerMillionTokens: 3, outputPerMillionTokens: 15 },
+            pricing: {
+              inputPerMillionTokens: 3,
+              outputPerMillionTokens: 15,
+              currency: 'USD',
+            },
           },
         },
       },

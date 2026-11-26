@@ -10,7 +10,7 @@
 ## Local usage event inspection
 
 - `/usage` is a local, discoverable command. `usage-observations.ts` captures actual SDK usage events by the handler's original chat-session identity, preserving descendant run/model attribution and fractional cost. Late events from a replaced conversation cannot charge the new conversation.
-- Reports distinguish known token/cost subtotals, missing counts, unknown reasons and subscription usage. Detail retention is 100 rows per session, newest 20 shown, with cumulative counts and explicit row omissions; only eight recent process-local sessions remain. Aggregate overflow stays explicit and finite. This view does not reconstruct saved history, provider invoices or failed requests without events; cache-write pricing and durable spending admission remain separate work.
+- Reports distinguish known token/cost subtotals, cache-read and provider-reported cache-write counts, missing counts, unknown reasons and subscription usage. Detail retention is 100 rows per session, newest 20 shown, with cumulative counts and explicit row omissions; only eight recent process-local sessions remain. Aggregate overflow stays explicit and finite. This view does not reconstruct saved history, provider invoices or failed requests without events; catalog/configured prices are estimates and durable spending admission remains separate work.
 
 ## Current local execution and maintenance boundaries
 

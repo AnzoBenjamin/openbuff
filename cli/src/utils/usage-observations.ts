@@ -7,6 +7,8 @@ export type UsageSnapshot = {
   observations: number
   inputTokens: number
   outputTokens: number
+  cacheWriteInputTokens: number
+  cacheWriteComplete: boolean
   cachedInputTokens: number
   inputComplete: boolean
   outputComplete: boolean
@@ -23,6 +25,8 @@ const empty = (): UsageSnapshot => ({
   observations: 0,
   inputTokens: 0,
   outputTokens: 0,
+  cacheWriteInputTokens: 0,
+  cacheWriteComplete: true,
   cachedInputTokens: 0,
   inputComplete: true,
   outputComplete: true,
@@ -52,6 +56,7 @@ export function recordUsageObservation(
     model: source.model?.slice(0, 256),
     inputTokens: source.inputTokens,
     outputTokens: source.outputTokens,
+    cacheWriteInputTokens: source.cacheWriteInputTokens,
     cachedInputTokens: source.cachedInputTokens,
     totalTokens: source.totalTokens,
     complete: source.complete,
@@ -80,7 +85,14 @@ export function recordUsageObservation(
     event.cachedInputTokens ?? 0,
     true,
   )
+  snapshot.cacheWriteInputTokens = add(
+    snapshot.cacheWriteInputTokens,
+    event.cacheWriteInputTokens ?? 0,
+    true,
+  )
+  snapshot.cacheWriteComplete &&= event.cacheWriteInputTokens !== undefined
   snapshot.inputComplete &&= event.inputTokens !== undefined
+
   snapshot.outputComplete &&= event.outputTokens !== undefined
   snapshot.cacheComplete &&= event.cachedInputTokens !== undefined
   if (event.costStatus === 'subscription') snapshot.subscriptionRequests++

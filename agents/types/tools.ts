@@ -457,7 +457,7 @@ export interface FindReferencesParams {
   path: string
   /** 1-based line number (as shown in editors and read_files). */
   line: number
-  /** 0-based character offset within the line (LSP convention). */
+  /** 0-based UTF-16 offset within the line; do not copy an unconverted UTF-8 byte offset. */
   character: number
 }
 
@@ -495,7 +495,7 @@ export interface GoToDefinitionParams {
   path: string
   /** 1-based line number (as shown in editors and read_files). */
   line: number
-  /** 0-based character offset within the line (LSP convention). */
+  /** 0-based UTF-16 offset within the line; do not copy an unconverted UTF-8 byte offset. */
   character: number
 }
 
@@ -688,7 +688,7 @@ export interface HoverTypeParams {
   path: string
   /** 1-based line number (as shown in editors and read_files). */
   line: number
-  /** 0-based character offset within the line (LSP convention). */
+  /** 0-based UTF-16 offset within the line; do not copy an unconverted UTF-8 byte offset. */
   character: number
 }
 

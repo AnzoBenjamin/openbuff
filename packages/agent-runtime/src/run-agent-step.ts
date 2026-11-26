@@ -4,7 +4,10 @@ import { captureRunOutputSchema } from '@codebuff/common/util/run-output-schema'
 import { supportsCacheControl } from '@codebuff/common/old-constants'
 import { TOOLS_WHICH_WONT_FORCE_NEXT_STEP } from '@codebuff/common/tools/constants'
 import { buildArray } from '@codebuff/common/util/array'
-import { MemoryAuthorityModeSchema, MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
+import {
+  MemoryAuthorityModeSchema,
+  MemoryTurnContextV2Schema,
+} from '@codebuff/common/types/memory-v2'
 import { runStatusFromOutcome } from '@codebuff/common/types/run-outcome'
 import {
   AbortError,
@@ -51,24 +54,13 @@ import { getAgentTemplate } from './templates/agent-registry'
 import { buildNestedInstructionFilesMessage } from './util/nested-instruction-files'
 import { classifyContextOverflowError } from './util/context-overflow'
 import { PLACEHOLDER } from './templates/types'
-import { inheritPlanLineage } from './tools/plan-mode-guard'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
   buildRunResumeReport,
-  executeReplayActions,
   isRunResumeReportClean,
-  planReplayActions,
+  unverifiedRunReplayRefusal,
 } from './util/run-journal'
 import type { RunResumeReport } from './util/run-journal'
-// P2-T2b: background-agent resume-from-own-journal engine (pure journal reads
-// plus an injectable launch seam) plus the same-process live re-drive
-// reservation the runtime seam below consults (dedupe against duplicate
-// launches while a re-drive is live).
-import {
-  releaseBackgroundReDrive,
-  reserveBackgroundReDrive,
-  resumeBackgroundFromOwnJournal,
-} from './util/background-resume'
 import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
@@ -765,12 +757,29 @@ export const runAgentStep = async (
   const emitted: string[] = []
   const memory = MemoryTurnContextV2Schema.safeParse(agentState.memoryV2Context)
   if (memory.success && memory.data.userInputId === userInputId.slice(0, 128)) {
-    const compiled = compileMemoryV2Context(memory.data, { emittedObservationIds: emitted })
-    const packed = agentMessagesUntruncated.some(message => message.tags?.includes('MEMORY_V2_CONTEXT') &&
-      message.content.some(part => part.type === 'text' && part.text.includes(compiled)))
+    const compiled = compileMemoryV2Context(memory.data, {
+      emittedObservationIds: emitted,
+    })
+    const packed = agentMessagesUntruncated.some(
+      (message) =>
+        message.tags?.includes('MEMORY_V2_CONTEXT') &&
+        message.content.some(
+          (part) => part.type === 'text' && part.text.includes(compiled),
+        ),
+    )
     if (packed) {
-      agentState.memoryV2EmittedObservationIds = [...new Set([...(agentState.memoryV2EmittedObservationIds ?? []), ...emitted])].slice(0, 256)
-      agentState.memoryV2EmittedQueryIds = [...new Set([...(agentState.memoryV2EmittedQueryIds ?? []), memory.data.queryId])].slice(0, 32)
+      agentState.memoryV2EmittedObservationIds = [
+        ...new Set([
+          ...(agentState.memoryV2EmittedObservationIds ?? []),
+          ...emitted,
+        ]),
+      ].slice(0, 256)
+      agentState.memoryV2EmittedQueryIds = [
+        ...new Set([
+          ...(agentState.memoryV2EmittedQueryIds ?? []),
+          memory.data.queryId,
+        ]),
+      ].slice(0, 32)
     }
   }
 
@@ -865,16 +874,19 @@ export const runAgentStep = async (
   let preRequestInputTokenEstimate = 0
   const onCacheDebugUsageReceived = (usage: CacheDebugUsageData) => {
     cacheUsageCallbackCount++
+    const cacheDenominator =
+      usage.inputTokensIncludesCache === true
+        ? usage.inputTokens
+        : usage.inputTokens + usage.cachedInputTokens
     const hasValidCacheCounts =
       usage.cacheUsageComplete === true &&
       Number.isSafeInteger(usage.inputTokens) &&
       usage.inputTokens >= 0 &&
       Number.isSafeInteger(usage.cachedInputTokens) &&
       usage.cachedInputTokens >= 0 &&
-      Number.isSafeInteger(usage.inputTokens + usage.cachedInputTokens)
+      Number.isSafeInteger(cacheDenominator)
     if (hasValidCacheCounts) {
-      stepCacheRateTotalInputTokens +=
-        usage.inputTokens + usage.cachedInputTokens
+      stepCacheRateTotalInputTokens += cacheDenominator
     } else {
       stepCacheUsageComplete = false
     }
@@ -1561,10 +1573,7 @@ export async function loopAgentSteps(
     // Only fired for the main agent loop (callers only pass this for the top-
     // level run); subagent loops leave this undefined.
     onCheckpoint?: (agentState: AgentState) => void
-    // P2-3: When true, the user prompt is already present in
-    // `initialAgentState.messageHistory` (restored from a checkpoint), so the
-    // loop must NOT re-append a USER_PROMPT message — doing so would duplicate
-    // the prompt and corrupt the resumed context.
+    /** Exact interrupted-turn re-entry; refused unless a replay prefix can be verified. */
     resumeInterruptedTurn?: boolean
     // M4.1: Maximum context tokens before auto-pruning triggers. When
     // contextTokenCount exceeds this threshold, the loop proactively trims
@@ -1578,13 +1587,7 @@ export async function loopAgentSteps(
       agentId?: string
       model?: string
     }) => number | undefined
-    // P2-T2 replay-driver slice: when wired, ACTS on the resume report built
-    // at loop entry (re-drive children whose journals require live execution,
-    // respawn interrupted background intents). Typically
-    // `(report) => executeRunResumeReport({ report, ... })` from
-    // ./util/run-replay-driver. Additive-optional: undefined (the default)
-    // leaves this path byte-identical; the driver never throws, so a failing
-    // handler is reported in its outcome rather than aborting the loop.
+    /** Legacy hook retained for callers; an unverified journal cannot invoke it. */
     resumeDriver?: (report: RunResumeReport) => Promise<unknown>
     // P2-T2b linkage thread from the background spawn path: present only for
     // BACKGROUND children of a journaled run. The background launch site
@@ -1596,20 +1599,7 @@ export async function loopAgentSteps(
     // stream. Additive-optional: omitted (the default, i.e. every foreground
     // child and every unjournaled parent) appends nothing.
     backgroundJobLink?: { jobId: string; parentRunId: string }
-    // P2-T2b resume pin: when set, SKIP the startAgentRun call and use this
-    // runId verbatim, so a re-driven background child keeps journaling into
-    // its ORIGINAL pre-crash stream (journal lookups and respawn-marker
-    // settlement both key on it; a re-minted local-run-<uuid> would orphan the
-    // stream and leave the marker permanently unsettled).
-    //
-    // Self-resume trace (verified, intentionally benign): the re-driven child
-    // is handed a state whose runId is pre-stamped to this pin, so its OWN
-    // loop-entry resume block classifies its pre-terminal journal tail and
-    // builds a report. That report is inert here: the reconstructed state
-    // carries backgroundAgentJobs: [] (createAgentState), so
-    // planBackgroundAgentResume plans nothing, and the launch seam passes
-    // resumeDriver: undefined so the entry block stays classify-and-log. No
-    // self-respawn recursion is possible.
+    /** Requests re-entry into this run ID; the ID alone is not replay authority. */
     pinnedRunId?: string
   } & ParamsExcluding<typeof additionalToolDefinitions, 'agentTemplate'> &
     ParamsExcluding<
@@ -1696,6 +1686,16 @@ export async function loopAgentSteps(
     resolveModelContextWindow,
   } = params
 
+  // A clean retained suffix is not a reconstruction of this generator or
+  // proof that earlier effects are present. Until an admitted verifier
+  // supplies that proof, neither exact return path may enter live work.
+  if (resumeInterruptedTurn || params.pinnedRunId !== undefined) {
+    throw unverifiedRunReplayRefusal(
+      params.journalReader,
+      params.pinnedRunId ?? initialAgentState.runId,
+    )
+  }
+
   let agentTemplate = params.agentTemplate
   if (!agentTemplate) {
     agentTemplate =
@@ -1709,7 +1709,8 @@ export async function loopAgentSteps(
     throw new Error(`Agent template not found for type: ${agentType}`)
   }
   const runOutputContract =
-    params.runOutputSchema !== undefined && initialAgentState.ancestorRunIds.length === 0
+    params.runOutputSchema !== undefined &&
+    initialAgentState.ancestorRunIds.length === 0
       ? captureRunOutputSchema(params.runOutputSchema)
       : undefined
   if (runOutputContract) {
@@ -1719,7 +1720,7 @@ export async function loopAgentSteps(
       outputSchema: runOutputContract.validator,
       toolNames: [...new Set([...agentTemplate.toolNames, 'set_output'])],
       programmaticToolNames: agentTemplate.programmaticToolNames?.filter(
-        name => name !== 'set_output',
+        (name) => name !== 'set_output',
       ),
     }
     if (!resumeInterruptedTurn) {
@@ -1727,8 +1728,11 @@ export async function loopAgentSteps(
       initialAgentState.lastSetOutputError = undefined
     }
   }
-  initialAgentState.stepsRemaining = selectAgentStepBudget(initialAgentState.stepsRemaining,
-    agentTemplate.maxSteps, initialAgentState.ancestorRunIds.length > 0)
+  initialAgentState.stepsRemaining = selectAgentStepBudget(
+    initialAgentState.stepsRemaining,
+    agentTemplate.maxSteps,
+    initialAgentState.ancestorRunIds.length > 0,
+  )
   prepareUnlockedToolTiersForTurn({
     agentState: initialAgentState,
     agentTemplate,
@@ -1784,357 +1788,21 @@ export async function loopAgentSteps(
     })
   }
   reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
-  // P2-T2: when a journal reader is wired and this state carries a prior
-  // runId, surface what a resume would do (own tail, children, background
-  // intents). P2-audit-fix-8: a caller-injected resumeDriver (production
-  // wiring: sdk/src/services/run-resume-driver.ts) ACTS on the report below;
-  // without one this block stays classify-and-log.
+  // A new turn may inspect older work without continuing it. In particular,
+  // never launch an interrupted child or append its respawn marker based on
+  // a retained journal suffix alone.
   if (params.journalReader && initialAgentState.runId) {
-    const resumeReport = buildRunResumeReport({
-      reader: params.journalReader,
-      runId: initialAgentState.runId,
-      intents: initialAgentState.backgroundAgentJobs,
-    })
-    if (!isRunResumeReportClean(resumeReport)) {
-      logger.warn(
-        { resumeReport },
-        'Run journal shows interrupted work from a previous run',
-      )
-      // P2-T2 final REPLAY SLICE: the report is now ACTED ON structurally —
-      // planned (bounded) and executed through caller-injected seams. The
-      // replayChild seam stays LOGGING-ONLY: it records the child's
-      // disposition without touching live state, because a foreground
-      // re-drive is a later slice and reconcileInterruptedBackgroundAgentIntents
-      // above already reconciled the intents. Unwired/confirmed seams skip, so
-      // a clean report fires no actions and this wiring stays byte-identical
-      // for fresh runs.
-      const replayPlan = planReplayActions(resumeReport)
-      if (replayPlan.actions.length > 0) {
-        // P2-T2b: the background respawn seam is REAL when both journal halves
-        // are wired. Captured into consts first so TypeScript's property
-        // narrowing survives the async closure below. Beyond the delegation to
-        // the engine, the seam owns three contracts the engine deliberately
-        // does not:
-        //  - same-process live re-drive dedupe (reviewer finding
-        //    respawn-seam-concurrent-dedupe): while ONE re-drive for a job is
-        //    live, every later parent turn in this process still re-plans the
-        //    intent 'respawn' (the respawn marker settles only on the re-driven
-        //    child's TERMINAL journal tail), so the seam reserves the jobId
-        //    BEFORE any journal read and short-circuits duplicate launches.
-        //  - the minimal settle (reviewer finding resume-result-not-delivered):
-        //    the detached re-drive bypasses the spawn settle chain, so the seam
-        //    folds the re-driven child's receipt into the parent and updates the
-        //    matching intent exactly like the spawn-agents settle chain does.
-        //    The re-drive is deliberately NOT a job-registry entry — the
-        //    original job's registry record died with the crashed process, and
-        //    re-creating one would double-count the per-root background budget;
-        //    the result is delivered through the intent settle instead, and
-        //    check_background_agent keeps reporting the pre-crash record
-        //    (documented residual, same honesty class as the
-        //    supervised-children gap in background-resume.ts).
-        //  - the detached launch itself: fire-and-forget with warn logging, so
-        //    a failed re-drive leaves the journaled marker unsettled and
-        //    re-planning honest instead of dropping the job.
-        const journalReader = params.journalReader
-        const journalWriter = params.journalWriter
-        const resumeParentRunId = initialAgentState.runId
-        const respawnBackground =
-          journalReader && journalWriter && resumeParentRunId
-            ? async (jobId: string, agentType: string) => {
-                // Same-process dedupe: check+reserve in one synchronous step
-                // BEFORE any await, so a concurrent pass cannot slip between
-                // the check and the reservation.
-                if (!reserveBackgroundReDrive(jobId)) {
-                  logger.debug(
-                    { runId: resumeParentRunId, jobId },
-                    'Journal replay: background re-drive already in flight for this job; skipping the duplicate launch',
-                  )
-                  return
-                }
-                let launched = false
-                try {
-                  const registryTemplate = await getAgentTemplate({
-                    ...params,
-                    agentId: agentType,
-                  })
-                  // A re-driven child keeps the parent's plan lineage (N03):
-                  // the registry template lacks the spawn-time derivation.
-                  const template = registryTemplate
-                    ? inheritPlanLineage({
-                        child: registryTemplate,
-                        parent: agentTemplate,
-                      })
-                    : registryTemplate
-                  if (!template) {
-                    logger.debug(
-                      { runId: resumeParentRunId, jobId, agentType },
-                      'Journal replay: background respawn skipped; agent template not found (honest degradation)',
-                    )
-                    return
-                  }
-                  // The engine reads the linkage + the child's own stream back
-                  // out of the journal, rebuilds the child state with its
-                  // ORIGINAL runId pinned, journals the settleable respawn
-                  // marker, then hands the state to the detached launch below.
-                  // no_linkage / unrecoverable degrade honestly: the intent
-                  // simply keeps re-planning on the next resume, exactly as it
-                  // did before this seam existed (and no marker is journaled
-                  // for a launch that never happens).
-                  const outcome = await resumeBackgroundFromOwnJournal({
-                    reader: journalReader,
-                    writer: journalWriter,
-                    parentRunId: resumeParentRunId,
-                    parentAgentState: initialAgentState,
-                    jobId,
-                    agentType,
-                    agentTemplate: template,
-                    logger,
-                    launch: async (childState) => {
-                      // Detached re-drive, NOT awaited inside the seam: the
-                      // seam must never throw into executeReplayActions, and
-                      // the parent turn must not block on the re-driven child.
-                      // (An async call always returns a promise, so the const
-                      // below cannot throw synchronously.)
-                      const drive = loopAgentSteps({
-                        ...params,
-                        agentType,
-                        agentTemplate: template,
-                        agentState: childState,
-                        // prompt:'' + no spawnParams + no content keeps
-                        // hasUserMessage false, so NO duplicate USER_PROMPT is
-                        // appended — the reconstructed history already carries
-                        // the original prompt (the hasUserMessage condition is
-                        // the verified guard for this).
-                        prompt: '',
-                        spawnParams: undefined,
-                        content: undefined,
-                        ancestorRunIds: [
-                          ...(initialAgentState.ancestorRunIds ?? []),
-                          initialAgentState.runId ?? initialAgentState.agentId,
-                        ],
-                        // Re-pass the link so the re-driven child journals its
-                        // linkage again: benign, because the linkage append is
-                        // keyed on jobId and findBackgroundChildLinkage
-                        // resolves the LAST match — and the childRunId is the
-                        // same pin.
-                        backgroundJobLink: {
-                          jobId,
-                          parentRunId: resumeParentRunId,
-                        },
-                        // The pin: loopAgentSteps skips startAgentRun and
-                        // reuses the ORIGINAL runId, so the re-drive keeps
-                        // journaling into the pre-crash stream the marker
-                        // settles against.
-                        pinnedRunId: childState.runId,
-                        // Neutralize every per-turn input the spread carried:
-                        // the re-drive is detached like the original background
-                        // spawn, so an aborted parent turn must not kill the
-                        // resume; the parent turn has moved past, so chunks are
-                        // dropped; and the MAIN agent's checkpoint callback
-                        // must never persist the child state over the main
-                        // agent.
-                        signal: new AbortController().signal,
-                        onResponseChunk: () => {},
-                        onCheckpoint: undefined,
-                        resumeDriver: undefined,
-                        clearUserPromptMessagesAfterResponse: false,
-                        resumeInterruptedTurn: false,
-                      })
-                      launched = true
-                      drive
-                        .then(async (result) => {
-                          // Minimal settle: mirror the spawn-agents settle
-                          // chain — fold the re-driven child's receipt + ledger
-                          // evidence into the parent and update the matching
-                          // intent, so the resume's result is DELIVERED instead
-                          // of dropped. Dynamic import: spawn-agent-utils
-                          // statically imports this module, so a static import
-                          // here would be a cycle; by settle time the module
-                          // graph is fully initialized. Never throws into the
-                          // drive chain: every step is guarded.
-                          try {
-                            const {
-                              buildRuntimeAgentReceiptWithArtifacts,
-                              mergeChildEvidenceIntoParent,
-                              reconcileAgentReceiptIntoParent,
-                            } =
-                              await import('./tools/handlers/tool/spawn-agent-utils')
-                            const receipt =
-                              await buildRuntimeAgentReceiptWithArtifacts({
-                                agentType,
-                                agentId: childState.agentId,
-                                output: result.output,
-                                agentState: result.agentState,
-                              })
-                            mergeChildEvidenceIntoParent({
-                              parentAgentState: initialAgentState,
-                              childAgentState: result.agentState,
-                            })
-                            reconcileAgentReceiptIntoParent({
-                              parentAgentState: initialAgentState,
-                              receipt,
-                              agentType,
-                              // Ledger pairing: the resumed child never went
-                              // through the spawn handler, so no
-                              // `spawn_started` event exists for it. Passing
-                              // the child's OWN agentId as the spawn id keeps
-                              // the receipt reconciliation keyed on a stable
-                              // identity instead of silently defaulting to
-                              // receipt.agentId (which differs on the
-                              // supervised path and dangles the ledger row).
-                              spawnId: childState.agentId,
-                            })
-                            // Fold the resumed child's cost into the parent,
-                            // exactly like the spawn-agents settle chain does
-                            // for a freshly launched background child
-                            // (spawn-agents.ts backgroundCredits). Without
-                            // this the re-drive ran for free: its
-                            // creditsUsed never reached the parent, so
-                            // resumed work was systematically underbilled.
-                            const resumedCredits =
-                              result.agentState.creditsUsed || 0
-                            if (resumedCredits > 0) {
-                              initialAgentState.creditsUsed += resumedCredits
-                            }
-                            const intent =
-                              initialAgentState.backgroundAgentJobs?.find(
-                                (entry) => entry.jobId === jobId,
-                              )
-                            if (intent) {
-                              intent.status = (
-                                receipt.runOutcome
-                                  ? receipt.runOutcome.termination ===
-                                    'cancelled'
-                                  : receipt.status === 'cancelled'
-                              )
-                                ? 'cancelled'
-                                : (
-                                      receipt.runOutcome
-                                        ? receipt.runOutcome.termination !==
-                                          'completed'
-                                        : receipt.status === 'failed'
-                                    )
-                                  ? 'error'
-                                  : 'completed'
-                              intent.completedAt = clock.now()
-                              intent.childRunId = childState.runId
-                              intent.receipt = receipt
-                            }
-                          } catch (settleError) {
-                            logger.warn(
-                              {
-                                jobId,
-                                childRunId: childState.runId,
-                                error: settleError,
-                              },
-                              'Background resume settle failed (non-fatal; the intent keeps its prior status)',
-                            )
-                          }
-                        })
-                        .catch(async (error) => {
-                          logger.warn(
-                            {
-                              runId: childState.runId,
-                              jobId,
-                              agentType,
-                              error,
-                            },
-                            'Background resume re-drive rejected (non-fatal; marker stays unsettled until a terminal child tail)',
-                          )
-                          // Error settle mirroring the spawn chain's
-                          // rejected-promise branch: a failed re-drive must
-                          // not stay reported 'interrupted' forever.
-                          try {
-                            const intent =
-                              initialAgentState.backgroundAgentJobs?.find(
-                                (entry) => entry.jobId === jobId,
-                              )
-                            if (intent) {
-                              intent.status = 'error'
-                              intent.completedAt = clock.now()
-                              intent.childRunId = childState.runId
-                              intent.error =
-                                error instanceof Error
-                                  ? error.message
-                                  : String(error)
-                            }
-                          } catch {
-                            // Never throws into the drive chain.
-                          }
-                        })
-                        .finally(() => {
-                          // The reservation lives exactly as long as the drive:
-                          // releasing on settle keeps a finished re-drive from
-                          // blocking the next legitimate one and keeps the
-                          // reservation set from leaking.
-                          releaseBackgroundReDrive(jobId)
-                        })
-                    },
-                  })
-                  if (outcome.kind === 'resumed') {
-                    logger.debug(
-                      {
-                        runId: resumeParentRunId,
-                        jobId,
-                        childRunId: outcome.childRunId,
-                      },
-                      'Journal replay: background child resumed from its own journal stream',
-                    )
-                  } else if (outcome.kind === 'no_linkage') {
-                    logger.debug(
-                      { runId: resumeParentRunId, jobId, agentType },
-                      'Journal replay: background respawn found no child linkage; leaving the intent to re-plan',
-                    )
-                  } else {
-                    logger.warn(
-                      {
-                        runId: resumeParentRunId,
-                        jobId,
-                        agentType,
-                        reason: outcome.reason,
-                      },
-                      'Journal replay: background child could not be reconstructed from its journal; leaving the intent to re-plan',
-                    )
-                  }
-                } finally {
-                  // No launch happened (template missing, no linkage,
-                  // unrecoverable, or an engine throw): release the reservation
-                  // so later passes re-plan unobstructed.
-                  if (!launched) releaseBackgroundReDrive(jobId)
-                }
-              }
-            : undefined
-        const replayResult = await executeReplayActions(replayPlan.actions, {
-          logger,
-          replayChild: async (childRunId, verdict) => {
-            logger.debug(
-              { runId: initialAgentState.runId, childRunId, verdict },
-              'Journal replay: child disposition planned (logging-only seam)',
-            )
-          },
-          respawnBackground,
-        })
-        logger.debug(
-          {
-            runId: initialAgentState.runId,
-            plannedActions: replayPlan.actions.length,
-            truncated: replayPlan.truncated,
-            attempted: replayResult.attempted,
-            succeeded: replayResult.succeeded,
-            failed: replayResult.failed,
-          },
-          'Journal replay actions executed',
-        )
+    try {
+      const report = buildRunResumeReport({
+        reader: params.journalReader,
+        runId: initialAgentState.runId,
+        intents: initialAgentState.backgroundAgentJobs,
+      })
+      if (!isRunResumeReportClean(report)) {
+        logger.warn({ resumeReport: report }, 'Previous work remains in the journal; no automatic replay was performed')
       }
-      // P2-T2 replay-driver slice: when a resumeDriver is wired, ACT on the
-      // report — re-drive children and respawn background intents — before
-      // the loop continues. Additive-optional: undefined (the default) keeps
-      // this path byte-identical; executeRunResumeReport never throws, so a
-      // failing handler is reported in its outcome rather than aborting the
-      // loop.
-      if (params.resumeDriver) {
-        await params.resumeDriver(resumeReport)
-      }
+    } catch {
+      // A new turn does not depend on that prior journal or its logger.
     }
   }
 
@@ -2143,16 +1811,11 @@ export async function loopAgentSteps(
   initialAgentState.runOutcome = undefined
   initialAgentState.executionRecovery = { staleRefusals: 0 }
   initialAgentState.taskAcceptance = { status: 'unknown' }
-  // P2-T2b: a resume-pinned relaunch (see pinnedRunId on the params type)
-  // skips startAgentRun entirely — reusing the ORIGINAL child runId — while
-  // every other caller keeps the byte-identical mint path.
-  const runId =
-    params.pinnedRunId ??
-    (await startAgentRun({
-      ...params,
-      agentId: agentTemplate.id,
-      ancestorRunIds: initialAgentState.ancestorRunIds,
-    }))
+  const runId = await startAgentRun({
+    ...params,
+    agentId: agentTemplate.id,
+    ancestorRunIds: initialAgentState.ancestorRunIds,
+  })
   if (!runId) {
     throw new Error('Failed to start agent run')
   }
@@ -2165,32 +1828,52 @@ export async function loopAgentSteps(
     rootRunId: initialAgentState.ancestorRunIds[0] ?? runId,
     agentId: initialAgentState.agentId,
   }
-  const resolvedMemoryAuthority = await params.resolveMemoryAuthority?.({ actor, userInputId })
-  const selectedMemoryAuthority = resolvedMemoryAuthority === undefined
-    ? undefined
-    : MemoryAuthorityModeSchema.parse(resolvedMemoryAuthority)
+  const resolvedMemoryAuthority = await params.resolveMemoryAuthority?.({
+    actor,
+    userInputId,
+  })
+  const selectedMemoryAuthority =
+    resolvedMemoryAuthority === undefined
+      ? undefined
+      : MemoryAuthorityModeSchema.parse(resolvedMemoryAuthority)
   if (selectedMemoryAuthority !== undefined) {
     // The SDK freshly prepares the root through its coordinator. Descendants
     // never acquire content or source selection from inherited/restored fields.
-    const rootAuthority = initialAgentState.ancestorRunIds.length === 0 &&
-      initialAgentState.memoryAuthority?.userInputId === userInputId.slice(0, 128) &&
+    const rootAuthority =
+      initialAgentState.ancestorRunIds.length === 0 &&
+      initialAgentState.memoryAuthority?.userInputId ===
+        userInputId.slice(0, 128) &&
       initialAgentState.memoryAuthority.requested === selectedMemoryAuthority
-      ? initialAgentState.memoryAuthority : undefined
-    const rootKnowledge = rootAuthority && selectedMemoryAuthority === 'sqlite-v2-opt-in'
-      ? MemoryTurnContextV2Schema.safeParse(initialAgentState.memoryV2Context) : undefined
-    initialAgentState.memoryV2Context = rootKnowledge?.success &&
+        ? initialAgentState.memoryAuthority
+        : undefined
+    const rootKnowledge =
+      rootAuthority && selectedMemoryAuthority === 'sqlite-v2-opt-in'
+        ? MemoryTurnContextV2Schema.safeParse(initialAgentState.memoryV2Context)
+        : undefined
+    initialAgentState.memoryV2Context =
+      rootKnowledge?.success &&
       rootKnowledge.data.userInputId === userInputId.slice(0, 128)
-      ? rootKnowledge.data : undefined
+        ? rootKnowledge.data
+        : undefined
     initialAgentState.memoryAuthority = {
       ...rootAuthority,
       schemaVersion: 1,
       userInputId: userInputId.slice(0, 128),
       requested: selectedMemoryAuthority,
-      active: selectedMemoryAuthority === 'sqlite-v2-opt-in' ? 'sqlite-v2-opt-in' : 'json-v1',
+      active:
+        selectedMemoryAuthority === 'sqlite-v2-opt-in'
+          ? 'sqlite-v2-opt-in'
+          : 'json-v1',
       fallbackOccurred: false,
-      reason: rootAuthority?.reason ?? (selectedMemoryAuthority === 'json-v1'
-        ? 'json-v1-selected' : selectedMemoryAuthority === 'shadow-v2' ? 'shadow-v2-selected' : undefined),
-      v1CompatibilityShadowAvailable: initialAgentState.taskMemory !== undefined,
+      reason:
+        rootAuthority?.reason ??
+        (selectedMemoryAuthority === 'json-v1'
+          ? 'json-v1-selected'
+          : selectedMemoryAuthority === 'shadow-v2'
+            ? 'shadow-v2-selected'
+            : undefined),
+      v1CompatibilityShadowAvailable:
+        initialAgentState.taskMemory !== undefined,
       v1Import: rootAuthority?.v1Import ?? { status: 'not-required' },
     }
   }
@@ -2201,8 +1884,13 @@ export async function loopAgentSteps(
   initialAgentState.memoryV2EmittedQueryIds = []
   initialAgentState.memoryReuse = undefined
   initialAgentState.memoryUsageTurn = undefined
-  const archiveReferenceContextPromise = prepareArchiveReferenceContext({ state: initialAgentState, actor, userInputId,
-    read: params.readContextArchiveBodyPage, signal })
+  const archiveReferenceContextPromise = prepareArchiveReferenceContext({
+    state: initialAgentState,
+    actor,
+    userInputId,
+    read: params.readContextArchiveBodyPage,
+    signal,
+  })
   if (params.prepareRepositoryContext) {
     try {
       const packet = await params.prepareRepositoryContext({
@@ -2230,23 +1918,25 @@ export async function loopAgentSteps(
         initialAgentState.playbookApplicability = packet.applicability
         const knowledge = MemoryTurnContextV2Schema.safeParse(packet.knowledge)
         if (
-          (selectedMemoryAuthority === undefined || selectedMemoryAuthority === 'sqlite-v2-opt-in') &&
+          (selectedMemoryAuthority === undefined ||
+            selectedMemoryAuthority === 'sqlite-v2-opt-in') &&
           knowledge.success &&
           knowledge.data.userInputId === userInputId.slice(0, 128)
         ) {
           initialAgentState.memoryV2Context = knowledge.data
           if (selectedMemoryAuthority !== undefined) {
             initialAgentState.memoryAuthority!.reason = undefined
-          } else initialAgentState.memoryAuthority = {
-            schemaVersion: 1,
-            userInputId: userInputId.slice(0, 128),
-            requested: 'sqlite-v2-opt-in',
-            active: 'sqlite-v2-opt-in',
-            fallbackOccurred: false,
-            v1CompatibilityShadowAvailable:
-              initialAgentState.taskMemory !== undefined,
-            v1Import: { status: 'not-required' },
-          }
+          } else
+            initialAgentState.memoryAuthority = {
+              schemaVersion: 1,
+              userInputId: userInputId.slice(0, 128),
+              requested: 'sqlite-v2-opt-in',
+              active: 'sqlite-v2-opt-in',
+              fallbackOccurred: false,
+              v1CompatibilityShadowAvailable:
+                initialAgentState.taskMemory !== undefined,
+              v1Import: { status: 'not-required' },
+            }
         }
         logger.debug(
           { actor, ...packet.metrics, freshness: packet.freshness },
@@ -2367,21 +2057,24 @@ export async function loopAgentSteps(
   }
 
   let currentAgentState: AgentState = initialAgentState
-  let totalSteps = 0
+  let totalSteps = params.readPlanStepOffset?.(runId) ?? 0
   let system = initialAgentState.systemPrompt ?? ''
 
   const finalizeRun = async () => {
     if (
       runOutputContract &&
-      (!currentAgentState.runOutcome || currentAgentState.runOutcome.termination === 'completed') &&
+      (!currentAgentState.runOutcome ||
+        currentAgentState.runOutcome.termination === 'completed') &&
       (currentAgentState.lastSetOutputError !== undefined ||
-        !runOutputContract.validator.safeParse(currentAgentState.output).success)
+        !runOutputContract.validator.safeParse(currentAgentState.output)
+          .success)
     ) {
       currentAgentState.runOutcome = {
         termination: 'failed',
         cause: {
           code: 'output_schema_invalid',
-          message: 'The run ended without a confirmed structured output matching the selected output schema.',
+          message:
+            'The run ended without a confirmed structured output matching the selected output schema.',
         },
       }
       currentAgentState.taskAcceptance = { status: 'unknown' }
@@ -2692,9 +2385,7 @@ export async function loopAgentSteps(
       currentUserMessage && [
         currentUserMessage,
         additionalSystemPrompt !== undefined &&
-          userMessage(
-            withSystemInstructionTags(additionalSystemPrompt),
-          ),
+          userMessage(withSystemInstructionTags(additionalSystemPrompt)),
       ],
 
       instructionsPrompt &&
@@ -3032,8 +2723,12 @@ export async function loopAgentSteps(
       const buildCompiledMemoryV2Message = (state: AgentState) => {
         const context = getCorrelatedAuthoritativeV2(state)
         if (!context) return false
-        return userMessage({ content: withSystemTags(compileMemoryV2Context(context)), tags: ['MEMORY_V2_CONTEXT'],
-          timeToLive: 'agentStep' as const, keepDuringTruncation: true })
+        return userMessage({
+          content: withSystemTags(compileMemoryV2Context(context)),
+          tags: ['MEMORY_V2_CONTEXT'],
+          timeToLive: 'agentStep' as const,
+          keepDuringTruncation: true,
+        })
       }
       const buildCompiledPlaybooksMessage = (state: AgentState) => {
         // Validation can empty the set (restored-session garbage), so gate
@@ -3058,10 +2753,22 @@ export async function loopAgentSteps(
           : false
       }
       const buildCompiledRepositoryContextMessage = (state: AgentState) => {
-        const briefing = state.repositoryContext?.userInputId === userInputId ? state.repositoryContext.briefing : undefined
-        const content = [briefing, archiveReferenceContext].filter(Boolean).join('\n\n')
-        return content && userMessage({ content: withSystemTags(content),
-          tags: ['REPOSITORY_CONTEXT'], timeToLive: 'agentStep' as const, keepDuringTruncation: true })
+        const briefing =
+          state.repositoryContext?.userInputId === userInputId
+            ? state.repositoryContext.briefing
+            : undefined
+        const content = [briefing, archiveReferenceContext]
+          .filter(Boolean)
+          .join('\n\n')
+        return (
+          content &&
+          userMessage({
+            content: withSystemTags(content),
+            tags: ['REPOSITORY_CONTEXT'],
+            timeToLive: 'agentStep' as const,
+            keepDuringTruncation: true,
+          })
+        )
       }
       let messagesWithStepPrompt = buildArray(
         ...currentAgentState.messageHistory,
@@ -4380,11 +4087,18 @@ export async function loopAgentSteps(
       error instanceof Error ? error.message : getErrorObject(error).message
     const errorMessage = apiErrorDetails.message ?? fallbackMessage
     const statusCode = apiErrorDetails.statusCode
+    const failureCode =
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'request_spend_refused'
+        ? 'request_spend_refused'
+        : 'agent_execution_error'
 
     currentAgentState.runOutcome ??= {
       termination: signal.aborted ? 'cancelled' : 'failed',
       cause: {
-        code: signal.aborted ? 'user_cancelled' : 'agent_execution_error',
+        code: signal.aborted ? 'user_cancelled' : failureCode,
         message: errorMessage,
       },
     }

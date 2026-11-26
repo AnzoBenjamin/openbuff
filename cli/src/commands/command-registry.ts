@@ -69,6 +69,7 @@ import {
   setupOpenbuffProviderFromArgs,
 } from '../utils/openbuff-provider'
 import { flushAnalytics } from '../utils/analytics'
+import { logger } from '../utils/logger'
 import {
   attachSession,
   detachOnExit,
@@ -83,7 +84,11 @@ import {
 import { getAttachTarget } from '../utils/codebuff-client'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
 import { withTimeout } from '../utils/terminal-color-detection'
-import { capturePendingAttachments } from '../utils/pending-attachments'
+import {
+  capturePendingAttachments,
+  getPromptAttachmentBlockReason,
+  restorePendingAttachments,
+} from '../utils/pending-attachments'
 import { fuzzyMatch } from '../utils/fuzzy-match'
 import {
   getProjectSkillTrustStatus,
@@ -97,6 +102,7 @@ import type { QueuedMessage } from '../hooks/use-message-queue'
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type {
   PostUserMessageFn,
+  PromptAdmissionResult,
   SendMessageFn,
 } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
@@ -146,17 +152,20 @@ export type RouterParams = {
   stopStreaming: () => void
 }
 
-export type CommandResult = {
-  openFeedbackMode?: boolean
-  openPublishMode?: boolean
-  openChatHistory?: boolean
-  openPromptHistorySearch?: boolean
-  openReviewScreen?: boolean
-  openModelRoutePicker?: boolean
-  openProviderPicker?: boolean
-  openPlanSessionPicker?: string
-  preSelectAgents?: string[]
-} | void
+export type CommandResult =
+  | {
+      openFeedbackMode?: boolean
+      openPublishMode?: boolean
+      openChatHistory?: boolean
+      openPromptHistorySearch?: boolean
+      openReviewScreen?: boolean
+      openModelRoutePicker?: boolean
+      openProviderPicker?: boolean
+      openPlanSessionPicker?: string
+      preSelectAgents?: string[]
+    }
+  | PromptAdmissionResult
+  | void
 
 export type CommandHandler = (
   params: RouterParams,
@@ -169,6 +178,8 @@ export type CommandDefinition = {
   handler: CommandHandler
   /** Whether this command accepts arguments. Set automatically by the factory functions. */
   acceptsArgs: boolean
+  /** Whether this invocation can admit an agent prompt. */
+  producesPrompt: (args: string) => boolean
 }
 
 /**
@@ -192,6 +203,7 @@ type CommandHandlerWithArgs = (
 type CommandConfig = {
   name: string
   aliases?: string[]
+  producesPrompt?: boolean
   handler: CommandHandlerNoArgs
 }
 
@@ -201,6 +213,7 @@ type CommandConfig = {
 type CommandWithArgsConfig = {
   name: string
   aliases?: string[]
+  producesPrompt?: boolean | ((args: string) => boolean)
   handler: CommandHandlerWithArgs
 }
 
@@ -213,6 +226,7 @@ export function defineCommand(config: CommandConfig): CommandDefinition {
     name: config.name,
     aliases: config.aliases ?? [],
     acceptsArgs: false,
+    producesPrompt: () => config.producesPrompt === true,
     handler: (params, args) => {
       if (args.trim())
         appendLocalMessage(
@@ -235,6 +249,10 @@ export function defineCommandWithArgs(
     name: config.name,
     aliases: config.aliases ?? [],
     acceptsArgs: true,
+    producesPrompt: (args) =>
+      typeof config.producesPrompt === 'function'
+        ? config.producesPrompt(args)
+        : config.producesPrompt === true,
     handler: config.handler,
   }
 }
@@ -284,44 +302,98 @@ const exitWithAnalyticsFlush = (
   })
 }
 
-export const sendPromptCommand = (
+export const sendPromptCommand = async (
   params: RouterParams,
   prompt: string,
   mode: AgentMode = params.agentMode,
   postUserMessage?: PostUserMessageFn,
-) => {
+): Promise<PromptAdmissionResult> => {
+  // This defensive gate mirrors the router's pre-handler preflight. It also
+  // covers picker/action and future direct callers that do not traverse the
+  // textual slash router.
+  if (isTurnBisectionRunning()) {
+    return { status: 'not-started', reason: 'bisection-active' }
+  }
+
+  const composerAttachments = params.preserveInputValue
+    ? []
+    : useChatStore.getState().pendingAttachments
+  const attachmentBlock = getPromptAttachmentBlockReason(composerAttachments)
+  if (attachmentBlock) {
+    return { status: 'not-started', reason: attachmentBlock }
+  }
+
+  // Capture only after every non-destructive preflight passes. Rejected direct
+  // submissions restore this exact set; accepted queue/run admission consumes
+  // it once. preserveInputValue actions intentionally leave the draft context
+  // untouched and send no composer attachments.
+  const capturedAttachments = params.preserveInputValue
+    ? []
+    : capturePendingAttachments()
+  const restoreRejectedInput = () => {
+    if (params.preserveInputValue) return
+    restorePendingAttachments(capturedAttachments)
+    params.setInputValue({
+      text: params.inputValue,
+      cursorPosition: params.inputValue.length,
+      lastEditDueToNav: false,
+    })
+  }
+
   // Guarded submit: never start a second concurrent turn while a stream or
-  // chain is active — queue the prompt instead (same busy-check + queue
-  // fallback the /init and skill commands use). /interview, /review,
-  // /resume-plan, /update-plan, /lessons, mode:* and /new <msg> all route
-  // through here, so an unguarded send would interleave two turns on one
-  // transcript and clobber streamMessageId.
+  // chain is active. Queue insertion is itself accepted admission; a later
+  // queue dispatch gets a separate started/rejected/not-started outcome.
   if (
     params.isStreaming ||
     params.streamMessageIdRef.current ||
     params.isChainInProgressRef.current
   ) {
-    params.addToQueue(
-      prompt,
-      params.preserveInputValue ? [] : capturePendingAttachments(),
-      mode,
-    )
-    params.onPromptAccepted?.()
+    try {
+      params.addToQueue(prompt, capturedAttachments, mode)
+    } catch (error) {
+      restoreRejectedInput()
+      return {
+        status: 'rejected',
+        reason: error instanceof Error ? error.message : String(error),
+        retryable: true,
+      }
+    }
+    try {
+      params.onPromptAccepted?.()
+    } catch (error) {
+      // Queue insertion already decided admission. Compatibility observers
+      // cannot revoke it or cause a retry/duplicate when they throw.
+      logger.warn(
+        { error },
+        '[prompt-admission] queued acceptance callback failed',
+      )
+    }
     params.setInputFocused(true)
     params.inputRef.current?.focus()
-    return Promise.resolve()
+    return { status: 'accepted', disposition: 'queued' }
   }
-  const sending = params.sendMessage({
-    content: prompt,
-    agentMode: mode,
-    ...(postUserMessage ? { postUserMessage } : {}),
-    ...(params.preserveInputValue ? { attachments: [] } : {}),
-    ...(params.onPromptAccepted ? { onAccepted: params.onPromptAccepted } : {}),
-  })
-  setTimeout(() => {
-    params.scrollToLatest()
-  }, 0)
-  return sending
+
+  try {
+    const result = await params.sendMessage({
+      content: prompt,
+      agentMode: mode,
+      ...(postUserMessage ? { postUserMessage } : {}),
+      attachments: capturedAttachments,
+      ...(params.onPromptAccepted
+        ? { onAccepted: params.onPromptAccepted }
+        : {}),
+    })
+    if (result.status !== 'accepted') restoreRejectedInput()
+    setTimeout(() => params.scrollToLatest(), 0)
+    return result
+  } catch (error) {
+    restoreRejectedInput()
+    return {
+      status: 'rejected',
+      reason: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    }
+  }
 }
 
 const appendLocalMessage = (params: RouterParams, body: string) => {
@@ -519,7 +591,9 @@ export const formatPlanListReport = (
     const emptyLines = [
       'No plan sessions found under .agents/sessions/.',
       'Use /mode:plan to start one.',
-      ...(planCatalogWarning(sessions) ? ['', planCatalogWarning(sessions)!] : []),
+      ...(planCatalogWarning(sessions)
+        ? ['', planCatalogWarning(sessions)!]
+        : []),
     ]
     if (staleNote) {
       emptyLines.push('', staleNote)
@@ -946,6 +1020,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'new',
+    producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       const trimmedArgs = args.trim()
 
@@ -1001,6 +1076,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'init',
+    producesPrompt: true,
     handler: async (params) => {
       const { postUserMessage } = handleInitializationFlowLocally()
       const trimmed = params.inputValue.trim()
@@ -1150,9 +1226,9 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'usage',
-    handler: params => {
+    handler: (params) => {
       const { postUserMessage } = handleUsageCommand()
-      params.setMessages(previous => postUserMessage(previous))
+      params.setMessages((previous) => postUserMessage(previous))
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
     },
@@ -1162,6 +1238,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
     // (run-agent-step parseCompactCommand) with the focus text intact. While
     // a turn is running, sendPromptCommand queues it like any other prompt.
     name: 'compact',
+    producesPrompt: true,
     handler: (params, args) => {
       const focus = args.trim()
       const prompt = focus ? `/compact ${focus}` : '/compact'
@@ -1271,6 +1348,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   ...AGENT_MODES.map((mode) =>
     defineCommandWithArgs({
       name: `mode:${mode.toLowerCase()}`,
+      producesPrompt: (args) => args.trim().length > 0,
       handler: (params, args) => {
         const trimmedArgs = args.trim()
 
@@ -1343,6 +1421,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'interview',
+    producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       const trimmedArgs = args.trim()
 
@@ -1361,6 +1440,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'resume-plan',
+    producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1395,6 +1475,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'update-plan',
+    producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1472,7 +1553,8 @@ const ALL_COMMANDS: CommandDefinition[] = [
             },
           ]
           const partialNotice = planCatalogWarning(sessions)
-          if (partialNotice && sessions.length > 0) blocks.push({ type: 'text', content: partialNotice })
+          if (partialNotice && sessions.length > 0)
+            blocks.push({ type: 'text', content: partialNotice })
           if (active.staleNote && sessions.length > 0)
             blocks.push({ type: 'text', content: active.staleNote })
           return { blocks, content: reportText }
@@ -1520,6 +1602,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'lessons',
+    producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1552,6 +1635,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'review',
+    producesPrompt: (args) => args.trim().length > 0,
     handler: (params, args) => {
       const trimmedArgs = args.trim()
 
@@ -1584,12 +1668,18 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
 ]
 
-export const COMMAND_REGISTRY: CommandDefinition[] = ALL_COMMANDS.map((command) => {
-  // Static discovery metadata owns aliases for router, menu and local help.
-  // Insertion-only general-agent retains its hidden direct route.
-  const metadata = SLASH_COMMANDS.find((item) => item.id === command.name && !item.insertText)
-  return metadata ? { ...command, aliases: [...(metadata.aliases ?? [])] } : command
-})
+export const COMMAND_REGISTRY: CommandDefinition[] = ALL_COMMANDS.map(
+  (command) => {
+    // Static discovery metadata owns aliases for router, menu and local help.
+    // Insertion-only general-agent retains its hidden direct route.
+    const metadata = SLASH_COMMANDS.find(
+      (item) => item.id === command.name && !item.insertText,
+    )
+    return metadata
+      ? { ...command, aliases: [...(metadata.aliases ?? [])] }
+      : command
+  },
+)
 
 export function findCommand(cmd: string): CommandDefinition | undefined {
   const lowerCmd = cmd.toLowerCase()
@@ -1675,6 +1765,7 @@ export function findCommandSuggestions(
 function createSkillCommand(skillName: string): CommandDefinition {
   return defineCommandWithArgs({
     name: skillName,
+    producesPrompt: true,
     handler: (params, args) => {
       const skill = getSkillByName(skillName)
       if (!skill) {

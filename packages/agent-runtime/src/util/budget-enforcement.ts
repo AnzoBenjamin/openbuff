@@ -1,12 +1,9 @@
 // Per-run budget enforcement helpers (P1-5). Single source of truth for the
 // lazy-init and post-accumulation check logic used in run-agent-step.ts.
 //
-// Background: AgentState carries optional maxCostCents / maxTokensPerTurn caps.
-// These are lazy-initialized from the agent template on the first step (avoids
-// threading config through run-state.ts / initialSessionState and naturally
-// handles subagents). After each step's cost/token accumulation, the check
-// helper determines whether a cap was exceeded and, if so, produces the
-// budget-exceeded system message that ends the turn.
+// Background: AgentState carries legacy optional maxCostCents / maxTokensPerTurn
+// caps. Root maxCostCents also selects durable strict request admission in the
+// SDK; these helpers retain the per-agent post-step compatibility stop.
 //
 // Extracting these as pure functions (rather than inline in run-agent-step.ts)
 // lets us unit-test the exact enforcement contract without spinning up the

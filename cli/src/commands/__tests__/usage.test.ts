@@ -60,6 +60,7 @@ test('local /usage report exposes tokens, incomplete fields, root/child models a
     inputTokens: 10,
     outputTokens: 2,
     cachedInputTokens: 4,
+    cacheWriteInputTokens: 3,
     complete: true,
     costStatus: 'estimated',
     costCents: 0.0018,
@@ -82,7 +83,8 @@ test('local /usage report exposes tokens, incomplete fields, root/child models a
   expect(report).toContain('Provider usage incomplete')
   expect(report).toContain('provider/child')
   expect(report).toContain('Context: not reported')
-  expect(report).toContain('Cache write: not reported')
+  expect(report).toContain('Cache write: 3 known subtotal · incomplete')
+  expect(report).toContain('cache-write=3')
 })
 test('/usage is discoverable and its actual registry handler never sends a provider prompt', async () => {
   let messages: ChatMessage[] = [],

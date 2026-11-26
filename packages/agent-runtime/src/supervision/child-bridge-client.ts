@@ -379,7 +379,11 @@ function createChildBridgeClient(socket: net.Socket): ChildBridgeClient {
       if (parsed.ok) {
         entry.resolve(parsed.result)
       } else {
-        entry.reject(new Error(parsed.error.message))
+        const error = new Error(parsed.error.message) as Error & {
+          code?: string
+        }
+        if (parsed.error.code) error.code = parsed.error.code
+        entry.reject(error)
       }
     },
     onProtocolError: (error) => {

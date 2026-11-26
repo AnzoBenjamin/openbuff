@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { logger } from '../utils/logger'
-import { getPendingAttachmentId } from '../utils/pending-attachments'
+import {
+  getPendingAttachmentId,
+  getPromptAttachmentBlockReason,
+} from '../utils/pending-attachments'
+import { isTurnBisectionRunning } from '../utils/turn-snapshots'
 
 import type { PendingAttachment } from '../types/store'
+import type { PromptAdmissionResult } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
 import type { MutableRefObject } from 'react'
 
@@ -71,8 +76,16 @@ export const beginQueuedMessageProcessing = (
 
 export type CompleteQueuedMessageProcessingParams = {
   messageToProcess: QueuedMessage
-  sendMessage: (message: QueuedMessage) => Promise<void>
+  sendMessage: (message: QueuedMessage) => Promise<PromptAdmissionResult>
+  onAccepted?: (
+    message: QueuedMessage,
+    result: Extract<PromptAdmissionResult, { status: 'accepted' }>,
+  ) => void
   onRejected?: (message: QueuedMessage, error: unknown) => void
+  onNotAccepted?: (
+    message: QueuedMessage,
+    result: Exclude<PromptAdmissionResult, { status: 'accepted' }>,
+  ) => void
   isProcessingQueueRef: MutableRefObject<boolean>
   queueProcessingRun: QueueProcessingRun
 }
@@ -83,7 +96,9 @@ export const completeQueuedMessageProcessing = (
   const {
     messageToProcess,
     sendMessage,
+    onAccepted,
     onRejected,
+    onNotAccepted,
     isProcessingQueueRef,
     queueProcessingRun,
   } = params
@@ -92,7 +107,7 @@ export const completeQueuedMessageProcessing = (
   // to chain .catch on (reviewer advisory): without this guard the throw
   // would escape before the `.finally` cleanup, leaking the processing lock
   // and orphaning the queue. Route it through the same rejection path.
-  let sendPromise: Promise<void>
+  let sendPromise: Promise<PromptAdmissionResult>
   try {
     sendPromise = sendMessage(messageToProcess)
   } catch (err: unknown) {
@@ -109,6 +124,10 @@ export const completeQueuedMessageProcessing = (
     return
   }
   sendPromise
+    .then((result) => {
+      if (result.status === 'accepted') onAccepted?.(messageToProcess, result)
+      else onNotAccepted?.(messageToProcess, result)
+    })
     .catch((err: unknown) => {
       logger.warn(
         { error: err },
@@ -129,8 +148,10 @@ export const completeQueuedMessageProcessing = (
 
 export type RunQueuedMessageParams = BeginQueuedMessageProcessingParams & {
   messageToProcess: QueuedMessage
-  sendMessage: (message: QueuedMessage) => Promise<void>
+  sendMessage: (message: QueuedMessage) => Promise<PromptAdmissionResult>
+  onAccepted?: CompleteQueuedMessageProcessingParams['onAccepted']
   onRejected?: (message: QueuedMessage, error: unknown) => void
+  onNotAccepted?: CompleteQueuedMessageProcessingParams['onNotAccepted']
 }
 
 export const runQueuedMessage = (params: RunQueuedMessageParams): void => {
@@ -139,14 +160,16 @@ export const runQueuedMessage = (params: RunQueuedMessageParams): void => {
   completeQueuedMessageProcessing({
     messageToProcess: params.messageToProcess,
     sendMessage: params.sendMessage,
+    onAccepted: params.onAccepted,
     onRejected: params.onRejected,
+    onNotAccepted: params.onNotAccepted,
     isProcessingQueueRef: params.isProcessingQueueRef,
     queueProcessingRun,
   })
 }
 
 export const useMessageQueue = (
-  sendMessage: (message: QueuedMessage) => Promise<void>,
+  sendMessage: (message: QueuedMessage) => Promise<PromptAdmissionResult>,
   isChainInProgressRef: MutableRefObject<boolean>,
   activeAgentStreamsRef: MutableRefObject<number>,
 ) => {
@@ -501,6 +524,20 @@ export const useMessageQueue = (
       return
     }
 
+    const preflightBlock =
+      getPromptAttachmentBlockReason(messageToProcess.attachments) ??
+      (isTurnBisectionRunning()
+        ? 'A turn bisection is active. Stop it before resuming the queue.'
+        : null)
+    if (preflightBlock) {
+      setQueueError(preflightBlock)
+      setQueueAttachmentNotice(preflightBlock)
+      isQueuePausedRef.current = true
+      setQueuePausedState(true)
+      setCanProcessQueue(false)
+      return
+    }
+
     const queueProcessingRun = beginQueuedMessageProcessing({
       isProcessingQueueRef,
       isQueuePausedRef,
@@ -508,29 +545,51 @@ export const useMessageQueue = (
       setCanProcessQueue,
     })
 
-    // Now remove the message from the queue
-    const remainingMessages = queuedMessagesRef.current.slice(1)
-    queuedMessagesRef.current = remainingMessages
-    setQueuedMessages(remainingMessages)
+    const pauseRefusedMessage = (
+      rejectedMessage: QueuedMessage,
+      reason: string,
+    ) => {
+      // The entry was never removed: rejection/not-started only pauses it.
+      // If the user explicitly removed/drained it while preflight was pending,
+      // a stale refusal must not resurrect it.
+      if (
+        !queuedMessagesRef.current.some(
+          (item) => item.id === rejectedMessage.id,
+        )
+      )
+        return
+      setQueueError(reason)
+      isQueuePausedRef.current = true
+      setQueuePausedState(true)
+      setCanProcessQueue(false)
+    }
 
     completeQueuedMessageProcessing({
       messageToProcess,
       sendMessage,
+      onAccepted: (acceptedMessage) => {
+        if (!queueProcessingRun.isCurrentQueueProcessingOwner()) return
+        const index = queuedMessagesRef.current.findIndex(
+          (item) => item.id === acceptedMessage.id,
+        )
+        if (index < 0) return
+        const remaining = [
+          ...queuedMessagesRef.current.slice(0, index),
+          ...queuedMessagesRef.current.slice(index + 1),
+        ]
+        queuedMessagesRef.current = remaining
+        setQueuedMessages(remaining)
+      },
       onRejected: (rejectedMessage, error) => {
-        // A queued prompt is user data. Put it back at the front and pause the
-        // queue so a transient or deterministic send failure cannot silently
-        // discard it or trigger an unbounded retry loop.
-        const restored = [rejectedMessage, ...queuedMessagesRef.current]
-        queuedMessagesRef.current = restored
-        setQueuedMessages(restored)
-        setQueueError(
+        pauseRefusedMessage(
+          rejectedMessage,
           error instanceof Error
             ? error.message
             : 'The queued prompt could not be sent',
         )
-        isQueuePausedRef.current = true
-        setQueuePausedState(true)
-        setCanProcessQueue(false)
+      },
+      onNotAccepted: (rejectedMessage, result) => {
+        pauseRefusedMessage(rejectedMessage, result.reason)
       },
       isProcessingQueueRef,
       queueProcessingRun,

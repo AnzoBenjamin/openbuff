@@ -50,9 +50,31 @@ export type CodebuffTextFileRead = ((
   readFileView?: (typeof fs.promises)['readFile']
 }
 
+/** Physical directory against which a durable transaction path was admitted. */
+export type CodebuffTransactionParentIdentity = {
+  canonicalPath: string
+  dev: string
+  ino: string
+}
+
+export type CodebuffTransactionRestoreGuard = {
+  parent: CodebuffTransactionParentIdentity
+  /** If known, the postimage permissions must also still match under the guard. */
+  expectedMode?: number
+  /** Apply pre-image mode on an owned replacement, before it becomes visible. */
+  mode?: number
+}
+
 export type CodebuffConditionalCommitOptions = {
   /** `null` requires the destination to still be absent. */
   expectedHash: string | null
+  /** Recovery additionally fences the parent identity under mutation authority. */
+  recovery?: CodebuffTransactionRestoreGuard
+}
+
+export type CodebuffConditionalDeleteOptions = {
+  expectedHash: string
+  recovery?: Omit<CodebuffTransactionRestoreGuard, 'mode'>
 }
 
 export type CodebuffConditionalCommitResult =
@@ -114,6 +136,8 @@ export type CodebuffStreamDirectory = ((
  * callers must not emulate the guarantee with a check-then-write sequence.
  */
 export type CodebuffFileSystemCapabilities = {
+  /** Optional no-follow metadata for checking durable recovery targets. */
+  lstat?: (typeof fs.promises)['lstat']
   /** Authenticated per-run read boundary supplied by the host composition. */
   hostReadPolicy?: HostReadPolicy
   /** Whether process-backed tools observe the same workspace as this adapter. */
@@ -159,7 +183,7 @@ export type CodebuffFileSystemCapabilities = {
   ) => Promise<CodebuffConditionalCommitResult>
   conditionalDelete?: (
     path: fs.PathLike,
-    options: { expectedHash: string },
+    options: CodebuffConditionalDeleteOptions,
   ) => Promise<CodebuffConditionalDeleteResult>
   /**
    * Move a source under the adapter's declared mutation authority only when

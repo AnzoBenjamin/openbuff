@@ -40,7 +40,17 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ResolvedOperationPath } from './path-utils'
 import type { FileFilter } from './read-files'
 import type { FilesystemAuthorityPolicy } from './filesystem-authority'
-import type { TransactionIntentLog } from './transaction-intent-log'
+import {
+  captureTransactionPath,
+  observeTransactionPath,
+  verifyTransactionParent,
+} from './transaction-path-identity'
+import {
+  restoreOwnedTransactionPath,
+  type IntentOutcome,
+  type TransactionIntentEntry,
+  type TransactionIntentLog,
+} from './transaction-intent-log'
 
 type ApplyChangeResult =
   | {
@@ -268,11 +278,8 @@ export async function changeFiles(params: {
   filesystemPolicy?: FilesystemAuthorityPolicy
   capabilityIssuer?: ReadCapabilityIssuer
   /**
-   * P2-T5: optional durable transaction-intent log. When provided (and the
-   * transaction touches more than one file), the pre-image of every staged
-   * path is recorded durably before the first commit, and tx_commit/tx_abort
-   * markers bracket the commit loop so a crash mid-loop is recoverable at
-   * startup. Absent: behavior is byte-identical to before.
+   * Supplying this log requires durable admission of multi-file groups.
+   * Without it, the caller explicitly uses in-memory rollback only.
    */
   intentLog?: TransactionIntentLog
   logger?: Logger
@@ -589,82 +596,72 @@ export async function changeFiles(params: {
       })
     }
 
-    // P2-T5: BEFORE the first file commit of a multi-file operation, record
-    // the durable pre-image of every staged path (the same bytes the
-    // in-memory rollback already holds, now crash-safe). Fail-open on
-    // logging: a failed tx_begin is logged and the commit proceeds — the
-    // existing in-memory rollback stays the fail-closed safety net.
-    //
-    // Receipts stamp transactionId ONLY when a durable intent record
-    // actually exists (beginTransaction ok:true): the CommitReceiptV1 field
-    // documents the durable transaction-intent id, so a not_started receipt,
-    // a single-file commit, or a commit whose tx_begin failed must not carry
-    // a dangling id no intent record can answer for.
-    const durableIntentLog =
-      intentLog !== undefined && prepared.length > 1 ? intentLog : undefined
+    // A supplied log is the admission boundary, not asynchronous telemetry.
+    const durableIntentLog = prepared.length > 1 ? intentLog : undefined
+    const durableEntries: TransactionIntentEntry[] = []
+    const byChange = new Map<
+      number,
+      { entry: TransactionIntentEntry; index: number }[]
+    >()
     let durableTransactionId: string | undefined
     if (durableIntentLog) {
-      const begunIntent = await durableIntentLog.beginTransaction({
-        transactionId,
-        operationId,
-        callId: callId ?? operationId,
-        entries: prepared.flatMap((change) =>
-          change.action === 'move'
-            ? [
-                {
-                  path: change.path,
-                  beforeHash:
-                    change.beforeContent === null
-                      ? null
-                      : hashFileContent(change.beforeContent),
-                  ...(change.beforeContent !== null
-                    ? {
-                        beforeBytes: change.beforeContent,
-                        // MODE IS PART OF THE PRE-IMAGE: without it, startup
-                        // recovery restores the bytes with default permissions
-                        // while the in-memory rollback preserves beforeMode —
-                        // an executable restored after a crash would lose its
-                        // +x bit.
-                        ...(change.beforeMode !== undefined
-                          ? { beforeMode: change.beforeMode }
-                          : {}),
-                      }
-                    : {}),
-                },
-                // A move destination did not exist before the transaction:
-                // beforeHash null (no beforeBytes) means revert deletes it.
-                {
-                  path: change.destinationPath!,
-                  beforeHash: null,
-                },
-              ]
-            : [
-                {
-                  path: change.path,
-                  beforeHash:
-                    change.beforeContent === null
-                      ? null
-                      : hashFileContent(change.beforeContent),
-                  ...(change.beforeContent !== null
-                    ? {
-                        beforeBytes: change.beforeContent,
-                        ...(change.beforeMode !== undefined
-                          ? { beforeMode: change.beforeMode }
-                          : {}),
-                      }
-                    : {}),
-                },
-              ],
-        ),
-      })
-      if (begunIntent.ok) {
-        durableTransactionId = transactionId
-      } else {
-        logger?.warn(
-          { operationId, transactionId, error: begunIntent.error },
-          'Transaction intent log tx_begin failed; proceeding without a durable pre-image (in-memory rollback still active)',
-        )
+      let admitted: IntentOutcome
+      try {
+        for (const change of prepared) {
+          const entries = await captureDurableChange(change, cwd, fs)
+          const staged = entries.map((entry) => {
+            const index = durableEntries.length
+            durableEntries.push(entry)
+            return { entry, index }
+          })
+          byChange.set(change.index, staged)
+        }
+        admitted = await durableIntentLog.beginTransaction({
+          transactionId,
+          operationId,
+          callId: callId ?? operationId,
+          entries: durableEntries,
+          inFlight: true,
+        })
+      } catch (error) {
+        admitted = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
       }
+      if (!admitted.ok) {
+        durableIntentLog.releaseTransaction?.(transactionId)
+        authority.finishCommit(begun.lease, {
+          succeeded: false,
+          errorCode: 'INTENT_ADMISSION_FAILED',
+        })
+        return transactionFailureResult({
+          authority,
+          callId: callId ?? operationId,
+          operationId,
+          changes,
+          authorityTier: tier,
+          failedIndex: 0,
+          error: filesystemError(
+            admitted.code === 'capacity'
+              ? 'resource_limit'
+              : admitted.code === 'recovery_required'
+                ? 'recovery_required'
+                : 'io_error',
+            `Transaction was not admitted to the durable intent log; no files were changed: ${admitted.error}`,
+            {
+              retryable: true,
+              recovery:
+                admitted.code === 'capacity'
+                  ? 'split_transaction'
+                  : admitted.code === 'recovery_required'
+                    ? 'inspect_rollback'
+                    : 'retry',
+            },
+          ),
+        })
+      }
+      durableTransactionId = transactionId
     }
 
     const attempted: PreparedTransactionChange[] = []
@@ -692,6 +689,29 @@ export async function changeFiles(params: {
         // adapter call may have partially mutated state (notably a portable
         // move creates the destination before unlinking the source), so the
         // rollback set must include the current action as well as prior ones.
+        // Check the captured parent again before this action acquires any
+        // forward ownership. An unattempted path must not be compensated.
+        const stages = byChange.get(change.index)
+        if (durableIntentLog && stages?.length) {
+          const authorization = await durableIntentLog.authorizeDispatch?.(
+            transactionId,
+            stages.at(-1)!.index,
+          )
+          if (!authorization?.ok)
+            throw new Error(
+              `Transaction dispatch was not durable: ${authorization?.error ?? 'unavailable'}`,
+            )
+          for (const { entry } of stages)
+            await verifyTransactionParent(cwd, fs, entry.path, entry.parent!)
+          if (signal?.aborted) {
+            throw new TransactionAbortedError(
+              filesystemError(
+                'cancelled',
+                'Transaction cancelled before the next file commit.',
+              ),
+            )
+          }
+        }
         attempted.push(change)
         // Per-change try/catch: a failing adapter call is attributed to the
         // offending change before it propagates to the shared rollback path
@@ -783,15 +803,15 @@ export async function changeFiles(params: {
         expectedFinalHashes,
       })
       authority.finishCommit(begun.lease, { succeeded: true })
-      // P2-T5: the durable transaction committed — mark it so startup
-      // recovery never reverts it. Fail-open on logging.
       if (durableIntentLog && durableTransactionId) {
-        const committedIntent =
-          await durableIntentLog.commitTransaction(transactionId)
-        if (!committedIntent.ok) {
+        try {
+          const committedIntent =
+            await durableIntentLog.commitTransaction(transactionId)
+          if (!committedIntent.ok) throw new Error(committedIntent.error)
+        } catch (intentError) {
           logger?.warn(
-            { operationId, transactionId, error: committedIntent.error },
-            'Transaction intent log tx_commit failed; the commit itself already succeeded',
+            { operationId, transactionId, error: intentError },
+            'Files committed; transaction acknowledgement needs reconciliation',
           )
         }
       }
@@ -853,13 +873,60 @@ export async function changeFiles(params: {
             )
       const rollbackFailures = new Map<number, FilesystemError>()
       const rollbackRestored = new Set<number>()
+      const attemptedIndexes = new Set(attempted.map((change) => change.index))
+      let rollbackAdmissionError: string | undefined
+      if (durableIntentLog && attempted.length) {
+        const unowned = [...byChange.entries()].flatMap(([index, entries]) =>
+          !attemptedIndexes.has(index) ||
+          forwardEvidence.get(index)?.outcome === 'not_applied'
+            ? entries.map((value) => value.index)
+            : [],
+        )
+        try {
+          const marker = await durableIntentLog.markRecoveryRequired?.(
+            transactionId,
+            durableEntries
+              .map((_, index) => index)
+              .filter((index) => !unowned.includes(index)),
+            unowned,
+          )
+          if (!marker?.ok)
+            rollbackAdmissionError =
+              marker?.error ?? 'Recovery markers are unavailable.'
+        } catch (markerError) {
+          rollbackAdmissionError =
+            markerError instanceof Error
+              ? markerError.message
+              : String(markerError)
+        }
+      }
       for (const change of attempted.toReversed()) {
         // A refused adapter call did not acquire mutation ownership. Even an
         // identical foreign postimage must not authorize compensation.
         if (forwardEvidence.get(change.index)?.outcome === 'not_applied')
           continue
         try {
-          if (await rollbackPreparedTransactionChange(change, fs, authority)) {
+          if (rollbackAdmissionError)
+            throw new Error(
+              `Could not durably begin rollback: ${rollbackAdmissionError}`,
+            )
+          const staged = byChange.get(change.index)
+          if (staged) {
+            let restored = false
+            let failure: unknown
+            for (const { entry } of staged.toReversed()) {
+              try {
+                if (await restoreOwnedTransactionPath(cwd, fs, entry))
+                  restored = true
+              } catch (restoreError) {
+                failure ??= restoreError
+              }
+            }
+            if (failure !== undefined) throw failure
+            if (restored) rollbackRestored.add(change.index)
+          } else if (
+            await rollbackPreparedTransactionChange(change, fs, authority)
+          ) {
             rollbackRestored.add(change.index)
           }
         } catch (rollbackError) {
@@ -885,7 +952,6 @@ export async function changeFiles(params: {
       // `cancel` only transitions an 'open' operation, so it is a no-op once
       // the commit lease above finished.
       authority.cancel(operationId)
-      const attemptedIndexes = new Set(attempted.map((change) => change.index))
       const receipt = await authority.issueObservedFailureReceipt({
         operationId,
         callId: callId ?? operationId,
@@ -926,21 +992,21 @@ export async function changeFiles(params: {
             : {}),
         })),
       })
-      // P2-T5: AFTER the existing in-memory rollback ran, record the abort
-      // so startup recovery never re-reverts this transaction. Fail-open on
-      // logging: a missing abort marker at worst causes an extra (idempotent)
-      // revert pass at startup.
-      if (durableIntentLog && durableTransactionId) {
+      // Incomplete compensation remains nonterminal, including foreign or
+      // unreadable paths. Never acknowledge an abort merely because we tried.
+      if (
+        durableIntentLog &&
+        durableTransactionId &&
+        rollbackFailures.size === 0
+      ) {
         const abortedIntent = await durableIntentLog.abortTransaction(
           transactionId,
-          error instanceof TransactionAbortedError
-            ? `aborted: ${commitError.message}`
-            : `commit failed: ${commitError.code}`,
+          `compensated ${commitError.code}`,
         )
         if (!abortedIntent.ok) {
           logger?.warn(
             { operationId, transactionId, error: abortedIntent.error },
-            'Transaction intent log tx_abort failed; startup recovery may re-attempt an already-rolled-back transaction',
+            'Transaction abort acknowledgement needs reconciliation',
           )
         }
       }
@@ -966,6 +1032,9 @@ export async function changeFiles(params: {
           value: buildFileMutationResultFromReceiptV1(receipt, [commitError]),
         },
       ]
+    } finally {
+      if (durableTransactionId)
+        durableIntentLog?.releaseTransaction?.(durableTransactionId)
     }
   })
 }
@@ -985,6 +1054,85 @@ type PreparedTransactionChange = {
   afterContent: string | null
   patch?: string
   beforeMode?: number
+}
+
+async function captureDurableChange(
+  change: PreparedTransactionChange,
+  cwd: string,
+  fs: CodebuffFileSystem,
+): Promise<TransactionIntentEntry[]> {
+  // Windows has no portable POSIX permission-bit recovery contract.
+  const mode =
+    process.platform === 'win32' || change.beforeMode === undefined
+      ? undefined
+      : change.beforeMode & 0o777
+  const capture = async (
+    target: AuthorizedPath,
+    before: string | null,
+    after: string | null,
+    afterMode?: number,
+  ) => {
+    const { parent, fullPath } = await captureTransactionPath(
+      cwd,
+      fs,
+      target.portablePath,
+    )
+    if (path.normalize(fullPath) !== path.normalize(target.canonicalPath)) {
+      throw new Error(
+        `Cannot bind durable transaction path to its authorized project target: ${target.portablePath}.`,
+      )
+    }
+    const snapshot = await observeTransactionPath(
+      cwd,
+      fs,
+      target.portablePath,
+      parent,
+    )
+    const beforeHash = before === null ? null : hashFileContent(before)
+    if (
+      snapshot.hash !== beforeHash ||
+      (before !== null && mode !== undefined && snapshot.mode !== mode)
+    ) {
+      throw new Error(
+        `Transaction basis changed before durable admission: ${target.portablePath}.`,
+      )
+    }
+    return {
+      path: target.portablePath,
+      parent,
+      beforeHash,
+      ...(before === null
+        ? {}
+        : {
+            beforeBytes: before,
+            ...(mode === undefined ? {} : { beforeMode: mode }),
+          }),
+      afterHash: after === null ? null : hashFileContent(after),
+      ...(afterMode === undefined ? {} : { afterMode }),
+    }
+  }
+  if (change.action === 'move') {
+    // Reverse recovery recreates the source BEFORE removing the destination,
+    // so either crash boundary retains at least one copy of the moved bytes.
+    return [
+      await capture(change.destination!, null, change.afterContent, mode),
+      await capture(change.source, change.beforeContent, null),
+    ]
+  }
+  return [
+    await capture(
+      change.source,
+      change.beforeContent,
+      change.afterContent,
+      change.afterContent === null
+        ? undefined
+        : (mode ??
+            (process.platform !== 'win32' &&
+            fs.mutationAuthority === 'cooperative_cas'
+              ? 0o600
+              : undefined)),
+    ),
+  ]
 }
 
 function filesystemError(

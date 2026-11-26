@@ -358,6 +358,12 @@ export function startParentBridgeServer(
           ok: false,
           error: {
             message: error instanceof Error ? error.message : String(error),
+            ...(error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'request_spend_refused'
+              ? { code: 'request_spend_refused' }
+              : {}),
           },
         })
       })
