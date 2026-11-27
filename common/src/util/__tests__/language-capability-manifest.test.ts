@@ -4,6 +4,7 @@ import z from 'zod/v4'
 import {
   LANGUAGE_CAPABILITY_MANIFEST_VERSION,
   buildLanguageCapabilityManifest,
+  buildLanguageOperationAvailability,
   languageCapabilityManifestV1Schema,
   type LanguageCapabilityManifestV1,
 } from '../language-capability-manifest'
@@ -1088,33 +1089,33 @@ describe('language capability manifest', () => {
   it('rejects an unknown language key', () => {
     const invalid = JSON.parse(GOLDEN_MANIFEST_JSON)
     invalid.languages.klingon = invalid.languages.ruby
-    expect(() =>
-      languageCapabilityManifestV1Schema.parse(invalid),
-    ).toThrow(z.ZodError)
+    expect(() => languageCapabilityManifestV1Schema.parse(invalid)).toThrow(
+      z.ZodError,
+    )
   })
 
   it('rejects a manifest missing a supported language key', () => {
     const invalid = JSON.parse(GOLDEN_MANIFEST_JSON)
     delete invalid.languages.ruby
-    expect(() =>
-      languageCapabilityManifestV1Schema.parse(invalid),
-    ).toThrow(z.ZodError)
+    expect(() => languageCapabilityManifestV1Schema.parse(invalid)).toThrow(
+      z.ZodError,
+    )
   })
 
   it('rejects a tools record missing a LanguageToolRole key', () => {
     const invalid = JSON.parse(GOLDEN_MANIFEST_JSON)
     delete invalid.languages.ruby.tools.linter
-    expect(() =>
-      languageCapabilityManifestV1Schema.parse(invalid),
-    ).toThrow(z.ZodError)
+    expect(() => languageCapabilityManifestV1Schema.parse(invalid)).toThrow(
+      z.ZodError,
+    )
   })
 
   it('rejects an unknown LanguageValidationStage value', () => {
     const invalid = JSON.parse(GOLDEN_MANIFEST_JSON)
     invalid.languages.ruby.validation.focused = ['syntax', 'semantics']
-    expect(() =>
-      languageCapabilityManifestV1Schema.parse(invalid),
-    ).toThrow(z.ZodError)
+    expect(() => languageCapabilityManifestV1Schema.parse(invalid)).toThrow(
+      z.ZodError,
+    )
   })
 
   it('covers every SUPPORTED_LANGUAGE_IDS entry in the fixture', () => {
@@ -1146,5 +1147,61 @@ describe('language capability manifest', () => {
         expect(VALIDATION_STAGES).toContain(stage)
       }
     }
+  })
+})
+
+describe('language operation availability', () => {
+  it('has a versioned generic tier with every higher cell unavailable for unknown sources', () => {
+    const unavailable = { status: 'unavailable', reason: 'unknown-language' }
+    const availability = buildLanguageOperationAvailability(
+      '/repo/check.obspec',
+      {
+        parse: 'unverified-or-foreign-parser',
+      },
+    )
+    expect(JSON.parse(JSON.stringify(availability))).toEqual({
+      schemaVersion: 1,
+      source: null,
+      generic: { read: 'available', edit: 'available', execute: 'available' },
+      operations: {
+        parse: unavailable,
+        query: unavailable,
+        navigation: unavailable,
+        refactor: unavailable,
+        diagnostics: unavailable,
+        build: unavailable,
+        test: unavailable,
+        joinedValidation: unavailable,
+      },
+    })
+  })
+
+  it('does not promote declarations or parser evidence to other operation cells', () => {
+    const unobserved = { status: 'unavailable', reason: 'not-observed' }
+    const availability = buildLanguageOperationAvailability('/repo/src/app.jsx')
+    expect(availability.source).toEqual({
+      family: 'javascript',
+      profileId: 'typescript',
+      documentLanguageId: 'javascriptreact',
+    })
+    expect(Object.values(availability.operations)).toHaveLength(8)
+    expect(
+      Object.values(availability.operations).every(
+        (cell) =>
+          cell.status === 'unavailable' && cell.reason === 'not-observed',
+      ),
+    ).toBe(true)
+
+    const observed = buildLanguageOperationAvailability('/repo/src/app.jsx', {
+      parse: 'observed-parser-fixture',
+      diagnostics: '   ',
+    })
+    expect(observed.operations).toEqual({
+      ...availability.operations,
+      parse: { status: 'available', evidenceId: 'observed-parser-fixture' },
+    })
+    expect(observed.operations.query).toEqual(unobserved)
+    expect(observed.operations.navigation).toEqual(unobserved)
+    expect(observed.operations.diagnostics).toEqual(unobserved)
   })
 })

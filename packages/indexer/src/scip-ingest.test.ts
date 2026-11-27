@@ -2,18 +2,16 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   MAX_SCIP_LABEL_CHARS,
+  MAX_SCIP_SYMBOL_CHARS,
   mergeScipIntoIndex,
   parseScipJson,
+  scipPreciseEdges,
   SCIP_MAX_MERGED_EDGES,
   SCIP_MAX_OCCURRENCES_PER_DOCUMENT,
   ScipIngestError,
 } from './scip-ingest'
 
-import type {
-  ScipDocument,
-  ScipIndex,
-  ScipOccurrence,
-} from './scip-ingest'
+import type { ScipDocument, ScipIndex, ScipOccurrence } from './scip-ingest'
 import type { IndexEdge, MetadataIndex } from './types'
 
 const HELPER_SYMBOL = 'scip-typescript npm pkg 1.0.0 src/util.ts/helper().'
@@ -74,7 +72,10 @@ function scipWithUniqueEdges(edgeCount: number): ScipIndex {
       referrer.push({ symbol })
     }
     documents.push({ relativePath: `src/def-${pair}.ts`, occurrences: definer })
-    documents.push({ relativePath: `src/ref-${pair}.ts`, occurrences: referrer })
+    documents.push({
+      relativePath: `src/ref-${pair}.ts`,
+      occurrences: referrer,
+    })
     produced += size
     pair++
   }
@@ -103,18 +104,22 @@ describe('parseScipJson', () => {
       { documents: [{ relative_path: 'a.ts' }] },
       { documents: [{ relative_path: 'a.ts', occurrences: 'nope' }] },
       {
+        documents: [{ relative_path: 'a.ts', occurrences: [{ symbol: 's' }] }],
+      },
+      {
         documents: [
-          { relative_path: 'a.ts', occurrences: [{ symbol: 's' }] },
+          {
+            relative_path: 'a.ts',
+            occurrences: [{ range: [0, 0], symbol: 's' }],
+          },
         ],
       },
       {
         documents: [
-          { relative_path: 'a.ts', occurrences: [{ range: [0, 0], symbol: 's' }] },
-        ],
-      },
-      {
-        documents: [
-          { relative_path: 'a.ts', occurrences: [{ range: [0, 0, 1], symbol: 3 }] },
+          {
+            relative_path: 'a.ts',
+            occurrences: [{ range: [0, 0, 1], symbol: 3 }],
+          },
         ],
       },
       { documents: [], external_symbols: [{}] },
@@ -148,9 +153,7 @@ describe('parseScipJson', () => {
     expect((caught as ScipIngestError).code).toBe('occurrence-limit')
   })
 
-  test('caps a 10k-char SCIP symbol to the bounded edge label', () => {
-    // A hostile/corrupt dump can carry arbitrarily long symbols; without the
-    // cap the symbol persists verbatim as the query-facing edge `label`.
+  test('keeps a 10k-char symbol exact while bounding its edge label', () => {
     const longSymbol = `scip-typescript npm pkg 1.0.0 src/long.ts/x().${'y'.repeat(10_000)}`
     const scip = parseScipJson({
       documents: [
@@ -164,28 +167,160 @@ describe('parseScipJson', () => {
           relative_path: 'src/user.ts',
           occurrences: [
             { range: [1, 0, 1, 1], symbol: longSymbol },
-            // Duplicate reference to the same over-long symbol: deduped
-            // against the capped symbol, not doubled.
             { range: [2, 0, 2, 1], symbol: longSymbol },
           ],
         },
       ],
     })
-    // The parse boundary bounds the symbol deterministically.
-    expect(scip.documents[0].occurrences[0].symbol).toHaveLength(
-      MAX_SCIP_LABEL_CHARS,
-    )
-    const merged = mergeScipIntoIndex(makeIndex(), scip)
-    const precise = merged.graph.edges.filter(
-      (edge) => edge.confidence === 'precise',
-    )
+    expect(scip.documents[0].occurrences[0].symbol).toBe(longSymbol)
+    const precise = scipPreciseEdges(scip)
     expect(precise).toHaveLength(1)
-    expect(precise[0].label).toHaveLength(MAX_SCIP_LABEL_CHARS)
-    expect(precise[0].label).toBe(scip.documents[0].occurrences[0].symbol)
+    expect(precise[0].label).toBe(longSymbol.slice(0, MAX_SCIP_LABEL_CHARS))
+    expect(precise[0].identityDigest).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  test('refuses a symbol over the identity bound instead of clipping it', () => {
+    const maximal = 'x'.repeat(MAX_SCIP_SYMBOL_CHARS)
+    const document = (symbol: string) => ({
+      relative_path: 'src/a.ts',
+      occurrences: [{ range: [0, 0, 1], symbol }],
+    })
+    expect(
+      parseScipJson({ documents: [document(maximal)] }).documents[0]
+        .occurrences[0].symbol,
+    ).toBe(maximal)
+    for (const parse of [
+      () => parseScipJson({ documents: [document(`${maximal}x`)] }),
+      () =>
+        parseScipJson({
+          documents: [],
+          external_symbols: [{ symbol: `${maximal}x` }],
+        }),
+      () =>
+        scipPreciseEdges({
+          documents: [
+            {
+              relativePath: 'src/a.ts',
+              occurrences: [{ symbol: `${maximal}x` }],
+            },
+          ],
+          externalSymbols: [],
+        }),
+    ]) {
+      expect(parse).toThrow(
+        expect.objectContaining({
+          name: 'ScipIngestError',
+          code: 'symbol-limit',
+        }),
+      )
+    }
   })
 })
 
 describe('mergeScipIntoIndex', () => {
+  test('joins opaque descriptors to exact owners and keeps separate same-endpoint references', () => {
+    const prefix = `scip-typescript npm pkg 1.0.0 ${'nested/'.repeat(24)}`
+    const [a, b, c, unknown] = ['a().', 'b().', 'c().', 'missing().'].map(
+      (suffix) => prefix + suffix,
+    )
+    const document = (
+      relative_path: string,
+      symbols: string[],
+      symbol_roles = 0,
+    ) => ({
+      relative_path,
+      occurrences: symbols.map((symbol, line) => ({
+        range: [line, 0, 1],
+        symbol,
+        symbol_roles,
+      })),
+    })
+    const documents = [
+      document('src/a.ts', [a, a], 1),
+      document('src/b.ts', [b, c], 1),
+      document('src/user.ts', [a, unknown, b, c, b]),
+    ]
+    const edges = mergeScipIntoIndex(makeIndex(), parseScipJson({ documents }))
+      .graph.edges
+    expect(edges.map((edge) => [edge.from, edge.to, edge.label])).toEqual([
+      [
+        'file:src/user.ts',
+        'file:src/a.ts',
+        prefix.slice(0, MAX_SCIP_LABEL_CHARS),
+      ],
+      [
+        'file:src/user.ts',
+        'file:src/b.ts',
+        prefix.slice(0, MAX_SCIP_LABEL_CHARS),
+      ],
+      [
+        'file:src/user.ts',
+        'file:src/b.ts',
+        prefix.slice(0, MAX_SCIP_LABEL_CHARS),
+      ],
+    ])
+    expect(new Set(edges.map((edge) => edge.identityDigest)).size).toBe(3)
+    const reordered = [...documents].reverse().map((doc) => ({
+      ...doc,
+      occurrences: [...doc.occurrences].reverse(),
+    }))
+    expect(
+      mergeScipIntoIndex(makeIndex(), parseScipJson({ documents: reordered }))
+        .graph.edges,
+    ).toEqual(edges)
+  })
+
+  test('does not normalize distinct or unusual JSON string identities', () => {
+    const prefix = 'x'.repeat(MAX_SCIP_LABEL_CHARS)
+    const symbols = ['\uD800', '\uD801', '\u00e9', 'e\u0301'].map(
+      (tail) => prefix + tail,
+    )
+    const scip = parseScipJson({
+      documents: ['src/definition.ts', 'src/user.ts'].map(
+        (relative_path, i) => ({
+          relative_path,
+          occurrences: symbols.map((symbol, line) => ({
+            range: [line, 0, 1],
+            symbol,
+            symbol_roles: i === 0 ? 1 : 0,
+          })),
+        }),
+      ),
+    })
+    const edges = scipPreciseEdges(scip)
+    expect(edges.map((edge) => edge.label)).toEqual(symbols.map(() => prefix))
+    expect(new Set(edges.map((edge) => edge.identityDigest)).size).toBe(
+      symbols.length,
+    )
+  })
+
+  test('reports distinct exact definition owners instead of selecting one', () => {
+    const documents = ['src/a.ts', 'src/b.ts', 'src/user.ts'].map(
+      (relative_path, i) => ({
+        relative_path,
+        occurrences: [
+          {
+            range: [0, 0, 1],
+            symbol: HELPER_SYMBOL,
+            symbol_roles: i < 2 ? 1 : 0,
+          },
+        ],
+      }),
+    )
+    const index = makeIndex()
+    for (const order of [documents, [...documents].reverse()]) {
+      expect(() =>
+        mergeScipIntoIndex(index, parseScipJson({ documents: order })),
+      ).toThrow(
+        expect.objectContaining({
+          name: 'ScipIngestError',
+          code: 'ambiguous-definition',
+        }),
+      )
+      expect(index.graph.edges).toEqual([])
+    }
+  })
+
   test('creates precise reference edges from definitions and references', () => {
     const index = makeIndex({
       graph: {

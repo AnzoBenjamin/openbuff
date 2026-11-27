@@ -36,6 +36,10 @@
 - `common/src/util/project-path-containment.ts` applies project containment, additional writable roots, and sensitive-path checks when project mode is selected. External mutable paths use the `host` scope; `readableRoots` remain read-only exceptions.
 - Tool path descriptions and their generated mirrors reflect configured sandbox access. Supervised prompt transport unwraps AI SDK JSON Schema envelopes and preserves complete schema members across the bridge.
 
+## Source-language identities
+
+- `getSourceLanguageIdentityForPath` separates a file's graph family, toolchain profile, and LSP document ID. Bare and dotted suffixes use the same finite grammar registry for family queries. A shared toolchain never makes different languages equivalent for call matching. Unknown files retain generic operations under normal policy; higher operations need current evidence.
+
 ## Polyglot outcome and mutation contracts
 
 - `byte-text.ts` separates exact UTF-8 bytes from BOM-free, LF-normalized observation text. Fresh `cap.v4` read authority binds both identities; complete scoped reads retain their raw slice scope. Partial or unverifiable reads provide no edit authority.

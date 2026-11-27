@@ -6,7 +6,6 @@ import {
 } from './language-capabilities'
 
 import type { FileTreeNode } from './file'
-import * as path from 'path'
 
 export {
   LANGUAGE_CAPABILITY_REGISTRY,
@@ -36,7 +35,6 @@ export type LanguageProfileSelection = {
 }
 
 type LanguageLookupMaps = {
-  extension: ReadonlyMap<string, SupportedLanguageId>
   manifestName: ReadonlyMap<string, SupportedLanguageId>
   manifestExtension: ReadonlyMap<string, SupportedLanguageId>
 }
@@ -59,7 +57,6 @@ function buildUniqueLookup(
 }
 
 function buildLanguageLookups(): LanguageLookupMaps {
-  const extensionEntries: Array<readonly [string, SupportedLanguageId]> = []
   const manifestNameEntries: Array<readonly [string, SupportedLanguageId]> = []
   const manifestExtensionEntries: Array<
     readonly [string, SupportedLanguageId]
@@ -67,9 +64,6 @@ function buildLanguageLookups(): LanguageLookupMaps {
 
   for (const languageId of SUPPORTED_LANGUAGE_IDS) {
     const capability = LANGUAGE_CAPABILITY_REGISTRY[languageId]
-    for (const extension of capability.extensions) {
-      extensionEntries.push([extension.toLowerCase(), languageId])
-    }
     for (const manifestName of capability.manifestNames) {
       manifestNameEntries.push([manifestName, languageId])
     }
@@ -79,7 +73,6 @@ function buildLanguageLookups(): LanguageLookupMaps {
   }
 
   return {
-    extension: buildUniqueLookup(extensionEntries, 'source extension'),
     manifestName: buildUniqueLookup(manifestNameEntries, 'manifest name'),
     manifestExtension: buildUniqueLookup(
       manifestExtensionEntries,
@@ -103,64 +96,90 @@ function getFileExtension(name: string): string {
 }
 
 /**
- * Pinned language-family extension sets, allocated once at module load instead
- * of rebuilding five array literals per getLanguageFamily invocation. That
- * function runs inside the call-graph caller-edge nested loops (per call and
- * per candidate), so hoisting keeps allocations from scaling with total
- * candidate edges in large/polyglot repos.
+ * Source suffixes covered by the bundled grammars. TSX shares the TypeScript
+ * family (but not its grammar or LSP ID); JSX shares the JavaScript grammar
+ * and family. The profile column is for toolchain routing only.
+ * A row identifies a source, not the availability of a parser or server.
  */
-const TYPESCRIPT_FAMILY_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts'])
-const JAVASCRIPT_FAMILY_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs'])
-const C_FAMILY_EXTENSIONS = new Set(['.c', '.h'])
-const CPP_FAMILY_EXTENSIONS = new Set([
-  '.cc',
-  '.cpp',
-  '.cxx',
-  '.hpp',
-  '.hh',
-  '.hxx',
-])
-const KOTLIN_FAMILY_EXTENSIONS = new Set(['.kt', '.kts'])
+const SOURCE_LANGUAGE_ROWS = [
+  ['typescript', 'typescript', 'typescript', ['.ts', '.mts', '.cts']],
+  ['typescript', 'typescript', 'typescriptreact', ['.tsx']],
+  ['javascript', 'typescript', 'javascript', ['.js', '.mjs', '.cjs']],
+  ['javascript', 'typescript', 'javascriptreact', ['.jsx']],
+  ['python', 'python', 'python', ['.py', '.pyi']],
+  ['rust', 'rust', 'rust', ['.rs']],
+  ['go', 'go', 'go', ['.go']],
+  ['java', 'java', 'java', ['.java']],
+  ['csharp', 'csharp', 'csharp', ['.cs']],
+  ['c', 'cpp', 'c', ['.c', '.h']],
+  ['cpp', 'cpp', 'cpp', ['.cc', '.cpp', '.cxx', '.hh', '.hpp', '.hxx']],
+  ['ruby', 'ruby', 'ruby', ['.rb']],
+  ['php', 'php', 'php', ['.php']],
+  ['swift', 'swift', 'swift', ['.swift']],
+  ['kotlin', 'kotlin', 'kotlin', ['.kt', '.kts']],
+  ['gdscript', 'gdscript', 'gdscript', ['.gd']],
+] as const satisfies readonly (readonly [
+  family: string,
+  profileId: SupportedLanguageId,
+  documentLanguageId: string,
+  extensions: readonly `.${string}`[],
+])[]
+
+export type SourceLanguageFamily = (typeof SOURCE_LANGUAGE_ROWS)[number][0]
+export type LspDocumentLanguageId = (typeof SOURCE_LANGUAGE_ROWS)[number][2]
+
+export type SourceLanguageIdentity = Readonly<{
+  family: SourceLanguageFamily
+  profileId: SupportedLanguageId
+  documentLanguageId: LspDocumentLanguageId
+}>
+
+const SOURCE_LANGUAGES = new Map<string, SourceLanguageIdentity>()
+for (const [
+  family,
+  profileId,
+  documentLanguageId,
+  extensions,
+] of SOURCE_LANGUAGE_ROWS) {
+  const identity = Object.freeze({ family, profileId, documentLanguageId })
+  for (const extension of extensions) {
+    if (SOURCE_LANGUAGES.has(extension))
+      throw new Error(`Duplicate source language extension ${extension}`)
+    SOURCE_LANGUAGES.set(extension, identity)
+  }
+}
+
+/** Classifies a file path, never a bare token or a toolchain manifest signal. */
+export function getSourceLanguageIdentityForPath(
+  filePath: string,
+): SourceLanguageIdentity | undefined {
+  const baseName = getBaseName(filePath)
+  const dot = baseName.lastIndexOf('.')
+  return dot < 0
+    ? undefined
+    : SOURCE_LANGUAGES.get(baseName.slice(dot).toLowerCase())
+}
+
+export function getLspDocumentLanguageId(
+  filePath: string,
+): LspDocumentLanguageId | undefined {
+  return getSourceLanguageIdentityForPath(filePath)?.documentLanguageId
+}
 
 /**
- * Canonical extension -> language-family map shared by code-map and the
- * indexer. Accepts either a leading-dot extension or a file path (extension is
- * derived via path.extname). Returns 'typescript'/'javascript'/'c'/'cpp'/
- * 'kotlin' for the pinned families, otherwise the normalized extension (with
- * dot; '' when there is none). undefined input yields '' so callers passing an
- * optional extension typecheck without casts.
- *
- * Deliberately NOT derived from LANGUAGE_CAPABILITY_REGISTRY: that registry
- * conflates js into typescript and c into cpp, which would collapse the
- * ts-vs-js and c-vs-cpp separation pinned by the code-map buildTokenCallers
- * tests and the indexer call-navigation suite.
+ * Resolves a known source family from a path or a bare/dotted suffix.
+ * The empty string means unknown, not a family that may join another file.
+ * Use the path-only classifier when the input is known to be a file path.
  */
 export function getLanguageFamily(
   filePathOrExtension: string | undefined,
-): string {
-  if (filePathOrExtension === undefined) return ''
-  // path.extname resolves the extension for real paths, including files that
-  // live inside a dot-directory (e.g. '.storybook/main.ts', '.config/foo.ts').
-  // It returns '' for a bare leading-dot token like '.ts', so treat a
-  // separator-free leading-dot input as a candidate extension only for the
-  // pinned-family checks below. That keeps '.ts'->typescript / '.jsx'->
-  // javascript bare-token resolution working without echoing a dotfile name
-  // like '.env' verbatim: a dotfile has no extension per path.extname, so it
-  // falls through to the documented '' result.
-  const extnameResult = path.extname(filePathOrExtension).toLowerCase()
-  const bareDotToken =
-    !extnameResult &&
-    filePathOrExtension.startsWith('.') &&
-    !/[\\/]/.test(filePathOrExtension)
-      ? filePathOrExtension.toLowerCase()
-      : ''
-  const candidate = extnameResult || bareDotToken
-  if (TYPESCRIPT_FAMILY_EXTENSIONS.has(candidate)) return 'typescript'
-  if (JAVASCRIPT_FAMILY_EXTENSIONS.has(candidate)) return 'javascript'
-  if (C_FAMILY_EXTENSIONS.has(candidate)) return 'c'
-  if (CPP_FAMILY_EXTENSIONS.has(candidate)) return 'cpp'
-  if (KOTLIN_FAMILY_EXTENSIONS.has(candidate)) return 'kotlin'
-  return extnameResult
+): SourceLanguageFamily | '' {
+  if (!filePathOrExtension) return ''
+  return (
+    getSourceLanguageIdentityForPath(filePathOrExtension)?.family ??
+    SOURCE_LANGUAGES.get(`.${filePathOrExtension.toLowerCase()}`)?.family ??
+    ''
+  )
 }
 
 export function detectLanguageIdForPath(
@@ -183,7 +202,7 @@ export function detectLanguageIdForPath(
   return (
     LANGUAGE_LOOKUPS.manifestName.get(baseName) ??
     LANGUAGE_LOOKUPS.manifestExtension.get(extension) ??
-    LANGUAGE_LOOKUPS.extension.get(extension)
+    SOURCE_LANGUAGES.get(extension)?.profileId
   )
 }
 
@@ -247,9 +266,7 @@ const LANGUAGE_SIGNAL_REGEXPS = new Map<
       {
         aliases: capability.taskAliases.map(taskAliasRegexp),
         manifests: capability.manifestNames.map(pathSignalRegexp),
-        manifestExtensions: capability.manifestExtensions.map(
-          pathSignalRegexp,
-        ),
+        manifestExtensions: capability.manifestExtensions.map(pathSignalRegexp),
         sourceExtensions: capability.extensions.map(pathSignalRegexp),
       },
     ]

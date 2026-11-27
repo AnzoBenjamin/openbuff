@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import {
   extractImportSitesFromLines,
   hasImportSiteExtraction,
+  PYTHON_IMPORT_EXTENSIONS,
   resolveModuleSpecifier,
   TS_IMPORT_EXTENSIONS,
 } from '@codebuff/code-map'
@@ -20,14 +21,12 @@ import type { TsModuleResolver } from './ts-module-resolver'
  *
  * - TS/JS: relative `./`/`../` paths with extension + `/index` resolution,
  *   then tsconfig `compilerOptions.paths` aliases for non-relative specifiers.
- * - Python: relative (`from .`) modules resolve from the importing file's
- *   directory; absolute modules resolve only when their first segment is an
- *   indexed top-level package/namespace directory — a loose same-named file
- *   never satisfies `import X` (conservative-unresolved contract).
- * - Rust: `mod`/`use` paths including `crate::`/`self::`/`super::` prefixes;
- *   the crate-root (`src/`) fallback applies only to explicit `crate::`
- *   paths, so bare imports resolve only in the importing file's directory.
- * - Go: module-path prefixes gated on the local `go.mod` module identity.
+ * - Python: exact Python modules and package initializers. Absolute names
+ *   start in an indexed Python package/namespace directory, not a loose file.
+ * - Rust: exact `.rs`/`mod.rs` module paths in a conventional source tree
+ *   owned by the nearest Cargo package (or a standalone root-level `src`).
+ * - Go: exact package directories within the caller's nearest `go.mod`.
+ *   A single eligible source file represents package membership, not symbols.
  * - JVM/PHP: imports only resolve when the target file declares the matching
  *   `package`/`namespace` (no filename guessing).
  *
@@ -40,8 +39,7 @@ export type TsAliasMap = Record<string, string[]>
 
 /**
  * Minimal shape of an indexed file used by resolution: a project-relative
- * path, extension, and (for JVM/PHP declaration checks + the Go module line)
- * a content sample.
+ * path, extension, and a bounded content sample for declarations/manifests.
  */
 export interface ImportResolutionFile {
   path: string
@@ -88,7 +86,11 @@ export function extractImportSpecifiers(
   if (!hasImportSiteExtraction(opts?.filePath ?? `file${ext}`)) return []
 
   const lines = opts?.lines ?? content.split(/\r?\n/)
-  const sites = extractImportSitesFromLines(lines, opts?.filePath ?? 'file', ext)
+  const sites = extractImportSitesFromLines(
+    lines,
+    opts?.filePath ?? 'file',
+    ext,
+  )
   for (const site of sites) {
     if (imports.size >= max) break
     // PHP keeps the canonical slash-normalized specifier (the historical
@@ -204,27 +206,239 @@ function topLevelDirsFor(
     dirs = new Set()
     for (const candidate of Object.keys(files)) {
       const slash = candidate.indexOf('/')
-      // Only nested paths contribute a top-level directory; a loose top-level
-      // file (e.g. `json.py`) never satisfies an absolute import.
-      if (slash > 0) dirs.add(candidate.slice(0, slash))
+      // Only Python sources contribute package/namespace evidence.
+      const ext = files[candidate]?.ext
+      if (slash > 0 && ext && pythonExtensions.has(ext))
+        dirs.add(candidate.slice(0, slash))
     }
     topLevelDirsCache.set(files, dirs)
   }
   return dirs
 }
 
+const pythonExtensions = new Set<string>(PYTHON_IMPORT_EXTENSIONS)
+const tsExtensions = new Set<string>(TS_IMPORT_EXTENSIONS)
+const identifier = /^[_\p{ID_Start}][_\p{ID_Continue}]*$/u
+
+function uniquePath(candidates: string[]): string | null {
+  return candidates.length === 1 ? candidates[0]! : null
+}
+
+function resolvePythonImport(
+  fromPath: string,
+  specifier: string,
+  files: Record<string, ImportResolutionFile>,
+): string | null {
+  const depth = specifier.match(/^\.+/)?.[0].length ?? 0
+  const module = specifier.slice(depth)
+  const segments = module ? module.split('.') : []
+  if (segments.some((part) => !identifier.test(part))) return null
+
+  let dir = path.posix.dirname(fromPath)
+  if (depth > 0) {
+    for (let level = 1; level < depth && dir !== '.'; level++)
+      dir = path.posix.dirname(dir)
+    // `from ..` may not climb out of the known package into the index root.
+    if (dir === '.') return null
+  } else {
+    if (!segments[0] || !topLevelDirsFor(files).has(segments[0])) return null
+    dir = '.'
+  }
+  const base = path.posix.join(dir, ...segments)
+  const candidates = [`${base}/__init__.py`, `${base}/__init__.pyi`]
+  if (segments.length > 0 && (depth > 0 || segments.length > 1))
+    candidates.push(`${base}.py`, `${base}.pyi`)
+  return uniquePath(
+    candidates.filter((candidate) =>
+      pythonExtensions.has(files[candidate]?.ext ?? ''),
+    ),
+  )
+}
+
+function nearestManifest(
+  dir: string,
+  name: string,
+  files: Record<string, ImportResolutionFile>,
+): string | null {
+  while (true) {
+    const candidate = path.posix.join(dir, name)
+    if (files[candidate]) return candidate
+    if (dir === '.') return null
+    dir = path.posix.dirname(dir)
+  }
+}
+
+function isWithin(dir: string, target: string): boolean {
+  return dir === '.' || target === dir || target.startsWith(`${dir}/`)
+}
+
+function resolveRustImport(
+  fromPath: string,
+  specifier: string,
+  files: Record<string, ImportResolutionFile>,
+): string | null {
+  const parts = specifier.split('::')
+  const prefix = parts[0]
+  const scoped = prefix === 'crate' || prefix === 'self' || prefix === 'super'
+  if (scoped && parts.at(-1) === '*') parts.pop()
+  if (!parts.every((part) => identifier.test(part))) return null
+  // A multi-segment bare `use` can name a dependency; no local basis.
+  if (!scoped && parts.length !== 1) return null
+
+  const fromDir = path.posix.dirname(fromPath)
+  const manifest = nearestManifest(fromDir, 'Cargo.toml', files)
+  const sample = manifest && files[manifest]?.contentSample
+  // Support conventional lib/main targets, not workspace-only or custom
+  // target layouts. An unsupported nearest manifest blocks any outer crate.
+  if (
+    manifest &&
+    (!sample ||
+      !/^\s*\[\s*package\s*\]\s*(?:#.*)?$/m.test(sample) ||
+      /…\[truncated\]$|^\s*\[(?:\s*lib\s*\]|\[\s*bin\s*\])|^\s*autolib\s*=/m.test(
+        sample,
+      ))
+  )
+    return null
+  const src = manifest
+    ? path.posix.join(path.posix.dirname(manifest), 'src')
+    : 'src'
+  if (!isWithin(src, fromDir) || isWithin(`${src}/bin`, fromDir)) return null
+
+  const roots = [`${src}/lib.rs`, `${src}/main.rs`].filter(
+    (candidate) => files[candidate]?.ext === '.rs',
+  )
+  const crateRoot = roots.includes(fromPath) ? fromPath : uniquePath(roots)
+  if (!crateRoot) return null
+  let base = fromDir
+  if (fromPath !== crateRoot && path.posix.basename(fromPath) !== 'mod.rs')
+    base = path.posix.join(fromDir, path.posix.basename(fromPath, '.rs'))
+
+  if (prefix === 'crate') {
+    base = src
+    parts.shift()
+  } else if (prefix === 'self') {
+    parts.shift()
+  } else {
+    while (parts[0] === 'super') {
+      if (base === src) return null
+      base = path.posix.dirname(base)
+      parts.shift()
+    }
+  }
+  if (parts.length === 0) return null
+
+  const moduleCandidates = (segments: string[]) => {
+    const target = path.posix.join(base, ...segments)
+    return [`${target}.rs`, `${target}/mod.rs`].filter(
+      (candidate) =>
+        files[candidate]?.ext === '.rs' &&
+        nearestManifest(path.posix.dirname(candidate), 'Cargo.toml', files) ===
+          manifest,
+    )
+  }
+  const exact = moduleCandidates(parts)
+  if (exact.length > 0) return uniquePath(exact)
+  // Only the final segment may be an item, not an arbitrary longer suffix.
+  // This is a module reference, not proof that the item exists.
+  if (scoped && parts.length > 1 && !specifier.endsWith('::*'))
+    return uniquePath(moduleCandidates(parts.slice(0, -1)))
+  return null
+}
+
+const goFilesByDirectory = new WeakMap<
+  Record<string, ImportResolutionFile>,
+  Map<string, string[]>
+>()
+
+function isGoSourceFile(file: ImportResolutionFile): boolean {
+  return file.ext === '.go' && !/(?:^|\/)[._]|_test\.go$/.test(file.path)
+}
+
+/** Shared declaration basis for Go resolution and incremental invalidation. */
+export function hasImportableGoPackageDeclaration(
+  file: ImportResolutionFile | undefined,
+): boolean {
+  if (!file || !isGoSourceFile(file)) return false
+  // A package declaration precedes other tokens; `main` cannot be imported.
+  const name = file.contentSample?.match(
+    /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*package[ \t]+([\w]+)[ \t]*(?:[;\r\n]|\/\/|$)/,
+  )?.[1]
+  return Boolean(name && name !== 'main')
+}
+
+function goSourcesFor(
+  dir: string,
+  files: Record<string, ImportResolutionFile>,
+): string[] {
+  let directories = goFilesByDirectory.get(files)
+  if (!directories) {
+    directories = new Map()
+    for (const file of Object.values(files)) {
+      if (!isGoSourceFile(file)) continue
+      const parent = path.posix.dirname(file.path)
+      const sources = directories.get(parent) ?? []
+      sources.push(file.path)
+      directories.set(parent, sources)
+    }
+    goFilesByDirectory.set(files, directories)
+  }
+  return directories.get(dir) ?? []
+}
+
+const goPathSegment = /^[A-Za-z0-9._~-]+$/
+
+function resolveGoImport(
+  fromPath: string,
+  specifier: string,
+  files: Record<string, ImportResolutionFile>,
+): string | null {
+  const fromDir = path.posix.dirname(fromPath)
+  const manifest = nearestManifest(fromDir, 'go.mod', files)
+  if (!manifest) return null
+  const directives = files[manifest]?.contentSample
+    ?.split(/\r?\n/)
+    .filter((line) => /^[ \t]*module(?:[ \t]|$)/.test(line))
+  if (directives?.length !== 1) return null
+  const directive = directives[0]!.match(
+    /^[ \t]*module[ \t]+(?:"([^"\s]+)"|([^"\s]+))[ \t]*(?:\/\/.*)?$/,
+  )
+  const modulePath = directive?.[1] ?? directive?.[2]
+  if (
+    !modulePath ||
+    (specifier !== modulePath && !specifier.startsWith(`${modulePath}/`))
+  )
+    return null
+  if (
+    specifier
+      .split('/')
+      .some(
+        (part) => !goPathSegment.test(part) || part === '.' || part === '..',
+      )
+  )
+    return null
+
+  const root = path.posix.dirname(manifest)
+  const packageDir = path.posix.join(
+    root,
+    specifier.slice(modulePath.length + 1),
+  )
+  if (
+    fromDir === packageDir ||
+    nearestManifest(packageDir, 'go.mod', files) !== manifest
+  )
+    return null
+  const source = uniquePath(goSourcesFor(packageDir, files))
+  return source && hasImportableGoPackageDeclaration(files[source])
+    ? source
+    : null
+}
+
 /**
  * Resolve one import specifier to a project-relative file path, or `null`
- * when it is external, ambiguous, or unmatched. Conservative by design:
- * non-TS/JS bare specifiers (other than tsconfig aliases) never resolve, so
- * e.g. `import React from 'react'` cannot match a local `react.ts`.
+ * when it is external, ambiguous, or not supported by the indexed basis.
  *
- * Snapshot contract: the conservative Python absolute-import rule derives its
- * top-level-directory set once per `files` record object identity (memoized
- * via {@link topLevelDirsFor}) and is NOT recomputed when the same record
- * object is mutated in place between calls. Callers that mutate the record
- * must pass a fresh record (or a copy) for the mutation to be reflected in
- * resolution results — a stale record silently yields stale results.
+ * Snapshot contract: the directory lookups for Python and Go are memoized per
+ * `files` record object identity. Pass a fresh record when any files change.
  */
 export function resolveImportToFile(
   fromFilePath: string,
@@ -234,9 +448,17 @@ export function resolveImportToFile(
   aliases?: TsAliasMap,
   tsResolver?: TsModuleResolver | null,
 ): string | null {
+  const fromPath = fromFilePath.replace(/\\/g, '/')
+  // These ecosystems must never fall through to another language's resolver.
+  if (pythonExtensions.has(fromExtension))
+    return resolvePythonImport(fromPath, importPath, files)
+  if (fromExtension === '.rs')
+    return resolveRustImport(fromPath, importPath, files)
+  if (fromExtension === '.go')
+    return resolveGoImport(fromPath, importPath, files)
+
   const normalizedImport = importPath.replace(/\\/g, '/')
   const hasFile = (candidate: string) => files[candidate] !== undefined
-  let suffixSpecifier = normalizedImport
   if (fromExtension === '.gd') {
     return resolveModuleSpecifier(
       normalizedImport.replace(/^res:\/\//, ''),
@@ -248,7 +470,7 @@ export function resolveImportToFile(
       fromExtension,
     )
   ) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
+    const fromDir = path.posix.dirname(fromPath)
     const local = resolveModuleSpecifier(
       path.posix.normalize(path.posix.join(fromDir, normalizedImport)),
       hasFile,
@@ -257,7 +479,6 @@ export function resolveImportToFile(
   }
   if (['.java', '.kt', '.kts', '.cs', '.php'].includes(fromExtension)) {
     const dottedPath = normalizedImport.replace(/\./g, '/')
-    suffixSpecifier = dottedPath
     if (['.java', '.kt', '.kts', '.php'].includes(fromExtension)) {
       const declared = resolveDeclaredPackageImport(
         dottedPath,
@@ -270,105 +491,20 @@ export function resolveImportToFile(
       if (exact) return exact
     }
   }
-  if (fromExtension === '.rs') {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const isCrateRooted = normalizedImport.startsWith('crate::')
-    const rustPath = normalizedImport
-      .replace(/^crate::/, '')
-      .replace(/^self::/, '')
-      .replace(/^super::/, '../')
-      .replace(/::/g, '/')
-    const local = resolveModuleSpecifier(
-      path.posix.normalize(path.posix.join(fromDir, rustPath)),
-      hasFile,
-    )
-    if (local) return local
-    // Crate-root fallback only for explicit `crate::` paths (audit G): a
-    // bare `use config;` must not match a same-named module in some other
-    // directory — only the importing file's own directory counts.
-    if (isCrateRooted) {
-      const crateRelative = resolveModuleSpecifier(`src/${rustPath}`, hasFile)
-      if (crateRelative) return crateRelative
-    }
-  }
-  if (['.py', '.pyi'].includes(fromExtension)) {
-    const leadingDots = normalizedImport.match(/^\.+/)?.[0].length ?? 0
-    const modulePath = normalizedImport.slice(leadingDots).replace(/\./g, '/')
-    if (leadingDots > 0) {
-      let baseDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-      for (let index = 1; index < leadingDots; index++)
-        baseDir = path.posix.dirname(baseDir)
-      const relative = resolveModuleSpecifier(
-        path.posix.join(baseDir, modulePath),
-        hasFile,
-      )
-      if (relative) return relative
-    } else {
-      // Conservative absolute-import rule (audit G): an absolute import
-      // resolves only when its FIRST segment is an indexed top-level
-      // package/namespace directory; segment resolution then continues under
-      // it. A bare `import X` whose X is only a loose same-named file stays
-      // unresolved ('conservative-unresolved' contract) instead of inventing
-      // a graph edge.
-      const firstSegment = modulePath.split('/')[0] ?? ''
-      // Membership test against the per-snapshot memoized top-level directory
-      // set (see topLevelDirsFor) instead of a full indexed-path scan per
-      // import site.
-      const hasTopLevelDir =
-        firstSegment.length > 0 && topLevelDirsFor(files).has(firstSegment)
-      if (hasTopLevelDir) {
-        const absolute = resolveModuleSpecifier(modulePath, hasFile)
-        if (absolute) return absolute
-      }
-    }
-  }
   if (normalizedImport.startsWith('.')) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
+    const fromDir = path.posix.dirname(fromPath)
     const normalizedBase = path.posix.normalize(
       path.posix.join(fromDir, normalizedImport),
     )
     return resolveModuleSpecifier(normalizedBase, hasFile)
   }
-  // Non-relative: try tsconfig path aliases (workspace-internal imports).
-  if (aliases) {
-    const aliasResolved = resolveAliasImport(normalizedImport, aliases, files)
-    if (aliasResolved) return aliasResolved
-  }
-  // TS/JS catch-all tier (P3-T5): real `ts.resolveModuleName` resolution over
-  // the indexed files map. Runs only after the cheaper relative/alias arms
-  // fail, and only when the caller injected a resolver — omitted/undefined
-  // keeps prior behavior byte-identical.
-  if (
-    tsResolver &&
-    (TS_IMPORT_EXTENSIONS as readonly string[]).includes(fromExtension)
-  ) {
-    const resolved = tsResolver(normalizedImport, fromFilePath)
-    if (resolved) return resolved
-  }
-  // Go module imports include a repository/module prefix. Resolve only when
-  // the specifier carries the local go.mod module identity, and only via an
-  // unambiguous package-directory suffix, to avoid inventing graph edges.
-  if (fromExtension !== '.go') {
-    return null
-  }
-  const goModule = files['go.mod']?.contentSample?.match(
-    /^\s*module\s+([^\s]+)\s*$/m,
-  )?.[1]
-  if (!goModule || !normalizedImport.startsWith(`${goModule}/`)) return null
-  suffixSpecifier = normalizedImport.slice(goModule.length + 1)
-  const suffixMatches = Object.keys(files).filter((candidate) => {
-    const withoutExtension = candidate.replace(/\.[^.\/]+$/, '')
-    const packageDirectory = path.posix.dirname(withoutExtension)
-    return (
-      suffixSpecifier.endsWith(withoutExtension) ||
-      withoutExtension.endsWith(suffixSpecifier) ||
-      (fromExtension === '.go' &&
-        packageDirectory !== '.' &&
-        suffixSpecifier.endsWith(packageDirectory))
-    )
-  })
-  if (suffixMatches.length === 1) return suffixMatches[0]
-  return null
+  if (!tsExtensions.has(fromExtension)) return null
+  // TS/JS only: try tsconfig aliases, then the injected compiler resolver.
+  return (
+    (aliases && resolveAliasImport(normalizedImport, aliases, files)) ||
+    tsResolver?.(normalizedImport, fromPath) ||
+    null
+  )
 }
 
 /**

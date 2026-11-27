@@ -754,5 +754,35 @@ console.log('Total:', formatCurrency(total));
       )
       expect(unambiguous['src/lib.ts']?.unique).toEqual(['src/use.ts'])
     })
+
+    it('joins parsed Python calls to Python stubs, never to Rust namesakes', async () => {
+      const sources: Record<string, string> = {
+        'src/caller.py': 'def caller():\n    return shared_name() + rust_only()\n',
+        'src/helper.pyi': 'def shared_name() -> int: ...\n',
+        'native/helper.rs': 'pub fn shared_name() -> i32 { 1 }\npub fn rust_only() -> i32 { 2 }\n',
+      }
+      const result = await getFileTokenScores(
+        '/tmp/openbuff-source-families',
+        Object.keys(sources),
+        (filePath) => sources[filePath] ?? null,
+      )
+
+      expect(result.parsed['src/caller.py']?.calls).toEqual(
+        expect.arrayContaining(['shared_name', 'rust_only']),
+      )
+      expect(result.tokenScores['src/helper.pyi']?.shared_name).toBeGreaterThan(0)
+      expect(result.tokenScores['native/helper.rs']?.rust_only).toBeGreaterThan(0)
+      expect(result.tokenCallers).toEqual({
+        'src/helper.pyi': { shared_name: ['src/caller.py'] },
+      })
+    })
+
+    it('does not join two unknown families', () => {
+      const callers = buildTokenCallers(
+        { 'src/target.obspec': { unknown: 1 } },
+        new Map([['src/caller.obspec', ['unknown']]]),
+      )
+      expect(callers).toEqual({})
+    })
   })
 })

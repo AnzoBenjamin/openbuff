@@ -570,6 +570,30 @@ describe('runScipIngest', () => {
     expect(result.mergedTotal).toBe(0)
   })
 
+  test('refuses ambiguous definition owners in the real dump worker path', async () => {
+    const root = makeRoot()
+    const definition = scipDump.documents[0]!
+    const { runner } = makeFakeRunner({
+      available: { 'scip-typescript': true },
+      dump: {
+        documents: [
+          ...scipDump.documents,
+          { ...definition, relative_path: 'src/another-definition.ts' },
+        ],
+      },
+    })
+    const result = await runScipIngest(root, {
+      runner,
+      index: makeIndex(),
+      indexers: ['typescript'],
+    })
+    expect(result.results[0]?.status).toBe('error')
+    expect(result.results[0]?.edgesMerged).toBeUndefined()
+    expect(result.results[0]?.error).toContain('ambiguous definition ownership')
+    expect(result.mergedTotal).toBe(0)
+    expect(result.mergedIndex).toBeUndefined()
+  })
+
   test('merges a full-cap batch without argument-spread assembly', async () => {
     const root = makeRoot()
     const { runner } = makeFakeRunner({

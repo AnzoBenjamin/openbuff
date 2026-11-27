@@ -689,7 +689,7 @@
         "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
         "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
         "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
-        "packages/indexer/src/durable-index-store.test.ts": "e2d98b1ef31ed3a6e24967c08f14d3eecbcdb208a0c44160f52cfc77089ca54f",
+        "packages/indexer/src/durable-index-store.test.ts": "21290973bd9265798bda2d094b0fa1d8c8a01fb786c9a793a4ee762b06233a65",
         "packages/indexer/src/index-manager-semantic.test.ts": "43cc9e4764bd695a29637122125476c366a0a9ca1fba42106a6f6959ae862e44",
         "packages/indexer/src/index-manager.test.ts": "3eb6a671c65b8ee613cafa77768a906a4118d8cec04ce3fda2cea28dcaced01d",
         "packages/indexer/src/index-manager.ts": "56fa79be984313a884bec528fd27f9f9918bee7d3c8ea0d8bf4377a74021fe5f",
@@ -707,19 +707,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen cooperative TypeScript reconciliation, exact writer/snapshot CAS and queued shell mutation refusal",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B04/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B04/accepted/20261127T021752111402Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-runtime-byte-nonauthor",
+            "reviewer": "b23-prerequisite-nonauthor",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "b23-implementation"
             ],
             "scope": "Current frozen cooperative TypeScript reconciliation, exact writer/snapshot CAS and queued shell mutation refusal",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B04-r10-wrapper.json",
-              "sha256": "85ce80483bf95dccbf1841132ebe5b9d9adf13a7d5a31ab42b38ab7be55e3c26"
+              "path": ".tmp/b23-renewal/B04-implementation-review.json",
+              "sha256": "598ff484b7a563a5e09d67a6cb6883a4314b6f4167701d9d507778d28c52d6dc"
             }
           }
         ],
@@ -728,10 +728,10 @@
       "risks": [
         "No fencing arbitrary external writers or automatic reclaim of unknown ownership."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.190621+00:00",
+      "acceptedAt": "2026-11-27T02:17:52.113862+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B04/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "256ae20c2a03963c1ebdea0367f52fdf488fdb8cd981f4baf3ab3d3071714fbc"
+        "path": "docs/execution/body-roadmap/evidence/B04/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "f14730c9790cf7004969c5f9af0fc694ef17d9ba9850754b8905d4389178984d"
       }
     },
     {
@@ -885,7 +885,7 @@
         "sdk/src/__tests__/change-file.test.ts": "60c3b9161d8d2c284fea39f656e179e7d6c8981e3a4f64e02529ccaab894997f",
         "sdk/src/__tests__/language-intelligence.test.ts": "6b54f4b8395c4043fedb14c0f1be4aa3b662780923b619378d94914f537d8eef",
         "sdk/src/__tests__/lsp-execution-fixture.ts": "6964483d415805e344c6100898ef2feb75eb2058c5ad9d2f8166ef03ca33dda0",
-        "sdk/src/__tests__/lsp-multiplexer.test.ts": "c7a9823e9410bddcff5f5f2671619e699ddde3aee9987392acca6af236fbd8f5",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
         "sdk/src/__tests__/mutation-capabilities.test.ts": "a3734c9df4d26fa7d9f67b2d111c37a33110dac747eab83d3d2dacf5c63189fc",
         "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3f62c259a63f80db611228d47e59251fc2235f57d07bd7d386dff928ebe125de",
         "sdk/src/__tests__/sdk-callback-fixture.ts": "00a18e84a7619eac5b92fb416c9a043766cd2fbfce7039893361e9040d1be4c0",
@@ -895,7 +895,7 @@
         "sdk/src/services/host-filesystem.ts": "eb60ad3034b3426222a380eaae90c887b21ce1c39ecea71d40f9a8a5e83ffc76",
         "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
         "sdk/src/services/lsp-install-hints.ts": "e084635695138bd77cb681a25d5d76fb58cf441fd015f207e800c443fa87355e",
-        "sdk/src/services/lsp-multiplexer.ts": "1c25e79072d78105fd635d296e15669cb9d1c10d6708bf8cd5af3d0395e10bc7",
+        "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
         "sdk/src/services/semantic-workspace-text.ts": "3a31593cde6b8cd42c18e60df2025c1baa786434628349071a8da0e8f23a1926",
         "sdk/src/services/transaction-mutation-proof.ts": "e0e3db2856f7b635ec6a08c0254f5b01c860f26f04ed397872195bd533285a9c",
         "sdk/src/services/workspace-mutation-broker.ts": "8cd4b5a93d2d3c8915fee0b80400d4e9f20ebf28f5fe77f89a77b78bc9cf96ac",
@@ -914,19 +914,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Pinned Bun 1.4.4/Linux x64, built-in source SDK framed WorkspaceEdit path for rename and concrete edit-only organize-imports/extract, finite contained text/create/move/delete operations through the production local broker, and the separately executed Bun definition/consumer oracle.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B06/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T021752111402Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-semantic-and-recovery-nonauthor",
+            "reviewer": "b23-prerequisite-nonauthor",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "b23-implementation"
             ],
             "scope": "Pinned Bun 1.4.4/Linux x64, built-in source SDK framed WorkspaceEdit path for rename and concrete edit-only organize-imports/extract, finite contained text/create/move/delete operations through the production local broker, and the separately executed Bun definition/consumer oracle.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B06-r10-wrapper.json",
-              "sha256": "669ae07fb4a319694e9a3001a0d66825416a95501fadd345151fefe088daee93"
+              "path": ".tmp/b23-renewal/B06-implementation-review.json",
+              "sha256": "7b8454e299294186b50651bc712f85edef88f8272bee9289540dd4c525f17672"
             }
           }
         ],
@@ -937,10 +937,10 @@
         "No command-backed code actions, host confirmation flow, directory operations, true overwrite/ignore/recursive options, other encodings, or broader codemod and refactor adapters are approved.",
         "Zero writes is a preflight guarantee, not all-file atomicity or isolation from external writers. Applied byte evidence is not automatic consumer validation; whole-intent success here includes the separate fixture oracle."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.204793+00:00",
+      "acceptedAt": "2026-11-27T02:17:52.120581+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B06/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "4ddaa673261be2feca3f80755089118a951f082951c721863e05367e1ff01de2"
+        "path": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "ad2e2668ebcc69db513f39942962d1addff70148ad380d3bf2afa2e10fa7cedb"
       }
     },
     {
@@ -976,7 +976,7 @@
         "sdk/src/__tests__/change-file.test.ts": "60c3b9161d8d2c284fea39f656e179e7d6c8981e3a4f64e02529ccaab894997f",
         "sdk/src/__tests__/language-intelligence.test.ts": "6b54f4b8395c4043fedb14c0f1be4aa3b662780923b619378d94914f537d8eef",
         "sdk/src/__tests__/lsp-execution-fixture.ts": "6964483d415805e344c6100898ef2feb75eb2058c5ad9d2f8166ef03ca33dda0",
-        "sdk/src/__tests__/lsp-multiplexer.test.ts": "c7a9823e9410bddcff5f5f2671619e699ddde3aee9987392acca6af236fbd8f5",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
         "sdk/src/__tests__/mutation-capabilities.test.ts": "a3734c9df4d26fa7d9f67b2d111c37a33110dac747eab83d3d2dacf5c63189fc",
         "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3f62c259a63f80db611228d47e59251fc2235f57d07bd7d386dff928ebe125de",
         "sdk/src/__tests__/sdk-callback-fixture.ts": "00a18e84a7619eac5b92fb416c9a043766cd2fbfce7039893361e9040d1be4c0",
@@ -985,7 +985,7 @@
         "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
         "sdk/src/services/host-filesystem.ts": "eb60ad3034b3426222a380eaae90c887b21ce1c39ecea71d40f9a8a5e83ffc76",
         "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
-        "sdk/src/services/lsp-multiplexer.ts": "1c25e79072d78105fd635d296e15669cb9d1c10d6708bf8cd5af3d0395e10bc7",
+        "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
         "sdk/src/services/semantic-workspace-text.ts": "3a31593cde6b8cd42c18e60df2025c1baa786434628349071a8da0e8f23a1926",
         "sdk/src/services/transaction-mutation-proof.ts": "e0e3db2856f7b635ec6a08c0254f5b01c860f26f04ed397872195bd533285a9c",
         "sdk/src/services/workspace-mutation-broker.ts": "8cd4b5a93d2d3c8915fee0b80400d4e9f20ebf28f5fe77f89a77b78bc9cf96ac",
@@ -1004,19 +1004,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Pinned Bun 1.4.4/Linux x64, participating source SDK/runtime cooperative local broker-backed durable groups (update/create/delete/move), ownership-bound crash and lost-commit-acknowledgement recovery, and the final common/runtime/CLI distinction between proven forward effects and transaction success.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B07/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T021752111402Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-semantic-and-recovery-nonauthor",
+            "reviewer": "b23-prerequisite-nonauthor",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "b23-implementation"
             ],
             "scope": "Pinned Bun 1.4.4/Linux x64, participating source SDK/runtime cooperative local broker-backed durable groups (update/create/delete/move), ownership-bound crash and lost-commit-acknowledgement recovery, and the final common/runtime/CLI distinction between proven forward effects and transaction success.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B07-r10-wrapper.json",
-              "sha256": "ecadf3eef1368358e6d78d3f1242fe43038d5ddd8907a27a4a3fad6e6de148cd"
+              "path": ".tmp/b23-renewal/B07-implementation-review.json",
+              "sha256": "7f909f33ee2f1f4ed37f2beb5a09935d9519d438aebb7257b4a8ba8ca6a0c841"
             }
           }
         ],
@@ -1027,10 +1027,10 @@
         "A stale workspace-broker lock is not automatically taken over; the captured in-broker crash required explicit operator repair. Missing, legacy, divergent or unproven broker state stays recovery-required, not eligible for blind rollback or replay.",
         "No atomic multi-file visibility, isolation from arbitrary writers, arbitrary custom/virtual filesystem recovery, or durable admission beyond configured log capacity. Proven forward effects do not imply a durable group acknowledgement or fresh edit authority."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.201079+00:00",
+      "acceptedAt": "2026-11-27T02:17:52.117394+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B07/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "0f2e2ef22b718a753d8cae308d9bb01a567bf0b5de468693444e9199a43ea12c"
+        "path": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "deac5d29c39aa1f20674095e2d27847974b0eedff91b4dc8fc4be67e04224d78"
       }
     },
     {
@@ -1669,7 +1669,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Frozen B15 R10 product lane: one-shot continuation of a bounded, data-only immutable recipe from a verified private local journal on Linux x64 / Bun 1.4.4. The tested package tier is the actual npm tarball's installed ESM SDK with a credential-free loopback OpenAI-compatible JSON endpoint. The built run, source-only built-in-read fixture, crash-refusal matrix, and sealed witness are separate supporting evidence, not broader packaged replay approval.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B15/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T021752111402Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1692,10 +1692,10 @@
         "Only bounded STEP, STEP_ALL, GENERATE_N, clock, random, and SHA-256 are supported in the immutable lane. The model interface is one explicit text-only, non-streaming OpenAI-compatible JSON route, without SDK retries or redirects. Packed evidence is ESM on the pinned Linux/Bun host and credential-free loopback HTTP, not other builds, remote provider behavior, or provider-side exactly-once delivery.",
         "The changed-bundle control changed recipe data and the changed-runtime control changed a stored digest; no actual alternate SDK binary or Bun executable was substituted. The read, crash, and sealed witness fixtures do not certify arbitrary JavaScript or production generator reconstruction, live replay of shell/custom/MCP effects, or default terminal OS enforcement."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.238651+00:00",
+      "acceptedAt": "2026-11-27T02:17:52.124754+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B15/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "b699001c21cb3f4952b1851ac48d30f8720ce4cad6214b92bfd9274a29891252"
+        "path": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "598125fd176a386fc31fd634cce0b533dd3a2d7758b5cc51d88f61a5f7203d25"
       }
     },
     {
@@ -2826,7 +2826,7 @@
         "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
         "common/docs/list-jobs.md": "160aff6d9a01253fad084b55595da9dd4c6e25b73ad3014ebcb3c607f7ed41e1",
         "common/docs/update-plan-status.md": "fd4e7fcba915416161c4b71cf556a3a70519de627484156723787340538a1ba0",
-        "common/knowledge.md": "5c261221ee2a16cd8b382f208f1f31b37c7bf07d1f0589f6f20fb7d484eca9e8",
+        "common/knowledge.md": "4099664747e7df4dbd975146b37a11490d759f712a9555dd7d0b864e2650e2a5",
         "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
         "common/src/__tests__/agent-validation.test.ts": "7ae80e88ee620a91e246d81412655bdd5e63d9e22ec43a3cb01cbb44a3ddc4fa",
         "common/src/__tests__/dynamic-agent-template-schema.test.ts": "0f534d44fca61b28554c75f60212ca87f905fdca8a436c4f7024b272e361d80e",
@@ -3162,8 +3162,8 @@
         "common/src/util/__tests__/host-read-policy.test.ts": "48f281ccd91ff0c44a082292f1ff45ead8395fdfb865330d6d9fa74fd8fa39b7",
         "common/src/util/__tests__/ip-address-policy.test.ts": "c5f7167c1a137fb5c388d999d56fe4ad608fe7a951a0884de73fea601fa92cd2",
         "common/src/util/__tests__/job-registry.test.ts": "bc5f7262cbf0c1a8f598d57ef5f60ce75964b523fdc183dc1547ffc0ec67fafd",
-        "common/src/util/__tests__/language-capability-manifest.test.ts": "4a314dcedc52985bbebe79ab61abea970b68381605305419d932443c78e529bd",
-        "common/src/util/__tests__/language-profiles.test.ts": "c158942ec9271217cc26e60c0bcaed116e06729b76d41e3adfff76a6601f4845",
+        "common/src/util/__tests__/language-capability-manifest.test.ts": "0122b564a8faa4617d0937ed992d89702b93baabd6a7ec8b1c53f68b97657915",
+        "common/src/util/__tests__/language-profiles.test.ts": "ec2f6374639dde67b75689c3943f84531f265089aca22bd4acedc92fbff6ea6e",
         "common/src/util/__tests__/line-coordinates.test.ts": "883fae0af765de61b2074b2e7e2f6939b62fee0a9fc26d958411f22a51f5713f",
         "common/src/util/__tests__/linux-process-scope.test.ts": "eac4d4eca10711ba8fdee1dfbb5e11e6c3a4905bc6c6d4dbad415c6f1fd0754a",
         "common/src/util/__tests__/list-jobs-view.test.ts": "878aea6005acb5f97553eabb15b51ccb9711acefad18074386fac66de6a0f72b",
@@ -3233,8 +3233,8 @@
         "common/src/util/job-registry.ts": "43a9fe994a662e2e4504325df4fb2dbc4d3887f6f5cd64adf0653cc8791ba0f2",
         "common/src/util/json-schema.ts": "18f7849d29f8b8dd84f776a9dcc433dbeb6ff51565a4c77607b148642c3071d6",
         "common/src/util/language-capabilities.ts": "eb8bc9fcc0670bb61a5c27ceb0fbff2e83efdccc3ebb5f421d30303d249be8ed",
-        "common/src/util/language-capability-manifest.ts": "cf843a6e5f6a1ff0d588ee035795b87caf777507989a7aef4ece5ab1696f5d66",
-        "common/src/util/language-profiles.ts": "96892891762e0deb545f21f8b527f159b4d512ddad9bb96613be9d1077ac7ce9",
+        "common/src/util/language-capability-manifest.ts": "336285d7870bbda4143f7a320ab25a2d5a2d62d30c4bfd80d5ac45c3c0edd8fe",
+        "common/src/util/language-profiles.ts": "61fc72e7af0b80019f301257d069294c2d0e24186d2fb21c62a6813e0cdfea7b",
         "common/src/util/line-coordinates.ts": "bf9cb0c582988ce116388753e94347e1f281b3ecb3d08a016a30374a57d15cda",
         "common/src/util/linux-process-scope.ts": "55ba6377c23a28044228c558ca98c1c1dd86c8ed49a771c12194e642093c3093",
         "common/src/util/list-jobs-view.ts": "bc5a7523c95e7037ae0f69ebcfc4cebc38900b3b4ad50a11a47ab4228e6ccd95",
@@ -3771,7 +3771,7 @@
         "packages/code-map/__tests__/integration.test.ts": "73321670e5af0b6b5c58f33cc96145a0c2470a884ce34ea40b379f5b1e17f29e",
         "packages/code-map/__tests__/languages-m7.test.ts": "2cb43142ba291135b24b266a358130d0687a440ff0029f65a5d82c6a3caa62a4",
         "packages/code-map/__tests__/languages.test.ts": "8d852965b8879b8cac5227cd4e1138eeb91c528feb8648c0b5d5ea237e7f330a",
-        "packages/code-map/__tests__/parse.test.ts": "1b6b6422d091799d56147639e651fd8fd06e4a4cf9f4421002bcd01081c3795e",
+        "packages/code-map/__tests__/parse.test.ts": "b73d4f8254c05eb6ae62bc775752dc66f53ef80ef289ec217e5f9df49ffc07bc",
         "packages/code-map/__tests__/tag-query-status.test.ts": "478341841a987f49d1ca72a9f890c592ed86355765a890506f88ff8b07727ac1",
         "packages/code-map/__tests__/test-langs/test.c": "d89c66e5b9cfc14feec1457fcaf5b053a0af448a46db282a87f478dac5c6d882",
         "packages/code-map/__tests__/test-langs/test.cpp": "a1bd3ab5de49d87efb7ab38feb6fcbebfef06d605f7659bea86175f01d6f1101",
@@ -3796,7 +3796,7 @@
         "packages/code-map/src/index.ts": "16e672458524f8060b0004d836cc6e544a31c6851195e1ed8c3336aeff2a501a",
         "packages/code-map/src/init-node.ts": "bbb392e920e95c4a9f15eedf243ca77e8ad040ea3c323c96a0116274c1cb4710",
         "packages/code-map/src/languages.ts": "c6376b1420082f9815067d110dd1ea2ff72111bbc37b706371e4cdacc97a055e",
-        "packages/code-map/src/parse.ts": "a23e54ec5c3390ee2277e98c3902e62299c6ffa179e695e546f24f13edc836e9",
+        "packages/code-map/src/parse.ts": "6614be5b7e3366b8ea7bc7e378a241dfeb1c39da21961591440e5f2ac224cb52",
         "packages/code-map/src/structure.ts": "7329b5f00f0a9bfe02f4d1fbe1d7820a5bd85c8ac36ffe8d0768a0e8b2fce103",
         "packages/code-map/src/tree-sitter-queries/readme.md": "d7100c2f942a40282b171e1c5328d36026829ea80971a3a825c74d23afa95fb7",
         "packages/code-map/src/tree-sitter-queries/tree-sitter-c-tags.scm": "c36dc1e26d8b0755e153bb8ea9f95e0f581a2dca568e3e1f913b57cc1cf088c6",
@@ -3823,17 +3823,17 @@
         "packages/indexer/src/__tests__/m7-regression.test.ts": "a2af72fe4f31089808c1215dc2f994b3f06eb9e20aa1b1420f5c92e5d4fac0e3",
         "packages/indexer/src/asset-refs.test.ts": "9eba4ca0d1995b049e8a620c247b59b41dcc892ac37a53745ccccc3923574eb0",
         "packages/indexer/src/asset-refs.ts": "4231807be0fc4e6322b5df03371a5ac2fb33e4f5abd10b336af0e8924c29621b",
-        "packages/indexer/src/call-navigation.test.ts": "252db4ffe15293cf80b56b202219bdf3f3a6dcaf511384e092f12f095ec6564b",
+        "packages/indexer/src/call-navigation.test.ts": "088aec7db3dca416af9085f667cc79c72b7d16b2c142de6fe4e736deed5b819a",
         "packages/indexer/src/chunk-freshness.test.ts": "484cab06bed88df227534520f9e232ccd787b4b307e568c577d1096bf426746f",
         "packages/indexer/src/chunk-freshness.ts": "3fddbf7ebeaaf8165701654338231c3291a27ace9368798915ab7e08d41fca3c",
         "packages/indexer/src/content-recall.test.ts": "c2a4bce597abe193ed2c57d28172d77229d37d48500f2f5c55ddfddc43778587",
-        "packages/indexer/src/durable-index-store.test.ts": "e2d98b1ef31ed3a6e24967c08f14d3eecbcdb208a0c44160f52cfc77089ca54f",
-        "packages/indexer/src/durable-index-store.ts": "34286b8f4d230ae6c24ff71abc5f22b590f683ec8672482bcecd7632a6e37ec3",
+        "packages/indexer/src/durable-index-store.test.ts": "21290973bd9265798bda2d094b0fa1d8c8a01fb786c9a793a4ee762b06233a65",
+        "packages/indexer/src/durable-index-store.ts": "2790c980778dfd395ee0358e4a1f5c32de5d03b9ee257eb65cf6132cd69a3cdc",
         "packages/indexer/src/embedded-storage.ts": "a759f12af9a505c01569c9ead379d0054367215db0754ae95ded73945deca90c",
         "packages/indexer/src/file-walker.test.ts": "c794521ee479a2e0e7f9eb306cc491b7b175c78a396d91332b1d41eda838c514",
         "packages/indexer/src/file-walker.ts": "d5402562295d6d3eb56b533fbe3940f76cadec3a02960999bebbde61a5d1e93b",
-        "packages/indexer/src/import-resolution.test.ts": "fd0e5ab82963d148043571b34c9ea13d4aa7c449b54af909804ea0a6e35432e1",
-        "packages/indexer/src/import-resolution.ts": "6e8236ea11af98b32e0aa3148e94aa1c52178e1d6027fe33a8dba35a86201545",
+        "packages/indexer/src/import-resolution.test.ts": "9c1e90f74e9045b3b6bc0b3619a95fcbb3f43eeb8be9257769676153bf529349",
+        "packages/indexer/src/import-resolution.ts": "7f8f302f2e121d073a6a972dc0c26685bff1f548568e79aff0324367f6d3f5e9",
         "packages/indexer/src/index-manager-semantic.test.ts": "43cc9e4764bd695a29637122125476c366a0a9ca1fba42106a6f6959ae862e44",
         "packages/indexer/src/index-manager.test.ts": "3eb6a671c65b8ee613cafa77768a906a4118d8cec04ce3fda2cea28dcaced01d",
         "packages/indexer/src/index-manager.ts": "56fa79be984313a884bec528fd27f9f9918bee7d3c8ea0d8bf4377a74021fe5f",
@@ -3841,8 +3841,8 @@
         "packages/indexer/src/index-store.test.ts": "3b218dc69365332ec0fa2dbe26339e4168a76054b1b4bda6a857c7cb9e90cb60",
         "packages/indexer/src/index-store.ts": "99e280e61cbd3eba0bb8e1355409eab633b4450c8749ff82ea55806847cf76bb",
         "packages/indexer/src/index.ts": "0407271c9a63272b8795a24b7d57198e513b304705e0958d4a444f2cae637e44",
-        "packages/indexer/src/metadata-indexer.test.ts": "61f7f392a840b6c3237772ca78908d63faa9d7389afd2397ce8d45db5094f5f2",
-        "packages/indexer/src/metadata-indexer.ts": "67c08f54b18dcbad80149aebc4c6e1f87cf2b15864bbc1666807347b5aab7182",
+        "packages/indexer/src/metadata-indexer.test.ts": "3fb8c0744fded18f4e391e53ff30213e9f3c5b359f75e605b8925860a2d1dc23",
+        "packages/indexer/src/metadata-indexer.ts": "484a84a3a1c19106a1e0d9be7c842e500b7a602499d0cc1811c6a3c8c4b2d5ef",
         "packages/indexer/src/p8-degraded-delta.test.ts": "6ca650f8bf65f9a239f7c5c453350d0d7166955b09b1d79752d08aafa28f3d5a",
         "packages/indexer/src/p8-lite.test.ts": "b14167bbbe75080a3202a2852f2ef68376118bf309c7faaec270cb6458895517",
         "packages/indexer/src/pagerank.test.ts": "b91ac613960c67274f6888005411850faa8cc7adf751e3b01d08a56fdd8edbd2",
@@ -3861,10 +3861,10 @@
         "packages/indexer/src/retrieval-quality.ts": "b5ed5c10afeea0247b891cbffc2441e55ce0d125cf82bbf139202c0da8e318e0",
         "packages/indexer/src/scip-execution-branch-controls.test.ts": "08405a504c576f2d169c9d496b4081ddce73c265b0e174d9b04f460d88a65d63",
         "packages/indexer/src/scip-execution.test.ts": "e765ef312fdc6a91849d269d053ef1ddb20003725ef69704014d26e4e59813a2",
-        "packages/indexer/src/scip-ingest.test.ts": "e36911051ee524b2877492ed7a731f3f587f072cb749489e4584626849878c86",
-        "packages/indexer/src/scip-ingest.ts": "cb2bbf1f6030d9d0cac9df14c3f667277e098a8af74cc18054729b185bfad326",
+        "packages/indexer/src/scip-ingest.test.ts": "e2e178a145b3f6628ad12b08ed97d91702f58a7ba8dbafc242c38200c576055b",
+        "packages/indexer/src/scip-ingest.ts": "11aa0739e8d516e0429bd24a440f04e0fed087dc60b0f267cf18ca6b00e9b3f8",
         "packages/indexer/src/scip-parse-worker.ts": "a89516aed0caed409e3f38cff6d39cdc0971da5f13bad0a7b2ad8bd460cfe6d8",
-        "packages/indexer/src/scip-runner.test.ts": "6dfca994cb9d67b81763594dea9c040d8b88d0280c8e2d5c57c546417ddec12b",
+        "packages/indexer/src/scip-runner.test.ts": "b40434a7ad21b097f3f122be7276ead0489b91c0c056ee6c0c42c39a112505e3",
         "packages/indexer/src/scip-runner.ts": "68c6caa762a560f0b1ebe54db71f1503c5b3236cb6ad71207f071066358b4258",
         "packages/indexer/src/semantic.test.ts": "b33261268412230a102f061a02726d4237c6c9e8d889154a7bad7b70b8a4eae8",
         "packages/indexer/src/semantic.ts": "2d9630246d1c295585ddc52e59da9cb29086c3e63a456a8245d3eb1787e45a12",
@@ -3872,7 +3872,7 @@
         "packages/indexer/src/storage-port.ts": "d47ca7841a1faa638ef585a0ef27a5b283ec377523ce0ae3f39a52b5a401cc52",
         "packages/indexer/src/ts-module-resolver.test.ts": "b67a07e8295709b36b40fd478b2676cfde05b87ee480f5a70ada33d8640550b8",
         "packages/indexer/src/ts-module-resolver.ts": "a65b95b83358650ae4724e6c7a1c0815a101f3e84c8cf035c21b7da2e676ba61",
-        "packages/indexer/src/types.ts": "882044f5022c730efd51f0273ff38fc262e5e33365ac266e192e20dcb8380376",
+        "packages/indexer/src/types.ts": "2087816b16acc7a8f0c21ac2451d9df03a6d7da2e724ed3fd6663e4a392474c9",
         "packages/indexer/tsconfig.json": "4ec2c796112cd309a04972ac599b015555300dff8a21b242efc2f1afcd6f2b67",
         "packages/internal/package.json": "88dea8252826d8558402f4b5be575a384b391c98028a822200e4943bbe5bae11",
         "packages/internal/src/env-schema.ts": "60f1b65fcce237d569a631ac3b0b6244a4dbff2814a477c8b6983797f9833042",
@@ -4104,7 +4104,7 @@
         "sdk/e2e/workflows/multi-turn-conversation.e2e.test.ts": "5eafb98a62b80a97ee3d6a913979c8ebf081b474110536bb2afce38e5d8a6516",
         "sdk/examples/readme-example-1.ts": "264c25f35a63e43f5e4a05fd2df14a0d711ca42afc04c9e8aa7c935ef94f23e4",
         "sdk/examples/readme-example-2.ts": "5d108260b27ec53900c02227b2b744c5a20bd7b34428d64eb17ea0b06615e408",
-        "sdk/knowledge.md": "709a6ad08a6523bda77c83b129cd0472947ac862e574bd78c72b3e7c12a6f019",
+        "sdk/knowledge.md": "89f80bbf1b543c1054a50a79a49a2b9ae5c1c771c798621f57808f5eb69028fd",
         "sdk/openbuff.json": "d02ac6f0fee5cb3dca70e426d22c094d0b8a712ef8a4419157be30711434bb8c",
         "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
@@ -4271,7 +4271,7 @@
         "sdk/src/__tests__/lsp-execution-branch-controls.test.ts": "efa8f016e687b4faa372c617e71c1a7f1a605451df29f0e3d4a6d8b604f70f8e",
         "sdk/src/__tests__/lsp-execution-fixture.ts": "6964483d415805e344c6100898ef2feb75eb2058c5ad9d2f8166ef03ca33dda0",
         "sdk/src/__tests__/lsp-execution.test.ts": "0b8eb8ec0f3636638f9e4bb2eb16394d5a1d46d08f0d1d2bf4da9cc30a0f1085",
-        "sdk/src/__tests__/lsp-multiplexer.test.ts": "c7a9823e9410bddcff5f5f2671619e699ddde3aee9987392acca6af236fbd8f5",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
         "sdk/src/__tests__/lsp-real-server.test.ts": "6e89c66b78b7b05c5f197b723f598a14f264c71f8daf98086596c9c8ca86f79d",
         "sdk/src/__tests__/mcp-address-policy.test.ts": "aefc7b60da3adf041878fb8bf55fcce5f846d91d9d0670a2ac141be710077a1f",
         "sdk/src/__tests__/mcp-origin-continuation.test.ts": "b5bcd393cf9960c976d2ecd3077ae3b95b08d1f94b76fdedf40a8fcf9c353b9a",
@@ -4480,7 +4480,7 @@
         "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
         "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
         "sdk/src/services/lsp-install-hints.ts": "e084635695138bd77cb681a25d5d76fb58cf441fd015f207e800c443fa87355e",
-        "sdk/src/services/lsp-multiplexer.ts": "1c25e79072d78105fd635d296e15669cb9d1c10d6708bf8cd5af3d0395e10bc7",
+        "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
         "sdk/src/services/memory-v2/__tests__/b14-usage.test.ts": "9bb7c6cbfee51f395bb608f035581ec4f8b8a37d5e65aff73041777744ed4502",
         "sdk/src/services/memory-v2/__tests__/coordinator.test.ts": "42e99e085b103edc47933f4755649c937cba8a26090229e78b27c56beda8102b",
         "sdk/src/services/memory-v2/__tests__/finish-turn.test.ts": "81f0151dec7a7a37ff031a74016636b82d2e944369877924d7564d4dfd872ea6",
@@ -4637,19 +4637,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261126T235453390455Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T021752111402Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-publication-launch-nonauthor",
+            "reviewer": "b23-launch-process-nonauthor",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "b23-implementation"
             ],
             "scope": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/r10-publication/B19-docs-wrapper.json",
-              "sha256": "b62065c28b52c34c54bbc903c2befa1baf4408ad30b28bc27e68b32992a80cea"
+              "path": ".tmp/b23-renewal/B19-implementation-review.json",
+              "sha256": "f7105ee3a52d1644ae79cc4fae0d109d9cb4389579cfea384698fd3607785e79"
             }
           }
         ],
@@ -4658,10 +4658,10 @@
       "risks": [
         "Selected proven local routes, no hosted CI, native execution availability or arbitrary scope containment."
       ],
-      "acceptedAt": "2026-11-26T23:54:53.506978+00:00",
+      "acceptedAt": "2026-11-27T02:17:52.241770+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261126T235453390455Z-acceptance.json",
-        "sha256": "f587ca850ec36a87997795aeda16200a019a187b54c8672677a21426287b2714"
+        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "ec454ecbc0e7ef0aecdba326e331d6d13045e07c19c53d7f36ae8b437a6328dd"
       }
     },
     {
@@ -5664,7 +5664,7 @@
         "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
         "common/docs/list-jobs.md": "160aff6d9a01253fad084b55595da9dd4c6e25b73ad3014ebcb3c607f7ed41e1",
         "common/docs/update-plan-status.md": "fd4e7fcba915416161c4b71cf556a3a70519de627484156723787340538a1ba0",
-        "common/knowledge.md": "5c261221ee2a16cd8b382f208f1f31b37c7bf07d1f0589f6f20fb7d484eca9e8",
+        "common/knowledge.md": "4099664747e7df4dbd975146b37a11490d759f712a9555dd7d0b864e2650e2a5",
         "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
         "common/src/__tests__/agent-validation.test.ts": "7ae80e88ee620a91e246d81412655bdd5e63d9e22ec43a3cb01cbb44a3ddc4fa",
         "common/src/__tests__/dynamic-agent-template-schema.test.ts": "0f534d44fca61b28554c75f60212ca87f905fdca8a436c4f7024b272e361d80e",
@@ -6000,8 +6000,8 @@
         "common/src/util/__tests__/host-read-policy.test.ts": "48f281ccd91ff0c44a082292f1ff45ead8395fdfb865330d6d9fa74fd8fa39b7",
         "common/src/util/__tests__/ip-address-policy.test.ts": "c5f7167c1a137fb5c388d999d56fe4ad608fe7a951a0884de73fea601fa92cd2",
         "common/src/util/__tests__/job-registry.test.ts": "bc5f7262cbf0c1a8f598d57ef5f60ce75964b523fdc183dc1547ffc0ec67fafd",
-        "common/src/util/__tests__/language-capability-manifest.test.ts": "4a314dcedc52985bbebe79ab61abea970b68381605305419d932443c78e529bd",
-        "common/src/util/__tests__/language-profiles.test.ts": "c158942ec9271217cc26e60c0bcaed116e06729b76d41e3adfff76a6601f4845",
+        "common/src/util/__tests__/language-capability-manifest.test.ts": "0122b564a8faa4617d0937ed992d89702b93baabd6a7ec8b1c53f68b97657915",
+        "common/src/util/__tests__/language-profiles.test.ts": "ec2f6374639dde67b75689c3943f84531f265089aca22bd4acedc92fbff6ea6e",
         "common/src/util/__tests__/line-coordinates.test.ts": "883fae0af765de61b2074b2e7e2f6939b62fee0a9fc26d958411f22a51f5713f",
         "common/src/util/__tests__/linux-process-scope.test.ts": "eac4d4eca10711ba8fdee1dfbb5e11e6c3a4905bc6c6d4dbad415c6f1fd0754a",
         "common/src/util/__tests__/list-jobs-view.test.ts": "878aea6005acb5f97553eabb15b51ccb9711acefad18074386fac66de6a0f72b",
@@ -6071,8 +6071,8 @@
         "common/src/util/job-registry.ts": "43a9fe994a662e2e4504325df4fb2dbc4d3887f6f5cd64adf0653cc8791ba0f2",
         "common/src/util/json-schema.ts": "18f7849d29f8b8dd84f776a9dcc433dbeb6ff51565a4c77607b148642c3071d6",
         "common/src/util/language-capabilities.ts": "eb8bc9fcc0670bb61a5c27ceb0fbff2e83efdccc3ebb5f421d30303d249be8ed",
-        "common/src/util/language-capability-manifest.ts": "cf843a6e5f6a1ff0d588ee035795b87caf777507989a7aef4ece5ab1696f5d66",
-        "common/src/util/language-profiles.ts": "96892891762e0deb545f21f8b527f159b4d512ddad9bb96613be9d1077ac7ce9",
+        "common/src/util/language-capability-manifest.ts": "336285d7870bbda4143f7a320ab25a2d5a2d62d30c4bfd80d5ac45c3c0edd8fe",
+        "common/src/util/language-profiles.ts": "61fc72e7af0b80019f301257d069294c2d0e24186d2fb21c62a6813e0cdfea7b",
         "common/src/util/line-coordinates.ts": "bf9cb0c582988ce116388753e94347e1f281b3ecb3d08a016a30374a57d15cda",
         "common/src/util/linux-process-scope.ts": "55ba6377c23a28044228c558ca98c1c1dd86c8ed49a771c12194e642093c3093",
         "common/src/util/list-jobs-view.ts": "bc5a7523c95e7037ae0f69ebcfc4cebc38900b3b4ad50a11a47ab4228e6ccd95",
@@ -6610,7 +6610,7 @@
         "packages/code-map/__tests__/integration.test.ts": "73321670e5af0b6b5c58f33cc96145a0c2470a884ce34ea40b379f5b1e17f29e",
         "packages/code-map/__tests__/languages-m7.test.ts": "2cb43142ba291135b24b266a358130d0687a440ff0029f65a5d82c6a3caa62a4",
         "packages/code-map/__tests__/languages.test.ts": "8d852965b8879b8cac5227cd4e1138eeb91c528feb8648c0b5d5ea237e7f330a",
-        "packages/code-map/__tests__/parse.test.ts": "1b6b6422d091799d56147639e651fd8fd06e4a4cf9f4421002bcd01081c3795e",
+        "packages/code-map/__tests__/parse.test.ts": "b73d4f8254c05eb6ae62bc775752dc66f53ef80ef289ec217e5f9df49ffc07bc",
         "packages/code-map/__tests__/tag-query-status.test.ts": "478341841a987f49d1ca72a9f890c592ed86355765a890506f88ff8b07727ac1",
         "packages/code-map/__tests__/test-langs/test.c": "d89c66e5b9cfc14feec1457fcaf5b053a0af448a46db282a87f478dac5c6d882",
         "packages/code-map/__tests__/test-langs/test.cpp": "a1bd3ab5de49d87efb7ab38feb6fcbebfef06d605f7659bea86175f01d6f1101",
@@ -6635,7 +6635,7 @@
         "packages/code-map/src/index.ts": "16e672458524f8060b0004d836cc6e544a31c6851195e1ed8c3336aeff2a501a",
         "packages/code-map/src/init-node.ts": "bbb392e920e95c4a9f15eedf243ca77e8ad040ea3c323c96a0116274c1cb4710",
         "packages/code-map/src/languages.ts": "c6376b1420082f9815067d110dd1ea2ff72111bbc37b706371e4cdacc97a055e",
-        "packages/code-map/src/parse.ts": "a23e54ec5c3390ee2277e98c3902e62299c6ffa179e695e546f24f13edc836e9",
+        "packages/code-map/src/parse.ts": "6614be5b7e3366b8ea7bc7e378a241dfeb1c39da21961591440e5f2ac224cb52",
         "packages/code-map/src/structure.ts": "7329b5f00f0a9bfe02f4d1fbe1d7820a5bd85c8ac36ffe8d0768a0e8b2fce103",
         "packages/code-map/src/tree-sitter-queries/readme.md": "d7100c2f942a40282b171e1c5328d36026829ea80971a3a825c74d23afa95fb7",
         "packages/code-map/src/tree-sitter-queries/tree-sitter-c-tags.scm": "c36dc1e26d8b0755e153bb8ea9f95e0f581a2dca568e3e1f913b57cc1cf088c6",
@@ -6662,17 +6662,17 @@
         "packages/indexer/src/__tests__/m7-regression.test.ts": "a2af72fe4f31089808c1215dc2f994b3f06eb9e20aa1b1420f5c92e5d4fac0e3",
         "packages/indexer/src/asset-refs.test.ts": "9eba4ca0d1995b049e8a620c247b59b41dcc892ac37a53745ccccc3923574eb0",
         "packages/indexer/src/asset-refs.ts": "4231807be0fc4e6322b5df03371a5ac2fb33e4f5abd10b336af0e8924c29621b",
-        "packages/indexer/src/call-navigation.test.ts": "252db4ffe15293cf80b56b202219bdf3f3a6dcaf511384e092f12f095ec6564b",
+        "packages/indexer/src/call-navigation.test.ts": "088aec7db3dca416af9085f667cc79c72b7d16b2c142de6fe4e736deed5b819a",
         "packages/indexer/src/chunk-freshness.test.ts": "484cab06bed88df227534520f9e232ccd787b4b307e568c577d1096bf426746f",
         "packages/indexer/src/chunk-freshness.ts": "3fddbf7ebeaaf8165701654338231c3291a27ace9368798915ab7e08d41fca3c",
         "packages/indexer/src/content-recall.test.ts": "c2a4bce597abe193ed2c57d28172d77229d37d48500f2f5c55ddfddc43778587",
-        "packages/indexer/src/durable-index-store.test.ts": "e2d98b1ef31ed3a6e24967c08f14d3eecbcdb208a0c44160f52cfc77089ca54f",
-        "packages/indexer/src/durable-index-store.ts": "34286b8f4d230ae6c24ff71abc5f22b590f683ec8672482bcecd7632a6e37ec3",
+        "packages/indexer/src/durable-index-store.test.ts": "21290973bd9265798bda2d094b0fa1d8c8a01fb786c9a793a4ee762b06233a65",
+        "packages/indexer/src/durable-index-store.ts": "2790c980778dfd395ee0358e4a1f5c32de5d03b9ee257eb65cf6132cd69a3cdc",
         "packages/indexer/src/embedded-storage.ts": "a759f12af9a505c01569c9ead379d0054367215db0754ae95ded73945deca90c",
         "packages/indexer/src/file-walker.test.ts": "c794521ee479a2e0e7f9eb306cc491b7b175c78a396d91332b1d41eda838c514",
         "packages/indexer/src/file-walker.ts": "d5402562295d6d3eb56b533fbe3940f76cadec3a02960999bebbde61a5d1e93b",
-        "packages/indexer/src/import-resolution.test.ts": "fd0e5ab82963d148043571b34c9ea13d4aa7c449b54af909804ea0a6e35432e1",
-        "packages/indexer/src/import-resolution.ts": "6e8236ea11af98b32e0aa3148e94aa1c52178e1d6027fe33a8dba35a86201545",
+        "packages/indexer/src/import-resolution.test.ts": "9c1e90f74e9045b3b6bc0b3619a95fcbb3f43eeb8be9257769676153bf529349",
+        "packages/indexer/src/import-resolution.ts": "7f8f302f2e121d073a6a972dc0c26685bff1f548568e79aff0324367f6d3f5e9",
         "packages/indexer/src/index-manager-semantic.test.ts": "43cc9e4764bd695a29637122125476c366a0a9ca1fba42106a6f6959ae862e44",
         "packages/indexer/src/index-manager.test.ts": "3eb6a671c65b8ee613cafa77768a906a4118d8cec04ce3fda2cea28dcaced01d",
         "packages/indexer/src/index-manager.ts": "56fa79be984313a884bec528fd27f9f9918bee7d3c8ea0d8bf4377a74021fe5f",
@@ -6680,8 +6680,8 @@
         "packages/indexer/src/index-store.test.ts": "3b218dc69365332ec0fa2dbe26339e4168a76054b1b4bda6a857c7cb9e90cb60",
         "packages/indexer/src/index-store.ts": "99e280e61cbd3eba0bb8e1355409eab633b4450c8749ff82ea55806847cf76bb",
         "packages/indexer/src/index.ts": "0407271c9a63272b8795a24b7d57198e513b304705e0958d4a444f2cae637e44",
-        "packages/indexer/src/metadata-indexer.test.ts": "61f7f392a840b6c3237772ca78908d63faa9d7389afd2397ce8d45db5094f5f2",
-        "packages/indexer/src/metadata-indexer.ts": "67c08f54b18dcbad80149aebc4c6e1f87cf2b15864bbc1666807347b5aab7182",
+        "packages/indexer/src/metadata-indexer.test.ts": "3fb8c0744fded18f4e391e53ff30213e9f3c5b359f75e605b8925860a2d1dc23",
+        "packages/indexer/src/metadata-indexer.ts": "484a84a3a1c19106a1e0d9be7c842e500b7a602499d0cc1811c6a3c8c4b2d5ef",
         "packages/indexer/src/p8-degraded-delta.test.ts": "6ca650f8bf65f9a239f7c5c453350d0d7166955b09b1d79752d08aafa28f3d5a",
         "packages/indexer/src/p8-lite.test.ts": "b14167bbbe75080a3202a2852f2ef68376118bf309c7faaec270cb6458895517",
         "packages/indexer/src/pagerank.test.ts": "b91ac613960c67274f6888005411850faa8cc7adf751e3b01d08a56fdd8edbd2",
@@ -6700,10 +6700,10 @@
         "packages/indexer/src/retrieval-quality.ts": "b5ed5c10afeea0247b891cbffc2441e55ce0d125cf82bbf139202c0da8e318e0",
         "packages/indexer/src/scip-execution-branch-controls.test.ts": "08405a504c576f2d169c9d496b4081ddce73c265b0e174d9b04f460d88a65d63",
         "packages/indexer/src/scip-execution.test.ts": "e765ef312fdc6a91849d269d053ef1ddb20003725ef69704014d26e4e59813a2",
-        "packages/indexer/src/scip-ingest.test.ts": "e36911051ee524b2877492ed7a731f3f587f072cb749489e4584626849878c86",
-        "packages/indexer/src/scip-ingest.ts": "cb2bbf1f6030d9d0cac9df14c3f667277e098a8af74cc18054729b185bfad326",
+        "packages/indexer/src/scip-ingest.test.ts": "e2e178a145b3f6628ad12b08ed97d91702f58a7ba8dbafc242c38200c576055b",
+        "packages/indexer/src/scip-ingest.ts": "11aa0739e8d516e0429bd24a440f04e0fed087dc60b0f267cf18ca6b00e9b3f8",
         "packages/indexer/src/scip-parse-worker.ts": "a89516aed0caed409e3f38cff6d39cdc0971da5f13bad0a7b2ad8bd460cfe6d8",
-        "packages/indexer/src/scip-runner.test.ts": "6dfca994cb9d67b81763594dea9c040d8b88d0280c8e2d5c57c546417ddec12b",
+        "packages/indexer/src/scip-runner.test.ts": "b40434a7ad21b097f3f122be7276ead0489b91c0c056ee6c0c42c39a112505e3",
         "packages/indexer/src/scip-runner.ts": "68c6caa762a560f0b1ebe54db71f1503c5b3236cb6ad71207f071066358b4258",
         "packages/indexer/src/semantic.test.ts": "b33261268412230a102f061a02726d4237c6c9e8d889154a7bad7b70b8a4eae8",
         "packages/indexer/src/semantic.ts": "2d9630246d1c295585ddc52e59da9cb29086c3e63a456a8245d3eb1787e45a12",
@@ -6711,7 +6711,7 @@
         "packages/indexer/src/storage-port.ts": "d47ca7841a1faa638ef585a0ef27a5b283ec377523ce0ae3f39a52b5a401cc52",
         "packages/indexer/src/ts-module-resolver.test.ts": "b67a07e8295709b36b40fd478b2676cfde05b87ee480f5a70ada33d8640550b8",
         "packages/indexer/src/ts-module-resolver.ts": "a65b95b83358650ae4724e6c7a1c0815a101f3e84c8cf035c21b7da2e676ba61",
-        "packages/indexer/src/types.ts": "882044f5022c730efd51f0273ff38fc262e5e33365ac266e192e20dcb8380376",
+        "packages/indexer/src/types.ts": "2087816b16acc7a8f0c21ac2451d9df03a6d7da2e724ed3fd6663e4a392474c9",
         "packages/indexer/tsconfig.json": "4ec2c796112cd309a04972ac599b015555300dff8a21b242efc2f1afcd6f2b67",
         "packages/internal/package.json": "88dea8252826d8558402f4b5be575a384b391c98028a822200e4943bbe5bae11",
         "packages/internal/src/env-schema.ts": "60f1b65fcce237d569a631ac3b0b6244a4dbff2814a477c8b6983797f9833042",
@@ -6943,7 +6943,7 @@
         "sdk/e2e/workflows/multi-turn-conversation.e2e.test.ts": "5eafb98a62b80a97ee3d6a913979c8ebf081b474110536bb2afce38e5d8a6516",
         "sdk/examples/readme-example-1.ts": "264c25f35a63e43f5e4a05fd2df14a0d711ca42afc04c9e8aa7c935ef94f23e4",
         "sdk/examples/readme-example-2.ts": "5d108260b27ec53900c02227b2b744c5a20bd7b34428d64eb17ea0b06615e408",
-        "sdk/knowledge.md": "709a6ad08a6523bda77c83b129cd0472947ac862e574bd78c72b3e7c12a6f019",
+        "sdk/knowledge.md": "89f80bbf1b543c1054a50a79a49a2b9ae5c1c771c798621f57808f5eb69028fd",
         "sdk/openbuff.json": "d02ac6f0fee5cb3dca70e426d22c094d0b8a712ef8a4419157be30711434bb8c",
         "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
@@ -7110,7 +7110,7 @@
         "sdk/src/__tests__/lsp-execution-branch-controls.test.ts": "efa8f016e687b4faa372c617e71c1a7f1a605451df29f0e3d4a6d8b604f70f8e",
         "sdk/src/__tests__/lsp-execution-fixture.ts": "6964483d415805e344c6100898ef2feb75eb2058c5ad9d2f8166ef03ca33dda0",
         "sdk/src/__tests__/lsp-execution.test.ts": "0b8eb8ec0f3636638f9e4bb2eb16394d5a1d46d08f0d1d2bf4da9cc30a0f1085",
-        "sdk/src/__tests__/lsp-multiplexer.test.ts": "c7a9823e9410bddcff5f5f2671619e699ddde3aee9987392acca6af236fbd8f5",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
         "sdk/src/__tests__/lsp-real-server.test.ts": "6e89c66b78b7b05c5f197b723f598a14f264c71f8daf98086596c9c8ca86f79d",
         "sdk/src/__tests__/mcp-address-policy.test.ts": "aefc7b60da3adf041878fb8bf55fcce5f846d91d9d0670a2ac141be710077a1f",
         "sdk/src/__tests__/mcp-origin-continuation.test.ts": "b5bcd393cf9960c976d2ecd3077ae3b95b08d1f94b76fdedf40a8fcf9c353b9a",
@@ -7319,7 +7319,7 @@
         "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
         "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
         "sdk/src/services/lsp-install-hints.ts": "e084635695138bd77cb681a25d5d76fb58cf441fd015f207e800c443fa87355e",
-        "sdk/src/services/lsp-multiplexer.ts": "1c25e79072d78105fd635d296e15669cb9d1c10d6708bf8cd5af3d0395e10bc7",
+        "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
         "sdk/src/services/memory-v2/__tests__/b14-usage.test.ts": "9bb7c6cbfee51f395bb608f035581ec4f8b8a37d5e65aff73041777744ed4502",
         "sdk/src/services/memory-v2/__tests__/coordinator.test.ts": "42e99e085b103edc47933f4755649c937cba8a26090229e78b27c56beda8102b",
         "sdk/src/services/memory-v2/__tests__/finish-turn.test.ts": "81f0151dec7a7a37ff031a74016636b82d2e944369877924d7564d4dfd872ea6",
@@ -7476,19 +7476,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261126T235453390455Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T021752111402Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-publication-process-nonauthor",
+            "reviewer": "b23-launch-process-nonauthor",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "b23-implementation"
             ],
             "scope": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/r10-publication/B20-docs-wrapper.json",
-              "sha256": "29b16c4f5402255171bdb235bccc59f1c93a1a37f83134f7f454fd7dfd7e86cd"
+              "path": ".tmp/b23-renewal/B20-implementation-review.json",
+              "sha256": "38c1e818a30510754fd01b2c18db09269c9812149396d9953cee23d0bd3934cf"
             }
           }
         ],
@@ -7497,10 +7497,10 @@
       "risks": [
         "No native process fence, escape prevention, Windows/non-Linux or arbitrary descendant/malformed identity credit."
       ],
-      "acceptedAt": "2026-11-26T23:54:53.625481+00:00",
+      "acceptedAt": "2026-11-27T02:17:52.359642+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261126T235453390455Z-acceptance.json",
-        "sha256": "c17f3674168c6a129425a1997d419395bd8b189d1654f695b343405297a359c0"
+        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "e07bd41b3bc17c5019bdfdd9ad1fc78bf506efb72c69765935e4078c87321dad"
       }
     },
     {
@@ -7554,17 +7554,70 @@
     {
       "nodeId": "B23",
       "parentCardId": null,
-      "status": "pending",
+      "status": "accepted",
       "prerequisites": [],
       "acceptedPrerequisites": [],
-      "sourceContractHashes": {},
+      "sourceContractHashes": {
+        ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+        ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+        ".bun-version": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
+        "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+        "common/knowledge.md": "4099664747e7df4dbd975146b37a11490d759f712a9555dd7d0b864e2650e2a5",
+        "common/src/util/__tests__/language-capability-manifest.test.ts": "0122b564a8faa4617d0937ed992d89702b93baabd6a7ec8b1c53f68b97657915",
+        "common/src/util/__tests__/language-profiles.test.ts": "ec2f6374639dde67b75689c3943f84531f265089aca22bd4acedc92fbff6ea6e",
+        "common/src/util/language-capability-manifest.ts": "336285d7870bbda4143f7a320ab25a2d5a2d62d30c4bfd80d5ac45c3c0edd8fe",
+        "common/src/util/language-profiles.ts": "61fc72e7af0b80019f301257d069294c2d0e24186d2fb21c62a6813e0cdfea7b",
+        "docs/execution/body-roadmap/record-renewal-checks.py": "ab2427f2dd0c2cde82cd5aa4a671128cf8d7627479dc4230cb6a6aaefe05b8b3",
+        "packages/code-map/__tests__/parse.test.ts": "b73d4f8254c05eb6ae62bc775752dc66f53ef80ef289ec217e5f9df49ffc07bc",
+        "packages/code-map/src/parse.ts": "6614be5b7e3366b8ea7bc7e378a241dfeb1c39da21961591440e5f2ac224cb52",
+        "packages/indexer/src/call-navigation.test.ts": "088aec7db3dca416af9085f667cc79c72b7d16b2c142de6fe4e736deed5b819a",
+        "packages/indexer/src/durable-index-store.test.ts": "21290973bd9265798bda2d094b0fa1d8c8a01fb786c9a793a4ee762b06233a65",
+        "packages/indexer/src/durable-index-store.ts": "2790c980778dfd395ee0358e4a1f5c32de5d03b9ee257eb65cf6132cd69a3cdc",
+        "packages/indexer/src/import-resolution.test.ts": "9c1e90f74e9045b3b6bc0b3619a95fcbb3f43eeb8be9257769676153bf529349",
+        "packages/indexer/src/import-resolution.ts": "7f8f302f2e121d073a6a972dc0c26685bff1f548568e79aff0324367f6d3f5e9",
+        "packages/indexer/src/metadata-indexer.test.ts": "3fb8c0744fded18f4e391e53ff30213e9f3c5b359f75e605b8925860a2d1dc23",
+        "packages/indexer/src/metadata-indexer.ts": "484a84a3a1c19106a1e0d9be7c842e500b7a602499d0cc1811c6a3c8c4b2d5ef",
+        "packages/indexer/src/scip-ingest.test.ts": "e2e178a145b3f6628ad12b08ed97d91702f58a7ba8dbafc242c38200c576055b",
+        "packages/indexer/src/scip-ingest.ts": "11aa0739e8d516e0429bd24a440f04e0fed087dc60b0f267cf18ca6b00e9b3f8",
+        "packages/indexer/src/scip-runner.test.ts": "b40434a7ad21b097f3f122be7276ead0489b91c0c056ee6c0c42c39a112505e3",
+        "packages/indexer/src/types.ts": "2087816b16acc7a8f0c21ac2451d9df03a6d7da2e724ed3fd6663e4a392474c9",
+        "sdk/knowledge.md": "89f80bbf1b543c1054a50a79a49a2b9ae5c1c771c798621f57808f5eb69028fd",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
+        "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
+        "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
+      },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": null,
-      "coverageTier": null,
-      "evidenceManifest": null,
-      "verification": null,
-      "risks": []
+      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "coverageTier": "Frozen B23 (PLAN.md:730): source-level identity and operation availability for the finite language registry and generic fallback; framed LSP document IDs; the exercised structural call/import joins; and exact bounded SCIP symbol identity through refresh and durable storage.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T021752111402Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "b23-language-nonauthor",
+            "implementationOwners": [
+              "b23-implementation"
+            ],
+            "scope": "Frozen B23 (PLAN.md:730): source-level identity and operation availability for the finite language registry and generic fallback; framed LSP document IDs; the exercised structural call/import joins; and exact bounded SCIP symbol identity through refresh and durable storage.",
+            "decision": "approve",
+            "evidence": {
+              "path": ".tmp/b23-renewal/B23-implementation-review.json",
+              "sha256": "11f0e85c7474d9d0a8612835e5c53574eee20ffe075576a9f606fef2847d2a66"
+            }
+          }
+        ],
+        "requiredCommandCount": 1
+      },
+      "risks": [
+        "LSP evidence is framed fixture traffic only; no live external language server behavior or general server lifecycle is established.",
+        "SCIP evidence covers fixture dumps, the actual ingestion/graph/storage paths, and the observed local Rust storage restart. It does not certify external SCIP indexers or other native/platform behavior.",
+        "Approval is limited to the exercised source-level B23 identity and operation-availability tier. It does not certify packaged assets or broader semantic operations such as navigation, refactoring, diagnostics, builds, tests, or joined validation across languages."
+      ],
+      "acceptedAt": "2026-11-27T02:17:52.365380+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T021752111402Z-acceptance.json",
+        "sha256": "fdb57ab93a3f6cb6d33cd5d0426fd0588e1bbdf1be71ca0a6d280b690fedeb52"
+      }
     },
     {
       "nodeId": "B24",
@@ -8119,5 +8172,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-26T23:54:53.628741+00:00"
+  "updatedAt": "2026-11-27T02:17:52.365945+00:00"
 }

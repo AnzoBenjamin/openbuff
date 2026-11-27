@@ -33,6 +33,7 @@ import {
   type IndexStorageStats,
 } from './storage-port'
 import { buildIndexQueryData } from './query-data'
+import { withoutStaleScipProjection } from './scip-ingest'
 import { canonicalJson } from './stable-json'
 import type {
   IndexedFile,
@@ -435,7 +436,7 @@ export async function loadIndexGeneration(
   )
   if (!previousDiscovery) return null
   options?.onDiscovery?.({
-    ...previousDiscovery,
+    ...withoutStaleScipProjection(previousDiscovery),
     repositoryId: opened.identity.repositoryId,
     worktreeId: opened.identity.worktreeId,
     freshness: 'unverified',
@@ -446,7 +447,7 @@ export async function loadIndexGeneration(
     const legacy = await loadLegacyIndex(projectRoot, cacheDir, options)
     if (!legacy) return null
     const upgraded: MetadataIndex = {
-      ...legacy,
+      ...withoutStaleScipProjection(legacy),
       repositoryId: opened.identity.repositoryId,
       worktreeId: opened.identity.worktreeId,
       freshness: 'unverified',
@@ -689,8 +690,11 @@ async function publishIndexGeneration(
   if (index.updateStats)
     index.updateStats.persistenceWrites = writes + publication.writes
   setIndexPublicationToken(index, headVersion)
+  // Match the cold reader even when a caller publishes a legacy graph.
+  const discovery = withoutStaleScipProjection(index)
+  if (discovery !== index) setIndexPublicationToken(discovery, headVersion)
   loadedGenerations.set(store, {
-    index,
+    index: discovery,
     manifest,
     headVersion,
     references,
@@ -990,16 +994,21 @@ function hydrateIndex(
     IndexNode
   >
   const edgeFacts = Array.from(facts.get('edges') ?? [])
-    .map(([key, value]) => [key, value as EdgeFact] as const)
+    .map(([key, value]) => {
+      const fact = value as EdgeFact
+      assertOpaqueEdgeKey(key, fact.edge)
+      return [key, fact] as const
+    })
     .sort((a, b) => a[1].order - b[1].order)
   const edges = edgeFacts.map(([, fact]) => fact.edge)
   const edgeIndexes = new Map(edgeFacts.map(([key], index) => [key, index]))
   const edgeByKey = new Map(edgeFacts.map(([key, fact]) => [key, fact.edge]))
   const structuralEdges = new Map(
-    Array.from(facts.get('structural_edges') ?? []).map(([key, edge]) => [
-      key,
-      edge as IndexEdge,
-    ]),
+    Array.from(facts.get('structural_edges') ?? []).map(([key, value]) => {
+      const edge = value as IndexEdge
+      assertOpaqueEdgeKey(key, edge)
+      return [key, edge] as const
+    }),
   )
   const graph: IndexGraph = { nodes, edges }
   const postings: Record<string, string[]> = Object.create(null)
@@ -1079,7 +1088,7 @@ function hydrateIndex(
     freshness: manifest.freshness,
     unverifiedPaths: manifest.unverifiedPaths,
   }
-  return index
+  return withoutStaleScipProjection(index)
 }
 
 function gatherFacts(
@@ -1150,18 +1159,24 @@ function gatherFacts(
 }
 
 export function stableIndexEdgeKey(edge: IndexEdge): string {
-  return createHash('sha256')
-    .update(
-      JSON.stringify([
-        edge.from,
-        edge.to,
-        edge.type,
-        edge.label ?? '',
-        edge.confidence ?? 'heuristic',
-        edge.producer?.name ?? '',
-      ]),
-    )
-    .digest('hex')
+  const identity = [
+    edge.from,
+    edge.to,
+    edge.type,
+    edge.identityDigest === undefined ? (edge.label ?? '') : null,
+    edge.confidence ?? 'heuristic',
+    edge.producer?.name ?? '',
+  ]
+  // Keep the serialized preimage byte-for-byte for edges without a digest.
+  // With a digest, the display label can change without changing identity.
+  if (edge.identityDigest !== undefined) identity.push(edge.identityDigest)
+  return createHash('sha256').update(JSON.stringify(identity)).digest('hex')
+}
+
+function assertOpaqueEdgeKey(key: string, edge: IndexEdge): void {
+  if (edge.identityDigest !== undefined && stableIndexEdgeKey(edge) !== key) {
+    throw new Error('Invalid opaque identity in index edge projection')
+  }
 }
 
 function sameFact(table: FactTable, previous: unknown, next: unknown): boolean {

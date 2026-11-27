@@ -14,7 +14,7 @@ BASE = Path(__file__).resolve().parent
 EXPECTED_MANIFEST = 'f007ac73599e36dcb494171d010d5b91cff946ecd61f545fa0a2e85644654d52'
 SNAPSHOTS = {
     'historical': (BASE, EXPECTED_MANIFEST),
-    'r10': (BASE / 'r10', '19fae9a6d9ec28c4472d9eb668196736818b1d426d7d075c06cb2f15466778de'),
+    'r10': (BASE / 'r10', '22b9c04bcdc8ae4b56ef72d5dca192a7bd55dce0d14a1ad6deddcb495a2e707d'),
 }
 CHUNK_SIZE = 1024 * 1024
 

@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { getLanguageToolSpecs } from '@codebuff/common/util/language-capabilities'
-import { LANGUAGE_CAPABILITY_REGISTRY } from '@codebuff/common/util/language-capabilities'
+import { getSourceLanguageIdentityForPath } from '@codebuff/common/util/language-profiles'
 
 import { lspInstallHint } from './lsp-install-hints'
 import { captureTextDocument } from '@codebuff/common/util/byte-text'
@@ -1237,21 +1237,9 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     options.onEvent?.(event)
   }
 
-  function resolveLanguage(filePath: string): SupportedLanguageId {
-    const normalized = filePath.toLowerCase()
-    const dot = normalized.lastIndexOf('.')
-    const extension = dot === -1 ? '' : normalized.slice(dot)
-    for (const id of Object.keys(
-      LANGUAGE_CAPABILITY_REGISTRY,
-    ) as SupportedLanguageId[]) {
-      if (
-        (LANGUAGE_CAPABILITY_REGISTRY[id].extensions as readonly string[]).includes(
-          extension,
-        )
-      ) {
-        return id
-      }
-    }
+  function resolveSourceLanguage(filePath: string) {
+    const source = getSourceLanguageIdentityForPath(filePath)
+    if (source) return source
     throw new LspServerUnavailableError(
       `No supported language for file '${filePath}'.`,
       { reason: 'unsupported-language' },
@@ -1318,7 +1306,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     if (disposed) {
       throw new LspServerError('LSP multiplexer is disposed.', { reason: 'disposed' })
     }
-    const languageId = resolveLanguage(filePath)
+    const { profileId: languageId } = resolveSourceLanguage(filePath)
     const spec = selectServerSpec(languageId)
     // Negative cache (language-intel-07): once a server binary is observed
     // missing, later calls answer not-installed without respawning it.
@@ -1508,15 +1496,17 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     if (options.openFile) {
       const uri = filePathToUri(filePath)
       if (entry.connection.versionOf(uri) === undefined) {
+        const { documentLanguageId } = resolveSourceLanguage(filePath)
         const text = await options.openFile({ filePath })
+        const version = 1
         await withResourceUse(
           entry,
           executionContext,
           'textDocument/didOpen',
-          { uri, text },
+          { uri, languageId: documentLanguageId, version, text },
           () => {
             if (entry.connection.versionOf(uri) === undefined)
-              entry.connection.didOpen(uri, entry.languageId, 1, text)
+              entry.connection.didOpen(uri, documentLanguageId, version, text)
           },
         )
       }
@@ -1982,7 +1972,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       if (filePath !== undefined) {
         let languageId: SupportedLanguageId
         try {
-          languageId = resolveLanguage(filePath)
+          languageId = resolveSourceLanguage(filePath).profileId
         } catch {
           // No language can be determined from the query context: degrade
           // to the existing unavailable result instead of throwing.
@@ -2017,12 +2007,13 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       }
       const known = entry.connection.versionOf(uri)
       if (open || known === undefined) {
+        const { documentLanguageId } = resolveSourceLanguage(filePath)
         await withResourceUse(
           entry,
           executionContext,
           'textDocument/didOpen',
-          { uri, version, text },
-          () => entry.connection.didOpen(uri, entry.languageId, version, text),
+          { uri, languageId: documentLanguageId, version, text },
+          () => entry.connection.didOpen(uri, documentLanguageId, version, text),
         )
       } else {
         await withResourceUse(

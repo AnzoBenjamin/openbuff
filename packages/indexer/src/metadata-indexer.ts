@@ -12,10 +12,12 @@ import {
 
 import {
   extractImportSpecifiers,
+  hasImportableGoPackageDeclaration,
   resolveImportToFile,
   stripJsonComments,
 } from './import-resolution'
 import { createTsModuleResolver } from './ts-module-resolver'
+import { edgeDedupeKey, isStaleScipEdge } from './scip-ingest'
 import {
   BINARY_EXTENSIONS,
   statProjectFiles,
@@ -46,7 +48,10 @@ import type {
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
 import type { WalkedFile, WalkProjectResult } from './file-walker'
 import type { TsModuleResolver } from './ts-module-resolver'
-import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
+import {
+  getSourceLanguageIdentityForPath,
+  type SourceLanguageFamily,
+} from '@codebuff/common/util/language-profiles'
 
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 
@@ -1259,6 +1264,13 @@ function collectAffectedGraphPaths(
         affected.add(caller)
     }
     if (!oldFile || !newFile) importTopologyChanged = true
+    if (
+      filePath.endsWith('.go') &&
+      hasImportableGoPackageDeclaration(oldFile) !==
+        hasImportableGoPackageDeclaration(newFile)
+    ) {
+      importTopologyChanged = true
+    }
     if (/\.(?:java|kt|php)$/.test(filePath)) {
       const declaration = (file: IndexedFile | undefined) =>
         file?.contentSample?.match(/(?:package|namespace)\s+[^;\n{]+/)?.[0]
@@ -1373,6 +1385,7 @@ function composeGraphLayers(
     (edge) => edge.confidence === 'precise',
   )
   const precise = priorPrecise.filter((edge) => {
+    if (isStaleScipEdge(edge)) return false
     const dependencies =
       edge.producer?.sourceHashes ??
       Object.fromEntries(
@@ -1423,13 +1436,7 @@ function countUpdatedGraphEdges(
   affected: ReadonlySet<string>,
 ): number {
   const key = (edge: IndexEdge) =>
-    JSON.stringify([
-      edge.from,
-      edge.to,
-      edge.type,
-      edge.label ?? '',
-      edge.confidence ?? 'heuristic',
-    ])
+    JSON.stringify([edgeDedupeKey(edge), edge.confidence ?? 'heuristic'])
   const before = new Map<string, IndexEdge>()
   const after = new Map<string, IndexEdge>()
   for (const filePath of affected) {
@@ -1501,7 +1508,7 @@ function getGraphConfigurationFingerprint(
     .createHash('sha256')
     .update(
       JSON.stringify({
-        version: 1,
+        version: 2, // Rebuild call edges made before source-family joins.
         sourceFingerprint,
         weights: resolveGraphWeights(weights),
       }),
@@ -1872,14 +1879,15 @@ async function buildModuleAwareCallEdges(
     }
   }
 
-  // Language family depends only on a file's extension, so resolve it once per
-  // file (with its lone path.extname/toLowerCase allocation) instead of once
-  // per candidate edge inside the caller-resolution loops below.
-  const familyByPath = new Map<string, string>()
-  const familyForPath = (filePath: string): string => {
+  // Resolve once per file, including misses. An unknown family is not a
+  // candidate, even if another indexed path is also unknown.
+  const familyByPath = new Map<string, SourceLanguageFamily | null>()
+  const familyForPath = (filePath: string): SourceLanguageFamily | null => {
     let family = familyByPath.get(filePath)
     if (family === undefined) {
-      family = getLanguageFamily(files[filePath]?.ext)
+      family = files[filePath]
+        ? (getSourceLanguageIdentityForPath(filePath)?.family ?? null)
+        : null
       familyByPath.set(filePath, family)
     }
     return family
@@ -1890,7 +1898,8 @@ async function buildModuleAwareCallEdges(
     if (sourcePaths && !sourcePaths.has(callerPath)) continue
     await yieldToEventLoop()
     const caller = files[callerPath]
-    if (!caller) continue
+    const callerFamily = familyForPath(callerPath)
+    if (!caller || !callerFamily) continue
     const importedFiles = new Set(
       caller.imports
         .map((importPath) =>
@@ -1906,18 +1915,11 @@ async function buildModuleAwareCallEdges(
         .filter((filePath): filePath is string => Boolean(filePath)),
     )
 
-    // callerLanguage is invariant across this caller's calls and candidates,
-    // so hoist it out of the inner loops rather than recomputing it (and its
-    // path.extname/toLowerCase allocation) per call and per candidate edge.
-    const callerLanguage = familyForPath(callerPath)
     for (const call of parsed.calls) {
-      const candidates = (definitions.get(call) ?? []).filter(
-        (filePath) => filePath !== callerPath,
+      const languageCandidates = (definitions.get(call) ?? []).filter(
+        (filePath) =>
+          filePath !== callerPath && familyForPath(filePath) === callerFamily,
       )
-      const sameLanguage = candidates.filter(
-        (filePath) => familyForPath(filePath) === callerLanguage,
-      )
-      const languageCandidates = sameLanguage
       const importedCandidates = languageCandidates.filter((filePath) =>
         importedFiles.has(filePath),
       )
@@ -2408,7 +2410,7 @@ function dedupeEdges(edges: IndexEdge[]): IndexEdge[] {
   const seen = new Set<string>()
   const deduped: IndexEdge[] = []
   for (const edge of edges) {
-    const key = `${edge.from}\0${edge.to}\0${edge.type}\0${edge.label ?? ''}`
+    const key = edgeDedupeKey(edge)
     if (seen.has(key)) continue
     seen.add(key)
     deduped.push(edge)

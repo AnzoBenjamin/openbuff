@@ -22,6 +22,7 @@ import {
   updateMetadataIndex,
 } from './metadata-indexer'
 import { extractImportSpecifiers } from './import-resolution'
+import { mergeScipIntoIndex, parseScipJson } from './scip-ingest'
 
 describe('metadata indexer', () => {
   test('builds graph nodes and content hashes', async () => {
@@ -133,6 +134,68 @@ describe('metadata indexer', () => {
     expect(updated?.headings).not.toContain('Alpha')
     expect(updated?.concepts).toContain('bravo')
     expect(updated?.concepts).not.toContain('alpha')
+  })
+
+  test('structural refresh retains distinct precise identities with shared labels and endpoints', async () => {
+    const root = await makeTempProject({
+      'src/def.ts': 'export const answer = 1\n',
+      'src/ref.ts': 'export const use = 1\n',
+      'docs/readme.md': '# Initial\n',
+    })
+    const first = await buildMetadataIndex(root)
+    const symbols = ['a', 'b'].map(
+      (suffix) =>
+        'scip-typescript npm fixture 1.0.0 ' +
+        'veryLongName'.repeat(32) +
+        suffix,
+    )
+    const scip = parseScipJson({
+      documents: [
+        {
+          relative_path: 'src/def.ts',
+          occurrences: symbols.map((symbol) => ({
+            symbol,
+            symbol_roles: 1,
+            range: [0, 0, 1],
+          })),
+        },
+        {
+          relative_path: 'src/ref.ts',
+          occurrences: symbols.map((symbol) => ({
+            symbol,
+            symbol_roles: 0,
+            range: [0, 0, 1],
+          })),
+        },
+      ],
+    })
+    const precise = mergeScipIntoIndex(first, scip)
+    const select = (index: typeof first) =>
+      index.graph.edges.filter(
+        (edge) =>
+          edge.confidence === 'precise' &&
+          edge.from === 'file:src/ref.ts' &&
+          edge.to === 'file:src/def.ts',
+      )
+    const old = select(precise)
+    expect(old).toHaveLength(2)
+    expect(new Set(old.map((edge) => edge.label)).size).toBe(1)
+    expect(new Set(old.map((edge) => edge.identityDigest)).size).toBe(2)
+    await fs.promises.writeFile(
+      path.join(root, 'docs/readme.md'),
+      '# Updated\n',
+    )
+    const refreshed = await updateMetadataIndex(
+      precise,
+      root,
+      {},
+      { changedPaths: ['docs/readme.md'], complete: true },
+    )
+    expect(
+      select(refreshed)
+        .map((edge) => edge.identityDigest)
+        .sort(),
+    ).toEqual(old.map((edge) => edge.identityDigest).sort())
   })
 
   test('uses a complete path delta without absorbing unrelated external changes', async () => {

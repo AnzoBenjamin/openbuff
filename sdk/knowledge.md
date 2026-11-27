@@ -62,6 +62,8 @@
 
 ## Polyglot first-wave contracts
 
+- The LSP pool still shares servers by toolchain profile and root. Each `didOpen` carries the source file's document ID instead, so one TypeScript pool can open JavaScript, JSX, TypeScript, and TSX, and clangd can distinguish C from C++.
+
 - SDK reads preserve exact UTF-8 BOM and terminator bytes separately from normalized observation text. Bounded Node readers retain a result buffer plus one fixed chunk, and localized edits verify the captured raw basis before committing. ACP/MCP outbound text redacts both legacy `cap.v3` and current `cap.v4` tokens.
 - SDK results, ACP events and journals retain separate run, task and action outcomes. Mutation dispatch and review bundles use observed forward receipts; compensation failure preserves uncertainty without certifying foreign or unapplied bytes.
 - `sdk/src/run.ts` keeps startup dependencies abortable. Once runtime cancellation is ready, it waits for tool, callback and runtime cleanup before returning final history and action outcomes. User lookup is raced against cancellation too.

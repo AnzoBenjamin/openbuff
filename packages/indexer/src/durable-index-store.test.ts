@@ -22,6 +22,7 @@ import {
   openIndexStorage,
   recordIndexMutation,
   saveIndexGeneration,
+  stableIndexEdgeKey,
 } from './durable-index-store'
 import {
   computeIndexSnapshotId,
@@ -32,7 +33,13 @@ import {
   withCacheLock,
   MAX_METADATA_INDEX_BYTES,
 } from './index-store'
-import { mergeScipEdgesIntoIndex } from './scip-ingest'
+import { queryIndex } from './query'
+import {
+  MAX_SCIP_LABEL_CHARS,
+  mergeScipEdgesIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+} from './scip-ingest'
 import { openRepositoryServiceStorage } from './repository-service-client'
 import {
   collectIndexGarbage,
@@ -46,7 +53,7 @@ import {
   setIndexStorageFactory,
   type IndexStoragePort,
 } from './storage-port'
-import type { MetadataIndex } from './types'
+import type { IndexEdge, MetadataIndex } from './types'
 
 const roots: string[] = []
 const managers: IndexManager[] = []
@@ -140,6 +147,153 @@ afterEach(async () => {
 })
 
 describe('normalized immutable index generations', () => {
+  test('keeps the historical durable key for an edge without an opaque identity', () => {
+    const legacy: IndexEdge = {
+      from: 'file:src/a.ts',
+      to: 'file:src/b.ts',
+      type: 'references',
+      weight: 0.9,
+      label: 'scip:test/helper',
+      confidence: 'precise',
+      producer: { name: 'scip', version: 'scip-json:1', sourceHashes: {} },
+    }
+    expect(stableIndexEdgeKey(legacy)).toBe(
+      'dd6da5e42e2eb4fb76b39eddb85966793ce0f3e7a1fe71c6cf37f33cc82feceb',
+    )
+  })
+
+  test('roundtrips distinct same-label SCIP edges and consumes both in reference queries', async () => {
+    const root = await fixture()
+    // No heuristic import/call edges to b.ts, so only SCIP can affect this score.
+    await fs.writeFile(path.join(root, 'src/a.ts'), 'export const start = 1\n')
+    const base = await buildMetadataIndex(root)
+    const prefix = `scip-typescript npm pkg 1.0.0 ${'nested/'.repeat(24)}`
+    const symbols = [`${prefix}one().`, `${prefix}two().`]
+    const document = (
+      relative_path: string,
+      names: string[],
+      symbol_roles: number,
+    ) => ({
+      relative_path,
+      occurrences: names.map((symbol, line) => ({
+        range: [line, 0, 1],
+        symbol,
+        symbol_roles,
+      })),
+    })
+    const input = scipPreciseEdges(
+      parseScipJson({
+        documents: [
+          document('src/b.ts', symbols, 1),
+          document('src/a.ts', [symbols[1]!, ...symbols], 0),
+        ],
+      }),
+    )
+    const { index: enriched, edgesMerged } = mergeScipEdgesIntoIndex(
+      base,
+      input,
+    )
+    expect(edgesMerged).toBe(2)
+    expect(
+      mergeScipEdgesIntoIndex(enriched, [...input].reverse()).edgesMerged,
+    ).toBe(0)
+    const preciseEdges = enriched.graph.edges.filter(
+      (edge) => edge.confidence === 'precise',
+    )
+    const [first, second] = preciseEdges
+    expect(first?.label).toBe(prefix.slice(0, MAX_SCIP_LABEL_CHARS))
+    expect(second?.label).toBe(first?.label)
+    expect(stableIndexEdgeKey(first!)).not.toBe(stableIndexEdgeKey(second!))
+    expect(
+      stableIndexEdgeKey({ ...first!, label: 'another display label' }),
+    ).toBe(stableIndexEdgeKey(first!))
+    expect(await saveIndexGeneration(base, root)).toBe(true)
+    expect(await saveIndexGeneration(enriched, root)).toBe(true)
+    await closeIndexStorage(root)
+
+    const reopened = (await loadIndexGeneration(root))!
+    expect(reopened.graph.edges).toEqual(enriched.graph.edges)
+    for (const endpoint of ['file:src/a.ts', 'file:src/b.ts']) {
+      const indexes = reopened.queryData?.adjacency[endpoint] ?? []
+      expect(
+        indexes
+          .map((i) => reopened.graph.edges[i])
+          .filter((edge) => edge?.confidence === 'precise'),
+      ).toEqual(preciseEdges)
+    }
+    for (const index of [enriched, reopened]) {
+      expect(
+        queryIndex(index, '', { mode: 'references', from: 'src/b.ts' }),
+      ).toEqual([expect.objectContaining({ path: 'src/a.ts', score: 1.8 })])
+    }
+  })
+
+  test.each(['normalized', 'json'] as const)(
+    'refuses lossy %s SCIP projections and restores structural fallback',
+    async (format) => {
+      const root = await fixture(1)
+      const base = await buildMetadataIndex(root)
+      const attached = precise(base)
+      const edge = attached.graph.edges.find(
+        (candidate) => candidate.confidence === 'precise',
+      )!
+      const stale: IndexEdge = {
+        ...edge,
+        producer: { ...edge.producer!, version: 'scip-json:1' },
+      }
+      const legacy = {
+        ...attached,
+        graph: {
+          ...attached.graph,
+          edges: [
+            ...attached.graph.edges.filter((candidate) => candidate !== edge),
+            stale,
+            { ...stale, to: 'file:src/extra0.ts' },
+          ],
+        },
+      }
+      if (format === 'json') {
+        expect(await saveLegacyIndex(legacy, root)).toBe(true)
+      } else {
+        expect(await saveIndexGeneration(legacy, root)).toBe(true)
+        expect(
+          (await loadIndexGeneration(root))?.graph.edges.some(
+            (candidate) => candidate.confidence === 'precise',
+          ),
+        ).toBe(false)
+        await closeIndexStorage(root)
+      }
+
+      let discovery: MetadataIndex | undefined
+      const reopened = (await loadIndexGeneration(root, undefined, {
+        onDiscovery: (index) => {
+          discovery = index
+        },
+      }))!
+      for (const index of [reopened, discovery!]) {
+        expect(
+          index.graph.edges.some(
+            (candidate) => candidate.confidence === 'precise',
+          ),
+        ).toBe(false)
+        const fallback = index.graph.edges.find(
+          (candidate) =>
+            candidate.type === 'references' &&
+            candidate.from === stale.from &&
+            candidate.to === stale.to,
+        )
+        expect(fallback).toMatchObject({ label: './b' })
+        expect(
+          queryIndex(index, '', { mode: 'references', from: 'src/extra0.ts' }),
+        ).toEqual([])
+        expect(
+          queryIndex(index, '', { mode: 'references', from: 'src/b.ts' })[0]
+            ?.path,
+        ).toBe('src/a.ts')
+      }
+    },
+  )
+
   test('dependency and posting names matching object properties survive restart and updates', async () => {
     const root = await fixture()
     await fs.writeFile(

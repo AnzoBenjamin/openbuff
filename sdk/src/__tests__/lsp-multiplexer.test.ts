@@ -207,6 +207,67 @@ describe('createLspMultiplexer', () => {
     await mux.dispose()
   })
 
+  test('sends exact document IDs on auto-open and sync without splitting toolchain servers', async () => {
+    const cases = [
+      ['js', 'javascript', 'typescript-language-server', 'export const n = 1'],
+      ['jsx', 'javascriptreact', 'typescript-language-server', 'const n = <div />'],
+      ['tsx', 'typescriptreact', 'typescript-language-server', 'const n: JSX.Element = <div />'],
+      ['c', 'c', 'clangd', 'int n = 1;'],
+      ['cpp', 'cpp', 'clangd', 'auto n = 1;'],
+    ] as const
+    const root = path.resolve('/proj')
+    const peers = new Map<string, FakePeer>()
+    const spawned: string[] = []
+    const sourceByPath = new Map<string, string>()
+    const mux = createLspMultiplexer({
+      spawner: ({ argv }) => {
+        const command = argv[0]!
+        const peer = makePeer(defaultBehavior)
+        spawned.push(command)
+        peers.set(command, peer)
+        return peer.child
+      },
+      rootResolver: () => root,
+      openFile: async ({ filePath }) => {
+        const text = sourceByPath.get(filePath)
+        if (text === undefined) throw new Error(`Unexpected auto-open: ${filePath}`)
+        return text
+      },
+    })
+    try {
+      for (const [extension, , , text] of cases) {
+        const queryPath = path.join(root, `query.${extension}`)
+        const syncPath = path.join(root, `sync.${extension}`)
+        sourceByPath.set(queryPath, text)
+        expect(await mux.hover({
+          filePath: queryPath,
+          position: { line: 0, character: 0 },
+        })).not.toBeNull()
+        await mux.syncFile({ filePath: syncPath, version: 9, text })
+      }
+      expect(spawned).toEqual(['typescript-language-server', 'clangd'])
+      expect(mux.warmServerCount()).toBe(2)
+      for (const [command, peer] of peers) {
+        const messages = peer.received.map((body) => JSON.parse(body) as {
+          method: string
+          params?: { textDocument?: { uri: string; languageId: string; version: number; text: string } }
+        })
+        const documents = messages
+          .filter(({ method }) => method === 'textDocument/didOpen')
+          .map(({ params }) => params?.textDocument)
+        const expected = cases
+          .filter(([, , server]) => server === command)
+          .flatMap(([extension, languageId, , text]) => [
+            { uri: pathToFileURL(path.join(root, `query.${extension}`)).href, languageId, version: 1, text },
+            { uri: pathToFileURL(path.join(root, `sync.${extension}`)).href, languageId, version: 9, text },
+          ])
+        expect(documents).toEqual(expected)
+      }
+    } finally {
+      await mux.dispose()
+    }
+  })
+
   test('syncFile issues didOpen then didChange', async () => {
     const peer = makePeer(defaultBehavior)
     const mux = createLspMultiplexer({ spawner: () => peer.child })

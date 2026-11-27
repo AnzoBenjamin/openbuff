@@ -6,6 +6,10 @@ import {
   type LanguageCapability,
   type SupportedLanguageId,
 } from './language-capabilities'
+import {
+  getSourceLanguageIdentityForPath,
+  type SourceLanguageIdentity,
+} from './language-profiles'
 
 /**
  * Version of the serialized language capability manifest shape. Bump this
@@ -101,5 +105,63 @@ export function buildLanguageCapabilityManifest(): LanguageCapabilityManifestV1 
     schemaVersion: LANGUAGE_CAPABILITY_MANIFEST_VERSION,
     // The loop above inserts every SUPPORTED_LANGUAGE_IDS entry in order.
     languages: languages as Record<SupportedLanguageId, LanguageCapability>,
+  }
+}
+
+// This observation contract is versioned separately from the V1 profile catalog.
+export const LANGUAGE_OPERATION_AVAILABILITY_VERSION = 1
+
+const LANGUAGE_OPERATIONS = [
+  'parse',
+  'query',
+  'navigation',
+  'refactor',
+  'diagnostics',
+  'build',
+  'test',
+  'joinedValidation',
+] as const
+
+export type LanguageOperation = (typeof LANGUAGE_OPERATIONS)[number]
+
+export type LanguageOperationCell =
+  | { status: 'available'; evidenceId: string }
+  | { status: 'unavailable'; reason: 'unknown-language' | 'not-observed' }
+
+export type LanguageOperationAvailabilityV1 = {
+  schemaVersion: typeof LANGUAGE_OPERATION_AVAILABILITY_VERSION
+  source: SourceLanguageIdentity | null
+  /** Language-independent paths, still subject to normal access and execution policy. */
+  generic: Record<'read' | 'edit' | 'execute', 'available'>
+  operations: Record<LanguageOperation, LanguageOperationCell>
+}
+
+/**
+ * Describe operation availability without treating declarations as observations.
+ * Only current evidence for this file/toolchain and the named operation belongs
+ * in `observed`: an available grammar is not evidence of successful queries,
+ * a live server, or configured validation. Generic execution can still run an
+ * explicitly configured command for an unknown language.
+ */
+export function buildLanguageOperationAvailability(
+  filePath: string,
+  observed: Readonly<Partial<Record<LanguageOperation, string>>> = {},
+): LanguageOperationAvailabilityV1 {
+  const source = getSourceLanguageIdentityForPath(filePath) ?? null
+  const operations = {} as Record<LanguageOperation, LanguageOperationCell>
+  for (const operation of LANGUAGE_OPERATIONS) {
+    const evidenceId = source && observed[operation]
+    operations[operation] = evidenceId?.trim()
+      ? { status: 'available', evidenceId }
+      : {
+          status: 'unavailable',
+          reason: source ? 'not-observed' : 'unknown-language',
+        }
+  }
+  return {
+    schemaVersion: LANGUAGE_OPERATION_AVAILABILITY_VERSION,
+    source,
+    generic: { read: 'available', edit: 'available', execute: 'available' },
+    operations,
   }
 }

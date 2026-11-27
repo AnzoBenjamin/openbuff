@@ -63,7 +63,10 @@ export interface IndexEdge {
   to: string
   type: IndexEdgeType
   weight: number
+  /** Human-facing label, never a substitute for an opaque edge identity. */
   label?: string
+  /** Stable digest of the full producer descriptor, when one is available. */
+  identityDigest?: string
   confidence?: EdgeConfidence
   /** Producer-specific validity; retained independently of structural refresh. */
   producer?: {

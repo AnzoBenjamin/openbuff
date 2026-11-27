@@ -7,6 +7,8 @@ import {
   detectLanguageProfilesFromPaths,
   detectLanguageProfilesFromTask,
   getLanguageFamily,
+  getLspDocumentLanguageId,
+  getSourceLanguageIdentityForPath,
   formatLanguageProfilePrompt,
   formatLanguageProfilePromptForFileTree,
   selectLanguageProfiles,
@@ -344,24 +346,95 @@ describe('language profile prompts', () => {
     ).toEqual(['typescript', 'java'])
   })
 
-  test('resolves language family for dot-directory paths, not just bare extensions', () => {
-    // Bare leading-dot extension input still resolves directly.
-    expect(getLanguageFamily('.ts')).toBe('typescript')
-    expect(getLanguageFamily('.JSX')).toBe('javascript')
+  test('resolves the same source family for every grammar suffix and path spelling', () => {
+    const families = {
+      typescript: ['ts', 'tsx', 'mts', 'cts'],
+      javascript: ['js', 'jsx', 'mjs', 'cjs'],
+      python: ['py', 'pyi'],
+      rust: ['rs'],
+      go: ['go'],
+      java: ['java'],
+      csharp: ['cs'],
+      c: ['c', 'h'],
+      cpp: ['cc', 'cpp', 'cxx', 'hh', 'hpp', 'hxx'],
+      ruby: ['rb'],
+      php: ['php'],
+      swift: ['swift'],
+      kotlin: ['kt', 'kts'],
+      gdscript: ['gd'],
+    }
+    expect(
+      Object.values(families)
+        .flat()
+        .map((ext) => `.${ext}`)
+        .sort(),
+    ).toEqual(
+      Object.values(LANGUAGE_CAPABILITY_REGISTRY)
+        .flatMap((profile) => [...profile.extensions])
+        .sort(),
+    )
+    for (const [family, extensions] of Object.entries(families)) {
+      for (const extension of extensions) {
+        for (const suffix of [extension, extension.toUpperCase()]) {
+          for (const input of [
+            suffix,
+            `.${suffix}`,
+            `/repo/.config/main.${suffix}`,
+            `C:\\repo\\.config\\main.${suffix}`,
+          ]) {
+            expect(getLanguageFamily(input)).toBe(family)
+          }
+        }
+      }
+    }
+  })
 
-    // Files inside a dot-directory start with '.' but must go through
-    // path.extname so same-language caller edges are not dropped.
-    expect(getLanguageFamily('.storybook/main.ts')).toBe('typescript')
-    expect(getLanguageFamily('.config/foo.ts')).toBe('typescript')
-    expect(getLanguageFamily('.github/scripts/build.js')).toBe('javascript')
+  test('separates source families, extension-specific LSP IDs and toolchain profiles', () => {
+    const cases = [
+      ['main.js', 'javascript', 'typescript', 'javascript'],
+      ['main.jsx', 'javascript', 'typescript', 'javascriptreact'],
+      ['main.tsx', 'typescript', 'typescript', 'typescriptreact'],
+      ['native.c', 'c', 'cpp', 'c'],
+      ['native.h', 'c', 'cpp', 'c'],
+      ['native.hpp', 'cpp', 'cpp', 'cpp'],
+    ] as const
+    for (const [name, family, profileId, documentLanguageId] of cases) {
+      const filePath = `/repo/src/${name}`
+      expect(getSourceLanguageIdentityForPath(filePath)).toEqual({
+        family,
+        profileId,
+        documentLanguageId,
+      })
+      expect(detectLanguageIdForPath(filePath)).toBe(profileId)
+      expect(getLspDocumentLanguageId(filePath)).toBe(documentLanguageId)
+    }
+    // A manifest may select a toolchain without naming a source document.
+    expect(detectLanguageIdForPath('/repo/package.json')).toBe('typescript')
+    expect(getLspDocumentLanguageId('/repo/package.json')).toBeUndefined()
+    expect(
+      getSourceLanguageIdentityForPath('/repo/package.json'),
+    ).toBeUndefined()
+    expect(detectLanguageIdForPath('/repo/build.gradle.kts')).toBeUndefined()
+    expect(
+      getSourceLanguageIdentityForPath('/repo/build.gradle.kts')?.family,
+    ).toBe('kotlin')
+  })
 
-    // Ordinary paths and undefined input keep their existing behavior.
-    expect(getLanguageFamily('src/App.tsx')).toBe('typescript')
-    expect(getLanguageFamily('native/lib.cpp')).toBe('cpp')
-    expect(getLanguageFamily(undefined)).toBe('')
-
-    // A leading-dot file with no extension (e.g. dotfile) yields ''.
-    expect(getLanguageFamily('.env')).toBe('')
+  test('does not treat unknown suffixes, tool names or dotfiles as source families', () => {
+    for (const input of [
+      undefined,
+      '',
+      'pyright',
+      '.env',
+      '.obspec',
+      '/repo/a.obspec',
+      '/repo/py',
+    ]) {
+      expect(getLanguageFamily(input)).toBe('')
+    }
+    expect(getSourceLanguageIdentityForPath('py')).toBeUndefined()
+    expect(getLspDocumentLanguageId('/repo/py')).toBeUndefined()
+    expect(getLspDocumentLanguageId('/repo/.jsx')).toBe('javascriptreact')
   })
 
   test('falls back to repository languages when no focused signal exists', () => {

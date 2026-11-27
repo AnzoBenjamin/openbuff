@@ -11,24 +11,23 @@ import { importSpecifiersFromAstCaptures } from './import-sites'
 
 import type { LanguageConfig } from './languages'
 import type { Parser, Query } from 'web-tree-sitter'
-import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
+import {
+  getSourceLanguageIdentityForPath,
+  type SourceLanguageFamily,
+} from '@codebuff/common/util/language-profiles'
 
 export const DEBUG_PARSING = false
 /**
  * Language-agnostic tokens ignored everywhere (dunder-style constructor
  * names), plus a conservative per-language-family stoplist of ubiquitous
  * builtins (Tier 1A retrieval-quality fix): builtins carry no retrieval
- * with real symbols. Keys match getLanguageFamily() outputs — pinned
- * families by name ('typescript', 'javascript', 'c', 'cpp', 'kotlin'),
- * other languages by their normalized extension WITH dot ('.py', '.go',
- * '.rs', '.rb', '.java'), which is what getLanguageFamily returns for
- * non-pinned families. Resolve the family from the FULL file path, not a
- * bare extension: path.extname('.py') is '' inside getLanguageFamily, so a
- * bare '.py' input returns '' and would never match these keys.
+ * signal and should not compete with project symbols.
  */
 const IGNORE_TOKENS = ['__init__', '__post_init__', '__call__', 'constructor']
 
-const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
+const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Partial<
+  Record<SourceLanguageFamily, ReadonlySet<string>>
+> = {
   typescript: new Set([
     'console',
     'window',
@@ -108,7 +107,7 @@ const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
     'this',
     'super',
   ]),
-  '.py': new Set([
+  python: new Set([
     'self',
     'cls',
     'None',
@@ -126,7 +125,7 @@ const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
     'tuple',
     'isinstance',
   ]),
-  '.go': new Set([
+  go: new Set([
     'err',
     'fmt',
     'nil',
@@ -140,7 +139,7 @@ const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
     'append',
     'copy',
   ]),
-  '.rs': new Set([
+  rust: new Set([
     'self',
     'Self',
     'crate',
@@ -152,7 +151,7 @@ const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
     'vec',
     'stringify',
   ]),
-  '.rb': new Set([
+  ruby: new Set([
     'puts',
     'require',
     'require_relative',
@@ -164,7 +163,7 @@ const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
     'proc',
     'lambda',
   ]),
-  '.java': new Set([
+  java: new Set([
     'System',
     'String',
     'Integer',
@@ -177,9 +176,15 @@ const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
   ]),
 }
 
-function isIgnoredToken(identifier: string, family: string): boolean {
-  if (IGNORE_TOKENS.includes(identifier)) return true
-  return IGNORED_TOKENS_BY_LANGUAGE_FAMILY[family]?.has(identifier) ?? false
+function isIgnoredToken(
+  identifier: string,
+  family: SourceLanguageFamily | undefined,
+): boolean {
+  return (
+    IGNORE_TOKENS.includes(identifier) ||
+    (family !== undefined &&
+      (IGNORED_TOKENS_BY_LANGUAGE_FAMILY[family]?.has(identifier) ?? false))
+  )
 }
 const MAX_CALLERS = 25
 const DEFAULT_MAX_PARSE_FILES = 10_000
@@ -976,7 +981,7 @@ function scoreFileTokens(
   const depth = dirs.length
   const tokenBaseScore =
     0.8 ** depth * Math.sqrt(parsed.numLines / (parsed.identifiers.length + 1))
-  const family = getLanguageFamily(fullPath)
+  const family = getSourceLanguageIdentityForPath(fullPath)?.family
 
   for (const identifier of parsed.identifiers) {
     if (isIgnoredToken(identifier, family)) continue
@@ -998,14 +1003,12 @@ export function buildTokenCallers(
 ): TokenCallerMap {
   const definitions = new Map<
     string,
-    Array<{ filePath: string; family: string }>
+    Array<{ filePath: string; family: SourceLanguageFamily }>
   >()
 
   for (const [filePath, scores] of Object.entries(tokenScores)) {
-    // Language family depends only on filePath, so resolve it once per file
-    // (with its lone path.extname/toLowerCase allocation) instead of once per
-    // candidate edge inside the caller-resolution loops below.
-    const family = getLanguageFamily(path.extname(filePath).toLowerCase())
+    const family = getSourceLanguageIdentityForPath(filePath)?.family
+    if (!family) continue
     for (const token of Object.keys(scores)) {
       ;(definitions.get(token) ?? definitions.set(token, []).get(token)!).push({
         filePath,
@@ -1016,27 +1019,17 @@ export function buildTokenCallers(
 
   const tokenCallers: TokenCallerMap = {}
   for (const [callingFile, calls] of fileCallsMap.entries()) {
-    // callerLanguage is invariant across this file's calls and candidates, so
-    // hoist it out of the inner loops rather than recomputing it (and its
-    // path.extname/toLowerCase allocation) per call and per candidate edge.
-    const callerLanguage = getLanguageFamily(callingFile)
+    const family = getSourceLanguageIdentityForPath(callingFile)?.family
+    if (!family) continue
     for (const call of calls) {
-      const candidates = definitions.get(call) ?? []
-      const sameLanguage = candidates.filter(
-        (candidate) => candidate.family === callerLanguage,
+      // Raw-name matches are only evidence when exactly one definition has
+      // the same known family. Neither shared toolchains nor unknown
+      // suffixes are evidence of an interface between files.
+      const candidates = (definitions.get(call) ?? []).filter(
+        (candidate) => candidate.family === family,
       )
-      // Same-language definitions only (M4-S6): cross-language raw-name
-      // matches are ambiguous in polyglot monorepos — a .py and a .ts file
-      // both defining the same name would fabricate a false blast-radius
-      // edge. Caller edges resolve only when exactly one same-language
-      // definition exists; import-aware graph construction adds stronger
-      // cross-language edges later. This contract is pinned by both
-      // code-map's buildTokenCallers tests and the indexer's
-      // call-navigation suite ('does not create cross-language raw-name call
-      // edges').
-      const eligible = sameLanguage
       const definingFile =
-        eligible.length === 1 ? eligible[0]?.filePath : undefined
+        candidates.length === 1 ? candidates[0]?.filePath : undefined
       if (!definingFile || callingFile === definingFile) {
         continue
       }

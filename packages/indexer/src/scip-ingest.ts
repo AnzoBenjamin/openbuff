@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import type { IndexEdge, IndexNode, MetadataIndex } from './types'
 
 /**
@@ -23,23 +25,18 @@ export const SCIP_MAX_MERGED_EDGES = 50_000
 /** Historical default `references` weight from metadata-indexer. */
 const SCIP_EDGE_WEIGHT = 0.9
 
-/**
- * Edge-label cap for SCIP symbols (P3 coherence audit), mirroring
- * metadata-indexer's 160-char concept guard: a hostile or corrupt dump can
- * carry arbitrarily long symbols, and the symbol is copied verbatim into the
- * query-facing edge `label`. Enforced at the parse boundary with a
- * deterministic prefix slice, so identical (over-long) symbols still dedupe
- * and merged output stays deterministic.
- */
+/** Identity bound in UTF-16 code units; over-limit descriptors are refused. */
+export const MAX_SCIP_SYMBOL_CHARS = 16_384
+/** Display-only cap; never used for a definition or reference lookup. */
 export const MAX_SCIP_LABEL_CHARS = 160
+const SCIP_PRODUCER_VERSION = 'scip-json:2'
 
-function capScipSymbol(symbol: string): string {
-  return symbol.length <= MAX_SCIP_LABEL_CHARS
-    ? symbol
-    : symbol.slice(0, MAX_SCIP_LABEL_CHARS)
-}
-
-export type ScipIngestErrorCode = 'malformed' | 'occurrence-limit' | 'edge-limit'
+export type ScipIngestErrorCode =
+  | 'malformed'
+  | 'occurrence-limit'
+  | 'edge-limit'
+  | 'symbol-limit'
+  | 'ambiguous-definition'
 
 /** Typed failure for malformed or unbounded SCIP input; ingestion fails closed. */
 export class ScipIngestError extends Error {
@@ -110,6 +107,7 @@ export function parseScipJson(json: unknown): ScipIndex {
           'external_symbols entries must be objects with a string symbol',
         )
       }
+      checkSymbolLength(rawExternal.symbol)
       externalSymbols.push(rawExternal.symbol)
     }
   }
@@ -131,46 +129,35 @@ export function parseScipJson(json: unknown): ScipIndex {
  * {@link mergeScipEdgesIntoIndex} after deriving edges via
  * {@link scipEdges}; prefer `scipPreciseEdges` + `mergeScipEdgesIntoIndex`
  * (the single-pass batch merge the scip-runner uses) or `runScipIngest`
- * directly. The exported signature and semantics are unchanged: the same
- * 'malformed' throw on unsafe paths, the same zero-edge identity
- * short-circuit (the input object is returned unchanged), and the same
- * supersede/dedupe/edge-cap/queryData-drop behavior.
+ * directly. Unsafe paths and ambiguous definition ownership fail closed;
+ * an input deriving no cross-file edges leaves the original index unchanged.
  */
 export function mergeScipIntoIndex(
   index: MetadataIndex,
   scip: ScipIndex,
 ): MetadataIndex {
-  const { edges: preciseEdges, skippedUnsafePaths } = scipEdges(scip)
-  // F2: a guard-tripped SCIP document must be observable, not silently
-  // absorbed — a hostile dump of '../' paths would otherwise look like a
-  // clean scan. Fail closed when any document escapes the project root.
-  if (skippedUnsafePaths > 0) {
-    throw new ScipIngestError(
-      'malformed',
-      `SCIP index contains ${skippedUnsafePaths} document(s) whose relative_path escapes the project root`,
-    )
-  }
-  if (preciseEdges.length === 0) return index
-  return mergeScipEdgesIntoIndex(index, preciseEdges).index
+  return mergeScipEdgesIntoIndex(index, scipPreciseEdges(scip)).index
 }
 
 /**
  * Derive the precise file→file reference edges of a validated SCIP index —
  * the same derivation {@link mergeScipIntoIndex} performs — without merging.
- * Fails closed with the typed {@link ScipIngestError} when any document
- * escapes the project root. The scip-runner derives every indexer dump's
- * edges up front and merges them all in one pass, instead of chaining one
- * full-index-copying merge per indexer.
+ * Fails closed with a typed {@link ScipIngestError} on unsafe paths or
+ * distinct definition owners for the same opaque descriptor. The scip-runner
+ * derives every indexer dump's edges up front and merges them all in one pass,
+ * instead of chaining one full-index-copying merge per indexer.
  */
 export function scipPreciseEdges(scip: ScipIndex): IndexEdge[] {
-  const { edges, skippedUnsafePaths } = scipEdges(scip)
+  const skippedUnsafePaths = scip.documents.filter(
+    (document) => !isSafeRelativePath(document.relativePath),
+  ).length
   if (skippedUnsafePaths > 0) {
     throw new ScipIngestError(
       'malformed',
       `SCIP index contains ${skippedUnsafePaths} document(s) whose relative_path escapes the project root`,
     )
   }
-  return edges
+  return scipEdges(scip.documents)
 }
 
 /**
@@ -181,7 +168,8 @@ export function scipPreciseEdges(scip: ScipIndex): IndexEdge[] {
  * change; consumers rebuild it from `graph.edges` or fall back. Semantics
  * match {@link mergeScipIntoIndex}
  * (heuristic duplicates of the same (from, to, type) tuple are superseded,
- * dedupe by (from, to, type, label), edge cap enforced) but the index is
+ * dedupe by endpoints/type and opaque identity (legacy edges use their label),
+ * edge cap enforced) but the index is
  * copied exactly once regardless of how many sources contributed edges —
  * the chained per-indexer merge shape copied the full snapshot once per
  * successful indexer (O(k x |index|) allocations for k indexers).
@@ -197,7 +185,7 @@ export function mergeScipEdgesIntoIndex(
   const nodes: Record<string, IndexNode> = { ...index.graph.nodes }
   const preciseTuples = new Set(preciseEdges.map(edgeTupleKey))
   const merged: IndexEdge[] = []
-  for (const edge of index.graph.edges) {
+  for (const edge of withoutStaleScipProjection(index).graph.edges) {
     if (
       (edge.confidence ?? 'heuristic') === 'heuristic' &&
       preciseTuples.has(edgeTupleKey(edge))
@@ -208,7 +196,9 @@ export function mergeScipEdgesIntoIndex(
   }
 
   const addedKeys = new Set<string>()
-  const existingPreciseKeys = new Set(merged.filter((edge) => edge.confidence === 'precise').map(edgeDedupeKey))
+  const existingPreciseKeys = new Set(
+    merged.filter((edge) => edge.confidence === 'precise').map(edgeDedupeKey),
+  )
   let addedCount = 0
   for (const edge of preciseEdges) {
     const key = edgeDedupeKey(edge)
@@ -225,15 +215,18 @@ export function mergeScipEdgesIntoIndex(
     ensureFileNode(nodes, edge.to)
     const sourceHashes: Record<string, string> = {}
     for (const nodeId of [edge.from, edge.to]) {
-      const filePath = nodeId.startsWith('file:') ? nodeId.slice(5) : index.graph.nodes[nodeId]?.path
-      if (filePath && index.files[filePath]) sourceHashes[filePath] = index.files[filePath]!.hash
+      const filePath = nodeId.startsWith('file:')
+        ? nodeId.slice(5)
+        : index.graph.nodes[nodeId]?.path
+      if (filePath && index.files[filePath])
+        sourceHashes[filePath] = index.files[filePath]!.hash
     }
     merged.push({
       ...edge,
       confidence: 'precise',
       producer: edge.producer ?? {
         name: 'scip',
-        version: 'scip-json:1',
+        version: SCIP_PRODUCER_VERSION,
         configFingerprint: index.sourceConfigFingerprint,
         sourceHashes,
       },
@@ -250,34 +243,35 @@ export function mergeScipEdgesIntoIndex(
  * Definition occurrences (symbol_roles definition bit) map symbols to their
  * defining document; reference occurrences then point at that file. Local
  * symbols stay file-internal, self edges are skipped, and unknown symbols
- * produce no edge. Documents are visited in sorted order so merged output is
- * deterministic; documents whose relative_path escapes the project are
- * skipped outright.
+ * produce no edge. Conflicting definition owners fail closed even when the
+ * conflicting descriptor is not referenced by this dump.
  */
-function scipEdges(scip: ScipIndex): {
-  edges: IndexEdge[]
-  skippedUnsafePaths: number
-} {
-  const allDocuments = [...scip.documents]
-  const skippedUnsafePaths = allDocuments.filter(
-    (document) => !isSafeRelativePath(document.relativePath),
-  ).length
-  const documents = allDocuments
-    .filter((document) => isSafeRelativePath(document.relativePath))
-    .sort((a, b) =>
-      a.relativePath < b.relativePath
-        ? -1
-        : a.relativePath > b.relativePath
-          ? 1
-          : 0,
-    )
+function scipEdges(input: readonly ScipDocument[]): IndexEdge[] {
+  const documents = [...input].sort((a, b) =>
+    compareStrings(a.relativePath, b.relativePath),
+  )
 
-  const definitionPathBySymbol = new Map<string, string>()
+  const definitionBySymbol = new Map<
+    string,
+    { path: string; digest?: string }
+  >()
   for (const document of documents) {
     for (const occurrence of document.occurrences) {
-      if (isLocalSymbol(occurrence.symbol)) continue
-      if (isDefinition(occurrence)) {
-        definitionPathBySymbol.set(occurrence.symbol, document.relativePath)
+      // Also bound descriptors in programmatically constructed ScipIndex values.
+      checkSymbolLength(occurrence.symbol)
+      if (isLocalSymbol(occurrence.symbol) || !isDefinition(occurrence))
+        continue
+      const definition = definitionBySymbol.get(occurrence.symbol)
+      if (definition && definition.path !== document.relativePath) {
+        throw new ScipIngestError(
+          'ambiguous-definition',
+          `SCIP symbol has ambiguous definition ownership: ${definition.path} and ${document.relativePath}`,
+        )
+      }
+      if (!definition) {
+        definitionBySymbol.set(occurrence.symbol, {
+          path: document.relativePath,
+        })
       }
     }
   }
@@ -288,25 +282,45 @@ function scipEdges(scip: ScipIndex): {
     const fromId = fileNodeId(document.relativePath)
     for (const occurrence of document.occurrences) {
       if (isLocalSymbol(occurrence.symbol) || isDefinition(occurrence)) continue
-      const definingPath = definitionPathBySymbol.get(occurrence.symbol)
-      if (definingPath === undefined || definingPath === document.relativePath) {
-        continue
-      }
+      const definition = definitionBySymbol.get(occurrence.symbol)
+      if (!definition || definition.path === document.relativePath) continue
+      // Use exact string code units: UTF-8 replacement would conflate distinct
+      // descriptors containing unpaired surrogates accepted by JSON.parse.
+      definition.digest ??= createHash('sha256')
+        .update(occurrence.symbol, 'utf16le')
+        .digest('hex')
       const edge: IndexEdge = {
         from: fromId,
-        to: fileNodeId(definingPath),
+        to: fileNodeId(definition.path),
         type: 'references',
         weight: SCIP_EDGE_WEIGHT,
-        label: occurrence.symbol,
+        label: occurrence.symbol.slice(0, MAX_SCIP_LABEL_CHARS),
+        identityDigest: definition.digest,
         confidence: 'precise',
       }
       const key = edgeDedupeKey(edge)
       if (seen.has(key)) continue
+      if (edges.length >= SCIP_MAX_MERGED_EDGES) {
+        throw new ScipIngestError(
+          'edge-limit',
+          `SCIP dump exceeded the cap of ${SCIP_MAX_MERGED_EDGES} edges`,
+        )
+      }
       seen.add(key)
       edges.push(edge)
     }
   }
-  return { edges, skippedUnsafePaths }
+  edges.sort(
+    (a, b) =>
+      compareStrings(a.from, b.from) ||
+      compareStrings(a.to, b.to) ||
+      compareStrings(a.identityDigest!, b.identityDigest!),
+  )
+  return edges
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 function parseDocument(rawDocument: unknown): ScipDocument {
@@ -374,14 +388,19 @@ function parseOccurrence(rawOccurrence: unknown): ScipOccurrence {
       'occurrence.symbol_roles must be a non-negative integer when present',
     )
   }
-  // Label cap at the parse boundary (P3 coherence audit): the symbol is
-  // copied verbatim into the edge `label` downstream, so a dump carrying an
-  // arbitrarily long symbol would persist it unbounded as a query-facing
-  // label. Sliced deterministically (fixed prefix, fixed length) so identical
-  // over-long symbols still share one dedupe key.
-  const occurrence: ScipOccurrence = { symbol: capScipSymbol(symbol) }
+  checkSymbolLength(symbol)
+  const occurrence: ScipOccurrence = { symbol }
   if (symbol_roles !== undefined) occurrence.symbolRoles = symbol_roles
   return occurrence
+}
+
+function checkSymbolLength(symbol: string): void {
+  if (symbol.length > MAX_SCIP_SYMBOL_CHARS) {
+    throw new ScipIngestError(
+      'symbol-limit',
+      `SCIP symbol exceeds the cap of ${MAX_SCIP_SYMBOL_CHARS} UTF-16 code units`,
+    )
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -435,11 +454,61 @@ function ensureFileNode(
 }
 
 /** Identity used for supersede semantics: same endpoints and type, any label. */
-function edgeTupleKey(edge: IndexEdge): string {
-  return `${edge.from}\0${edge.to}\0${edge.type}`
+export function edgeTupleKey(edge: IndexEdge): string {
+  return JSON.stringify([edge.from, edge.to, edge.type])
 }
 
-/** Matches metadata-indexer's dedupeEdges keying. */
-function edgeDedupeKey(edge: IndexEdge): string {
-  return `${edge.from}\0${edge.to}\0${edge.type}\0${edge.label ?? ''}`
+/** In-memory identity, shared by precise merge and graph recomposition. */
+export function edgeDedupeKey(edge: IndexEdge): string {
+  return edge.identityDigest === undefined
+    ? JSON.stringify([edge.from, edge.to, edge.type, edge.label ?? ''])
+    : JSON.stringify([edge.from, edge.to, edge.type, null, edge.identityDigest])
+}
+
+/** V1 joined on clipped labels and could silently choose an ambiguous owner. */
+export function isStaleScipEdge(edge: IndexEdge): boolean {
+  return (
+    edge.confidence === 'precise' &&
+    edge.producer?.name === 'scip' &&
+    edge.producer.version === 'scip-json:1'
+  )
+}
+
+/** Refuse lossy V1 evidence, without discarding unrelated index facts. */
+export function withoutStaleScipProjection(
+  index: MetadataIndex,
+): MetadataIndex {
+  const staleTuples = new Set<string>()
+  for (const edge of index.graph.edges) {
+    if (isStaleScipEdge(edge)) staleTuples.add(edgeTupleKey(edge))
+  }
+  if (staleTuples.size === 0) return index
+
+  const edges = index.graph.edges.filter((edge) => !isStaleScipEdge(edge))
+  // A valid precise edge may still supersede the structural fallback.
+  for (const edge of edges) {
+    if (edge.confidence === 'precise') staleTuples.delete(edgeTupleKey(edge))
+  }
+  if (staleTuples.size && index.graphData) {
+    const present = new Set(edges.map(edgeDedupeKey))
+    for (const group of Object.values(index.graphData)) {
+      for (const edge of group.edges) {
+        if (
+          edge.confidence === 'precise' ||
+          !staleTuples.has(edgeTupleKey(edge))
+        )
+          continue
+        const key = edgeDedupeKey(edge)
+        if (present.has(key)) continue
+        present.add(key)
+        edges.push(edge)
+      }
+    }
+  }
+  return {
+    ...index,
+    graph: { ...index.graph, edges },
+    // The old adjacency refers to the pre-filtered edge array.
+    queryData: undefined,
+  }
 }
