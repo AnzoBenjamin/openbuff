@@ -1,0 +1,1789 @@
+{
+  "shardId": "02-providers",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "02-providers",
+    "subsystemIds": [
+      "cli",
+      "sdk",
+      "packages",
+      "common",
+      "docs"
+    ],
+    "files": [
+      "cli/src/__tests__/unit/openbuff-provider-readiness.test.ts",
+      "cli/src/commands/command-registry.ts",
+      "cli/src/components/provider-picker-screen.tsx",
+      "cli/src/hooks/use-send-message.ts",
+      "cli/src/utils/__tests__/provider-diagnostics.test.ts",
+      "cli/src/utils/openbuff-provider.ts",
+      "cli/src/utils/provider-diagnostics.ts",
+      "cli/src/utils/sdk-event-handlers.ts",
+      "common/src/types/contracts/llm.ts",
+      "docs/architecture.md",
+      "docs/configuration.md",
+      "docs/local-mode.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "packages/agent-runtime/src/prompt-agent-stream.ts",
+      "packages/agent-runtime/src/run-agent-step.ts",
+      "packages/internal/package.json",
+      "packages/internal/src/openai-compatible/chat/convert-to-openai-compatible-chat-messages.ts",
+      "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+      "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+      "packages/internal/src/openai-compatible/chat/openai-compatible-chat-options.ts",
+      "packages/internal/src/openai-compatible/openai-compatible-error.ts",
+      "packages/internal/src/openrouter-ai-sdk/chat/index.ts",
+      "packages/internal/src/openrouter-ai-sdk/tests/stream-usage-accounting.test.ts",
+      "sdk/package.json",
+      "sdk/src/__tests__/model-provider.test.ts",
+      "sdk/src/__tests__/retry-config.test.ts",
+      "sdk/src/env.ts",
+      "sdk/src/error-utils.ts",
+      "sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts",
+      "sdk/src/impl/__tests__/llm-context-window.test.ts",
+      "sdk/src/impl/__tests__/llm-cost.test.ts",
+      "sdk/src/impl/__tests__/llm-repair-tool-input.test.ts",
+      "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts",
+      "sdk/src/impl/agent-runtime.ts",
+      "sdk/src/impl/failover.ts",
+      "sdk/src/impl/llm.ts",
+      "sdk/src/impl/model-provider.ts",
+      "sdk/src/provider-config.ts",
+      "sdk/src/retry-config.ts",
+      "sdk/src/run.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "cli/src/__tests__/unit/openbuff-provider-readiness.test.ts",
+      "from": 1,
+      "to": 47
+    },
+    {
+      "path": "cli/src/commands/command-registry.ts",
+      "from": 954,
+      "to": 988
+    },
+    {
+      "path": "cli/src/components/provider-picker-screen.tsx",
+      "from": 330,
+      "to": 383
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 655,
+      "to": 851
+    },
+    {
+      "path": "cli/src/utils/__tests__/provider-diagnostics.test.ts",
+      "from": 1,
+      "to": 82
+    },
+    {
+      "path": "cli/src/utils/openbuff-provider.ts",
+      "from": 302,
+      "to": 348
+    },
+    {
+      "path": "cli/src/utils/openbuff-provider.ts",
+      "from": 485,
+      "to": 566
+    },
+    {
+      "path": "cli/src/utils/openbuff-provider.ts",
+      "from": 987,
+      "to": 1048
+    },
+    {
+      "path": "cli/src/utils/provider-diagnostics.ts",
+      "from": 1,
+      "to": 59
+    },
+    {
+      "path": "cli/src/utils/sdk-event-handlers.ts",
+      "from": 2195,
+      "to": 2270
+    },
+    {
+      "path": "common/src/types/contracts/llm.ts",
+      "from": 1,
+      "to": 280
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 155,
+      "to": 177
+    },
+    {
+      "path": "docs/configuration.md",
+      "from": 140,
+      "to": 265
+    },
+    {
+      "path": "docs/local-mode.md",
+      "from": 176,
+      "to": 299
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 131,
+      "to": 195
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 68
+    },
+    {
+      "path": "packages/agent-runtime/src/prompt-agent-stream.ts",
+      "from": 1,
+      "to": 150
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 720,
+      "to": 750
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 792,
+      "to": 856
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1000,
+      "to": 1078
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1560,
+      "to": 1618
+    },
+    {
+      "path": "packages/internal/package.json",
+      "from": 1,
+      "to": 51
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/convert-to-openai-compatible-chat-messages.ts",
+      "from": 1,
+      "to": 178
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+      "from": 234,
+      "to": 365
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+      "from": 1,
+      "to": 322
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+      "from": 414,
+      "to": 1078
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-options.ts",
+      "from": 1,
+      "to": 25
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/openai-compatible-error.ts",
+      "from": 1,
+      "to": 80
+    },
+    {
+      "path": "packages/internal/src/openrouter-ai-sdk/chat/index.ts",
+      "from": 395,
+      "to": 835
+    },
+    {
+      "path": "packages/internal/src/openrouter-ai-sdk/tests/stream-usage-accounting.test.ts",
+      "from": 1,
+      "to": 224
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "sdk/src/__tests__/model-provider.test.ts",
+      "from": 200,
+      "to": 421
+    },
+    {
+      "path": "sdk/src/__tests__/model-provider.test.ts",
+      "from": 761,
+      "to": 859
+    },
+    {
+      "path": "sdk/src/__tests__/model-provider.test.ts",
+      "from": 948,
+      "to": 1090
+    },
+    {
+      "path": "sdk/src/__tests__/model-provider.test.ts",
+      "from": 1428,
+      "to": 1503
+    },
+    {
+      "path": "sdk/src/__tests__/model-provider.test.ts",
+      "from": 1729,
+      "to": 1930
+    },
+    {
+      "path": "sdk/src/__tests__/retry-config.test.ts",
+      "from": 196,
+      "to": 469
+    },
+    {
+      "path": "sdk/src/env.ts",
+      "from": 47,
+      "to": 67
+    },
+    {
+      "path": "sdk/src/error-utils.ts",
+      "from": 1,
+      "to": 227
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts",
+      "from": 1,
+      "to": 67
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-context-window.test.ts",
+      "from": 1,
+      "to": 168
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-context-window.test.ts",
+      "from": 280,
+      "to": 365
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-context-window.test.ts",
+      "from": 706,
+      "to": 721
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-cost.test.ts",
+      "from": 1,
+      "to": 153
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-repair-tool-input.test.ts",
+      "from": 1,
+      "to": 47
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts",
+      "from": 1,
+      "to": 396
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 1,
+      "to": 30
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 180,
+      "to": 246
+    },
+    {
+      "path": "sdk/src/impl/failover.ts",
+      "from": 1,
+      "to": 101
+    },
+    {
+      "path": "sdk/src/impl/llm.ts",
+      "from": 277,
+      "to": 348
+    },
+    {
+      "path": "sdk/src/impl/llm.ts",
+      "from": 515,
+      "to": 565
+    },
+    {
+      "path": "sdk/src/impl/llm.ts",
+      "from": 791,
+      "to": 2399
+    },
+    {
+      "path": "sdk/src/impl/model-provider.ts",
+      "from": 1,
+      "to": 989
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1,
+      "to": 365
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1069,
+      "to": 1523
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1630,
+      "to": 1707
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1868,
+      "to": 2137
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 2189,
+      "to": 2221
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 2533,
+      "to": 2915
+    },
+    {
+      "path": "sdk/src/retry-config.ts",
+      "from": 1,
+      "to": 154
+    },
+    {
+      "path": "sdk/src/retry-config.ts",
+      "from": 178,
+      "to": 523
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 743,
+      "to": 1040
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1780,
+      "to": 1847
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "providers.byok-routing",
+      "maturity": "usable",
+      "assurance": "static CLI\u2192runtime trace + offline integration",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 679,
+          "detail": "Provider readiness gates each user send before client.run at807."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1785,
+          "detail": "callMainPrompt receives production runtime implementation."
+        },
+        {
+          "path": "sdk/src/impl/agent-runtime.ts",
+          "line": 229,
+          "detail": "Actual LLM functions and context resolver are injected into the agent loop."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 1969,
+          "detail": "Mode, per-agent, default, explicit-model routing precedence is implemented."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 416,
+          "detail": "Unmatched models fail closed without hosted fallback."
+        }
+      ],
+      "gaps": [
+        "Availability guarantees are limited by02-F1/F2/F4; user-run env overrides were not audited end-to-end.",
+        "Provider/model mapping ambiguity is resolved by configured iteration order; this review did not measure routing quality."
+      ],
+      "strengths": [
+        "Local BYOK endpoints, model aliases, mode/per-agent overrides, native Anthropic gateways, and unauthenticated loopback endpoints have real consumers.",
+        "No hosted inference/balance path in the selected production resolver; clear missing-key/model errors aid recovery."
+      ],
+      "trace": {
+        "entrypoint": [
+          "cli/src/hooks/use-send-message.ts:679",
+          "sdk/src/run.ts:743"
+        ],
+        "implementation": [
+          "sdk/src/provider-config.ts:1928",
+          "sdk/src/impl/model-provider.ts:231"
+        ],
+        "consumer": [
+          "sdk/src/impl/agent-runtime.ts:229",
+          "packages/agent-runtime/src/run-agent-step.ts:1023"
+        ],
+        "tests": [
+          "sdk/src/__tests__/model-provider.test.ts:761",
+          "sdk/src/__tests__/model-provider.test.ts:1428",
+          "evidence/02-providers-probes.test.ts"
+        ],
+        "docs": [
+          "docs/local-mode.md:176",
+          "docs/request-flow.md:158"
+        ]
+      },
+      "states": {
+        "failure": "Invalid config, missing model/key and disconnected OAuth surface errors.",
+        "loading": "Readiness awaits registry readiness before accepting a send.",
+        "empty": "Missing configuration shows setup guidance.",
+        "cancellation": "CLI supplies the run AbortSignal.",
+        "retry": "Retry/failover partial; separate capability.",
+        "permission": "Configured providers are the authority; ancestor apiKeyEnv trust gate and HTTPS checks exist."
+      }
+    },
+    {
+      "id": "providers.capability-resolution",
+      "maturity": "partial",
+      "assurance": "static trace + offline options/wire probes",
+      "evidence": [
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 1630,
+          "detail": "Explicit provider defaults and per-model overrides are merged."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 278,
+          "detail": "Context, pricing and output metadata are consumed."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 182,
+          "detail": "Tool, structured-output and caching fields are declared."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 347,
+          "detail": "Wire compatibility remains provider-level flags."
+        },
+        {
+          "path": "cli/src/utils/openbuff-provider.ts",
+          "line": 303,
+          "detail": "Resolved capabilities are displayed in model status."
+        }
+      ],
+      "gaps": [
+        "Model tools.supported/requiredToolChoice/structuredOutputs and promptCaching metadata are advisory/display data; provider compatibility controls transport. Probe shows tools.supported=false still sends native tools, which is a completeness limit rather than an assumed security defect.",
+        "reasoning.defaultEffort is display metadata while route/adaptive effort decides execution; wire effort has02-F5.",
+        "Legacy window fallback helper exists but production model/context resolvers use explicit metadata; docs/configuration.md explicitly requires migration."
+      ],
+      "strengths": [
+        "Mapped IDs and per-model overrides provide an extensible provider-independent metadata spine.",
+        "Explicit image/context support avoids relying solely on model names; unknown metadata is retained rather than fabricating measured quality."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/provider-config.ts:146"
+        ],
+        "implementation": [
+          "sdk/src/provider-config.ts:1630"
+        ],
+        "consumer": [
+          "sdk/src/impl/model-provider.ts:261",
+          "cli/src/utils/openbuff-provider.ts:303"
+        ],
+        "tests": [
+          "sdk/src/__tests__/model-provider.test.ts:761",
+          "evidence/02-providers-probes.test.ts:advisory-tools-metadata"
+        ],
+        "docs": [
+          "docs/configuration.md:193"
+        ]
+      },
+      "states": {
+        "failure": "Schema validation rejects malformed numbers/types; unsupported wire options are incompletely negotiated.",
+        "loading": "Loaded with provider config.",
+        "empty": "Unknown capabilities remain omitted/defaulted.",
+        "cancellation": "No separate operation; follows request signal.",
+        "retry": "Metadata is re-resolved per attempt.",
+        "permission": "Capability metadata grants no filesystem permission; provider config trust governs transport."
+      }
+    },
+    {
+      "id": "providers.native-tool-streaming",
+      "maturity": "usable",
+      "assurance": "static consumer trace + unit + offline real adapter/SDK stream",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1059,
+          "detail": "Actual loop consumes getAgentStreamFromTemplate via processStream."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1128,
+          "detail": "Tools are buffered until authoritative finish reason."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1215,
+          "detail": "Each retry clears stale buffered calls."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1795,
+          "detail": "Length finish marks tool chunks before delivery."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 570,
+          "detail": "Incremental arguments, placeholders and tool metadata are handled."
+        }
+      ],
+      "gaps": [
+        "No real provider API/model quality test in this review.",
+        "Tool schema/permission execution is owned by runtime/tool lanes; transport correctness does not prove every tool operation safe.",
+        "Error-chunk flush can publish pending calls before a terminal error; this review records current behavior rather than treating all such calls as duplicates."
+      ],
+      "strengths": [
+        "Only actual delivery blocks retry, so a failed buffered payload cannot leak into the next successful attempt.",
+        "Stream-only truncation evidence is stripped from persisted payload by the shared contract.",
+        "Empty placeholders, missing IDs and anomalous continuations have focused adapter tests."
+      ],
+      "trace": {
+        "entrypoint": [
+          "packages/agent-runtime/src/prompt-agent-stream.ts:85"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:1104",
+          "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts:414"
+        ],
+        "consumer": [
+          "packages/agent-runtime/src/run-agent-step.ts:1059",
+          "common/src/types/contracts/llm.ts:57"
+        ],
+        "tests": [
+          "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts:230",
+          "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts:234"
+        ],
+        "docs": [
+          "docs/request-flow.md:146",
+          "docs/configuration.md:239"
+        ]
+      },
+      "states": {
+        "failure": "Malformed inputs reach validation/repair feedback; fatal provider errors preserve the no-duplicate gate.",
+        "loading": "Text/reasoning stream immediately; tools wait for finish.",
+        "empty": "Empty stream has explicit bounded retry/failover behavior.",
+        "cancellation": "Caller signal reaches adapter HTTP/SSE.",
+        "retry": "Buffered-only thrown failures can retry without emitting failed calls.",
+        "permission": "Actual tool permissions are enforced downstream; no direct execution in provider adapter."
+      }
+    },
+    {
+      "id": "providers.text-tool-fallback",
+      "maturity": "usable",
+      "assurance": "static consumer trace + unit",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1298,
+          "detail": "Provider supportsTools=false appends actual tool schema instructions."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1353,
+          "detail": "Native tool fields are removed and historical tool messages converted to text."
+        },
+        {
+          "path": "packages/agent-runtime/src/prompt-agent-stream.ts",
+          "line": 107,
+          "detail": "The production stream explicitly preserves XML parser fallback."
+        }
+      ],
+      "gaps": [
+        "Requires a model capable of following the text protocol; success against arbitrary chat-only models was not measured.",
+        "Per-model tool hints do not automatically activate the fallback; provider compatibility flag is the actual control.",
+        "Non-streaming generation omits native tools but does not use the same instruction/history fallback."
+      ],
+      "strengths": [
+        "Fallback sends structured tool names/descriptions/schemas rather than hiding the tool surface.",
+        "Historical calls/results are made compatible with providers rejecting tool roles."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/provider-config.ts:96"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:1298"
+        ],
+        "consumer": [
+          "packages/agent-runtime/src/run-agent-step.ts:1059",
+          "packages/agent-runtime/src/prompt-agent-stream.ts:107"
+        ],
+        "tests": [
+          "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts:210",
+          "sdk/src/impl/__tests__/llm-context-window.test.ts:17"
+        ],
+        "docs": [
+          "docs/local-mode.md:293"
+        ]
+      },
+      "states": {
+        "failure": "Unrenderable schemas fail explicitly.",
+        "loading": "Instruction/history conversion happens per selected provider attempt.",
+        "empty": "No schemas means no extra instructions.",
+        "cancellation": "Follows stream cancellation.",
+        "retry": "Rebuilt per attempt so backup compatibility can differ.",
+        "permission": "Normal tool validation/permissions remain downstream."
+      }
+    },
+    {
+      "id": "providers.retry-failover",
+      "maturity": "partial",
+      "assurance": "static trace +62 selected unit tests + offline real HTTP/SSE and DI probes",
+      "evidence": [
+        {
+          "path": "sdk/src/retry-config.ts",
+          "line": 70,
+          "detail": "Exponential jitter and capped delay are shared."
+        },
+        {
+          "path": "sdk/src/impl/failover.ts",
+          "line": 51,
+          "detail": "Configured candidate list dedupes and preserves order."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1923,
+          "detail": "Delivered content forbids retry."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 2027,
+          "detail": "Configured provider failover is a real outer loop."
+        },
+        {
+          "path": "cli/src/utils/sdk-event-handlers.ts",
+          "line": 2208,
+          "detail": "CLI renders coalesced retry/failover/recovered status."
+        }
+      ],
+      "gaps": [
+        "02-F1 hides initial HTTP status after SDK retries;02-F2 loses in-band status;02-F7 diverges from the shared policy.",
+        "Non-streaming/structured paths retry but have no configured failover loop.",
+        "AI SDK and Openbuff retries are not one observable budget; no measured worst-case transport attempt count is claimed."
+      ],
+      "strengths": [
+        "No retry after delivered content protects edits/output from duplication.",
+        "Auth and server status classes, rate-limit/timeouts carve-outs, and cancellation-aware waits are explicit.",
+        "UI status events have a production consumer and do not accumulate assistant prose."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/impl/llm.ts:1196"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:1203",
+          "sdk/src/retry-config.ts:460",
+          "sdk/src/impl/failover.ts:83"
+        ],
+        "consumer": [
+          "cli/src/utils/sdk-event-handlers.ts:2204"
+        ],
+        "tests": [
+          "sdk/src/__tests__/retry-config.test.ts:196",
+          "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts:284",
+          "evidence/02-providers-probes.test.ts"
+        ],
+        "docs": [
+          "docs/configuration.md:140"
+        ]
+      },
+      "states": {
+        "failure": "Terminal failure after bounded eligible attempts; wrappers/status loss currently impair recovery.",
+        "loading": "Visible provider-status events for Openbuff outer retries.",
+        "empty": "NoOutputGeneratedError is an explicit retry/failover class.",
+        "cancellation": "Backoff rejects promptly on signal abort.",
+        "retry": "Partial; three concrete policy/transport defects.",
+        "permission": "Only configured backup models; no arbitrary hosted fallback."
+      }
+    },
+    {
+      "id": "providers.cancellation-timeouts",
+      "maturity": "usable",
+      "assurance": "static CLI\u2192adapter trace + unit",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 787,
+          "detail": "Run config receives the AbortSignal."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 543,
+          "detail": "Each request combines caller cancellation and a600s default deadline."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 443,
+          "detail": "HTTP/SSE transport receives the merged abort signal."
+        },
+        {
+          "path": "sdk/src/retry-config.ts",
+          "line": 127,
+          "detail": "Backoff cleans up timer and abort listener."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 987,
+          "detail": "Optional post-stream metadata has a500ms wait bound."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 822,
+          "detail": "Superseded send completions cannot replace current state."
+        }
+      ],
+      "gaps": [
+        "No live hung socket or provider ignoring abort test here.",
+        "The600s default is per request/attempt; it is not a total run SLA.",
+        "Finish reason is awaited separately from optional post-stream metadata; alternate misbehaving LanguageModel implementations were not probed."
+      ],
+      "strengths": [
+        "Abort propagation spans CLI, runtime, SDK and adapter rather than only dismissing the UI.",
+        "Wait listeners/timers are removed and optional metadata errors do not invalidate successful content.",
+        "CLI serializes preserved cancelled state under send ownership."
+      ],
+      "trace": {
+        "entrypoint": [
+          "cli/src/hooks/use-send-message.ts:787"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:543",
+          "sdk/src/retry-config.ts:111"
+        ],
+        "consumer": [
+          "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts:443",
+          "cli/src/hooks/use-send-message.ts:819"
+        ],
+        "tests": [
+          "sdk/src/__tests__/retry-config.test.ts:371",
+          "sdk/src/__tests__/retry-config.test.ts:423",
+          "cli/src/utils/__tests__/provider-diagnostics.test.ts:36"
+        ],
+        "docs": [
+          "docs/request-flow.md:180",
+          "docs/testing.md:21"
+        ]
+      },
+      "states": {
+        "failure": "Timeout/network errors and user cancellation are differentiated by signal checks.",
+        "loading": "In-flight request remains abortable.",
+        "empty": "Pre-aborted request returns without provider dispatch.",
+        "cancellation": "Propagated signal; listener cleanup and no-backoff retry after abort.",
+        "retry": "Bounded default timeout applies per request attempt.",
+        "permission": "No new permission required to cancel; provider config determines request authority."
+      }
+    },
+    {
+      "id": "providers.oauth-subscription",
+      "maturity": "partial",
+      "assurance": "static trace + offline resolver/credential DI",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 302,
+          "detail": "Configured OAuth credentials are lazily requested."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 965,
+          "detail": "OAuth model uses the ChatGPT/Codex backend conversion fetch."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1606,
+          "detail": "An auth failure can refresh/retry once before skip-based fallback."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1842,
+          "detail": "OAuth subscription requests deliberately omit per-request cost tracking."
+        },
+        {
+          "path": "cli/src/utils/openbuff-provider.ts",
+          "line": 1032,
+          "detail": "Readiness explains disconnected subscription recovery."
+        }
+      ],
+      "gaps": [
+        "02-F6 makes skip-based recovery incomplete for configured OAuth routes.",
+        "Credential persistence, real OAuth refresh and backend Responses stream conversion were not re-audited here.",
+        "No live subscription assurance; prompt model allowlist/availability must be maintained separately."
+      ],
+      "strengths": [
+        "Optional explicit provider path and actionable connect/reconnect failure states.",
+        "No hosted credit charge for a provider-owned subscription; auth handling is separate from API keys."
+      ],
+      "trace": {
+        "entrypoint": [
+          "cli/src/utils/openbuff-provider.ts:1032"
+        ],
+        "implementation": [
+          "sdk/src/impl/model-provider.ts:302",
+          "sdk/src/impl/llm.ts:1553"
+        ],
+        "consumer": [
+          "sdk/src/impl/llm.ts:1247"
+        ],
+        "tests": [
+          "sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts:5",
+          "evidence/02-providers-probes.test.ts:configured-oauth-ignores-skip"
+        ],
+        "docs": [
+          "docs/local-mode.md:251",
+          "docs/request-flow.md:172"
+        ]
+      },
+      "states": {
+        "failure": "Missing credentials/connect message; refresh failure currently has recovery gap.",
+        "loading": "Credentials are fetched/refreshed on demand.",
+        "empty": "Disconnected state is explicit.",
+        "cancellation": "Request signal reaches the backend adapter; refresh lifecycle not dynamically verified.",
+        "retry": "One auth refresh recursion; configured skip is defective.",
+        "permission": "User explicitly connects a subscription; stored secrets were not read."
+      }
+    },
+    {
+      "id": "providers.context-limit-adaptation",
+      "maturity": "partial",
+      "assurance": "static runtime/request trace + unit inspection + offline preflight probe",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1572,
+          "detail": "Model window seeds agent state before the first programmatic step."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1263,
+          "detail": "Actual attempt model capacity is reported to the runtime."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1324,
+          "detail": "Dispatch trims with actual model window and system/tool overhead."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1932,
+          "detail": "Explicit oversized-prompt limit can trigger one adaptive trim/retry."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 927,
+          "detail": "A throwing observational trim callback cannot abort dispatch."
+        }
+      ],
+      "gaps": [
+        "02-F4 couples capability resolution to all backup credentials.",
+        "resolveModelContextWindows failoverFloor helper is tested but has no production caller found; do not count floor negotiation as shipped.",
+        "Adaptive context errors are recognized by bounded text patterns; arbitrary provider formats were not measured."
+      ],
+      "strengths": [
+        "Pre-request capacity and dispatch-time emergency brake are both connected, avoiding a purely documented trim helper.",
+        "System/tool overhead and text-history expansion are reserved.",
+        "Emergency trims emit distinct telemetry for diagnosis; repeated identical non-streaming retries hoist trim once."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/impl/model-provider.ts:429"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:815",
+          "sdk/src/impl/llm.ts:1932"
+        ],
+        "consumer": [
+          "packages/agent-runtime/src/run-agent-step.ts:828",
+          "packages/agent-runtime/src/run-agent-step.ts:1572"
+        ],
+        "tests": [
+          "sdk/src/__tests__/model-provider.test.ts:1818",
+          "sdk/src/impl/__tests__/llm-context-window.test.ts:67",
+          "sdk/src/impl/__tests__/llm-context-window.test.ts:706"
+        ],
+        "docs": [
+          "docs/configuration.md:193",
+          "docs/configuration.md:253"
+        ]
+      },
+      "states": {
+        "failure": "Oversized prompt can trim/retry once; unknown format still fails clearly.",
+        "loading": "Window resolves before runtime starts and per attempted route.",
+        "empty": "Unknown window uses the standard fallback budget.",
+        "cancellation": "Follows run signal.",
+        "retry": "One adaptive context retry within request budget.",
+        "permission": "Pure capacity lookup should need no secret permission, currently violated by credential coupling."
+      }
+    },
+    {
+      "id": "providers.usage-and-cost",
+      "maturity": "partial",
+      "assurance": "static runtime observers + unit + offline production transport probes",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 297,
+          "detail": "Pricing calculation supports input/output/cache rates."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1828,
+          "detail": "Stream usage is handed to the actual observer."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 734,
+          "detail": "Cost accumulates in step-local state."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 804,
+          "detail": "Usage feeds cache totals and token observations."
+        }
+      ],
+      "gaps": [
+        "02-F3 proves missing/zero cost and missing usage under normal production configurations.",
+        "Whole-cent per-request rounding and accepted non-USD currency metadata are not sufficient for precise cross-provider spend accounting; no FX or measured accuracy claim.",
+        "Provider-reported OpenRouter cost extraction expects codebuff.usage, while default configured clients neither use the specialized adapter nor install a raw usage metadata extractor.",
+        "Unknown, absent, estimated and provider-reported accounting need explicit provenance before reliable spend comparisons/limits."
+      ],
+      "strengths": [
+        "Cost/usage have real runtime consumers and configured-pricing fallback exists.",
+        "Step-local accumulation avoids stale pre-spread object mutation.",
+        "OAuth subscription accounting is intentionally separate rather than fabricated request charges."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/provider-config.ts:196"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:297",
+          "sdk/src/impl/llm.ts:1844"
+        ],
+        "consumer": [
+          "packages/agent-runtime/src/run-agent-step.ts:734",
+          "packages/agent-runtime/src/run-agent-step.ts:804"
+        ],
+        "tests": [
+          "sdk/src/impl/__tests__/llm-cost.test.ts:6",
+          "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts:28",
+          "evidence/02-providers-probes.test.ts:late-tool-usage"
+        ],
+        "docs": [
+          "docs/configuration.md:195",
+          "docs/request-flow.md:176"
+        ]
+      },
+      "states": {
+        "failure": "Missing metadata currently degrades to missing/zero, so error provenance is incomplete.",
+        "loading": "Cost resolves after a successful stream.",
+        "empty": "Missing usage is indistinguishable from zero at current observer/helper boundaries.",
+        "cancellation": "Cancelled/failed attempt spend was not measured.",
+        "retry": "Successful attempt cost only; failed/retried billed usage needs a defined receipt.",
+        "permission": "Telemetry is local/BYOK, not hosted credit billing."
+      }
+    },
+    {
+      "id": "providers.vision-input-routing",
+      "maturity": "usable",
+      "assurance": "static adapter/consumer trace + unit inspection",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1239,
+          "detail": "Image parts trigger requiresVision on actual requests."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 524,
+          "detail": "Explicit image capabilities override model-name heuristics."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 629,
+          "detail": "Explicit visionModel or configured fallback is selected."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/convert-to-openai-compatible-chat-messages.ts",
+          "line": 45,
+          "detail": "Image files are transported as image_url/data URLs."
+        }
+      ],
+      "gaps": [
+        "Fallback still uses model-name heuristics and scans credential-validating candidates; no live image quality or multi-provider preference test here.",
+        "Arbitrary non-image file inputs are explicitly unsupported by this adapter despite an input.file metadata field.",
+        "Image capability is a routing/transport capability, not image understanding accuracy."
+      ],
+      "strengths": [
+        "A non-image primary does not silently discard an image; route or actionable error is explicit.",
+        "Per-model overrides and explicit vision route can cross configured providers."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/impl/llm.ts:1239"
+        ],
+        "implementation": [
+          "sdk/src/impl/model-provider.ts:609"
+        ],
+        "consumer": [
+          "sdk/src/impl/model-provider.ts:250",
+          "packages/internal/src/openai-compatible/chat/convert-to-openai-compatible-chat-messages.ts:45"
+        ],
+        "tests": [
+          "sdk/src/__tests__/model-provider.test.ts:1741",
+          "sdk/src/__tests__/model-provider.test.ts:1896"
+        ],
+        "docs": [
+          "docs/configuration.md:195"
+        ]
+      },
+      "states": {
+        "failure": "Missing/non-vision route gives an actionable error.",
+        "loading": "Routing occurs before provider request.",
+        "empty": "No image parts means ordinary model path.",
+        "cancellation": "Uses request cancellation.",
+        "retry": "Backup attempts re-evaluate vision requirements.",
+        "permission": "Only configured provider candidates; no arbitrary external vision fallback."
+      }
+    },
+    {
+      "id": "providers.empirical-language-recommendations",
+      "maturity": "usable",
+      "assurance": "static real CLI command\u2192helper trace + unit inspection",
+      "evidence": [
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 965,
+          "detail": "/models command forwards argument forms to configureOpenbuffModelFromArgs."
+        },
+        {
+          "path": "cli/src/utils/openbuff-provider.ts",
+          "line": 525,
+          "detail": "recommend calls recommendConfiguredModel and displays score/provenance."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 1887,
+          "detail": "Only declared measured coding rows matching language/task/role enter ranking."
+        }
+      ],
+      "gaps": [
+        "This is opt-in recommendation lookup, not autonomous language-aware run routing or an automatic evaluation\u2192quality update loop.",
+        "Metrics are user-configured evidence; benchmark comparability, freshness and measured confidence are not enforced.",
+        "Automated evaluator producers were out of this lane; do not infer they exist from the display schema."
+      ],
+      "strengths": [
+        "Real user-facing consumer makes the existing multilingual hook useful today.",
+        "Unmeasured models are excluded; benchmark/sample size/matched dimensions remain visible.",
+        "Explicit routes are preserved and recommendations are opt-in."
+      ],
+      "trace": {
+        "entrypoint": [
+          "cli/src/commands/command-registry.ts:965"
+        ],
+        "implementation": [
+          "sdk/src/provider-config.ts:1868"
+        ],
+        "consumer": [
+          "cli/src/utils/openbuff-provider.ts:532"
+        ],
+        "tests": [
+          "sdk/src/__tests__/model-provider.test.ts:238"
+        ],
+        "docs": [
+          "docs/local-mode.md:198"
+        ]
+      },
+      "states": {
+        "failure": "Bad command shape shows usage.",
+        "loading": "Synchronous config-backed lookup.",
+        "empty": "No matching measurements produces actionable guidance.",
+        "cancellation": "No long-running work; evaluation cancellation is outside this capability.",
+        "retry": "No retry needed for the lookup.",
+        "permission": "Recommendation does not change routing or authorize model/provider use."
+      }
+    },
+    {
+      "id": "providers.openrouter-specific-accounting",
+      "maturity": "unwired",
+      "assurance": "static constructor/caller search + adapter unit tests",
+      "evidence": [
+        {
+          "path": "packages/internal/src/openrouter-ai-sdk/chat/index.ts",
+          "line": 463,
+          "detail": "Specialized adapter collects raw OpenRouter cost/cache/reasoning usage."
+        },
+        {
+          "path": "packages/internal/src/openrouter-ai-sdk/tests/stream-usage-accounting.test.ts",
+          "line": 108,
+          "detail": "Tests instantiate this specialized class directly."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 686,
+          "detail": "Actual configured OpenRouter-like providers use the generic OpenAI-compatible adapter instead."
+        }
+      ],
+      "gaps": [
+        "No production SDK/CLI constructor caller was found for the specialized adapter; type-only imports do not execute it.",
+        "Specialized adapter tests cannot assure real OpenRouter cost or multimodal metadata behavior in CLI runs."
+      ],
+      "strengths": [
+        "Reusable specialized transformer and injected HTTP tests exist as implementation material.",
+        "Usage/cost details can be reused during adapter unification rather than designed from scratch."
+      ],
+      "trace": {
+        "entrypoint": [
+          "packages/internal/src/openrouter-ai-sdk/chat/index.ts:395"
+        ],
+        "implementation": [
+          "packages/internal/src/openrouter-ai-sdk/chat/index.ts:527"
+        ],
+        "consumer": [],
+        "tests": [
+          "packages/internal/src/openrouter-ai-sdk/tests/stream-usage-accounting.test.ts:136"
+        ],
+        "docs": [
+          "docs/request-flow.md:166"
+        ]
+      },
+      "states": {
+        "failure": "Transformer has error/finish branches, but no default consumer.",
+        "loading": "Not on default run path.",
+        "empty": "Unit fixtures cover usage present/absent.",
+        "cancellation": "Adapter accepts abortSignal but not selected by real routing.",
+        "retry": "No production retry contract for this unused adapter.",
+        "permission": "Configured generic OpenRouter use remains BYOK; optional adapter selection not shipped."
+      }
+    },
+    {
+      "id": "providers.output-ceilings-and-truncation",
+      "maturity": "partial",
+      "assurance": "static stream/contract trace + unit",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1345,
+          "detail": "Configured outputTokens fills only an omitted template maxOutputTokens."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 1689,
+          "detail": "Per-model transport byte bands are resolved."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1752,
+          "detail": "Byte band only diagnoses stale expected transport limits."
+        },
+        {
+          "path": "common/src/types/contracts/llm.ts",
+          "line": 35,
+          "detail": "Authoritative length finish marks transport truncation."
+        },
+        {
+          "path": "docs/configuration.md",
+          "line": 236,
+          "detail": "Bundled base/editor explicitly request64k output tokens, overriding config fallback."
+        }
+      ],
+      "gaps": [
+        "Configured outputTokens is a default, not an enforced provider maximum; adapters may reject a larger template request. This precedence is documented, not a newly invented breaking change.",
+        "maxOutputBytes is diagnostic only; it is not a hard output-memory/transport budget.",
+        "OAuth backend treats output-token ceiling as a no-op per docs; no live cut/error behavior measured."
+      ],
+      "strengths": [
+        "Known length cuts survive as stream-only metadata to downstream validators.",
+        "Per-model byte envelope and actual-token limit are distinct concepts with documented consumers."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/provider-config.ts:153",
+          "sdk/src/provider-config.ts:174"
+        ],
+        "implementation": [
+          "sdk/src/impl/llm.ts:1345",
+          "sdk/src/impl/llm.ts:1752"
+        ],
+        "consumer": [
+          "sdk/src/impl/llm.ts:1795",
+          "common/src/types/contracts/llm.ts:66"
+        ],
+        "tests": [
+          "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts:339"
+        ],
+        "docs": [
+          "docs/configuration.md:224"
+        ]
+      },
+      "states": {
+        "failure": "Provider length marks cut; invalid actual ceiling may produce provider error.",
+        "loading": "Tools buffer until finish fact arrives.",
+        "empty": "No configured ceiling uses provider/template default.",
+        "cancellation": "Follows stream abort.",
+        "retry": "No retry after delivered payload; truncation feedback belongs to runtime.",
+        "permission": "Ceiling does not authorize oversized tool mutations; downstream validation still applies."
+      }
+    },
+    {
+      "id": "providers.native-gemini-protocol",
+      "maturity": "absent",
+      "assurance": "static configured-provider entrypoint/manifest inspection",
+      "evidence": [
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 351,
+          "detail": "Provider union contains openai-compatible, chatgpt-oauth and anthropic-compatible only."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 325,
+          "detail": "Native direct branch is Anthropic; remaining non-OAuth providers use OpenAI-compatible adapter."
+        },
+        {
+          "path": "sdk/package.json",
+          "line": 63,
+          "detail": "Shipped direct vendor dependency is Anthropic; no native Gemini provider dependency."
+        }
+      ],
+      "gaps": [
+        "Gemini is usable through an OpenAI-compatible gateway; direct Gemini API transport is absent in the reviewed source-selected routing path.",
+        "Adding a vendor SDK is an optional protocol capability decision, not proof that current BYOK gateway support is defective."
+      ],
+      "strengths": [
+        "Existing generic protocol and preserved tool metadata offer a starting point for a new native adapter."
+      ],
+      "trace": {
+        "entrypoint": [
+          "sdk/src/provider-config.ts:351"
+        ],
+        "implementation": [],
+        "consumer": [],
+        "tests": [],
+        "docs": [
+          "docs/request-flow.md:158"
+        ]
+      },
+      "states": {
+        "failure": "Native Gemini config type is not accepted.",
+        "loading": "Not implemented.",
+        "empty": "Not applicable.",
+        "cancellation": "Not applicable.",
+        "retry": "Not applicable.",
+        "permission": "Gateway credentials follow normal BYOK configuration; no native permission path."
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "02-F1",
+      "title": "AI SDK retry wrappers disable configured failover after initial HTTP 5xx",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/prompt-agent-stream.ts",
+          "line": 95,
+          "detail": "Production agent requests set maxRetries: 3, enabling AI SDK transport retries."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1339,
+          "detail": "streamText spreads streamParams, including that maxRetries value; only OAuth explicitly disables SDK retries at line 1361."
+        },
+        {
+          "path": "sdk/src/error-utils.ts",
+          "line": 189,
+          "detail": "getErrorStatusCode only reads top-level numeric statusCode/status; it does not unwrap AI_RetryError.lastError."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 2027,
+          "detail": "Configured backup requires isFailoverEligibleError(error), which receives the wrapper."
+        },
+        {
+          "path": "sdk/src/impl/failover.ts",
+          "line": 98,
+          "detail": "A wrapper with no top-level status is ineligible for failover."
+        },
+        {
+          "path": "docs/configuration.md",
+          "line": 173,
+          "detail": "Documented 5xx behavior is retries followed by configured failover."
+        }
+      ],
+      "trigger": "An ordinary agent request (maxRetries: 3) receives initial HTTP 503 responses whose message is 'Provider unavailable'; defaultModel=local/primary and failoverModels=['local/backup'].",
+      "consequence": "Observed actual AI SDK/adapter path makes four primary HTTP requests, throws AI_RetryError with lastError.statusCode=503 but classifierStatus absent, and makes zero backup requests. This is not the intended Openbuff outer retry/failover policy; UI attempt/status telemetry cannot see the inner retries either.",
+      "suggestedFix": "Choose one retry owner for all provider request paths (prefer the Openbuff loop with AI SDK maxRetries: 0), preserve the last provider error/status in a canonical error contract, and classify failover on that contract.",
+      "acceptanceProbe": "Use the offline HTTP fixture from evidence/02-providers-probes.test.ts, probe http-retry-wrapper-disables-failover: primary returns HTTP503 + Retry-After:0, backup streams text. Require bounded primary attempts followed by one backup attempt, final success, and accurate retry/failover status events.",
+      "probeId": "http-retry-wrapper-disables-failover"
+    },
+    {
+      "id": "02-F2",
+      "title": "In-band SSE error status is converted into prose instead of retry metadata",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 122,
+          "detail": "createOpenAICompatibleStreamError embeds code/status/details into Error.message but only assigns name; it does not retain status/statusCode properties."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 670,
+          "detail": "The production SSE adapter uses that converter for error chunks."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1648,
+          "detail": "The stream loop throws that converted Error for non-tool errors."
+        },
+        {
+          "path": "sdk/src/error-utils.ts",
+          "line": 189,
+          "detail": "Retry/failover status extraction only reads numeric properties, not embedded message JSON."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+          "line": 335,
+          "detail": "Existing 'preserves structured provider metadata' regression checks message contents rather than retry-classifier-visible status."
+        }
+      ],
+      "trigger": "A configured provider opens HTTP200 SSE and emits {error:{message:'Upstream provider failure',code:'upstream_error',status:'503'}} before any content, with a configured backup.",
+      "consequence": "Observed real SDK stream receives OpenAICompatibleStreamError, classifier status is absent, and performs one primary request with no retry or backup, despite an explicit server-error status in the provider payload.",
+      "suggestedFix": "Normalize validated numeric/string status into a structured numeric statusCode and preserve provider code/details separately from the display message. Reuse the same error contract as HTTP failures.",
+      "acceptanceProbe": "Run the sse-status-loss fixture through the production configured model and AI SDK. Require classifier status503 and the documented bounded retry\u2192backup behavior before any content is delivered; malformed status must remain unclassified.",
+      "probeId": "sse-status-loss"
+    },
+    {
+      "id": "02-F3",
+      "title": "Default streaming transport drops usage and suppresses configured cost accounting",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 73,
+          "detail": "stripProviderMetadata defaults true for OpenAI-compatible providers."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 686,
+          "detail": "CLI/SDK configured OpenAI-compatible providers use the local OpenAICompatibleChatLanguageModel."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 696,
+          "detail": "That production constructor always sets includeUsage: undefined; config exposes no includeUsage control."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 424,
+          "detail": "The usage request field is sent only when includeUsage is enabled."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 939,
+          "detail": "On a tool-calls finish, the default adapter terminates the stream before later usage chunks."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1844,
+          "detail": "Both provider cost extraction and configured-pricing fallback are inside !stripProviderMetadata."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1876,
+          "detail": "If cost fallback does run without token counts, computeCostCentsFromUsage treats missing usage as zero."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 734,
+          "detail": "Reported cost is accumulated into step accounting."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 797,
+          "detail": "The usage callback unconditionally feeds cache totals and token-calibration observations."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+          "line": 70,
+          "detail": "The green late-usage test explicitly constructs includeUsage: true, unlike the shipped constructor."
+        }
+      ],
+      "trigger": "A real configured OpenAI-compatible stream uses pricing input=$3/M, output=$15/M and offers usage 20,000 input +10,000 output tokens. A tool turn sends usage after finish_reason=tool_calls; separately a normal text turn sends known usage with stripProviderMetadata=true.",
+      "consequence": "Observed tool stream delivers its tool call but loses all offered usage; with metadata stripping disabled the cost callback reports0 instead of21 cents. With the default stripping flag enabled, a text stream retains usage but never calls the cost observer at all. Cache/calibration inputs and step cost therefore lack truthful provider provenance. Actual provider charges and hard budget enforcement were not measured by these probes.",
+      "suggestedFix": "Separate request-metadata compatibility from response accounting; negotiate include_usage for supporting endpoints and retain terminal usage when requested; represent unknown usage/cost distinctly from zero. Keep high precision internally and round only for display. Attach provider/model/currency/provenance to accounting.",
+      "acceptanceProbe": "Use late-tool-usage and strip-provider-metadata-cost-gate fixtures with the real configured adapter. Both must report21 cents with 20k/10k usage, preserve exactly one tool call, and report unknown rather than0 when the endpoint supplies no usage. Test endpoints that reject include_usage via an explicit compatibility control, and assert runtime aggregates receive the same receipt.",
+      "probeId": "late-tool-usage; strip-provider-metadata-cost-gate"
+    },
+    {
+      "id": "02-F4",
+      "title": "Context preflight requires backup credentials before a healthy primary can run",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 424,
+          "detail": "Context resolution is documented as capacity-only without touching credentials."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 439,
+          "detail": "It scans every primary/failover candidate and calls credential-validating resolveConfiguredProviderModel."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 2034,
+          "detail": "A matched backup with missing apiKeyEnv throws synchronously."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1572,
+          "detail": "The production agent loop calls the resolver before its first programmatic step."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1197,
+          "detail": "The stream path also calls it before entering the guarded provider attempt loop."
+        },
+        {
+          "path": "cli/src/utils/openbuff-provider.ts",
+          "line": 1021,
+          "detail": "CLI readiness validates the selected root provider, so the primary can pass readiness before this backup error."
+        },
+        {
+          "path": "docs/configuration.md",
+          "line": 141,
+          "detail": "Failover is documented as secondary and starts only after primary request failure."
+        }
+      ],
+      "trigger": "defaultModel=local/primary is an unauthenticated local provider with a valid200k window; failoverModels includes backup/emergency with HTTPS endpoint and an unset apiKeyEnv.",
+      "consequence": "Observed getModelForRequest successfully constructs the primary, but capacity resolution and promptAiSdkStream throw the backup missing-key error before any fetch. A dormant emergency route takes down the otherwise usable primary.",
+      "suggestedFix": "Resolve route/model capability metadata without credential validation; check credentials when a candidate is actually selected. Surface invalid backup readiness separately, with a defined skip/fail behavior when failover is needed.",
+      "acceptanceProbe": "Use context-preflight-backup-credential-coupling fixture. Require primary window200k and a successful primary request with backup credentials absent. If primary fails, require a precise backup configuration result without erasing the primary failure.",
+      "probeId": "context-preflight-backup-credential-coupling"
+    },
+    {
+      "id": "02-F5",
+      "title": "Configured reasoning effort is omitted for custom OpenAI-compatible provider IDs",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 243,
+          "detail": "Configured route effort is resolved and exposed on ModelResult."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1037,
+          "detail": "withConfiguredReasoningEffort writes providerOptions.openaiCompatible and providerOptions.openai."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 181,
+          "detail": "The adapter's providerOptionsName is the configured provider ID."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 207,
+          "detail": "The generic options namespace read by the adapter is 'openai-compatible' (hyphenated), followed by the provider ID."
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+          "line": 288,
+          "detail": "reasoning_effort is emitted only from the options it parsed."
+        },
+        {
+          "path": "packages/agent-runtime/src/prompt-agent-stream.ts",
+          "line": 138,
+          "detail": "Template effort uses the same camelCase namespace, so the generic route shares the mismatch."
+        }
+      ],
+      "trigger": "A custom provider ID 'local' declares reasoning support and high/medium/low efforts; defaultReasoningEffort='high'; a normal agent stream is sent through the actual configured adapter.",
+      "consequence": "Observed ModelResult.reasoningEffort is high while the HTTP body has no reasoning_effort. Providers named 'openai' can use the other namespace, making behavior depend on the arbitrary configuration ID rather than declared capabilities. Adaptive role choices can likewise be selected but never transmitted.",
+      "suggestedFix": "Publish one canonical generic provider-options namespace and use it consistently at producer/adapter boundaries, or map options using the resolved provider ID. Preserve compatibility with existing public option names and validate effort support.",
+      "acceptanceProbe": "Use reasoning-provider-options-namespace fixture; run high/medium/low route and template overrides for provider IDs local, custom-gateway, and openai. Require the same correct wire reasoning_effort or an explicit unsupported-setting result.",
+      "probeId": "reasoning-provider-options-namespace"
+    },
+    {
+      "id": "02-F6",
+      "title": "Configured OAuth routes ignore the skip flag used for recovery",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 234,
+          "detail": "The resolver receives skipChatGptOAuth."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 302,
+          "detail": "A configured chatgpt-oauth provider is selected unconditionally; skip/rate-limit flags are checked only in the later implicit OAuth branch."
+        },
+        {
+          "path": "sdk/src/impl/model-provider.ts",
+          "line": 379,
+          "detail": "Only implicit OAuth honors skipChatGptOAuth and the rate-limit cache."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1578,
+          "detail": "The OAuth rate-limit recovery recursively calls the same params with skipChatGptOAuth:true to obtain configured provider fallback."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1631,
+          "detail": "Failed auth refresh uses the same skip-based fallback."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 2091,
+          "detail": "Non-streaming requests also rely on skipChatGptOAuth:true."
+        },
+        {
+          "path": "sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts",
+          "line": 58,
+          "detail": "Existing test checks the policy helper's skip behavior, not actual configured model selection."
+        }
+      ],
+      "trigger": "defaultModel='codex/gpt-5.5', provider codex type chatgpt-oauth; recovery or a non-streaming caller invokes getModelForRequest with skipChatGptOAuth:true.",
+      "consequence": "Observed actual model resolver still requests OAuth credentials and returns isChatGptOAuth:true. Thus the recursive recovery path can revisit the same excluded provider instead of selecting BYOK backup. A known configured OAuth rate limit is not prevented by the cache in that branch. The probe injected credentials and did not exercise real refresh/subscription services.",
+      "suggestedFix": "Define explicit OAuth recovery routing: honor skip for configured routes, select only configured BYOK backup candidates, and fail with an actionable reconnect/route message when none exists. Make rate-limit state apply to configured OAuth routes too.",
+      "acceptanceProbe": "Use configured-oauth-ignores-skip fixture plus a simulated pre-content429/failed-auth-refresh recovery. After skip is requested, neither OAuth credential getter nor backend fetch may be called again; configured BYOK backup must run or an actionable terminal error must result.",
+      "probeId": "configured-oauth-ignores-skip"
+    },
+    {
+      "id": "02-F7",
+      "title": "Streaming retry bypasses the shared deterministic-error policy",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "performance",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/retry-config.ts",
+          "line": 412,
+          "detail": "The shared classifier fails fast for content-policy errors and explicit non-retryable statuses, and extracts bounded Retry-After."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1915,
+          "detail": "Streaming normalizes content-policy errors but does not call the shared classifier afterward."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1977,
+          "detail": "Streaming accepts transient message OR retryable status OR empty stream; a policy error retaining503 is consequently retried."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 1997,
+          "detail": "Streaming always computes exponential delay rather than applying the shared Retry-After decision."
+        },
+        {
+          "path": "sdk/src/impl/llm.ts",
+          "line": 2151,
+          "detail": "Non-streaming uses runWithRetryPolicy, so policies diverge."
+        },
+        {
+          "path": "sdk/src/__tests__/retry-config.test.ts",
+          "line": 196,
+          "detail": "The retry matrix tests the correct helper, not the production streaming gate."
+        }
+      ],
+      "trigger": "An injected provider stream fails before output with createProviderContentPolicyError({statusCode:503}); the shared classifier says retryable:false.",
+      "consequence": "Observed promptAiSdkStream makes four stream attempts and three backoff calls while the shared policy requires one. Deterministic refusals can consume extra requests and delay, and the streaming layer does not share the documented header-aware decision. The four attempts are Openbuff outer stream calls in this DI probe; they are distinct from the four internal HTTP retries in02-F1.",
+      "suggestedFix": "Use classifyRetryableError in the streaming gate, with the explicit no-content and empty-stream exceptions retained. Apply its delayMs and cancellation semantics. Combine with a single retry owner so policy is checked before hidden SDK retries.",
+      "acceptanceProbe": "Use stream-loop-bypasses-shared-retry-classifier fixture. Require one call/no backoff for policy503 and non-retryable400 containing transient-sounding text; require bounded Retry-After for429, no retry after user abort, and existing safe buffered-tool retry/failover regressions to remain passing.",
+      "probeId": "stream-loop-bypasses-shared-retry-classifier"
+    }
+  ],
+  "domainAssessment": {
+    "security": "Reviewed provider schema validation, HTTPS credential transport, loopback-only unauthenticated HTTP, ancestor-source trust stripping, readonly-root provenance and no-hosted-fallback boundaries. No new concrete exploit was validated in this lane. Project/explicit provider config is deliberately trusted; discovery, credential persistence and arbitrary tool permission security are not fully re-audited here.",
+    "correctness": "Real routing/stream/tool paths are present. Offline production probes establish status-wrapper/SSE normalization gaps, usage/cost loss, backup credential coupling and configured reasoning/OAuth control mismatch. Advisory tool metadata is distinguished from operational provider compatibility.",
+    "state-mutation": "Pending tool buffers reset per attempt; delivered-content gate prevents unsafe replay; cost/cache observers use step-local accumulators; CLI send ownership protects authoritative completion; backoff/diagnostic listeners clean up. OAuth rate-limit state is process-global and configured routes do not honor it; config cache returns shared mutable data and fragmented atomic-write scopes were inspected without a crash/concurrent-writer test.",
+    "error-handling": "Finite request/post-stream bounds and shared header-aware retry helper are strong existing infrastructure. Production streaming bypasses that helper, HTTP SDK wrappers obscure status, in-band errors flatten status, and OAuth skip recovery does not select a different configured transport. Suggested fixes retain delivered-content safety.",
+    "performance": "Assessed tool/stream buffering, synchronous config dependency discovery, metadata waits, retry multiplication/wrapper effects and diagnostics worker-pool wiring. Cache invalidation rediscovering fragment files is deliberate. No throughput/latency/RSS measurements or known-vulnerability assertions are made.02-F7 demonstrates avoidable retry calls without fabricating timings.",
+    "dependency-hygiene": "SDK declares ai and pinned @ai-sdk/anthropic; internal package declares @ai-sdk/provider/provider-utils and ai with compatible V2 interfaces. Shared workspace packages are deliberately bundled. Semver ranges and manifest declarations were inspected; registry/CVE/lock integrity and published dist were outside this lane. Installed AI SDK retry wrapper source was inspected only as probe context, excluded from native receipt.",
+    "test-coverage": "62 existing tests passed across retry policy, tool buffering, cost helper and the two adapters;9 offline current-behavior probes passed. These expose production wiring failures despite green helpers. OAuth tests are classifier-only; metadata error tests assert prose rather than classifier properties; usage test enables an option never enabled by the production constructor. No real API/live provider, CLI TUI end-to-end or OAuth refresh test was run.",
+    "api-contract": "Checked provider config, compatibility controls, shared StreamChunk/truncation shape, CLI status consumer and configured routing docs. Failover after5xx and reasoning effort differ from production behavior. Per-model tools/caching metadata is advisory. Legacy-window helper and specialized OpenRouter/failover-floor helpers are not default runtime capabilities. OutputTokens precedence and output-byte diagnostic scope are documented limitations."
+  },
+  "coverageLimits": [
+    "Receipt covers41 inventory files with64 exact sampled/merged ranges; large provider/run files were not audited line-for-line. Selected picker ranges were read, with adjacent production consumers added.",
+    "Read-only source audit; only owned /tmp reports and offline probe artifacts were created. No source implementation or source test files were changed.",
+    "Nine offline probes pin CURRENT observed behavior. Their passing result is reproduction evidence, not acceptance that these defects are fixed.62 existing tests passed separately under pinned Bun1.3.5.",
+    "No external API calls, credential/private provider configuration values, private logs or secret environment values were inspected. Config fixtures and the OAuth credential function response were synthesized.",
+    "Installed node_modules/ai/dist/index.mjs retry/error source was consulted for probe interpretation; not included as a current inventory source in structuralReceipt.",
+    "Provider discovery transport, OAuth credential persistence/real refresh, Responses transformer internals, embedding generation and API-dependent concurrent/subagent e2e tests were not fully reviewed in this lane.",
+    "Native Openbuff query_index/read_files/coverage tools are not exposed in this Codex session; discovery used picker artifacts, rg and exact numbered reads. Root will run native receipt validation.",
+    "Capability quality is not model intelligence/accuracy. No provider benchmark, cost accuracy measurement or claim of best possible performance is made.",
+    "Automatic benchmark-to-routing learning/measurement producers were not traced across evals; existing /models recommend is an opt-in configured evidence lookup."
+  ],
+  "verification": {
+    "runtime": "Bun1.3.5 (1e86cebd)",
+    "existingUnitTests": {
+      "command": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun test sdk/src/__tests__/retry-config.test.ts sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts sdk/src/impl/__tests__/llm-cost.test.ts packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts packages/internal/src/openrouter-ai-sdk/tests/stream-usage-accounting.test.ts",
+      "passed": 62,
+      "failed": 0,
+      "assertions": 464,
+      "assurance": "unit/injected streams; specialized adapters explicitly configured by tests"
+    },
+    "offlineProbes": {
+      "command": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun test /tmp/openbuff-body-review-2026-11-05/evidence/02-providers-probes.test.ts",
+      "passed": 9,
+      "failed": 0,
+      "assertions": 29,
+      "source": "/tmp/openbuff-body-review-2026-11-05/evidence/02-providers-probes.test.ts",
+      "results": "/tmp/openbuff-body-review-2026-11-05/evidence/02-providers-probes.json",
+      "assurance": "real configured resolver/adapter/AI SDK except clearly marked stream/credential DI probes; no live APIs"
+    }
+  },
+  "recommendedPlanWork": [
+    {
+      "priority": "P0",
+      "id": "provider-canonical-errors-single-retry-owner",
+      "addresses": [
+        "02-F1",
+        "02-F2",
+        "02-F7"
+      ],
+      "work": "Create a provider error contract preserving HTTP/in-band code, status, retry hints and cause; disable hidden SDK retries and use the same policy for streaming/non-streaming/structured requests with the no-delivered-content guard.",
+      "acceptance": "Real fake-HTTP503 and fake-SSE503 fixtures exhaust bounded primary attempts then recover on configured backup; policy errors use one attempt;429 obeys bounded Retry-After; abort and safe buffered-tool tests remain green."
+    },
+    {
+      "priority": "P0",
+      "id": "provider-truthful-accounting",
+      "addresses": [
+        "02-F3"
+      ],
+      "work": "Separate response accounting from request metadata stripping, negotiate terminal usage, emit provenance-bearing unknown/estimated/provider-reported cost and usage, and preserve precision/currency until display. Correlate with the root's hard-budget/terminal-truthfulness milestone.",
+      "acceptance": "Both20k/10k fake streams report21 cents and identical runtime totals with stripping on/off; no-usage endpoints produce unknown rather than0; callback provenance separates successful and billed failed attempts."
+    },
+    {
+      "priority": "P1",
+      "id": "provider-capacity-without-secrets",
+      "addresses": [
+        "02-F4"
+      ],
+      "work": "Split metadata-only route resolution from credential/client construction; expose primary and backup readiness separately. Snapshot effective attempt route/capabilities once.",
+      "acceptance": "Missing backup key cannot prevent healthy primary or pre-run capacity lookup; failure of the primary produces a precise backup readiness outcome."
+    },
+    {
+      "priority": "P1",
+      "id": "provider-reasoning-options-contract",
+      "addresses": [
+        "02-F5"
+      ],
+      "work": "Unify generic/configured provider-options namespaces and effort precedence, with actual wire-request tests across arbitrary provider IDs.",
+      "acceptance": "local/custom/openai IDs transmit identical configured effort; route/template/default/adaptive precedence is verified at the HTTP body."
+    },
+    {
+      "priority": "P1",
+      "id": "provider-explicit-oauth-recovery",
+      "addresses": [
+        "02-F6"
+      ],
+      "work": "Replace recursive same-route OAuth fallback with explicit configured BYOK recovery candidates; honor skip/rate-limit state across configured/implicit OAuth paths.",
+      "acceptance": "A pre-content429 or failed refresh never reselects excluded OAuth; backup runs or an actionable terminal error results, with credential/network seams injected."
+    },
+    {
+      "priority": "P2",
+      "id": "provider-conformance-suite-and-capability-contract",
+      "addresses": [],
+      "work": "Build protocol-level fake-server/stream fixtures from entrypoint through runtime consumer, covering malformed tools, empty stream, late usage, cancellation, context limit and status metadata. Mark model tools/cache/structured metadata advisory or wire deliberate per-model negotiation; reuse specialized adapter code only after production caller selection is explicit.",
+      "acceptance": "Fixture matrix runs without keys or network and asserts request bodies, stream payloads, terminal state, cost/usage provenance and CLI-visible events; passing helper tests alone do not mark a capability usable."
+    },
+    {
+      "priority": "P2",
+      "id": "multilingual-recommendation-evidence",
+      "addresses": [],
+      "work": "Keep the wired opt-in /models recommend path, define a comparable benchmark receipt and a reviewed evaluation-to-quality update seam before automatic language/task routing. Native Gemini transport should be added only with a clear protocol/feature need and conformance target.",
+      "acceptance": "Recommendations cite language/task/role, sample size, benchmark/version and measurement date; missing evidence stays explicit; explicit routes are preserved until the user opts into automatic selection."
+    }
+  ]
+}

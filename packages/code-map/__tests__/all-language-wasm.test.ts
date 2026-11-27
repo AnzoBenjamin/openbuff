@@ -1,8 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+
+import { PINNED_GRAMMAR_ASSETS } from '../src/grammar-wasm-repair'
 import { getLanguageConfig, languageTable, setWasmDir } from '../src/languages'
 
 describe('packaged language WASM coverage', () => {
@@ -31,8 +34,21 @@ describe('packaged language WASM coverage', () => {
         'wasm',
         config.wasmFile,
       )
-      const source = fs.existsSync(primary) ? primary : fallback
-      expect(fs.existsSync(source), config.wasmFile).toBe(true)
+      // The GDScript grammar is built from its pinned source; neither
+      // dependency publishes it. The SDK build retains those verified bytes.
+      const built = path.join(repoRoot, 'sdk', 'dist', 'wasm', config.wasmFile)
+      const source = [primary, fallback, built].find((file) =>
+        fs.existsSync(file),
+      )
+      if (!source)
+        throw new Error(
+          `Missing ${config.wasmFile}; build the SDK assets before this packaging check`,
+        )
+      if (source === built) {
+        expect(
+          createHash('sha256').update(fs.readFileSync(source)).digest('hex'),
+        ).toBe(PINNED_GRAMMAR_ASSETS[config.wasmFile].sha256)
+      }
       fs.copyFileSync(source, path.join(wasmDir, config.wasmFile))
     }
     setWasmDir(wasmDir)

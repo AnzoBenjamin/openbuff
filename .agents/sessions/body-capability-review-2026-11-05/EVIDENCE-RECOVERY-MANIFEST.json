@@ -1,0 +1,3739 @@
+{
+  "schemaVersion": 1,
+  "recoveryStartedAt": "2026-11-06T05:51:16.132935+00:00",
+  "state": "frozen evidence recovery with explicit historical-source and coverage-count gaps",
+  "sourceHEAD": "e65c06c0ae783130998bd9ab18c8d35320e40ea8",
+  "sourceSnapshot": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "originalHashMapRecovered": false,
+  "originalWholeFileHashCountRecorded": 558,
+  "originalWholeFileHashesRecovered": 0,
+  "historicalComparisons": [
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 35,
+        "graphRows": 35,
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "f5da08c6ad6388b12a05897ec5ee18f9cab28120eafcd9a4ec3580c0cedf1163",
+          "SPEC.md": "9a9b58a7d8fcc91c7c5c80ffd678ac6a4e13dd0cdcc642ecb1ca305bbcdc4d30",
+          "OLD-TASK-MIGRATION.md": "0cce04a196aeaa54e60c83c529b92e4eab3ba20e61dee2c28dd0a0efa695e7af",
+          "CAPABILITIES.md": "f0967f9214c7a1133281c30e32e996f2061bf96fcdfc7d853f7198fc14afa31c"
+        },
+        "errors": [
+          {
+            "missingListedTestPaths": [
+              "__tests__/run-buffbench.test.ts",
+              "src/commands/__tests__/prompt-dispatch.test.ts",
+              "src/components/__tests__/attachment-recovery.test.tsx",
+              "src/components/__tests__/session-route-recovery.test.tsx",
+              "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+              "src/hooks/__tests__/use-send-message-ownership.test.ts"
+            ]
+          }
+        ],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "b14f3e99271499741a72fcc1f9bd0fb23e74cbe14497c815273a62be1d8f333e.json",
+        "sha256": "b14f3e99271499741a72fcc1f9bd0fb23e74cbe14497c815273a62be1d8f333e",
+        "bytes": 1807,
+        "timestamp": "2026-11-06T00:12:38.122Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_u2iie8va98cb3Z1GqAbRliUn",
+        "transformation": "exact recorded output",
+        "location": "$.output[decoded-json]"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    },
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 35,
+        "graphRows": 35,
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "shorthandTestResolution": [
+          {
+            "reference": "__tests__/run-buffbench.test.ts",
+            "uniqueRepositoryPath": "evals/buffbench/__tests__/run-buffbench.test.ts"
+          },
+          {
+            "reference": "src/commands/__tests__/prompt-dispatch.test.ts",
+            "uniqueRepositoryPath": "cli/src/commands/__tests__/prompt-dispatch.test.ts"
+          },
+          {
+            "reference": "src/components/__tests__/attachment-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/attachment-recovery.test.tsx"
+          },
+          {
+            "reference": "src/components/__tests__/session-route-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/session-route-recovery.test.tsx"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts"
+          }
+        ],
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "f5da08c6ad6388b12a05897ec5ee18f9cab28120eafcd9a4ec3580c0cedf1163",
+          "SPEC.md": "9a9b58a7d8fcc91c7c5c80ffd678ac6a4e13dd0cdcc642ecb1ca305bbcdc4d30",
+          "OLD-TASK-MIGRATION.md": "0cce04a196aeaa54e60c83c529b92e4eab3ba20e61dee2c28dd0a0efa695e7af",
+          "CAPABILITIES.md": "f0967f9214c7a1133281c30e32e996f2061bf96fcdfc7d853f7198fc14afa31c"
+        },
+        "errors": [],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "4f358338f5213778aeb06dc25269ccec3c6d8947541d60d58b28d6ae963294ce.json",
+        "sha256": "4f358338f5213778aeb06dc25269ccec3c6d8947541d60d58b28d6ae963294ce",
+        "bytes": 2205,
+        "timestamp": "2026-11-06T00:14:36.092Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_YnpLrQvJFoHQNl08DFQ7T6za",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    },
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 36,
+        "graphRows": 39,
+        "milestoneNodes": [
+          "M22-CHILD",
+          "M22-CORE",
+          "M22-TXN"
+        ],
+        "completionGraph": {
+          "B01": [],
+          "B02": [],
+          "B03": [],
+          "B04": [],
+          "B05": [
+            "B03"
+          ],
+          "B06": [
+            "B03",
+            "B04",
+            "B05",
+            "B07"
+          ],
+          "B07": [
+            "B03",
+            "B04",
+            "B05"
+          ],
+          "B08": [],
+          "B09": [
+            "B02",
+            "B08"
+          ],
+          "B10": [
+            "B02"
+          ],
+          "B11": [],
+          "B12": [
+            "B02"
+          ],
+          "B13": [
+            "B12"
+          ],
+          "B14": [
+            "B12"
+          ],
+          "B15": [
+            "B02",
+            "B03",
+            "B04"
+          ],
+          "B16": [
+            "B04",
+            "B15"
+          ],
+          "B17": [
+            "B02",
+            "B15"
+          ],
+          "B18": [],
+          "B19": [
+            "B02",
+            "B18"
+          ],
+          "B20": [
+            "B02",
+            "B19"
+          ],
+          "B21": [
+            "B19",
+            "B20"
+          ],
+          "B22": [
+            "M22-CORE",
+            "M22-TXN",
+            "M22-CHILD"
+          ],
+          "B23": [],
+          "B24": [
+            "B23"
+          ],
+          "B25": [
+            "B05",
+            "B19",
+            "B20",
+            "B23"
+          ],
+          "B26": [
+            "B04",
+            "B23"
+          ],
+          "B27": [
+            "B06",
+            "B19",
+            "B23",
+            "B24",
+            "B25",
+            "B26",
+            "B36"
+          ],
+          "B28": [],
+          "B29": [
+            "B15",
+            "B19",
+            "B28"
+          ],
+          "B30": [],
+          "B31": [
+            "B02",
+            "B09",
+            "B12",
+            "B13",
+            "B14",
+            "B27",
+            "B30"
+          ],
+          "B32": [],
+          "B33": [
+            "B03",
+            "B05",
+            "B19",
+            "B20",
+            "B28"
+          ],
+          "B34": [
+            "B06",
+            "B07",
+            "B16",
+            "B17",
+            "B22",
+            "B27"
+          ],
+          "B35": [
+            "B03",
+            "B05",
+            "B19",
+            "B20"
+          ],
+          "B36": [],
+          "M22-CORE": [
+            "B04",
+            "B15",
+            "B21"
+          ],
+          "M22-TXN": [
+            "M22-CORE",
+            "B05",
+            "B07"
+          ],
+          "M22-CHILD": [
+            "M22-CORE",
+            "M22-TXN",
+            "B16"
+          ]
+        },
+        "canonicalJsonGraphValidated": true,
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32",
+          "B36"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "shorthandTestResolution": [
+          {
+            "reference": "__tests__/run-buffbench.test.ts",
+            "uniqueRepositoryPath": "evals/buffbench/__tests__/run-buffbench.test.ts"
+          },
+          {
+            "reference": "src/commands/__tests__/prompt-dispatch.test.ts",
+            "uniqueRepositoryPath": "cli/src/commands/__tests__/prompt-dispatch.test.ts"
+          },
+          {
+            "reference": "src/components/__tests__/attachment-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/attachment-recovery.test.tsx"
+          },
+          {
+            "reference": "src/components/__tests__/session-route-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/session-route-recovery.test.tsx"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts"
+          }
+        ],
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "e9fa084036c0b99d17b5e173afe237804ff5306c971dcb5aff780aefc6dba34e",
+          "SPEC.md": "9baced80a7ff1c35ff3e41e4fb81d4a74efa1bd93364723ed3c4c05a4b6619e3",
+          "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+          "CAPABILITIES.md": "c062b5530cc7efde5c4d0e995982f3a2c4fc1a15467a5153c015b075d79c5818"
+        },
+        "errors": [],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "84019aaed178b823e1e99b18d446f1dac6745c7953a9c508ce1590c2b5630b68.json",
+        "sha256": "84019aaed178b823e1e99b18d446f1dac6745c7953a9c508ce1590c2b5630b68",
+        "bytes": 4806,
+        "timestamp": "2026-11-06T00:40:01.698Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_Xxl7BPGEgqrB6nFUCP6tlsGO",
+        "transformation": "exact recorded output",
+        "location": "$.output[decoded-json]"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    },
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 36,
+        "graphRows": 39,
+        "milestoneNodes": [
+          "M22-CHILD",
+          "M22-CORE",
+          "M22-TXN"
+        ],
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32",
+          "B36"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "shorthandTestResolution": [
+          {
+            "reference": "__tests__/run-buffbench.test.ts",
+            "uniqueRepositoryPath": "evals/buffbench/__tests__/run-buffbench.test.ts"
+          },
+          {
+            "reference": "src/commands/__tests__/prompt-dispatch.test.ts",
+            "uniqueRepositoryPath": "cli/src/commands/__tests__/prompt-dispatch.test.ts"
+          },
+          {
+            "reference": "src/components/__tests__/attachment-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/attachment-recovery.test.tsx"
+          },
+          {
+            "reference": "src/components/__tests__/session-route-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/session-route-recovery.test.tsx"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts"
+          }
+        ],
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "e9fa084036c0b99d17b5e173afe237804ff5306c971dcb5aff780aefc6dba34e",
+          "SPEC.md": "9baced80a7ff1c35ff3e41e4fb81d4a74efa1bd93364723ed3c4c05a4b6619e3",
+          "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+          "CAPABILITIES.md": "c062b5530cc7efde5c4d0e995982f3a2c4fc1a15467a5153c015b075d79c5818"
+        },
+        "errors": [],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "05a88dcdc787600c41b34d8c7f1e523ebc468f60f40f92fd06e82b0d0f0287c1.json",
+        "sha256": "05a88dcdc787600c41b34d8c7f1e523ebc468f60f40f92fd06e82b0d0f0287c1",
+        "bytes": 2603,
+        "timestamp": "2026-11-06T00:31:28.697Z",
+        "session": "rollout-2026-11-06T02-08-44-01a1adf8-c4f8-7f60-8efd-a4619c4f5157.jsonl",
+        "callId": "call_hjCGPhtuWPHEc0GL5c8zBdOz",
+        "transformation": "exact recorded output",
+        "location": "$.output[decoded-json]"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    }
+  ],
+  "captureIndexEntries": 1227,
+  "uniqueCaptureFilesVerified": 1227,
+  "artifacts": [
+    {
+      "path": "evidence/historical-COVERAGE.md",
+      "bytes": 3547,
+      "sha256": "591da2f88b426cb28efebb8853c61a0b43b682775b255b002033e5b5b27afe19",
+      "provenance": {
+        "store": "stores.json",
+        "storeKey": "COVERAGE.md",
+        "transformation": "line number and tab prefixes removed; no prose reconstruction"
+      },
+      "complete": true
+    },
+    {
+      "path": "evidence/historical-source-hash-comparisons.json",
+      "bytes": 14293,
+      "sha256": "7fea2aab8feb60e30cfa3a1c716adea8115d27d21ebd379b804aaad970b12c50"
+    },
+    {
+      "path": "evidence/07-read-ranges.json",
+      "bytes": 8079,
+      "sha256": "65f642cebd155932a7ea749246dcc87bbf10b1fcc015b395e992995e324d0767"
+    },
+    {
+      "path": "evidence/07-read-ranges-PROVENANCE.json",
+      "bytes": 90384,
+      "sha256": "1cc4a170d6265d22f796b0958aaf5eec96144d22b2162227b7b1f8f68a508d79"
+    },
+    {
+      "path": "evidence/09-read-ranges.jsonl",
+      "bytes": 7440,
+      "sha256": "6ebf8698fa6e1a7cf2bb3db63ad116f4f9c05dd46c169f7247e8ffa9757ce3c1"
+    },
+    {
+      "path": "evidence/09-read-ranges-PROVENANCE.json",
+      "bytes": 112924,
+      "sha256": "4b59d9fd93498d06fbca1115bfd9f49c3cc5a3c538b5984a5ee30a0da00c0046"
+    },
+    {
+      "path": "evidence/10-read-ranges.json",
+      "bytes": 12783,
+      "sha256": "6c4cb808ef5e3e1c6249b8edc8b1d67b981f1a7504f169dc62d04963d7a6f576"
+    },
+    {
+      "path": "evidence/10-read-ranges-PROVENANCE.json",
+      "bytes": 140408,
+      "sha256": "be5675e1b9cf2023bb86f5e48d0986d656dc185e7bee5974adf6d7097c2f9a6d"
+    },
+    {
+      "path": "evidence/11-read-ranges.json",
+      "bytes": 8906,
+      "sha256": "d14287e3cf0d303c806b92ce1b703a64b397feab63e53d2e7e6da7e099138eb8"
+    },
+    {
+      "path": "evidence/11-read-ranges-PROVENANCE.json",
+      "bytes": 93976,
+      "sha256": "fc7fd88460a54071afccb3caf562e6996f911016b3f4fe1f449bff2a541521c5"
+    },
+    {
+      "path": "evidence/recovered-source-line-bindings.json",
+      "bytes": 423445,
+      "sha256": "bef59f8d8b298950bf92dbe97b8413558ebdf4605f8d6e48dfae165d1ea0e1fb"
+    },
+    {
+      "path": "evidence/02-providers-probes.json",
+      "sha256": "9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160",
+      "bytes": 3638,
+      "provenance": {
+        "capture": "9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160.json",
+        "sha256": "9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160",
+        "bytes": 3638,
+        "timestamp": "2026-11-05T21:12:24.087Z",
+        "session": "rollout-2026-11-05T23-58-55-01a1ad81-edbe-7f52-a218-cacd99170781.jsonl",
+        "callId": "call_nyj2XK86yN6vo3aTSkzIXn6v",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/03-orchestration-probes.json",
+      "sha256": "346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87",
+      "bytes": 1090,
+      "provenance": {
+        "capture": "346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87.json",
+        "sha256": "346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87",
+        "bytes": 1090,
+        "timestamp": "2026-11-05T21:06:09.859Z",
+        "session": "rollout-2026-11-05T23-59-29-01a1ad82-714d-76e3-ae69-8c80613b6f84.jsonl",
+        "callId": "call_NkB80GtllMgj1tVqec6Oq0jd",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/04-memory-fixture-result.json",
+      "sha256": "6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93",
+      "bytes": 2713,
+      "provenance": {
+        "capture": "6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93.json",
+        "sha256": "6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93",
+        "bytes": 2713,
+        "timestamp": "2026-11-05T21:39:14.413Z",
+        "session": "rollout-2026-11-06T00-20-48-01a1ad95-f665-7e01-83b7-ebb497d2b9a1.jsonl",
+        "callId": "call_p6DutAPON6MbYQdIyfvT1oS2",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-edit-probes.json",
+      "sha256": "9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0",
+      "bytes": 10008,
+      "provenance": {
+        "capture": "9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0.json",
+        "sha256": "9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0",
+        "bytes": 10008,
+        "timestamp": "2026-11-05T21:32:32.393Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_IDBJ0swjnBeO5PpAUnF7725B",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-workspace-edit-probe.json",
+      "sha256": "a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5",
+      "bytes": 4250,
+      "provenance": {
+        "capture": "a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5.json",
+        "sha256": "a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5",
+        "bytes": 4250,
+        "timestamp": "2026-11-05T21:34:11.411Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_uRKlrXAnmIvkfBvJds8YkLfO",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-mutation-truth-probe.json",
+      "sha256": "1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799",
+      "bytes": 4821,
+      "provenance": {
+        "capture": "1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799.json",
+        "sha256": "1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799",
+        "bytes": 4821,
+        "timestamp": "2026-11-05T21:35:34.423Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_VDCZpK0jMknjDYN5KtqQ2Osm",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-text-preservation-probe.json",
+      "sha256": "35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971",
+      "bytes": 855,
+      "provenance": {
+        "capture": "35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971.json",
+        "sha256": "35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971",
+        "bytes": 855,
+        "timestamp": "2026-11-05T21:53:00.545Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_GBcX9C9mNZnJx2ksfaAUTYRR",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-broker-lock-probe.json",
+      "sha256": "ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6",
+      "bytes": 740,
+      "provenance": {
+        "capture": "ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6.json",
+        "sha256": "ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6",
+        "bytes": 740,
+        "timestamp": "2026-11-05T21:39:22.953Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_8ezug4SADQ2ZzZHexTMS3DsW",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-broker-recovery-containment-probe.json",
+      "sha256": "64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b",
+      "bytes": 1384,
+      "provenance": {
+        "capture": "64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b.json",
+        "sha256": "64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b",
+        "bytes": 1384,
+        "timestamp": "2026-11-05T21:42:06.189Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_OY1L0h7DmhB9oEPnPGbIBZul",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/07-probes.json",
+      "sha256": "12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e",
+      "bytes": 4518,
+      "provenance": {
+        "capture": "12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e.json",
+        "sha256": "12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e",
+        "bytes": 4518,
+        "timestamp": "2026-11-05T22:06:17.787Z",
+        "session": "rollout-2026-11-06T00-57-53-01a1adb7-e778-7970-b090-4ee5e53c3144.jsonl",
+        "callId": "call_9PWcGsxJ04irRAlY2MBumf2O",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/07-assets.json",
+      "sha256": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0",
+      "bytes": 5048,
+      "provenance": {
+        "capture": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0.json",
+        "sha256": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0",
+        "bytes": 5048,
+        "timestamp": "2026-11-05T22:07:39.824Z",
+        "session": "rollout-2026-11-06T00-57-53-01a1adb7-e778-7970-b090-4ee5e53c3144.jsonl",
+        "callId": "call_SZhRQ4WlsNRviJTmPNVKce6K",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/08-freshness-lock-probes.json",
+      "sha256": "15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54",
+      "bytes": 1086,
+      "provenance": {
+        "capture": "15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54.json",
+        "sha256": "15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54",
+        "bytes": 1086,
+        "timestamp": "2026-11-05T22:13:26.085Z",
+        "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+        "callId": "call_v9UdAldC2QmqYzR53VBksykZ",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/08-safety-sweep-probe.json",
+      "sha256": "0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793",
+      "bytes": 1220,
+      "provenance": {
+        "capture": "0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793.json",
+        "sha256": "0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793",
+        "bytes": 1220,
+        "timestamp": "2026-11-05T22:15:22.621Z",
+        "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+        "callId": "call_By6Ph9hA4DlIubh9e1F19X4M",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-policy-probe.json",
+      "sha256": "0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b",
+      "bytes": 3926,
+      "provenance": {
+        "capture": "0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b.json",
+        "sha256": "0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b",
+        "bytes": 3926,
+        "timestamp": "2026-11-05T22:17:16.328Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_VYqrCJRHLD74sWZWHbNYYycb",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-supervisor-probe.json",
+      "sha256": "33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52",
+      "bytes": 1791,
+      "provenance": {
+        "capture": "33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52.json",
+        "sha256": "33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52",
+        "bytes": 1791,
+        "timestamp": "2026-11-05T22:20:08.417Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_iTdl37rMznlhwVRCVZBMOxKs",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-mcp-hooks-probe.json",
+      "sha256": "e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa",
+      "bytes": 975,
+      "provenance": {
+        "capture": "e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa.json",
+        "sha256": "e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa",
+        "bytes": 975,
+        "timestamp": "2026-11-05T22:22:53.889Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_Ks5XzMQjEe4WZClXU7A2wYeM",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/12-source-binding-probe.json",
+      "sha256": "d31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e",
+      "bytes": 2831,
+      "provenance": {
+        "capture": "d31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e.json",
+        "sha256": "d31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e",
+        "bytes": 2831,
+        "timestamp": "2026-11-05T22:54:53.537Z",
+        "session": "rollout-2026-11-06T01-42-44-01a1ade0-f933-7411-86fd-70bd20786633.jsonl",
+        "callId": "call_51OLtWTE6YqUnL7Pdm5cbDOX",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/12-review-bundle-probe.json",
+      "sha256": "67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4",
+      "bytes": 1699,
+      "provenance": {
+        "capture": "67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4.json",
+        "sha256": "67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4",
+        "bytes": 1699,
+        "timestamp": "2026-11-05T22:51:31.940Z",
+        "session": "rollout-2026-11-06T01-42-44-01a1ade0-f933-7411-86fd-70bd20786633.jsonl",
+        "callId": "call_wqVU6pLUWxy7WI0O3AUsWbpB",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/historical-REVIEW-VALIDATION.json",
+      "sha256": "432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd",
+      "bytes": 10291,
+      "provenance": {
+        "capture": "432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd.json",
+        "sha256": "432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd",
+        "bytes": 10291,
+        "timestamp": "2026-11-06T00:06:31.795Z",
+        "session": "rollout-2026-11-06T02-08-44-01a1adf8-c4f8-7f60-8efd-a4619c4f5157.jsonl",
+        "callId": "call_6MlAo67jpWYsNSbx5sG4ohWO",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/08-indexer-probes.json",
+      "sha256": "bc5dcaf316327009b2a0220b7c6165b6239d057743e1f031e03603b50ed1d641",
+      "bytes": 2700,
+      "provenance": {
+        "capture": {
+          "capture": "0d7d4498e8f570ef5e931ea6bcfe49bf55701afdc840e6fb57065e6792328bcf.json",
+          "sha256": "0d7d4498e8f570ef5e931ea6bcfe49bf55701afdc840e6fb57065e6792328bcf",
+          "bytes": 4122,
+          "timestamp": "2026-11-05T22:10:23.000Z",
+          "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+          "callId": "call_NWAIKtX5th62IZrDA73tgJ5W",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        },
+        "command": {
+          "timestamp": "2026-11-05T22:10:22.041Z",
+          "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+          "callId": "call_NWAIKtX5th62IZrDA73tgJ5W"
+        },
+        "commandFilename": "0236-call_NWAIKtX5th62IZrDA73tgJ5W.txt"
+      },
+      "completeness": "complete captured JSON payload; original artifact byte hash unavailable",
+      "transformation": "Extract the complete observed JSON block from captured stdout; add one LF. No execution.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-native-probe.json",
+      "sha256": "a3590a2c22745528194ccb0fa1166240a6c2a7804de184c60f0ebac23df33b5a",
+      "bytes": 1206,
+      "provenance": {
+        "capture": {
+          "capture": "c7aa798e495802c7278105e23847724709c73611e8a1ea6c6c91b2ebe3b68dd5.json",
+          "sha256": "c7aa798e495802c7278105e23847724709c73611e8a1ea6c6c91b2ebe3b68dd5",
+          "bytes": 1499,
+          "timestamp": "2026-11-05T22:20:08.417Z",
+          "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+          "callId": "call_iTdl37rMznlhwVRCVZBMOxKs",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        },
+        "command": {
+          "timestamp": "2026-11-05T22:20:07.612Z",
+          "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+          "callId": "call_iTdl37rMznlhwVRCVZBMOxKs"
+        },
+        "commandFilename": "0273-call_iTdl37rMznlhwVRCVZBMOxKs.txt"
+      },
+      "completeness": "complete captured JSON payload; original artifact byte hash unavailable",
+      "transformation": "Extract the complete observed JSON block from captured stdout; add one LF. No execution.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/snapshot-probes.json",
+      "sha256": "7bc1d9dee7b8fd8d3d378fe459044777508bfd15ca7d8c41083e5be36344a5b5",
+      "bytes": 576,
+      "provenance": {
+        "capture": {
+          "capture": "9fc189c4a594684449fae2d0de4abd44d33470134dc05b3d5940baf599d3a51c.json",
+          "sha256": "9fc189c4a594684449fae2d0de4abd44d33470134dc05b3d5940baf599d3a51c",
+          "bytes": 736,
+          "timestamp": "2026-11-05T22:26:12.373Z",
+          "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+          "callId": "call_OGLJdwCi6RAL2602LbMw3vlW",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        },
+        "command": {
+          "timestamp": "2026-11-05T22:26:11.334Z",
+          "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+          "callId": "call_OGLJdwCi6RAL2602LbMw3vlW"
+        },
+        "commandFilename": "0305-call_OGLJdwCi6RAL2602LbMw3vlW.txt"
+      },
+      "completeness": "complete captured JSON payload; original artifact byte hash unavailable",
+      "transformation": "Extract the complete observed JSON block from captured stdout; add one LF. No execution.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/10-probe-results.json",
+      "bytes": 3345,
+      "sha256": "8912f3e0486e73a9c189bebcb125b2c8ba86a29de1dfb485dfb7e1832ab160bf",
+      "provenance": {
+        "capture": "3a6c03c28e530eedc281a1ea4a707c0cf72fdeff30b0ca2b7b436f1cf017014d.json",
+        "sha256": "3a6c03c28e530eedc281a1ea4a707c0cf72fdeff30b0ca2b7b436f1cf017014d",
+        "bytes": 3872,
+        "title": null,
+        "keys": [
+          "chunk_id",
+          "wall_time_seconds",
+          "exit_code",
+          "original_token_count",
+          "output"
+        ],
+        "items": null,
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FdXPEDUviNlj81JH8lm75rdh",
+        "timestamp": "2026-11-05T22:44:38.757Z",
+        "transformation": "exact recorded output"
+      },
+      "transformation": "Remove non-JSON Using environment: dev stdout prefix and retain exactly one trailing newline; resulting bytes match independently recorded original artifact SHA256.",
+      "originalSha256": "8912f3e0486e73a9c189bebcb125b2c8ba86a29de1dfb485dfb7e1832ab160bf",
+      "originalHashReceipt": {
+        "capture": "b1b9d27ad5791303a81963d92f7e9330f1e30f6cc0b1b258e033a87a72f1e326.json",
+        "sha256": "b1b9d27ad5791303a81963d92f7e9330f1e30f6cc0b1b258e033a87a72f1e326",
+        "bytes": 977,
+        "title": null,
+        "keys": [
+          "json",
+          "markdown",
+          "findings",
+          "capabilities",
+          "currentFiles",
+          "readRanges",
+          "wordCount",
+          "domains",
+          "snapshotId",
+          "artifactValidation"
+        ],
+        "items": null,
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KvIUk5AwIlidJF3OO0E1KxZS",
+        "timestamp": "2026-11-05T22:54:02.756Z",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete original artifact; independently recorded byte hash matches"
+    },
+    {
+      "path": "evidence/cli-help.log",
+      "sha256": "63b3dcc0e457c140443633ed29f78b449c9771f0f9d585c45f35dfbeacbfef87",
+      "bytes": 1868,
+      "provenance": {
+        "capture": "00259f70621e461b9debc388dd9bf7597a2a97f1956db4c52b34576045141170.json",
+        "sha256": "00259f70621e461b9debc388dd9bf7597a2a97f1956db4c52b34576045141170",
+        "bytes": 2006,
+        "timestamp": "2026-11-05T21:02:08.480Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_i7BWhpSgvGAvz8kjig7la1Tp",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "original help tail (30 lines); original full log unavailable",
+      "transformation": "Copy the exact recorded tail. The original entrypoint exit=0 is separately recorded in the review checkpoints.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/code-map-tests.log",
+      "sha256": "e7bd4dff703896e78f1a9689dcf8c2c13e02c644437e5feba990b27ff5b7b20e",
+      "bytes": 1180,
+      "provenance": {
+        "capture": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664.json",
+        "sha256": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664",
+        "bytes": 2041,
+        "timestamp": "2026-11-05T21:06:39.147Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_Vm61T5H47uWFW6mjJSj4B0T7",
+        "transformation": "exact recorded output",
+        "location": "$.value"
+      },
+      "completeness": "captured parser test footer plus enumerated failure lines; original full log unavailable",
+      "transformation": "Extract the code-map section of the recorded summary command output.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/indexer-tests.log",
+      "sha256": "460810adc2c0e435845398f58d862484fba805f1128a2dc80f8ec6e15d55a947",
+      "bytes": 643,
+      "provenance": {
+        "capture": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664.json",
+        "sha256": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664",
+        "bytes": 2041,
+        "timestamp": "2026-11-05T21:06:39.147Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_Vm61T5H47uWFW6mjJSj4B0T7",
+        "transformation": "exact recorded output",
+        "location": "$.value"
+      },
+      "completeness": "captured indexer test tail and footer; original full log unavailable",
+      "transformation": "Extract the indexer section of the recorded summary command output.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/audit-tests.log",
+      "sha256": "fe3e18cf450a7253fd7573697af1744a3da92519206e0bb9a1072c2e6ecf9f1a",
+      "bytes": 1268,
+      "provenance": {
+        "storeFile": "stores.json",
+        "storeSha256": "eac9c279d27f7e9f9e8a00d164619ca9747cc7eee88191815c6f8f8713620aff",
+        "storeKey": "auditprobe-0",
+        "location": "$.value.output[decoded-json-line:5].value",
+        "recordedTailCommand": {
+          "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0022-call_qA8RxsGNtQR4wjIH8aoTkMpF.txt",
+          "timestamp": "2026-11-05T21:01:11.294Z",
+          "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+          "callId": "call_qA8RxsGNtQR4wjIH8aoTkMpF"
+        },
+        "timestampMeaning": "Command timestamp, not an independently recorded stdout timestamp."
+      },
+      "completeness": "captured 15-line audit test tail and footer; original full log unavailable",
+      "transformation": "Decode the complete nested JSON record retained inside the truncated aggregate store output; retain its exact output string.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/code-map-structure-alone.log",
+      "sha256": "68cd0b0149bc17fa505a9675983a8b4d1c610c1488c7a9ac2b19ce648a97055f",
+      "bytes": 1909,
+      "provenance": {
+        "capture": "4bdd2f0f684d4ea54dd9f432f80806da3762def842b5d51e62c2d8213b2c6364.json",
+        "sha256": "4bdd2f0f684d4ea54dd9f432f80806da3762def842b5d51e62c2d8213b2c6364",
+        "bytes": 6262,
+        "timestamp": "2026-11-05T21:08:04.290Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_5qQR3FIxwXLIN2VsagwUe2Pz",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "captured isolated structure test tail and footer; original full log unavailable",
+      "transformation": "Take the recorded test section before the subsequent languages.ts source read.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/rust-tests.log",
+      "sha256": "0666112405d3cd89a84f0d73ecf48e106be0428a570038000ac3082781827f1f",
+      "bytes": 3025,
+      "provenance": {
+        "capture": "c0a4f9ea7b33e5366604b80012fcd1c125272b455a5d80f47f782397058ad0ea.json",
+        "sha256": "c0a4f9ea7b33e5366604b80012fcd1c125272b455a5d80f47f782397058ad0ea",
+        "bytes": 3589,
+        "timestamp": "2026-11-05T22:23:52.565Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_MYAjIpESyre15H8ZsLjkEO4v",
+        "transformation": "exact recorded output",
+        "location": "$.r.value"
+      },
+      "completeness": "all 70 original log lines recovered; original byte hash unavailable",
+      "transformation": "Remove the exact numbered-reader prefixes and join with LF. Contains locked/offline 18+1 passing workspace tests.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/historical-COVERAGE-RESULT.json",
+      "sha256": "02f8bf299f565783c0226290f61bfe11738d4b0a9cd02c567f93917aa6c117cd",
+      "bytes": 4082,
+      "provenance": {
+        "capture": "83e3e653a12f1f2bf94a65c1c2cf3c8ffdd109d97c9481cf46c8bb103718b1b0.md",
+        "sha256": "83e3e653a12f1f2bf94a65c1c2cf3c8ffdd109d97c9481cf46c8bb103718b1b0",
+        "bytes": 7629,
+        "timestamp": "2026-11-05T23:43:58.808Z",
+        "session": "rollout-2026-11-06T02-42-36-01a1ae17-c970-78e2-bd15-0dad07a9a0b0.jsonl",
+        "callId": "call_WGKmLhlAtkANdh2SZaHC4Ofc",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete earlier captured coverage payload; later metadata-only revision unavailable",
+      "transformation": "Extract the complete JSON following the captured COVERAGE.md output; preserve native complete=false.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/01-cli-probes.log",
+      "sha256": "d150acbe5c09eb4fad2894689c08f123fa73dbae46706981bd8969e1cdc13f01",
+      "bytes": 2041,
+      "provenance": {
+        "capture": "ceda532a91308c78584c1e3cd1304280ae04bf0154ef3f7588c73240c84305b5.json",
+        "sha256": "ceda532a91308c78584c1e3cd1304280ae04bf0154ef3f7588c73240c84305b5",
+        "bytes": 2284,
+        "timestamp": "2026-11-05T21:06:53.865Z",
+        "session": "rollout-2026-11-05T23-58-42-01a1ad81-ba12-7d00-9220-9c1ac8a570fc.jsonl",
+        "callId": "call_pqELPXuoXJHIz5h2IXqCUYEi",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded stdout capture; original artifact byte hash unavailable",
+      "transformation": "Copy exact recorded output string without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/05-durability-probes.log",
+      "sha256": "1e145d7d61bf8ae51857910c6c7b6887ea3d4f822b656d356d6f0c0664a16be4",
+      "bytes": 2884,
+      "provenance": {
+        "capture": "6d885ada901cab454ce9868c775372df18718cc3795a00f6fb7eac9f617a0271.json",
+        "sha256": "6d885ada901cab454ce9868c775372df18718cc3795a00f6fb7eac9f617a0271",
+        "bytes": 3115,
+        "timestamp": "2026-11-05T21:43:11.245Z",
+        "session": "rollout-2026-11-06T00-27-41-01a1ad9c-43cf-7812-a29c-a6fe0744b316.jsonl",
+        "callId": "call_8x0Te9hnujQ3TFcWAVSpvPi1",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded stdout capture; original artifact byte hash unavailable",
+      "transformation": "Copy exact recorded output string without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/07-assets-probe.log",
+      "sha256": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0",
+      "bytes": 5048,
+      "provenance": {
+        "capture": "96cb6183001b3538625ef5ae5ce9e64547a8ac9c3744f84671725dba7106b1f7.json",
+        "sha256": "96cb6183001b3538625ef5ae5ce9e64547a8ac9c3744f84671725dba7106b1f7",
+        "bytes": 5736,
+        "timestamp": "2026-11-05T22:07:39.824Z",
+        "session": "rollout-2026-11-06T00-57-53-01a1adb7-e778-7970-b090-4ee5e53c3144.jsonl",
+        "callId": "call_SZhRQ4WlsNRviJTmPNVKce6K",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded stdout capture; original artifact byte hash unavailable",
+      "transformation": "Copy exact recorded output string without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/11-comparison-cli.log",
+      "sha256": "65379437ffae2c0b96edaa06a77cbb0c9ccdd6b8600fe0fb0d96b88d5160197e",
+      "bytes": 534,
+      "provenance": {
+        "capture": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8.json",
+        "sha256": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8",
+        "bytes": 4267,
+        "timestamp": "2026-11-05T22:51:26.778Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_qlMey1hAin7Z72dBJNBJ72O4",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete captured comparison CLI stdout; original artifact byte hash unavailable",
+      "transformation": "Extract the printed comparison CLI stdout between its run header and the next recorded command receipt, restoring one final LF.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/11-offline-probe-results.json",
+      "sha256": "7c8166e0de21ae1604953e49cc82c21da642d3abb7b5dcf5a3aec3e9bd9d3071",
+      "bytes": 1782,
+      "provenance": {
+        "capture": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8.json",
+        "sha256": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8",
+        "bytes": 4267,
+        "timestamp": "2026-11-05T22:51:26.778Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_qlMey1hAin7Z72dBJNBJ72O4",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded JSON observation; original artifact byte hash unavailable",
+      "transformation": "Extract the complete OFFLINE_RESULTS JSON and retain one trailing LF.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/11-execution-capture.log",
+      "sha256": "e4f20b77adf140c4d7c7b64622b08709607eaf761c169398a1483077a8674a36",
+      "bytes": 3896,
+      "provenance": {
+        "capture": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8.json",
+        "sha256": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8",
+        "bytes": 4267,
+        "timestamp": "2026-11-05T22:51:26.778Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_qlMey1hAin7Z72dBJNBJ72O4",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded aggregate of five execution receipts, comparison/smoke output, safe-test footer, and final diagnostic JSON",
+      "transformation": "Copy exact recorded aggregate stdout. Smoke exit2 and 58safe-test passes are baseline observations, not release acceptance.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    }
+  ],
+  "gaps": [
+    {
+      "artifact": "INSPECTED-FILE-HASHES.json",
+      "reason": "Original558-entry whole-byte map is unavailable; four exact historical changedSource=[] summaries are preserved. CURRENT is a fresh binding."
+    },
+    {
+      "artifact": "historical versus reconstructed read-window union",
+      "historical": 147721,
+      "reconstructed": 147555,
+      "difference": 166,
+      "reason": "No surviving captured extra interval supports padding the reconstruction."
+    },
+    {
+      "artifacts": [
+        "cli-help.log",
+        "indexer-tests.log",
+        "audit-tests.log",
+        "code-map-tests.log",
+        "code-map-structure-alone.log"
+      ],
+      "reason": "Actual recorded tails/footers/failure excerpts recovered; original complete logs unavailable."
+    },
+    {
+      "artifact": "historical-COVERAGE-RESULT.json",
+      "reason": "Latest complete earlier payload recovered. The later metadata-only revision cannot establish its full content."
+    }
+  ],
+  "readRangeEndpointQualifications": [
+    {
+      "group": "07",
+      "path": "common/src/util/language-capability-manifest.ts",
+      "from": 1,
+      "requestedTo": 105,
+      "to": 105,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0163-call_u0aiwWIvGbHK5u1Qt0z42bTg.txt"
+    },
+    {
+      "group": "07",
+      "path": "common/src/util/language-capabilities.ts",
+      "from": 301,
+      "requestedTo": 588,
+      "to": 588,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0166-call_tCqnCHGA2DfoTb2oZFnZbcsr.txt"
+    },
+    {
+      "group": "07",
+      "path": "common/src/util/language-profiles.ts",
+      "from": 1,
+      "requestedTo": 364,
+      "to": 364,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0166-call_tCqnCHGA2DfoTb2oZFnZbcsr.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/src/init-node.ts",
+      "from": 1,
+      "requestedTo": 110,
+      "to": 110,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0169-call_6xIXG0EAEeZwd6dZLWm15hx4.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/__tests__/all-language-wasm.test.ts",
+      "from": 1,
+      "requestedTo": 54,
+      "to": 54,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0169-call_6xIXG0EAEeZwd6dZLWm15hx4.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/src/languages.ts",
+      "from": 361,
+      "requestedTo": 650,
+      "to": 620,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0170-call_RzkezW5xn3iRbdvhsIfaLPNT.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/scripts/build.ts",
+      "from": 460,
+      "requestedTo": 580,
+      "to": 574,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0172-call_NGfrCtlRSIDpiRkUSEMK8Pfc.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/package.json",
+      "from": 1,
+      "requestedTo": 110,
+      "to": 93,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0172-call_NGfrCtlRSIDpiRkUSEMK8Pfc.txt"
+    },
+    {
+      "group": "07",
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 635,
+      "requestedTo": 655,
+      "to": 655,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0172-call_NGfrCtlRSIDpiRkUSEMK8Pfc.txt"
+    },
+    {
+      "group": "07",
+      "path": "cli/src/pre-init/tree-sitter-wasm.ts",
+      "from": 1,
+      "requestedTo": 116,
+      "to": 116,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0172-call_NGfrCtlRSIDpiRkUSEMK8Pfc.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/src/structure.ts",
+      "from": 827,
+      "requestedTo": 1084,
+      "to": 1084,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0173-call_ZfjOeZgiPFWTUletwE6Erzgp.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/src/parse.ts",
+      "from": 878,
+      "requestedTo": 929,
+      "to": 929,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0173-call_ZfjOeZgiPFWTUletwE6Erzgp.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 263,
+      "requestedTo": 545,
+      "to": 545,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0174-call_0f7wL7kkSTVFWw3ZaSUahWmL.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 785,
+      "requestedTo": 1056,
+      "to": 1056,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0176-call_kNYn9DaxhPnGdPxBUVmhOR4q.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1207,
+      "requestedTo": 1306,
+      "to": 1306,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0176-call_kNYn9DaxhPnGdPxBUVmhOR4q.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1385,
+      "requestedTo": 1488,
+      "to": 1454,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0176-call_kNYn9DaxhPnGdPxBUVmhOR4q.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 498,
+      "requestedTo": 735,
+      "to": 735,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0178-call_tqxAuwNTOksy0rqci4pVkieO.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 938,
+      "requestedTo": 1035,
+      "to": 1025,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0178-call_tqxAuwNTOksy0rqci4pVkieO.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/run.ts",
+      "from": 3226,
+      "requestedTo": 3244,
+      "to": 3244,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0178-call_tqxAuwNTOksy0rqci4pVkieO.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/indexer/src/import-resolution.ts",
+      "from": 1,
+      "requestedTo": 413,
+      "to": 413,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0179-call_BwUo3aCVA4CVH2OS3SLXU0wN.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1389,
+      "requestedTo": 1514,
+      "to": 1514,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0179-call_BwUo3aCVA4CVH2OS3SLXU0wN.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/indexer/src/scip-ingest.ts",
+      "from": 1,
+      "requestedTo": 430,
+      "to": 430,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0180-call_kY3Uc2UROUGjTefscwTwuXzh.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/diagnostic-delta.ts",
+      "from": 351,
+      "requestedTo": 520,
+      "to": 494,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0181-call_X13yOS72kLoa8Mu50vVN7MMJ.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1663,
+      "requestedTo": 1758,
+      "to": 1740,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0182-call_uSMlvKJwPoobyjQOOFXBADjc.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "requestedTo": 190,
+      "to": 148,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0182-call_uSMlvKJwPoobyjQOOFXBADjc.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/tools/get-build-targets.ts",
+      "from": 1,
+      "requestedTo": 34,
+      "to": 34,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0182-call_uSMlvKJwPoobyjQOOFXBADjc.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/run.ts",
+      "from": 2982,
+      "requestedTo": 3024,
+      "to": 3024,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0182-call_uSMlvKJwPoobyjQOOFXBADjc.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/run.ts",
+      "from": 3102,
+      "requestedTo": 3110,
+      "to": 3110,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0182-call_uSMlvKJwPoobyjQOOFXBADjc.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 289,
+      "requestedTo": 425,
+      "to": 425,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0184-call_bpfBz3E6zcCWTsRpr4CgilRf.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 603,
+      "requestedTo": 823,
+      "to": 823,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0184-call_bpfBz3E6zcCWTsRpr4CgilRf.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1540,
+      "requestedTo": 1732,
+      "to": 1732,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0184-call_bpfBz3E6zcCWTsRpr4CgilRf.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 890,
+      "requestedTo": 938,
+      "to": 938,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0187-call_zYWFgYT52jgDzLPP9Mnbqhwi.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/indexer/src/call-navigation.test.ts",
+      "from": 1,
+      "requestedTo": 151,
+      "to": 129,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0187-call_zYWFgYT52jgDzLPP9Mnbqhwi.txt"
+    },
+    {
+      "group": "07",
+      "path": "common/src/util/__tests__/language-profiles.test.ts",
+      "from": 144,
+      "requestedTo": 377,
+      "to": 377,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0187-call_zYWFgYT52jgDzLPP9Mnbqhwi.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/src/grammar-wasm-repair.ts",
+      "from": 221,
+      "requestedTo": 404,
+      "to": 404,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0188-call_sWhM2Cm5E5JAbJ6KpzVSTORT.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 221,
+      "requestedTo": 269,
+      "to": 269,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0189-call_JB0hTgcXP8q8mW9hy7o9JjIz.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 306,
+      "requestedTo": 335,
+      "to": 335,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0189-call_JB0hTgcXP8q8mW9hy7o9JjIz.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 437,
+      "requestedTo": 563,
+      "to": 563,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0189-call_JB0hTgcXP8q8mW9hy7o9JjIz.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 602,
+      "requestedTo": 705,
+      "to": 705,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0189-call_JB0hTgcXP8q8mW9hy7o9JjIz.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/test/tree-sitter-queries/test-query-files.js",
+      "from": 160,
+      "requestedTo": 270,
+      "to": 256,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0189-call_JB0hTgcXP8q8mW9hy7o9JjIz.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/code-map/src/utils.ts",
+      "from": 1,
+      "requestedTo": 155,
+      "to": 41,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0196-call_Wl4j5mbfZCjU4SlVP250LX8b.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 200,
+      "requestedTo": 240,
+      "to": 240,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0196-call_Wl4j5mbfZCjU4SlVP250LX8b.txt"
+    },
+    {
+      "group": "09",
+      "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+      "from": 1,
+      "requestedTo": 62,
+      "to": 62,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0211-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts",
+      "from": 1,
+      "requestedTo": 128,
+      "to": 128,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0211-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/run.ts",
+      "from": 2624,
+      "requestedTo": 2778,
+      "to": 2778,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0211-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/env.ts",
+      "from": 57,
+      "requestedTo": 149,
+      "to": 149,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0211-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "common/src/tools/params/tool/run-terminal-command.ts",
+      "from": 1,
+      "requestedTo": 201,
+      "to": 201,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 42,
+      "requestedTo": 165,
+      "to": 165,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 697,
+      "requestedTo": 742,
+      "to": 742,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/credential-env-keys.ts",
+      "from": 1,
+      "requestedTo": 54,
+      "to": 54,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "common/src/util/redact-secrets.ts",
+      "from": 1,
+      "requestedTo": 68,
+      "to": 68,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 176,
+      "requestedTo": 202,
+      "to": 202,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "docs/agents-and-tools.md",
+      "from": 53,
+      "requestedTo": 81,
+      "to": 81,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "docs/agents-and-tools.md",
+      "from": 103,
+      "requestedTo": 114,
+      "to": 114,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0212-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/tools/terminal-command-policy.ts",
+      "from": 2095,
+      "requestedTo": 2454,
+      "to": 2454,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0213-call_MetXAXaR8BAhTdVURypIVXH4.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "requestedTo": 148,
+      "to": 148,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0227-call_AICwF0GZSYLRNuVkriLZ49jF.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 263,
+      "requestedTo": 337,
+      "to": 337,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0227-call_AICwF0GZSYLRNuVkriLZ49jF.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 586,
+      "requestedTo": 611,
+      "to": 611,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0227-call_AICwF0GZSYLRNuVkriLZ49jF.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 525,
+      "requestedTo": 654,
+      "to": 654,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0227-call_AICwF0GZSYLRNuVkriLZ49jF.txt"
+    },
+    {
+      "group": "09",
+      "path": "packages/indexer/src/scip-runner.ts",
+      "from": 318,
+      "requestedTo": 379,
+      "to": 379,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0227-call_AICwF0GZSYLRNuVkriLZ49jF.txt"
+    },
+    {
+      "group": "09",
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 328,
+      "requestedTo": 434,
+      "to": 434,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0227-call_AICwF0GZSYLRNuVkriLZ49jF.txt"
+    },
+    {
+      "group": "07",
+      "path": "docs/agents-and-tools.md",
+      "from": 152,
+      "requestedTo": 178,
+      "to": 178,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0241-call_Yse9ZLWh8i4IVftjsqmkwLcn.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/tools/language-diagnostics.ts",
+      "from": 1,
+      "requestedTo": 72,
+      "to": 72,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0241-call_Yse9ZLWh8i4IVftjsqmkwLcn.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/tools/language-diagnostics.ts",
+      "from": 594,
+      "requestedTo": 690,
+      "to": 690,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0241-call_Yse9ZLWh8i4IVftjsqmkwLcn.txt"
+    },
+    {
+      "group": "07",
+      "path": "packages/indexer/src/scip-ingest.test.ts",
+      "from": 340,
+      "requestedTo": 425,
+      "to": 369,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0242-call_dIDqnm5EymxTiS2gxVYJsdWn.txt"
+    },
+    {
+      "group": "07",
+      "path": "common/src/util/__tests__/language-capability-manifest.test.ts",
+      "from": 1060,
+      "requestedTo": 1150,
+      "to": 1150,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0242-call_dIDqnm5EymxTiS2gxVYJsdWn.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/services/diagnostic-delta-runner.ts",
+      "from": 1,
+      "requestedTo": 260,
+      "to": 256,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0256-call_7IgnKOwo48yWtDvdVjrzkffX.txt"
+    },
+    {
+      "group": "07",
+      "path": "sdk/src/run.ts",
+      "from": 205,
+      "requestedTo": 263,
+      "to": 263,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0256-call_7IgnKOwo48yWtDvdVjrzkffX.txt"
+    },
+    {
+      "group": "09",
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/09-native-smoke.json",
+      "from": 1,
+      "requestedTo": null,
+      "reason": "endpoint not captured and disposable file unavailable",
+      "command": "0265-call_5BbEXOx9fh0v0BDWO8WyxO1z.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/mcp/client.ts",
+      "from": 812,
+      "requestedTo": 903,
+      "to": 903,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/mcp.ts",
+      "from": 1,
+      "requestedTo": 98,
+      "to": 98,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/types/mcp.ts",
+      "from": 1,
+      "requestedTo": 38,
+      "to": 38,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 2293,
+      "requestedTo": 2465,
+      "to": 2465,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 134,
+      "requestedTo": 183,
+      "to": 183,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/custom-tool.ts",
+      "from": 1,
+      "requestedTo": 76,
+      "to": 76,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/prompts.ts",
+      "from": 425,
+      "requestedTo": 500,
+      "to": 500,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 1535,
+      "requestedTo": 1618,
+      "to": 1618,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 4201,
+      "requestedTo": 4368,
+      "to": 4368,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0332-call_ZEXG6caZrrBW63yBv240NsgJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/agents/load-agents.ts",
+      "from": 1,
+      "requestedTo": 330,
+      "to": 330,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0333-call_vuKPqtvWkRQNSqPbYlVXsCye.txt"
+    },
+    {
+      "group": "10",
+      "path": "cli/scripts/prebuild-agents.ts",
+      "from": 1,
+      "requestedTo": 141,
+      "to": 141,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/templates/agent-validation.ts",
+      "from": 500,
+      "requestedTo": 735,
+      "to": 735,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/compile-tool-definitions.ts",
+      "from": 1,
+      "requestedTo": 304,
+      "to": 304,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt"
+    },
+    {
+      "group": "10",
+      "path": "scripts/generate-tool-definitions.ts",
+      "from": 1,
+      "requestedTo": 78,
+      "to": 78,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/util/zod-schema.ts",
+      "from": 1,
+      "requestedTo": 210,
+      "to": 25,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/agents/load-mcp-config.ts",
+      "from": 1,
+      "requestedTo": 222,
+      "to": 222,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 135,
+      "requestedTo": 218,
+      "to": 218,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/impl/database.ts",
+      "from": 258,
+      "requestedTo": 341,
+      "to": 341,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "cli/src/utils/local-agent-registry.ts",
+      "from": 131,
+      "requestedTo": 247,
+      "to": 247,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 870,
+      "requestedTo": 1055,
+      "to": 1055,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/prompts.ts",
+      "from": 510,
+      "requestedTo": 617,
+      "to": 610,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+      "from": 1,
+      "requestedTo": 196,
+      "to": 196,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0338-call_wSe66mYAcWObsmTSaakljwBh.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/agents-and-tools.md",
+      "from": 1,
+      "requestedTo": 14,
+      "to": 14,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/agents-and-tools.md",
+      "from": 53,
+      "requestedTo": 81,
+      "to": 81,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/agents-and-tools.md",
+      "from": 103,
+      "requestedTo": 114,
+      "to": 114,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/architecture.md",
+      "from": 143,
+      "requestedTo": 158,
+      "to": 158,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/request-flow.md",
+      "from": 118,
+      "requestedTo": 157,
+      "to": 157,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/README.md",
+      "from": 302,
+      "requestedTo": 319,
+      "to": 319,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 289,
+      "requestedTo": 412,
+      "to": 412,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 585,
+      "requestedTo": 638,
+      "to": 638,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 1006,
+      "requestedTo": 1082,
+      "to": 1082,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/package.json",
+      "from": 1,
+      "requestedTo": 93,
+      "to": 93,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/package.json",
+      "from": 1,
+      "requestedTo": 56,
+      "to": 56,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/package.json",
+      "from": 1,
+      "requestedTo": 10,
+      "to": 10,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "from": 1,
+      "requestedTo": 115,
+      "to": 115,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/mcp/server.ts",
+      "from": 345,
+      "requestedTo": 543,
+      "to": 543,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/mcp/server.ts",
+      "from": 1480,
+      "requestedTo": 1635,
+      "to": 1635,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt"
+    },
+    {
+      "group": "10",
+      "path": "cli/src/commands/mcp-command.ts",
+      "from": 1,
+      "requestedTo": 176,
+      "to": 176,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 749,
+      "requestedTo": 773,
+      "to": 773,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 861,
+      "requestedTo": 927,
+      "to": 927,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 286,
+      "requestedTo": 304,
+      "to": 304,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/services/acp/ext-methods.ts",
+      "from": 1,
+      "requestedTo": 157,
+      "to": 157,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/codex-cli.ts",
+      "from": 1,
+      "requestedTo": 216,
+      "to": 216,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/create-cli-agent.ts",
+      "from": 1,
+      "requestedTo": 85,
+      "to": 85,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/cli-agent-types.ts",
+      "from": 1,
+      "requestedTo": 57,
+      "to": 57,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/cli-agent-schemas.ts",
+      "from": 1,
+      "requestedTo": 149,
+      "to": 149,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/__tests__/placeholder.test.ts",
+      "from": 1,
+      "requestedTo": 5,
+      "to": 5,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/cli-agent-prompts.ts",
+      "from": 198,
+      "requestedTo": 378,
+      "to": 378,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt"
+    },
+    {
+      "group": "10",
+      "path": "scripts/tmux/tmux-cli.sh",
+      "from": 1,
+      "requestedTo": 158,
+      "to": 158,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/custom-tool-dispatch.test.ts",
+      "from": 1,
+      "requestedTo": 128,
+      "to": 128,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/run-mcp-tool-filter.test.ts",
+      "from": 1,
+      "requestedTo": 124,
+      "to": 124,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts",
+      "from": 1,
+      "requestedTo": 38,
+      "to": 38,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 585,
+      "requestedTo": 638,
+      "to": 638,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/load-agents.test.ts",
+      "from": 964,
+      "requestedTo": 1095,
+      "to": 1095,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0357-call_KjuFipr7E7qN0UHUVsfXWvGX.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/claude-code-cli.ts",
+      "from": 1,
+      "requestedTo": 136,
+      "to": 136,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/gemini-cli.ts",
+      "from": 1,
+      "requestedTo": 142,
+      "to": 142,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/codebuff-local-cli.ts",
+      "from": 1,
+      "requestedTo": 147,
+      "to": 147,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/notion-agent.ts",
+      "from": 1,
+      "requestedTo": 45,
+      "to": 45,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/notion-researcher.ts",
+      "from": 1,
+      "requestedTo": 50,
+      "to": 50,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+      "from": 142,
+      "requestedTo": 242,
+      "to": 242,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/types/agent-definition.ts",
+      "from": 263,
+      "requestedTo": 400,
+      "to": 400,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 322,
+      "requestedTo": 453,
+      "to": 453,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 478,
+      "requestedTo": 552,
+      "to": 552,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/types/dynamic-agent-template.ts",
+      "from": 180,
+      "requestedTo": 199,
+      "to": 199,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+      "from": 1,
+      "requestedTo": 68,
+      "to": 62,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/gemini-cli.ts",
+      "from": 105,
+      "requestedTo": 142,
+      "to": 142,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+      "from": 209,
+      "requestedTo": 254,
+      "to": 254,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 204,
+      "requestedTo": 214,
+      "to": 214,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 150,
+      "requestedTo": 150,
+      "to": 150,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 179,
+      "requestedTo": 179,
+      "to": 179,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/agents/load-mcp-config.ts",
+      "from": 1,
+      "requestedTo": 46,
+      "to": 46,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 135,
+      "requestedTo": 554,
+      "to": 554,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0372-call_IHAGxTTMBbsg55NeBslAFUkb.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 717,
+      "requestedTo": 1112,
+      "to": 1112,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0372-call_IHAGxTTMBbsg55NeBslAFUkb.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/agent-runner.ts",
+      "from": 1,
+      "requestedTo": 471,
+      "to": 471,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0373-call_61qHGBKkxg6XZRlBXhZ61ryY.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 1,
+      "requestedTo": 134,
+      "to": 134,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0373-call_61qHGBKkxg6XZRlBXhZ61ryY.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 551,
+      "requestedTo": 710,
+      "to": 710,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0373-call_61qHGBKkxg6XZRlBXhZ61ryY.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/types.ts",
+      "from": 1,
+      "requestedTo": 218,
+      "to": 218,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0373-call_61qHGBKkxg6XZRlBXhZ61ryY.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/mcp/client.ts",
+      "from": 574,
+      "requestedTo": 601,
+      "to": 601,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1,
+      "requestedTo": 92,
+      "to": 92,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 770,
+      "requestedTo": 820,
+      "to": 820,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/__tests__/compile-tool-definitions.test.ts",
+      "from": 1,
+      "requestedTo": 115,
+      "to": 54,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/compare-buffbench-runs.ts",
+      "from": 1,
+      "requestedTo": 328,
+      "to": 328,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0375-call_6UFQcmQRFM325iePdJj3SVrE.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/compare-runs.ts",
+      "from": 1,
+      "requestedTo": 255,
+      "to": 255,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0375-call_6UFQcmQRFM325iePdJj3SVrE.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/statistics.ts",
+      "from": 1,
+      "requestedTo": 274,
+      "to": 274,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0375-call_6UFQcmQRFM325iePdJj3SVrE.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/proposals.ts",
+      "from": 1,
+      "requestedTo": 490,
+      "to": 490,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0376-call_wRMgh9LKYYhYPiK0Zp3zQuIx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/lessons-extractor.ts",
+      "from": 172,
+      "requestedTo": 341,
+      "to": 341,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0376-call_wRMgh9LKYYhYPiK0Zp3zQuIx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/trace-utils.ts",
+      "from": 1,
+      "requestedTo": 58,
+      "to": 58,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0376-call_wRMgh9LKYYhYPiK0Zp3zQuIx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/judge.ts",
+      "from": 1,
+      "requestedTo": 507,
+      "to": 507,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0377-call_1u8FpiWfHOJaookTKmzYIqgC.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/deterministic-signals.ts",
+      "from": 1,
+      "requestedTo": 268,
+      "to": 268,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0377-call_1u8FpiWfHOJaookTKmzYIqgC.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/main.ts",
+      "from": 1,
+      "requestedTo": 27,
+      "to": 27,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0377-call_1u8FpiWfHOJaookTKmzYIqgC.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/main-nightly.ts",
+      "from": 1,
+      "requestedTo": 113,
+      "to": 113,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0377-call_1u8FpiWfHOJaookTKmzYIqgC.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/main-openbuff.ts",
+      "from": 1,
+      "requestedTo": 110,
+      "to": 110,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0377-call_1u8FpiWfHOJaookTKmzYIqgC.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/ci.yml",
+      "from": 1,
+      "requestedTo": 414,
+      "to": 414,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0378-call_EIFooJWhE7wKUXYztK17Yfmn.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 1,
+      "requestedTo": 148,
+      "to": 148,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0378-call_EIFooJWhE7wKUXYztK17Yfmn.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/__tests__/ci-workflow.test.ts",
+      "from": 1,
+      "requestedTo": 272,
+      "to": 272,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0378-call_EIFooJWhE7wKUXYztK17Yfmn.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+      "from": 1,
+      "requestedTo": 61,
+      "to": 61,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0378-call_EIFooJWhE7wKUXYztK17Yfmn.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/scripts/build.ts",
+      "from": 1,
+      "requestedTo": 240,
+      "to": 240,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0380-call_Vc5ONprX2IXGswhVLLXTwMt4.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/scripts/verify.ts",
+      "from": 1,
+      "requestedTo": 204,
+      "to": 204,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0380-call_Vc5ONprX2IXGswhVLLXTwMt4.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/smoke-test-dist.ts",
+      "from": 1,
+      "requestedTo": 248,
+      "to": 248,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0380-call_Vc5ONprX2IXGswhVLLXTwMt4.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/package.json",
+      "from": 1,
+      "requestedTo": 93,
+      "to": 93,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0380-call_Vc5ONprX2IXGswhVLLXTwMt4.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/PUBLISHING.md",
+      "from": 1,
+      "requestedTo": 55,
+      "to": 55,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0380-call_Vc5ONprX2IXGswhVLLXTwMt4.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/sdk-release.yml",
+      "from": 1,
+      "requestedTo": 109,
+      "to": 109,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0380-call_Vc5ONprX2IXGswhVLLXTwMt4.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/cjs-compatibility/package.json",
+      "from": 1,
+      "requestedTo": 21,
+      "to": 21,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/cjs-compatibility/test-imports.js",
+      "from": 1,
+      "requestedTo": 77,
+      "to": 77,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/esm-compatibility/package.json",
+      "from": 1,
+      "requestedTo": 21,
+      "to": 21,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/esm-compatibility/test-imports.js",
+      "from": 1,
+      "requestedTo": 83,
+      "to": 83,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/scripts/publish.ts",
+      "from": 1,
+      "requestedTo": 51,
+      "to": 51,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/scripts/esm-export-fixup.ts",
+      "from": 1,
+      "requestedTo": 132,
+      "to": 132,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/src/__tests__/build-esm-fixup.test.ts",
+      "from": 1,
+      "requestedTo": 55,
+      "to": 55,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "bunfig.toml",
+      "from": 1,
+      "requestedTo": 14,
+      "to": 14,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "test/setup-scm-loader.ts",
+      "from": 1,
+      "requestedTo": 15,
+      "to": 15,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/setup-env.ts",
+      "from": 1,
+      "requestedTo": 47,
+      "to": 47,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "package.json",
+      "from": 1,
+      "requestedTo": 80,
+      "to": 80,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/package.json",
+      "from": 1,
+      "requestedTo": 55,
+      "to": 55,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/package.json",
+      "from": 1,
+      "requestedTo": 39,
+      "to": 39,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/package.json",
+      "from": 1,
+      "requestedTo": 64,
+      "to": 64,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/build-tools/executors/infisical-run/executor.ts",
+      "from": 1,
+      "requestedTo": 61,
+      "to": 61,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/build-tools/executors.json",
+      "from": 1,
+      "requestedTo": 9,
+      "to": 9,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/build-tools/package.json",
+      "from": 1,
+      "requestedTo": 15,
+      "to": 15,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/build-tools/project.json",
+      "from": 1,
+      "requestedTo": 23,
+      "to": 23,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0385-call_TV1R7SQXPRU8q6fJAdeK0vNB.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/dependency-provenance-guard.ts",
+      "from": 624,
+      "requestedTo": 1045,
+      "to": 1045,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0386-call_yAK56KcWnefhkLW7z2AW6gfw.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/measure-perf-guards-baseline.ts",
+      "from": 1874,
+      "requestedTo": 2243,
+      "to": 2243,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0386-call_yAK56KcWnefhkLW7z2AW6gfw.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/check-ci-local.ts",
+      "from": 355,
+      "requestedTo": 526,
+      "to": 526,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0386-call_yAK56KcWnefhkLW7z2AW6gfw.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/scripts/build-binary.ts",
+      "from": 465,
+      "requestedTo": 706,
+      "to": 706,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0387-call_f7dLZL7zoK9MQhCKelPVZoMq.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/scripts/smoke-binary.ts",
+      "from": 109,
+      "requestedTo": 466,
+      "to": 466,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0387-call_f7dLZL7zoK9MQhCKelPVZoMq.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 395,
+      "requestedTo": 475,
+      "to": 475,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0387-call_f7dLZL7zoK9MQhCKelPVZoMq.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 593,
+      "requestedTo": 655,
+      "to": 655,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0387-call_f7dLZL7zoK9MQhCKelPVZoMq.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/scripts/run-cli-tests.ts",
+      "from": 1,
+      "requestedTo": 184,
+      "to": 184,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0387-call_f7dLZL7zoK9MQhCKelPVZoMq.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/src/__tests__/run-cli-tests.test.ts",
+      "from": 83,
+      "requestedTo": 131,
+      "to": 131,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0387-call_f7dLZL7zoK9MQhCKelPVZoMq.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 1,
+      "requestedTo": 133,
+      "to": 133,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0389-call_P0UK8qW3k4ZoxtdEAxlewbCh.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 690,
+      "requestedTo": 790,
+      "to": 790,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 1007,
+      "requestedTo": 1155,
+      "to": 1155,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 2364,
+      "requestedTo": 2470,
+      "to": 2470,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/util/scoped-tool-path.ts",
+      "from": 1,
+      "requestedTo": 159,
+      "reason": "endpoint not captured and disposable file unavailable",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/src/run.ts",
+      "from": 1380,
+      "requestedTo": 1401,
+      "to": 1401,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/src/run.ts",
+      "from": 1920,
+      "requestedTo": 1972,
+      "to": 1972,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts",
+      "from": 1,
+      "requestedTo": 49,
+      "to": 49,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 3090,
+      "requestedTo": 3177,
+      "to": 3177,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1755,
+      "requestedTo": 1809,
+      "to": 1809,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/src/provider-config.ts",
+      "from": 1934,
+      "requestedTo": 1998,
+      "to": 1998,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "common/src/util/router.ts",
+      "from": 133,
+      "requestedTo": 191,
+      "to": 191,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "agents/base2/base-deep.ts",
+      "from": 275,
+      "requestedTo": 335,
+      "to": 335,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/src/agents/load-agents.ts",
+      "from": 166,
+      "requestedTo": 240,
+      "to": 240,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0392-call_71NUfohbTPzzkxfz8johab6V.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 1007,
+      "requestedTo": 1155,
+      "to": 1155,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 2364,
+      "requestedTo": 2470,
+      "to": 2470,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 50,
+      "requestedTo": 68,
+      "to": 68,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/compaction-fidelity/scenario.test.ts",
+      "from": 1,
+      "requestedTo": 292,
+      "to": 292,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "from": 920,
+      "requestedTo": 1156,
+      "to": 1156,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/edit-blocks/scenario.test.ts",
+      "from": 388,
+      "requestedTo": 529,
+      "to": 529,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/run-mutation-gate.ts",
+      "from": 1,
+      "requestedTo": 18,
+      "to": 18,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/judge-calibration.test.ts",
+      "from": 175,
+      "requestedTo": 253,
+      "to": 253,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/fixtures/judge-gold-set.json",
+      "from": 1,
+      "requestedTo": 45,
+      "to": 45,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/judge.ts",
+      "from": 492,
+      "requestedTo": 507,
+      "to": 507,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0394-call_vBU4AQPMMND6uoqFvdLueJKe.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/util/filesystem-scope.ts",
+      "from": 1,
+      "requestedTo": 147,
+      "to": 81,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0395-call_kz75Yh4Holv8CkSfNoDEEcaT.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "from": 900,
+      "requestedTo": 1110,
+      "to": 1110,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0396-call_gYUnHtxtfcasDMdwOMvlHMYx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "from": 1217,
+      "requestedTo": 1502,
+      "to": 1502,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0396-call_gYUnHtxtfcasDMdwOMvlHMYx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/agent-runner.test.ts",
+      "from": 253,
+      "requestedTo": 333,
+      "to": 333,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0396-call_gYUnHtxtfcasDMdwOMvlHMYx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/proposals.test.ts",
+      "from": 38,
+      "requestedTo": 255,
+      "to": 255,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0396-call_gYUnHtxtfcasDMdwOMvlHMYx.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/__tests__/statistics.test.ts",
+      "from": 75,
+      "requestedTo": 213,
+      "to": 213,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0396-call_gYUnHtxtfcasDMdwOMvlHMYx.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/impl/database.ts",
+      "from": 342,
+      "requestedTo": 365,
+      "to": 365,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0402-call_KgI7zj2dyZL0XCeKn4jq35JO.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 465,
+      "requestedTo": 516,
+      "to": 516,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 822,
+      "requestedTo": 858,
+      "to": 858,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 1383,
+      "requestedTo": 1410,
+      "to": 1410,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 813,
+      "requestedTo": 828,
+      "to": 828,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0405-call_NuNCx5lLWRihBLXjn7unx7v8.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/runners/codebuff.ts",
+      "from": 1,
+      "requestedTo": 280,
+      "to": 207,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/trace-analyzer.ts",
+      "from": 1,
+      "requestedTo": 120,
+      "to": 120,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/meta-analyzer.ts",
+      "from": 150,
+      "requestedTo": 265,
+      "to": 265,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/buffbench.yml",
+      "from": 1,
+      "requestedTo": 50,
+      "to": 50,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/workflows/nightly-evals.yml",
+      "from": 1,
+      "requestedTo": 53,
+      "to": 53,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/scripts/smoke-binary.ts",
+      "from": 1,
+      "requestedTo": 108,
+      "to": 108,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": "scripts/__tests__/release-workflow.test.ts",
+      "from": 1,
+      "requestedTo": 78,
+      "to": 78,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts",
+      "from": 1,
+      "requestedTo": 195,
+      "to": 195,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0408-call_FveqYUZiScnenVNJy8ihmEOB.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/development.md",
+      "from": 1,
+      "requestedTo": 37,
+      "to": 37,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/local-mode.md",
+      "from": 1,
+      "requestedTo": 62,
+      "to": 62,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/util/agent-tool-names.ts",
+      "from": 1,
+      "requestedTo": 156,
+      "to": 82,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 1054,
+      "requestedTo": 1125,
+      "to": 1125,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/client.ts",
+      "from": 1,
+      "requestedTo": 119,
+      "to": 73,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "agents/general-agent/general-agent.ts",
+      "from": 1,
+      "requestedTo": 95,
+      "to": 95,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+      "from": 1,
+      "requestedTo": 183,
+      "to": 183,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/logger.ts",
+      "from": 1,
+      "requestedTo": 110,
+      "to": 68,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/runners/runner.ts",
+      "from": 1,
+      "requestedTo": 105,
+      "to": 33,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/subagents/test-repo-utils.ts",
+      "from": 1,
+      "requestedTo": 164,
+      "to": 164,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/agent-runtime/src/util/compaction-verification.ts",
+      "from": 1,
+      "requestedTo": 103,
+      "to": 103,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/README.md",
+      "from": 335,
+      "requestedTo": 416,
+      "to": 416,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "11",
+      "path": "docs/testing.md",
+      "from": 1,
+      "requestedTo": 95,
+      "to": 95,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "11",
+      "path": "docs/testing.md",
+      "from": 176,
+      "requestedTo": 194,
+      "to": 194,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0411-call_v27SbWu8LATnTGrbkdpRPec9.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/client.ts",
+      "from": 66,
+      "requestedTo": 80,
+      "to": 73,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+      "from": 156,
+      "requestedTo": 183,
+      "to": 183,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/release/index.js",
+      "from": 890,
+      "requestedTo": 1065,
+      "to": 1065,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/release/index.js",
+      "from": 1124,
+      "requestedTo": 1279,
+      "to": 1279,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/release/index.js",
+      "from": 1630,
+      "requestedTo": 1757,
+      "to": 1757,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/release/package.json",
+      "from": 1,
+      "requestedTo": 55,
+      "to": 55,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "cli/src/__tests__/release-wrapper.test.ts",
+      "from": 1320,
+      "requestedTo": 1385,
+      "to": 1385,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/cjs-compatibility/test-types.ts",
+      "from": 1,
+      "requestedTo": 100,
+      "to": 54,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "sdk/test/esm-compatibility/test-types.ts",
+      "from": 1,
+      "requestedTo": 100,
+      "to": 76,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": ".github/actions/setup-project/action.yml",
+      "from": 1,
+      "requestedTo": 105,
+      "to": 31,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "docs/testing.md",
+      "from": 150,
+      "requestedTo": 173,
+      "to": 173,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0420-call_fFQ3AqKU5dOVbzK8CBuwQQUZ.txt"
+    },
+    {
+      "group": "11",
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 1,
+      "requestedTo": 240,
+      "to": 218,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0421-call_YsHCPuC1uLus1sLdvk6opqTi.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/run-cross-model-experiment.ts",
+      "from": 1,
+      "requestedTo": 180,
+      "to": 39,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0421-call_YsHCPuC1uLus1sLdvk6opqTi.txt"
+    },
+    {
+      "group": "11",
+      "path": "evals/buffbench/run-coding-harness-ablation.ts",
+      "from": 1,
+      "requestedTo": 140,
+      "to": 30,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0421-call_YsHCPuC1uLus1sLdvk6opqTi.txt"
+    }
+  ],
+  "safety": {
+    "capturedCommandsExecuted": false,
+    "productOrDiagnosticProbesRerun": false,
+    "wholeEvaluationSuiteRun": false,
+    "privateEnvironmentOrProviderValuesRead": false,
+    "historicalProductRunLogsRead": false
+  },
+  "sourceStability": {
+    "path": "SOURCE-STABILITY.json",
+    "originalHashMapRecovered": false,
+    "historicalComparisonsRecovered": 4,
+    "sourceFileCount": 173,
+    "windowCount": 258,
+    "uniqueCapturedLineCount": 38692,
+    "matchingWindowCount": 258
+  },
+  "diagnosticAndLogRecovery": {
+    "artifacts": 47,
+    "complete10OriginalHashMatched": true,
+    "logNotices": [],
+    "coverageResultQualification": "Latest full data capture is recovered; later metadata-only revision is not full evidence.",
+    "resolvedLogGaps": [
+      "01-cli-probes.log",
+      "05-durability-probes.log",
+      "11-comparison-cli.log"
+    ]
+  },
+  "frozenAt": "2026-11-06T06:17:50.908073+00:00",
+  "historicalCoverage": {
+    "pairs": 13,
+    "receiptFiles": 555,
+    "readWindowLines": 147721,
+    "sourceHashCountRecorded": 558
+  },
+  "reconstructedCoverage": {
+    "pairs": 13,
+    "receiptFiles": 555,
+    "readWindowLines": 147555,
+    "currentBoundFiles": 558,
+    "readWindowDifferenceFromHistorical": 166,
+    "errors": []
+  },
+  "frozenArtifactHashes": {
+    "COVERAGE.md": {
+      "sha256": "b8f1016273bd555e0174553bebd27bd4e6cb07785fd85b2161890e47662554b7",
+      "bytes": 4672
+    },
+    "SOURCE-STABILITY.md": {
+      "sha256": "d991ed25522c57723e040ac585a437ec012da2e1a8a5b4ac19b71c1710e8001a",
+      "bytes": 1690
+    },
+    "SOURCE-STABILITY.json": {
+      "sha256": "83fed62a679572bf7e0344fd9bc6fac5ff9d3af37a2957fe273a998961eccef8",
+      "bytes": 17891
+    },
+    "evidence/README.md": {
+      "sha256": "740c4de76281dd2ff389f66f73b6a3fb356483b283ad2501ce82e19d917d5e5c",
+      "bytes": 6451
+    },
+    "evidence/RECOVERED-ARTIFACTS-PROVENANCE.json": {
+      "sha256": "31ad91b89a04e97ae55dbbd8dfd940043c5cd938a0c37decd77b58409d90ae26",
+      "bytes": 37826
+    },
+    "evidence/recovered-source-line-bindings.json": {
+      "sha256": "bef59f8d8b298950bf92dbe97b8413558ebdf4605f8d6e48dfae165d1ea0e1fb",
+      "bytes": 423445
+    },
+    "evidence/historical-COVERAGE-RESULT.json": {
+      "sha256": "02f8bf299f565783c0226290f61bfe11738d4b0a9cd02c567f93917aa6c117cd",
+      "bytes": 4082
+    },
+    "evidence/historical-COVERAGE.md": {
+      "sha256": "591da2f88b426cb28efebb8853c61a0b43b682775b255b002033e5b5b27afe19",
+      "bytes": 3547
+    }
+  },
+  "navigationValidation": {
+    "errors": [],
+    "publicationManifestLink": "Created by root delivery preparation; intentionally absent in staging."
+  }
+}

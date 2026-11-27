@@ -1548,3 +1548,145 @@ describe('release wrapper update safety', () => {
     expect(source).not.toContain('unlinkSync')
   })
 })
+
+// N09: tag queries ship in tree-sitter-queries/ and are listed under the
+// manifest's `queries` key.
+const QUERY_NAMES = [
+  'tree-sitter-python-tags.scm',
+  'tree-sitter-typescript-tags.scm',
+]
+
+function writeQueryAssets(dir: string) {
+  writeValidTreeSitterAssets(dir)
+  const queryDir = path.join(dir, 'tree-sitter-queries')
+  mkdirSync(queryDir, { recursive: true })
+  const hashes: Record<string, string> = {}
+  for (const name of QUERY_NAMES) {
+    const bytes = Buffer.from(`(query ${name})`)
+    writeFileSync(path.join(queryDir, name), bytes)
+    hashes[name] = createHash('sha256').update(bytes).digest('hex')
+  }
+  writeFileSync(path.join(queryDir, 'readme.md'), 'not a query')
+  const manifestPath = path.join(dir, 'tree-sitter-manifest.json')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  writeFileSync(manifestPath, JSON.stringify({ ...manifest, queries: hashes }))
+}
+
+describe('release wrapper tree-sitter queries (N09)', () => {
+  test.each(wrappers)(
+    '%s manages every extracted tag query',
+    (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-queries-'))
+      try {
+        writeQueryAssets(tempDir)
+        const { getManagedSiblingNames } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+        const names = getManagedSiblingNames(tempDir)
+        for (const name of QUERY_NAMES) {
+          expect(names).toContain(`tree-sitter-queries/${name}`)
+        }
+        expect(names).not.toContain('tree-sitter-queries/readme.md')
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s rejects a symlinked query directory',
+    (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-queries-link-'))
+      try {
+        const outside = path.join(tempDir, 'outside')
+        const extracted = path.join(tempDir, 'extracted')
+        mkdirSync(outside)
+        mkdirSync(extracted)
+        symlinkSync(outside, path.join(extracted, 'tree-sitter-queries'))
+        const { getManagedSiblingNames } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+        expect(() => getManagedSiblingNames(extracted)).toThrow(
+          'must be a directory',
+        )
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s detects missing and corrupted tag queries listed in the manifest',
+    (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-queries-chk-'))
+      try {
+        writeQueryAssets(tempDir)
+        const { getTreeSitterAssetProblems } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([])
+        writeFileSync(
+          path.join(tempDir, 'tree-sitter-queries', QUERY_NAMES[0]),
+          'corrupt',
+        )
+        rmSync(path.join(tempDir, 'tree-sitter-queries', QUERY_NAMES[1]))
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([
+          `tree-sitter-queries/${QUERY_NAMES[0]}:checksum`,
+          `tree-sitter-queries/${QUERY_NAMES[1]}`,
+        ])
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s accepts older manifests without a queries key',
+    (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-queries-old-'))
+      try {
+        writeValidTreeSitterAssets(tempDir)
+        const { getTreeSitterAssetProblems } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([])
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s installs tag queries next to the binary',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-queries-inst-'))
+      const archive = Buffer.from('release-archive-with-queries')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      try {
+        const { downloadBinary, getTreeSitterAssetProblems } = require(
+          path.join(repoRoot, wrapperPath),
+        )
+        await downloadBinary('2.0.0', {
+          config,
+          platformKey: 'linux-x64',
+          httpGet: createMockHttpGet(fileName, archive),
+          extractArchive: ({ cwd }: { cwd: string }) => {
+            writeFileSync(path.join(cwd, config.binaryName), 'installed-binary')
+            writeQueryAssets(cwd)
+          },
+        })
+        for (const name of QUERY_NAMES) {
+          expect(
+            existsSync(path.join(tempDir, 'tree-sitter-queries', name)),
+          ).toBe(true)
+        }
+        expect(
+          existsSync(path.join(tempDir, 'tree-sitter-queries', 'readme.md')),
+        ).toBe(false)
+        expect(getTreeSitterAssetProblems(tempDir)).toEqual([])
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+})

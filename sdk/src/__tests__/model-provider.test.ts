@@ -40,6 +40,7 @@ import {
   getProviderDiscoveryConfig,
   addDiscoveredModelToProviderConfig,
   readModelDiscoveryCache,
+  writeModelDiscoveryCache,
   setModelDiscoveryCachePath,
   setModelDiscoveryCachePathForTest,
 } from '../model-discovery'
@@ -176,6 +177,37 @@ describe('model-provider', () => {
       expect(
         providerConfigFileSchema.safeParse({ maxAgentSteps: 0 }).success,
       ).toBe(false)
+    })
+
+    test('validates and flows maxMissingOutputRetries through the schema transform', () => {
+      // A positive integer cap parses and flows through the transform.
+      const parsed = providerConfigFileSchema.parse({
+        maxMissingOutputRetries: 3,
+      })
+      expect(parsed.maxMissingOutputRetries).toBe(3)
+
+      // Zero is not a positive integer: unset means unlimited, so a
+      // zero "cap" is ambiguous and must be rejected.
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: 0 })
+          .success,
+      ).toBe(false)
+      // Negative values can never mean "cap the retries".
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: -1 })
+          .success,
+      ).toBe(false)
+      // Fractional retry counts are not meaningful.
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: 2.5 })
+          .success,
+      ).toBe(false)
+
+      // Unset stays absent after the transform: consumers see unlimited
+      // retries, never an implicit cap (same contract as maxAgentSteps).
+      expect(
+        providerConfigFileSchema.parse({}).maxMissingOutputRetries,
+      ).toBeUndefined()
     })
 
     test('recommends only empirically measured models for the requested coding context', () => {
@@ -351,6 +383,7 @@ describe('model-provider', () => {
                 pricing: {
                   inputPerMillionTokens: 0.5,
                   outputPerMillionTokens: 2,
+                  currency: 'USD',
                 },
               },
               'custom/public-name': {
@@ -531,7 +564,7 @@ describe('model-provider', () => {
     })
 
     test('strips stop sequences for providers that opt out', () => {
-      const transformed = applyConfiguredProviderRequestCompatibility(
+      const transformedOpenAI = applyConfiguredProviderRequestCompatibility(
         {
           model: 'custom-coder',
           messages: [{ role: 'user', content: 'hello' }],
@@ -545,7 +578,23 @@ describe('model-provider', () => {
         },
       )
 
-      expect(transformed.stop).toBeUndefined()
+      expect(transformedOpenAI.stop).toBeUndefined()
+
+      const transformedAnthropic = applyConfiguredProviderRequestCompatibility(
+        {
+          model: 'custom-coder',
+          messages: [{ role: 'user', content: 'hello' }],
+          stop_sequences: ['"cb_easp"'],
+        },
+        {
+          providerModel: 'custom-coder',
+          compatibility: {
+            supportsStopSequences: false,
+          },
+        },
+      )
+
+      expect(transformedAnthropic.stop_sequences).toBeUndefined()
     })
 
     test('keeps stop sequences when providers opt in', () => {
@@ -2084,6 +2133,7 @@ describe('model-provider', () => {
           agents: { thinker: 'custom/thinker' },
           failoverModels: ['custom/backup-a', 'custom/backup-b'],
           maxAgentSteps: 42,
+          maxMissingOutputRetries: 3,
           providers: {
             custom: {
               type: 'openai-compatible',
@@ -2118,6 +2168,7 @@ describe('model-provider', () => {
         'custom/backup-b',
       ])
       expect(mergedConfig.maxAgentSteps).toBe(42)
+      expect(mergedConfig.maxMissingOutputRetries).toBe(3)
     })
 
     test('updates fragmented provider config without flattening the root', () => {
@@ -2285,6 +2336,27 @@ describe('model-provider', () => {
       expect(result?.strategy).toBe('openrouter')
     })
 
+    test('similarly named or noncanonical OpenRouter gateways do not inherit discovery semantics', () => {
+      for (const baseURL of [
+        'https://openrouter.ai.example.com/v1',
+        'https://openrouter.ai:8443/api/v1',
+      ]) {
+        const config = providerConfigFileSchema.parse({
+          providers: {
+            openrouter: {
+              type: 'openai-compatible',
+              baseURL,
+              models: ['model'],
+            },
+          },
+        })
+        expect(
+          getProviderDiscoveryConfig('openrouter', config.providers.openrouter)
+            ?.strategy,
+        ).toBe('openai-compatible')
+      }
+    })
+
     test('getProviderDiscoveryConfig returns ollama for localhost:11434', () => {
       const config = providerConfigFileSchema.parse({
         providers: {
@@ -2437,6 +2509,42 @@ describe('model-provider', () => {
       expect(seenSignal?.aborted).toBe(true)
     })
 
+    test('discoverProviderModels keeps the timeout armed through response-body consumption', async () => {
+      writeTestProviderConfig({
+        local: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8080/v1',
+          models: [],
+        },
+      })
+      const loadedConfig = loadProviderConfigSync()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await expect(
+        discoverProviderModels({
+          providerId: 'local',
+          loadedConfig,
+          timeoutMs: 1,
+          fetch: async () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  timer = setTimeout(() => {
+                    controller.enqueue(
+                      new TextEncoder().encode('{"data":[{"id":"late"}]}'),
+                    )
+                    controller.close()
+                  }, 30)
+                },
+                cancel() {
+                  if (timer) clearTimeout(timer)
+                },
+              }),
+              { headers: { 'content-type': 'application/json' } },
+            ),
+        }),
+      ).rejects.toThrow('Model discovery timed out after 1ms.')
+    })
+
     test('discoverProviderModels propagates fetch aborts', async () => {
       writeTestProviderConfig({
         local: {
@@ -2533,19 +2641,426 @@ describe('model-provider', () => {
               id: 'anthropic/claude-sonnet-4.5',
               name: 'Claude Sonnet 4.5',
               context_length: 200_000,
-              pricing: { prompt: '0.000003', completion: '0.000015' },
+              top_provider: { max_completion_tokens: 64_000 },
+              supported_parameters: ['reasoning'],
+              pricing: {
+                prompt: '0.000003',
+                completion: '0.000015',
+                input_cache_read: '0.0000003',
+                input_cache_write: '0.00000375',
+              },
             },
           ],
         }),
       })
 
+      expect(result).toMatchObject({
+        schemaVersion: 1,
+        strategy: 'openrouter',
+        endpoint: 'https://openrouter.ai/api/v1/models',
+        responseSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      })
       expect(result.models).toHaveLength(1)
       const model = result.models[0]
       expect(model.id).toBe('anthropic/claude-sonnet-4.5')
       expect(model.name).toBe('Claude Sonnet 4.5')
-      expect(model.capabilities?.context?.windowTokens).toBe(200_000)
-      expect(model.capabilities?.pricing?.inputPerMillionTokens).toBe(3)
-      expect(model.capabilities?.pricing?.outputPerMillionTokens).toBe(15)
+      expect(model.capabilities?.context).toEqual({
+        windowTokens: 200_000,
+        outputTokens: 64_000,
+      })
+      expect(model.capabilities?.reasoning?.supported).toBe(true)
+      expect(model.capabilities?.pricing).toEqual({
+        inputPerMillionTokens: 3,
+        outputPerMillionTokens: 15,
+        cachedInputPerMillionTokens: 0.3,
+        cacheWriteInputPerMillionTokens: 3.75,
+        currency: 'USD',
+      })
+
+      const configPath = addDiscoveredModelToProviderConfig({
+        providerId: 'openrouter',
+        modelId: model.id,
+        loadedConfig,
+      })
+      const writtenConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      expect(
+        writtenConfig.providers.openrouter.modelCapabilities[model.id],
+      ).toEqual(model.capabilities)
+    })
+
+    test('adding discovered capabilities preserves explicit default and model fields', async () => {
+      writeTestProviderConfig({
+        openrouter: {
+          type: 'openai-compatible',
+          baseURL: 'https://openrouter.ai/api/v1',
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+          models: [],
+          defaultCapabilities: {
+            context: { windowTokens: 123_456 },
+            pricing: { inputPerMillionTokens: 99, currency: 'USD' },
+          },
+          modelCapabilities: {
+            'anthropic/claude-sonnet-4.5': {
+              context: { outputTokens: 777 },
+              pricing: { inputPerMillionTokens: 88, currency: 'USD' },
+            },
+          },
+        },
+      })
+      process.env.OPENROUTER_API_KEY = 'test-key'
+      const loadedConfig = loadProviderConfigSync()
+      await discoverProviderModels({
+        providerId: 'openrouter',
+        loadedConfig,
+        fetch: makeFetchMock({
+          data: [
+            {
+              id: 'anthropic/claude-sonnet-4.5',
+              context_length: 200_000,
+              top_provider: { max_completion_tokens: 64_000 },
+              supported_parameters: ['reasoning'],
+              pricing: {
+                prompt: '0.000003',
+                completion: '0.000015',
+              },
+            },
+          ],
+        }),
+      })
+
+      const configPath = addDiscoveredModelToProviderConfig({
+        providerId: 'openrouter',
+        modelId: 'anthropic/claude-sonnet-4.5',
+        loadedConfig,
+      })
+      const writtenConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      expect(writtenConfig.providers.openrouter.defaultCapabilities).toEqual({
+        context: { windowTokens: 123_456 },
+        pricing: { inputPerMillionTokens: 99, currency: 'USD' },
+      })
+      expect(
+        writtenConfig.providers.openrouter.modelCapabilities[
+          'anthropic/claude-sonnet-4.5'
+        ],
+      ).toEqual({
+        context: { outputTokens: 777 },
+        reasoning: { supported: true },
+        pricing: { inputPerMillionTokens: 88, currency: 'USD' },
+      })
+    })
+
+    test('partial discovered pricing remains unknown instead of becoming a mixed schedule', async () => {
+      writeTestProviderConfig({
+        openrouter: {
+          type: 'openai-compatible',
+          baseURL: 'https://openrouter.ai/api/v1',
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+          models: [],
+        },
+      })
+      process.env.OPENROUTER_API_KEY = 'test-key'
+      const result = await discoverProviderModels({
+        providerId: 'openrouter',
+        loadedConfig: loadProviderConfigSync(),
+        fetch: makeFetchMock({
+          data: [
+            {
+              id: 'partial-price',
+              context_length: 8_000,
+              pricing: { prompt: '0.000001', completion: '' },
+            },
+          ],
+        }),
+      })
+      expect(result.models[0]?.capabilities).toEqual({
+        context: { windowTokens: 8_000 },
+      })
+    })
+
+    test('stale discovery provenance cannot cross a provider endpoint change', () => {
+      writeTestProviderConfig({
+        openrouter: {
+          type: 'openai-compatible',
+          baseURL: 'https://gateway.example.com/v1',
+          models: [],
+        },
+      })
+      writeModelDiscoveryCache({
+        providerId: 'openrouter',
+        fetchedAt: '2026-11-25T00:00:00.000Z',
+        schemaVersion: 1,
+        strategy: 'openrouter',
+        endpoint: 'https://openrouter.ai/api/v1/models',
+        responseSha256: 'a'.repeat(64),
+        models: [
+          {
+            id: 'same-id',
+            capabilities: {
+              context: { windowTokens: 200_000 },
+              pricing: {
+                inputPerMillionTokens: 3,
+                outputPerMillionTokens: 15,
+                currency: 'USD',
+              },
+            },
+          },
+        ],
+      })
+      const loadedConfig = loadProviderConfigSync()
+      expect(getCachedProviderModels('openrouter')).toEqual([])
+      expect(getAvailableProviderModels(loadedConfig)).toEqual([])
+      const configPath = addDiscoveredModelToProviderConfig({
+        providerId: 'openrouter',
+        modelId: 'same-id',
+        loadedConfig,
+      })
+      const writtenConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      expect(writtenConfig.providers.openrouter.models).toContain('same-id')
+      expect(
+        writtenConfig.providers.openrouter.modelCapabilities,
+      ).toBeUndefined()
+    })
+
+    test('last-known-good discovery entries remain scoped to endpoint identity', async () => {
+      writeTestProviderConfig({
+        shared: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8101/v1',
+          models: [],
+        },
+      })
+      clearProviderConfigCacheForTest()
+      const configA = loadProviderConfigSync()
+      await discoverProviderModels({
+        providerId: 'shared',
+        loadedConfig: configA,
+        fetch: makeFetchMock({ data: [{ id: 'model-a' }] }),
+      })
+
+      writeTestProviderConfig({
+        shared: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8102/v1',
+          models: [],
+        },
+      })
+      clearProviderConfigCacheForTest()
+      const configB = loadProviderConfigSync()
+      expect(getCachedProviderModels('shared')).toEqual([])
+      await discoverProviderModels({
+        providerId: 'shared',
+        loadedConfig: configB,
+        fetch: makeFetchMock({ data: [{ id: 'model-b' }] }),
+      })
+      expect(
+        getCachedProviderModels('shared').map((model) => model.id),
+      ).toEqual(['model-b'])
+
+      writeTestProviderConfig({
+        shared: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8101/v1',
+          models: [],
+        },
+      })
+      clearProviderConfigCacheForTest()
+      expect(
+        getCachedProviderModels('shared').map((model) => model.id),
+      ).toEqual(['model-a'])
+    })
+
+    test('tampered normalized cache payloads are rejected instead of carrying unrelated response provenance', async () => {
+      writeTestProviderConfig({
+        local: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8080/v1',
+          models: [],
+        },
+      })
+      const loadedConfig = loadProviderConfigSync()
+      await discoverProviderModels({
+        providerId: 'local',
+        loadedConfig,
+        fetch: makeFetchMock({ data: [{ id: 'trusted-model' }] }),
+      })
+      const cachePath = path.join(tempDir, 'model-cache.json')
+      const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as Record<
+        string,
+        unknown
+      >
+      const tamperFirstModel = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false
+        const record = value as Record<string, unknown>
+        if (Array.isArray(record.models) && record.models.length > 0) {
+          ;(record.models[0] as Record<string, unknown>).id = 'tampered-model'
+          return true
+        }
+        for (const child of Object.values(record)) {
+          if (Array.isArray(child)) {
+            for (const item of child) if (tamperFirstModel(item)) return true
+          } else if (tamperFirstModel(child)) return true
+        }
+        return false
+      }
+      expect(tamperFirstModel(cache)).toBe(true)
+      fs.writeFileSync(cachePath, JSON.stringify(cache))
+      expect(getCachedProviderModels('local')).toEqual([])
+    })
+
+    test('discovery rejects oversized responses and terminal-control model ids', async () => {
+      writeTestProviderConfig({
+        local: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8080/v1',
+          models: [],
+        },
+      })
+      const loadedConfig = loadProviderConfigSync()
+      await expect(
+        discoverProviderModels({
+          providerId: 'local',
+          loadedConfig,
+          fetch: async () =>
+            new Response('{"data":[]}', {
+              headers: { 'content-length': '20000000' },
+            }),
+        }),
+      ).rejects.toThrow(/response exceeds/i)
+
+      const controls = await discoverProviderModels({
+        providerId: 'local',
+        loadedConfig,
+        fetch: makeFetchMock({ data: [{ id: 'safe\u001b[31m' }] }),
+      })
+      expect(controls).toMatchObject({
+        models: [],
+        partial: true,
+        cacheUpdated: false,
+        skippedRows: 1,
+      })
+    })
+
+    test('atomic discovery-cache replacement preserves the prior file when rename fails', () => {
+      writeTestProviderConfig({
+        local: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8080/v1',
+          models: [],
+        },
+      })
+      const first = {
+        providerId: 'local',
+        fetchedAt: '2026-11-25T00:00:00.000Z',
+        schemaVersion: 1 as const,
+        strategy: 'openai-compatible' as const,
+        endpoint: 'http://127.0.0.1:8080/v1/models',
+        responseSha256: 'a'.repeat(64),
+        models: [{ id: 'last-known-good' }],
+        partial: false,
+        cacheUpdated: true,
+      }
+      writeModelDiscoveryCache(first)
+      const cachePath = path.join(tempDir, 'model-cache.json')
+      const priorBytes = fs.readFileSync(cachePath)
+      const writeWithInjectedRename = writeModelDiscoveryCache as unknown as (
+        result: typeof first,
+        deps: { renameSync: (from: string, to: string) => never },
+      ) => void
+      expect(() =>
+        writeWithInjectedRename(
+          { ...first, models: [{ id: 'replacement' }] },
+          {
+            renameSync() {
+              throw Object.assign(new Error('simulated rename failure'), {
+                code: 'EIO',
+              })
+            },
+          },
+        ),
+      ).toThrow('simulated rename failure')
+      expect(fs.readFileSync(cachePath)).toEqual(priorBytes)
+      expect(fs.existsSync(`${cachePath}.lock`)).toBe(false)
+      expect(
+        fs.readdirSync(tempDir).filter((name) => name.includes('.tmp-')),
+      ).toEqual([])
+    })
+
+    test('partial or empty discovery retains the last known good cache', async () => {
+      writeTestProviderConfig({
+        local: {
+          type: 'openai-compatible',
+          baseURL: 'http://127.0.0.1:8080/v1',
+          models: [],
+        },
+      })
+      writeModelDiscoveryCache({
+        providerId: 'local',
+        fetchedAt: '2026-11-24T00:00:00.000Z',
+        schemaVersion: 1,
+        strategy: 'openai-compatible',
+        endpoint: 'http://127.0.0.1:8080/v1/models',
+        responseSha256: 'b'.repeat(64),
+        models: [{ id: 'last-known-good' }],
+      })
+      const loadedConfig = loadProviderConfigSync()
+      const partial = await discoverProviderModels({
+        providerId: 'local',
+        loadedConfig,
+        fetch: makeFetchMock({
+          data: [{ id: 'fresh-valid' }, { name: 'missing-id' }],
+        }),
+      })
+      expect(partial).toMatchObject({
+        partial: true,
+        cacheUpdated: false,
+        skippedRows: 1,
+      })
+      expect(getCachedProviderModels('local').map((model) => model.id)).toEqual(
+        ['last-known-good'],
+      )
+
+      const empty = await discoverProviderModels({
+        providerId: 'local',
+        loadedConfig,
+        fetch: makeFetchMock({ data: [] }),
+      })
+      expect(empty).toMatchObject({ partial: true, cacheUpdated: false })
+      expect(getCachedProviderModels('local').map((model) => model.id)).toEqual(
+        ['last-known-good'],
+      )
+    })
+
+    test('duplicate discovery ids add the route without inventing capability provenance', () => {
+      writeTestProviderConfig({
+        local: {
+          type: 'openai-compatible',
+          baseURL: 'http://localhost:11434/v1',
+          models: [],
+        },
+      })
+      writeModelDiscoveryCache({
+        providerId: 'local',
+        fetchedAt: '2026-11-25T00:00:00.000Z',
+        models: [
+          {
+            id: 'duplicate',
+            capabilities: { context: { windowTokens: 10_000 } },
+          },
+          {
+            id: 'duplicate',
+            capabilities: { context: { windowTokens: 20_000 } },
+          },
+        ],
+      })
+      const loadedConfig = loadProviderConfigSync()
+      const configPath = addDiscoveredModelToProviderConfig({
+        providerId: 'local',
+        modelId: 'duplicate',
+        loadedConfig,
+      })
+      const writtenConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      expect(writtenConfig.providers.local.models).toContain('duplicate')
+      expect(writtenConfig.providers.local.modelCapabilities).toBeUndefined()
     })
 
     test('discoverProviderModels supports custom arrayPath and idPath', async () => {
@@ -2918,6 +3433,26 @@ describe('model-provider', () => {
       )
     })
 
+    test('readModelDiscoveryCache rejects valid JSON with invalid shapes or provider identity', () => {
+      const cachePath = path.join(tempDir, 'discovery-cache.json')
+      setModelDiscoveryCachePathForTest(cachePath)
+      for (const value of [
+        null,
+        { local: { providerId: 'local', fetchedAt: 'now', models: 'bad' } },
+        {
+          local: {
+            providerId: 'other',
+            fetchedAt: '2026-11-25T00:00:00.000Z',
+            models: [{ id: 'model' }],
+          },
+        },
+      ]) {
+        fs.writeFileSync(cachePath, JSON.stringify(value))
+        expect(readModelDiscoveryCache()).toEqual({})
+        expect(getCachedProviderModels('local')).toEqual([])
+      }
+    })
+
     test('readModelDiscoveryCache returns empty cache for invalid JSON', () => {
       const cachePath = path.join(tempDir, 'discovery-cache.json')
       setModelDiscoveryCachePathForTest(cachePath)
@@ -3040,7 +3575,11 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
     delete process.env.OPENBUFF_TRUST_ANCESTOR_CONFIG
     const isolatedHome = makeTempDir('openbuff-ancestor-home-')
     process.env.HOME = isolatedHome
-    process.env.OPENBUFF_CONFIG_DIR = path.join(isolatedHome, '.config', 'openbuff')
+    process.env.OPENBUFF_CONFIG_DIR = path.join(
+      isolatedHome,
+      '.config',
+      'openbuff',
+    )
     // The project cwd must live INSIDE a private ancestor temp dir so the
     // "ancestor above the project" is a dir this test owns. Using dirname()
     // of a bare mkdtemp dir would point at the shared tmp root on Linux.
@@ -3070,7 +3609,10 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
     models: ['ancestor-model'],
   }
 
-  const writeAncestorConfig = (): { projectDir: string; ancestorConfigFile: string } => {
+  const writeAncestorConfig = (): {
+    projectDir: string
+    ancestorConfigFile: string
+  } => {
     // The ancestor temp dir is the private parent of the project cwd (set up
     // in beforeEach); read back through process.cwd() (symlink-safe on macOS).
     const projectDir = process.cwd()
@@ -3095,8 +3637,14 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
 
     // Fail-closed: the credential-exfiltration vector is removed.
     expect(loaded.config.providers.ancestor).toBeUndefined()
-    // Strip only the provider; the rest of the untrusted fragment still merges.
-    expect(loaded.config.defaultModel).toBe('ancestor/ancestor-model')
+    // N02: the untrusted fragment's route to a provider the user did not
+    // configure is withheld too (it previously merged).
+    expect(loaded.config.defaultModel).toBeUndefined()
+    expect(
+      loaded.projectTrust?.gated.some(
+        (item) => item.kind === 'route' && item.filePath === ancestorConfigFile,
+      ),
+    ).toBe(true)
     expect(
       loaded.diagnostics?.some(
         (diagnostic) =>
@@ -3111,6 +3659,9 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
   test('keeps apiKeyEnv providers from ancestor configs when OPENBUFF_TRUST_ANCESTOR_CONFIG=1', () => {
     const { ancestorConfigFile } = writeAncestorConfig()
     process.env.OPENBUFF_TRUST_ANCESTOR_CONFIG = '1'
+    // N02: ancestor configs are project scope, so the project must also be
+    // trusted for its credentialed providers to load.
+    process.env.OPENBUFF_TRUST_PROJECT_CONFIG = '1'
 
     const loaded = loadProviderConfigSync()
 
@@ -3121,11 +3672,16 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
     ).toBe('ANCESTOR_EXFIL_API_KEY')
     // Opted in: no strip diagnostic for the ancestor fragment.
     expect(
-      loaded.diagnostics?.some((diagnostic) => diagnostic.filePath === ancestorConfigFile),
+      loaded.diagnostics?.some(
+        (diagnostic) => diagnostic.filePath === ancestorConfigFile,
+      ),
     ).toBe(false)
   })
 
-  test('never strips apiKeyEnv providers from the project config inside cwd', () => {
+  test('never strips apiKeyEnv providers from a trusted project config inside cwd', () => {
+    // N02: untrusted, the project provider is withheld by the project trust
+    // gate (see project-trust-gate.test.ts); trusted, M1-T3 never strips it.
+    process.env.OPENBUFF_TRUST_PROJECT_CONFIG = '1'
     fs.writeFileSync(
       path.join(process.cwd(), 'openbuff.json'),
       JSON.stringify({
@@ -3170,7 +3726,10 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
   })
 
   test('trusts the explicit OPENBUFF_PROVIDER_CONFIG override but not arbitrary untrusted paths', () => {
-    const explicitConfigFile = path.join(makeTempDir('openbuff-explicit-'), 'openbuff.json')
+    const explicitConfigFile = path.join(
+      makeTempDir('openbuff-explicit-'),
+      'openbuff.json',
+    )
     expect(
       isTrustedProviderConfigPath(explicitConfigFile, {
         projectRoot: process.cwd(),
@@ -3224,9 +3783,9 @@ describe('readableRoots provenance (ER-1)', () => {
     expect(loaded.config.readableRoots).toEqual(['/opt/global-notes'])
     // The trust gate in run.ts registers this root unconditionally precisely
     // because its source file lives inside the openbuff config directory.
-    expect(loaded.readableRootsSources?.[path.resolve('/opt/global-notes')]).toBe(
-      configFile,
-    )
+    expect(
+      loaded.readableRootsSources?.[path.resolve('/opt/global-notes')],
+    ).toBe(configFile)
   })
 
   test('records the project openbuff.json that declared a readable root', () => {
@@ -3251,6 +3810,123 @@ describe('readableRoots provenance (ER-1)', () => {
     expect(
       loaded.readableRootsSources?.[path.resolve('/opt/project-notes')],
     ).toBe(projectConfigFile)
+  })
+})
+
+describe('sandbox block (opt-in policy)', () => {
+  const tempDirs: string[] = []
+
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  beforeEach(() => {
+    resetEnv()
+    delete process.env[PROVIDER_CONFIG_ENV_VAR]
+    clearProviderConfigCacheForTest()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    resetEnv()
+    clearProviderConfigCacheForTest()
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('parsing an empty config leaves sandbox undefined (absent-vs-present contract)', () => {
+    // The per-fragment merge distinguishes a fragment that omits the block
+    // (inherits the base block wholesale) from one that sets it (override
+    // wins), so the parsed output must stay ABSENT, never defaulted.
+    expect(providerConfigFileSchema.parse({}).sandbox).toBeUndefined()
+  })
+
+  test('parsing a sandbox block passes it through and defaults allowPaths to []', () => {
+    // allowPaths defaults INSIDE the block; the block itself stays optional.
+    expect(
+      providerConfigFileSchema.parse({ sandbox: { mode: 'project' } }).sandbox,
+    ).toEqual({ mode: 'project', allowPaths: [] })
+
+    expect(
+      providerConfigFileSchema.parse({
+        sandbox: { mode: 'unrestricted', allowPaths: ['/opt/scratch'] },
+      }).sandbox,
+    ).toEqual({ mode: 'unrestricted', allowPaths: ['/opt/scratch'] })
+  })
+
+  test('records allowPaths provenance for absolute entries only', () => {
+    // Mirrors the ER-1 readableRoots provenance tests: a config-dir file
+    // declares the block so the trust gate can attribute each allow path.
+    const configDir = makeTempDir('openbuff-config-dir-')
+    process.env.OPENBUFF_CONFIG_DIR = configDir
+    const configFile = path.join(configDir, 'openbuff.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        sandbox: {
+          mode: 'project',
+          allowPaths: ['/opt/global-scratch', 'relative/scratch'],
+        },
+      }),
+    )
+    process.chdir(makeTempDir('openbuff-project-'))
+
+    const loaded = loadProviderConfigSync()
+
+    expect(loaded.config.sandbox).toEqual({
+      mode: 'project',
+      allowPaths: ['/opt/global-scratch', 'relative/scratch'],
+    })
+    // Absolute entry -> attributed to the exact declaring file.
+    expect(
+      loaded.sandboxAllowPathsSources?.[path.resolve('/opt/global-scratch')],
+    ).toBe(configFile)
+    // Relative entry -> no provenance record, so the trust gate drops it
+    // (fail closed) rather than anchoring it to a guessed directory.
+    expect(
+      loaded.sandboxAllowPathsSources?.[path.resolve('relative/scratch')],
+    ).toBeUndefined()
+  })
+
+  test('an override fragment with a sandbox block replaces the base; without one it inherits', () => {
+    const tempDir = makeTempDir('openbuff-provider-')
+    const basePath = path.join(tempDir, 'base.json')
+    fs.writeFileSync(
+      basePath,
+      JSON.stringify({
+        sandbox: { mode: 'project', allowPaths: ['/opt/base-scratch'] },
+      }),
+    )
+
+    // The root config's own block is the override; the include is the base.
+    const overridingRoot = path.join(tempDir, 'overriding.json')
+    fs.writeFileSync(
+      overridingRoot,
+      JSON.stringify({
+        include: ['base.json'],
+        sandbox: {
+          mode: 'unrestricted',
+          allowPaths: ['/opt/override-scratch'],
+        },
+      }),
+    )
+    process.env[PROVIDER_CONFIG_ENV_VAR] = overridingRoot
+    expect(loadProviderConfigSync().config.sandbox).toEqual({
+      mode: 'unrestricted',
+      allowPaths: ['/opt/override-scratch'],
+    })
+
+    // A root that omits the block inherits the fragment's block wholesale.
+    const inheritingRoot = path.join(tempDir, 'inheriting.json')
+    fs.writeFileSync(inheritingRoot, JSON.stringify({ include: ['base.json'] }))
+    process.env[PROVIDER_CONFIG_ENV_VAR] = inheritingRoot
+    expect(loadProviderConfigSync().config.sandbox).toEqual({
+      mode: 'project',
+      allowPaths: ['/opt/base-scratch'],
+    })
   })
 })
 

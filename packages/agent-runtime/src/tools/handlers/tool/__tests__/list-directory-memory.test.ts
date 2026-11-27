@@ -86,25 +86,34 @@ describe('handleListDirectory memory-first', () => {
     mock.restore()
   })
 
-  test('skips the client call on full cover and serves a receipt output', async () => {
-    const agentState = buildVerifiedState(['src/auth'])
-    const toolCall = buildToolCall({ path: 'src/auth' })
+  test('memory covering the path never replaces the real listing', async () => {
+    // read-search-01 negative case. Before the fix the handler returned the
+    // nested memory path as a direct child with `directories: []`.
+    const agentState = buildVerifiedState(['src/auth/login.ts'])
+    const toolCall = buildToolCall({ path: 'src' })
+    const filesystemResult = [
+      {
+        type: 'json',
+        value: { files: [], directories: ['auth', 'db'], path: 'src' },
+      },
+    ] as unknown as CodebuffToolOutput<'list_directory'>
     let clientCalls = 0
-    const output = buildOutput()
     const { output: returned } = await invoke({
       agentState,
-      output,
+      output: filesystemResult,
       toolCall,
       onClientCall: () => {
         clientCalls += 1
       },
     })
-    expect(clientCalls).toBe(0)
+    expect(clientCalls).toBe(1)
+    expect(returned).toEqual(filesystemResult)
     const value = (
-      returned as unknown as Array<{ type: string; value: Record<string, unknown> }>
-    )[0].value as { files: string[]; directories: string[]; path: string }
-    expect(Array.isArray(value.files)).toBe(true)
-    expect(value.path).toBe('src/auth')
+      returned as unknown as Array<{ value: { files: string[]; directories: string[] } }>
+    )[0].value
+    expect(value.files).not.toContain('src/auth/login.ts')
+    expect(value.directories).toEqual(['auth', 'db'])
+    expect(agentState.memoryReuse?.skip ?? 0).toBe(0)
     expect(agentState.discoveryCoverage).toBeDefined()
   })
 })

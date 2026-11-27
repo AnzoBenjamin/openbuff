@@ -1,0 +1,219 @@
+// Audit experiments: assert observed current behavior, not desired acceptance.
+// No provider/ACP calls, credential reads, source changes, or real git mutations.
+import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test'
+import React from '/home/ben/Code/CLI/openbuff/node_modules/react/index.js'
+import { enableMapSet } from '/home/ben/Code/CLI/openbuff/node_modules/immer/dist/immer.mjs'
+import { mkdirSync, writeFileSync, symlinkSync, existsSync, realpathSync } from 'node:fs'
+
+enableMapSet()
+process.env.NEXT_PUBLIC_CB_ENVIRONMENT = 'test'
+process.env.NEXT_PUBLIC_CODEBUFF_APP_URL = 'https://app.codebuff.test'
+process.env.NEXT_PUBLIC_SUPPORT_EMAIL = 'support@codebuff.test'
+process.env.NEXT_PUBLIC_POSTHOG_API_KEY = 'phc_test_key'
+process.env.NEXT_PUBLIC_POSTHOG_HOST_URL = 'https://posthog.codebuff.test'
+// Explicit absent config prevents a fallback read of real user/project config.
+process.env.OPENBUFF_PROVIDER_CONFIG = '/tmp/openbuff-body-review-2026-11-05/evidence/01-fixture-absent-provider.json'
+
+const root = '/home/ben/Code/CLI/openbuff'
+const { useSendMessage } = await import(`${root}/cli/src/hooks/use-send-message.ts`)
+const { useChatStore } = await import(`${root}/cli/src/state/chat-store.ts`)
+const registries = await import(`${root}/cli/src/services/deferred-registries.ts`)
+const yielding = await import(`${root}/cli/src/utils/yield-to-event-loop.ts`)
+const clientModule = await import(`${root}/cli/src/utils/codebuff-client.ts`)
+const agentModule = await import(`${root}/cli/src/utils/local-agent-registry.ts`)
+const snapshots = await import(`${root}/cli/src/utils/turn-snapshots.ts`)
+const { setProjectRoot } = await import(`${root}/cli/src/project-files.ts`)
+const { routeUserPrompt } = await import(`${root}/cli/src/commands/router.ts`)
+const { prepareUserMessage } = await import(`${root}/cli/src/hooks/helpers/send-message.ts`)
+const sdk = await import(`${root}/sdk/dist/index.mjs`)
+const planArtifacts = await import(`${root}/cli/src/commands/plan-artifacts.ts`)
+const internals = (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE
+const originalDispatcher = internals.H
+const observations: Record<string, unknown>[] = []
+const noop = () => {}
+
+beforeEach(() => {
+  useChatStore.getState().reset()
+  setProjectRoot('/tmp/openbuff-body-review-2026-11-05/evidence')
+  internals.H = {
+    useRef: (value: unknown) => ({ current: value }),
+    useCallback: (fn: unknown) => fn,
+    useEffect: noop,
+  }
+  spyOn(registries, 'whenRegistriesReady').mockResolvedValue(undefined)
+  spyOn(yielding, 'yieldToEventLoop').mockResolvedValue(undefined)
+  spyOn(agentModule, 'loadAgentDefinitions').mockReturnValue([])
+  // The real CLI readiness function consumes this credential-free config.
+  spyOn(sdk, 'loadProviderConfigSync').mockReturnValue({
+    config: { providers: {}, indexing: { enabled: false } },
+    sourceFilePaths: [],
+    diagnostics: [],
+  } as any)
+})
+
+afterEach(() => {
+  clientModule.setAttachTarget(undefined)
+  internals.H = originalDispatcher
+  mock.restore()
+  useChatStore.getState().reset()
+})
+
+function hookHarness(validation = async () => ({ success: true, errors: [] })) {
+  const chain = { current: false }
+  let canQueue = true
+  const statuses: string[] = []
+  const hook = useSendMessage({
+    inputRef: { current: null },
+    activeSubagentsRef: { current: new Set() },
+    isChainInProgressRef: chain,
+    setStreamStatus: (status: string) => statuses.push(status),
+    setContextWindowUsage: noop,
+    setCompactionNotice: noop,
+    setCanProcessQueue: (value: boolean) => { canQueue = value },
+    abortControllerRef: { current: null },
+    onBeforeMessageSend: validation,
+    mainAgentTimer: {
+      start: noop, stop: noop, pause: noop, resume: noop,
+      elapsedSeconds: 0, startTime: null, isPaused: false,
+    },
+    scrollToLatest: noop,
+    continueChat: false,
+  } as any)
+  return { hook, chain, statuses, get canQueue() { return canQueue } }
+}
+
+function routeHarness(content: string) {
+  let prepared: any
+  const params = {
+    inputValue: content, agentMode: 'DEFAULT', isStreaming: false,
+    isChainInProgressRef: { current: false }, streamMessageIdRef: { current: null },
+    abortControllerRef: { current: null }, inputRef: { current: null },
+    sendMessage: async (request: any) => {
+      prepared = await prepareUserMessage({
+        content: request.content, agentMode: request.agentMode,
+        deps: {
+          setMessages: useChatStore.getState().setMessages,
+          lastMessageMode: null, setLastMessageMode: noop,
+          scrollToLatest: noop, setHasReceivedPlanResponse: noop,
+        },
+      })
+    },
+    addToQueue: () => { throw new Error('Unexpected queue in idle probe') },
+    setMessages: useChatStore.getState().setMessages,
+    setInputValue: noop, saveToHistory: noop, setInputFocused: noop,
+    setCanProcessQueue: noop, scrollToLatest: noop, clearMessages: noop, stopStreaming: noop,
+  }
+  return { params, get prepared() { return prepared } }
+}
+
+test('observed: attach with a ready stub server still fails the local provider gate', async () => {
+  clientModule.setAttachTarget({ socketPath: '/tmp/01-stub-server.sock', token: 'fixture' })
+  let remoteRuns = 0
+  spyOn(clientModule, 'getCodebuffClient').mockImplementation(async () => ({
+    backend: { run: async () => { remoteRuns++; return { output: { type: 'success' } } } },
+    run: async () => { remoteRuns++; return { output: { type: 'success' } } },
+  } as any))
+  const harness = hookHarness()
+  await harness.hook.sendMessage({ content: 'inspect project', agentMode: 'DEFAULT' })
+  const errors = useChatStore.getState().messages.map((m: any) => m.userError).filter(Boolean)
+  expect(remoteRuns).toBe(0)
+  expect(errors.join(' ')).toContain('provider is not configured')
+  expect(harness.chain.current).toBe(false)
+  observations.push({ probe: 'attach-local-readiness', remoteRuns, errors, chainBusy: harness.chain.current })
+})
+
+test('observed: prompt-producing slash command consumes a still-processing file', async () => {
+  useChatStore.getState().addPendingAttachment({
+    kind: 'file', id: 'loading-file', path: 'src/large.ts', filename: 'large.ts',
+    isDirectory: false, content: '', status: 'processing',
+  } as any)
+  const ordinary = routeHarness('inspect project')
+  await routeUserPrompt(ordinary.params as any)
+  expect(ordinary.prepared).toBeUndefined()
+  expect(useChatStore.getState().pendingAttachments).toHaveLength(1)
+  const command = routeHarness('/mode:default inspect project')
+  await routeUserPrompt(command.params as any)
+  expect(command.prepared.finalContent).toBe('inspect project')
+  expect(useChatStore.getState().pendingAttachments).toEqual([])
+  const user = useChatStore.getState().messages.find((m: any) => m.variant === 'user')
+  expect(user?.fileAttachments?.length ?? 0).toBe(0)
+  observations.push({ probe: 'slash-processing-file', finalContent: command.prepared.finalContent, pendingCount: 0, storedFileCount: user?.fileAttachments?.length ?? 0 })
+})
+
+test('observed: ordinary prompt consumes a failed file without its path/error in model context', async () => {
+  useChatStore.getState().addPendingAttachment({
+    kind: 'file', id: 'failed-file', path: 'missing.ts', filename: 'missing.ts',
+    isDirectory: false, content: '', status: 'error', note: 'Failed to read: fixture ENOENT',
+  } as any)
+  const harness = routeHarness('inspect project')
+  await routeUserPrompt(harness.params as any)
+  expect(harness.prepared.finalContent).toBe('inspect project')
+  expect(useChatStore.getState().pendingAttachments).toEqual([])
+  observations.push({ probe: 'failed-file-drain', finalContent: harness.prepared.finalContent, pendingCount: 0 })
+})
+
+test('observed: bisection stops ordinary prompts but allows prompt-producing slash command', async () => {
+  spyOn(snapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+  const ordinary = routeHarness('inspect project')
+  await routeUserPrompt(ordinary.params as any)
+  expect(ordinary.prepared).toBeUndefined()
+  const command = routeHarness('/mode:default inspect project')
+  await routeUserPrompt(command.params as any)
+  expect(command.prepared.finalContent).toBe('inspect project')
+  observations.push({ probe: 'slash-bisection-bypass', ordinaryBlocked: true, slashDispatched: true })
+})
+
+test('observed: client factory rejection leaves run/queue occupancy held', async () => {
+  spyOn(clientModule, 'getCodebuffClient').mockRejectedValue(new Error('fixture client initialization failure'))
+  const harness = hookHarness()
+  await expect(harness.hook.sendMessage({ content: 'inspect project', agentMode: 'DEFAULT' })).rejects.toThrow('fixture client initialization failure')
+  expect(harness.chain.current).toBe(true)
+  expect(harness.canQueue).toBe(false)
+  observations.push({ probe: 'client-init-rejection', chainBusy: harness.chain.current, canQueue: harness.canQueue })
+})
+
+test('observed: validation exception-shaped result provides no user-visible error', async () => {
+  const harness = hookHarness(async () => ({ success: false, errors: [] }))
+  await harness.hook.sendMessage({ content: 'inspect project', agentMode: 'DEFAULT' })
+  const messages = useChatStore.getState().messages
+  expect(messages.some((m: any) => m.userError || m.variant === 'error' || m.validationErrors?.length)).toBe(false)
+  expect(harness.chain.current).toBe(false)
+  observations.push({ probe: 'empty-validation-error', messageCount: messages.length, visibleFailure: false })
+})
+
+test('observed: preparation removes old messages instead of retaining them for pagination', async () => {
+  useChatStore.getState().setMessages(Array.from({ length: 105 }, (_, i) => ({
+    id: `old-${i}`, variant: 'user', content: `prompt ${i}`, timestamp: new Date(),
+  })) as any)
+  const harness = routeHarness('new prompt')
+  await routeUserPrompt(harness.params as any)
+  const messages = useChatStore.getState().messages
+  expect(messages).toHaveLength(100)
+  expect(messages.some((m: any) => m.id === 'old-0')).toBe(false)
+  observations.push({ probe: 'live-history-trim', seededCount: 105, retainedCount: messages.length, oldestLost: true })
+})
+
+test('observed: plan artifact resolver and reader follow a session symlink outside the project', async () => {
+  const fixture = '/tmp/openbuff-body-review-2026-11-05/evidence/01-plan-fixture'
+  const project = `${fixture}/project`
+  const outside = `${fixture}/outside`
+  mkdirSync(`${project}/.agents/sessions`, { recursive: true })
+  mkdirSync(outside, { recursive: true })
+  writeFileSync(`${outside}/PLAN.md`, 'Outside project fixture content; no credentials.')
+  const link = `${project}/.agents/sessions/link`
+  if (!existsSync(link)) symlinkSync(outside, link, 'dir')
+  setProjectRoot(project)
+  const resolved = planArtifacts.resolvePlanSessionDir('link')
+  const artifacts = planArtifacts.readPlanArtifacts('link')
+  const page = await planArtifacts.readPlanArtifactPage('link', 'PLAN.md')
+  expect(resolved.ok).toBe(true)
+  expect(realpathSync(link).startsWith(project)).toBe(false)
+  expect(artifacts?.files['PLAN.md']).toContain('Outside project fixture content')
+  expect(page).toContain('Outside project fixture content')
+  observations.push({ probe: 'plan-session-symlink', lexicalAccepted: resolved.ok, physicalInsideProject: false, prefixReaderIncludedOutsideBytes: true, pageReaderIncludedOutsideBytes: true })
+})
+
+test('print structured observations', () => {
+  console.log(JSON.stringify({ evidenceKind: 'safe stub behavioral probes', observations }, null, 2))
+  expect(observations).toHaveLength(8)
+})

@@ -1,0 +1,63 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { WorkspaceMutationBroker } from '/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = await fs.mkdtemp(path.join(evidenceDir, '06-broker-lock-fixture-'))
+const cwd = path.join(fixtureRoot, 'workspace')
+await fs.mkdir(cwd)
+const stateDir = path.join(fixtureRoot, 'state')
+const brokerA = await WorkspaceMutationBroker.create({ cwd, stateDir })
+const brokerB = await WorkspaceMutationBroker.create({ cwd, stateDir })
+const target = path.join(cwd, 'a.txt')
+await fs.writeFile(target, 'original\n')
+const expected = `sha256:${createHash('sha256').update('original\n').digest('hex')}`
+const lockPath = (brokerA as any).lockPath as string
+await fs.mkdir(lockPath)
+await fs.writeFile(path.join(lockPath, 'owner.json'), JSON.stringify({ schemaVersion: 1, token: 'fixture-dead-owner', pid: 0, acquiredAt: new Date(0).toISOString() }))
+const old = new Date(Date.now() - 180_000)
+await fs.utimes(lockPath, old, old)
+
+// Internal DI widens only the already-present await boundary after B's stale
+// break decision, so A can acquire a fresh lock before B performs fs.rm.
+let signalBDecision!: () => void
+const bDecision = new Promise<void>((resolve) => { signalBDecision = resolve })
+let continueB!: () => void
+const bMayContinue = new Promise<void>((resolve) => { continueB = resolve })
+const originalCanRecoverB = (brokerB as any).canRecoverLock.bind(brokerB)
+let pausedB = false
+;(brokerB as any).canRecoverLock = async () => {
+  const canRecover = await originalCanRecoverB()
+  if (canRecover && !pausedB) {
+    pausedB = true
+    signalBDecision()
+    await bMayContinue
+  }
+  return canRecover
+}
+
+let signalAStaged!: () => void
+const aStaged = new Promise<void>((resolve) => { signalAStaged = resolve })
+let continueA!: () => void
+const aMayContinue = new Promise<void>((resolve) => { continueA = resolve })
+const originalWriteStagedA = (brokerA as any).writeStagedFile.bind(brokerA)
+;(brokerA as any).writeStagedFile = async (...args: unknown[]) => {
+  signalAStaged()
+  await aMayContinue
+  return originalWriteStagedA(...args)
+}
+
+const resultBPromise = brokerB.conditionalCommit(target, 'writer B\n', expected)
+await bDecision
+const resultAPromise = brokerA.conditionalCommit(target, 'writer A\n', expected)
+await aStaged
+const freshOwnerA = JSON.parse(await fs.readFile(path.join(lockPath, 'owner.json'), 'utf8'))
+continueB()
+const resultB = await resultBPromise
+const afterB = await fs.readFile(target, 'utf8')
+continueA()
+const resultA = await resultAPromise
+const report = { fixtureRoot, injectedDelays: 'B after canRecoverLock=true, A after CAS check before staging', expectedHash: expected, freshOwnerAWasLive: freshOwnerA.pid === process.pid && freshOwnerA.token !== 'fixture-dead-owner', resultB, afterB, resultA, final: await fs.readFile(target, 'utf8') }
+await fs.writeFile(path.join(evidenceDir, '06-broker-lock-probe.json'), `${JSON.stringify(report, null, 2)}\n`)
+console.log(JSON.stringify(report, null, 2))

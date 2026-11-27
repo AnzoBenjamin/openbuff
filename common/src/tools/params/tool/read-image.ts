@@ -16,7 +16,7 @@ const inputSchema = z
             .string()
             .min(1, 'Paths cannot be empty')
             .describe(
-              'Image file path to read relative to the project root. Absolute paths work only when they are inside the project root.',
+              'Image file path to read absolute or relative to the project root; access follows the configured sandbox policy. Absolute paths work only when they are inside the project root.',
             ),
         ),
       )

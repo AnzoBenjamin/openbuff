@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "kind": "selected-local-capture-publication",
+  "verification": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/verification.json",
+  "verificationSha256": "6d1fda5215cd7a36d38eb93fa240a80a20763d355fdc7116e4d2c4d938329c43",
+  "captures": [
+    {
+      "originalPath": ".tmp/b13-continuation/originals-red.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/originals-red.log",
+      "sha256": "436a5301c598bc8c51f8d0a3fb2fcfefcf10a09dfa7628137d94d2ed517243fb",
+      "bytes": 4973
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/originals-focused-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/originals-focused-r1.log",
+      "sha256": "160cd046b415fe1543f47bb24a42c8ff0ead0a2ccc8bd4b7dc6aa87395579ea3",
+      "bytes": 4646
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/storage-red.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/storage-red.log",
+      "sha256": "041f3b4073a7816ae47440d30c093ee1d4bf733c23f9c3965ed42b1354f0f004",
+      "bytes": 3679
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/storage-single-copy-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/storage-single-copy-r1.log",
+      "sha256": "8a53becca664d54297b2bf1aa56c742421ddb910a216df2fdeac2ce7fa83b374",
+      "bytes": 3479
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/storage-adverse-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/storage-adverse-r2.log",
+      "sha256": "284df31ac40e2d7cd5196456d94174a9b6be2978c15ea6498bf302b3e7bef755",
+      "bytes": 1187
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/repository-regression-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/repository-regression-r2.log",
+      "sha256": "4af4b11e8f490f274c6a4cff9509159f733510669ecbc64d6bea839a9c5f03c6",
+      "bytes": 11801
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-schedule.json",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-schedule.json",
+      "sha256": "e6d8bae0ef29e5f492ca90ed02a86bcc53a5c7d2ba609e9a5fe126e5a0c0dd63",
+      "bytes": 17966
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-result.json",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-result.json",
+      "sha256": "81314de5a5b1214528cfc1c9abd42346ed3e9fe087514f4430f398a805edb92f",
+      "bytes": 18043
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-bounded.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-bounded.log",
+      "sha256": "c1a9438a706d1f1108e6e7fe575177945808a0aaf887c69d342b380f58dcaee3",
+      "bytes": 587981
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/runtime-regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/runtime-regression-r1.log",
+      "sha256": "eec06e74d02b39850a5b31d49a3008854f8ce7dbb8503922ccf4bb4fdde94d76",
+      "bytes": 51248
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/sdk-regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/sdk-regression-r1.log",
+      "sha256": "2fb67ac9f15345aa5210cb167be9913e2a89332d625265589abd20f1029ca6c8",
+      "bytes": 21003
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-focused-r4.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-focused-r4.log",
+      "sha256": "61b766a5818c14ff106bcd5c118e0d83fc7ca065e3767650b3309582ce3de8f9",
+      "bytes": 22219
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/final-core.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/final-core.log",
+      "sha256": "92e6e2ec3098059af49c30c20a569aa3754b7ea43b4eaed5a904d3039919ed6e",
+      "bytes": 16112
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/final-cli-core.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/final-cli-core.log",
+      "sha256": "29662ab5d0631dbe7fa415d58d9dc9b9a4c1db29da5a818e232a8e01988fd707",
+      "bytes": 6005
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/runtime-latest.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/runtime-latest.log",
+      "sha256": "db26a5492d1bab216d0b7a0bb1f5c503e0af0245ce6f39771b3483397902a11f",
+      "bytes": 4063
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/expiry-only-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/expiry-only-final.log",
+      "sha256": "ed0666c0d5550cd8d3b5f716631adac921ddcceab72ce8d97c27e365cf24fd30",
+      "bytes": 291
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/typecheck-latest.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/typecheck-latest.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/sdk-build-latest.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/sdk-build-latest.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-build-latest.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-build-latest.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-help-latest.txt",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-help-latest.txt",
+      "sha256": "2e113eb04bc57eafed9a1e6fb4e25d1a207a430c26c87ca8ee5f33d90aa9473b",
+      "bytes": 2563
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/cli-version-latest.txt",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/cli-version-latest.txt",
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+      "bytes": 6
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/doc-defaults-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/ledger-validation-final.json",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/ledger-validation-final.json",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77",
+      "bytes": 2352
+    },
+    {
+      "originalPath": ".tmp/b13-continuation/restart-final/receipt.json",
+      "path": "docs/execution/body-roadmap/evidence/B13/continuation-20261125/published-captures/restart-final/receipt.json",
+      "sha256": "131607ed9e554b32a86d19517954176848b3782ed9fc5199ef9559a67ef662a4",
+      "bytes": 3034743
+    }
+  ],
+  "limits": [
+    "Copies preserve the recorded local observations; not formal roadmap acceptance or full source closure.",
+    "Original artifact hashes may name historical ignored builds; publication does not manufacture executable availability."
+  ]
+}

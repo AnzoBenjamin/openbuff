@@ -35,6 +35,8 @@ export type ConceptExpansion = {
   modelDigest: string
   degraded: boolean
   degradedReason?: 'no-embedder' | 'timeout' | 'error'
+  indexedRecords?: number
+  pendingEmbeddings?: number
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -70,11 +72,7 @@ export function conceptEmbedText(params: {
   const parts = [params.kind, params.summary]
   if (params.detail && params.detail.trim().length > 0)
     parts.push(params.detail)
-  return parts
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 512)
+  return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 512)
 }
 
 export function conceptEmbeddingHash(text: string): string {
@@ -99,6 +97,16 @@ CREATE TABLE IF NOT EXISTS concept_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS concept_records (
+ observation_id TEXT PRIMARY KEY,
+ embedding_hash TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ summary TEXT NOT NULL,
+ detail TEXT NOT NULL,
+ claim_id TEXT NOT NULL,
+ updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS concept_records_embedding ON concept_records(embedding_hash);
 `
 
 /**
@@ -117,7 +125,9 @@ function migrateConceptVectorsToCompositeKey(db: Database): void {
     )
     .get() as { name: string } | null
   if (!table) return
-  const columns = db.query('PRAGMA table_info(concept_vectors)').all() as Array<{
+  const columns = db
+    .query('PRAGMA table_info(concept_vectors)')
+    .all() as Array<{
     name: string
     pk: number
   }>
@@ -166,7 +176,10 @@ export function openConceptDatabase(projectRoot: string): Database | null {
     const insertMeta = db.prepare(
       'INSERT OR IGNORE INTO concept_meta (key, value) VALUES (?, ?)',
     )
-    insertMeta.run('conceptEmbeddingTextVersion', CONCEPT_EMBEDDING_TEXT_VERSION)
+    insertMeta.run(
+      'conceptEmbeddingTextVersion',
+      CONCEPT_EMBEDDING_TEXT_VERSION,
+    )
     db.prepare(
       'INSERT INTO concept_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     ).run('schemaVersion', CONCEPT_SCHEMA_VERSION)
@@ -226,6 +239,35 @@ async function expandConceptRecallInner(
   const seen = new Set<string>()
   const pending: PendingEmbedding[] = []
   const cached = new Map<string, number[]>()
+  // The complete eligible corpus is durable independently of a query's
+  // bounded embedding work. Missing vectors progress on subsequent queries.
+  db.transaction(() => {
+    db.exec(
+      'CREATE TEMP TABLE IF NOT EXISTS current_concept_ids(observation_id TEXT PRIMARY KEY); DELETE FROM current_concept_ids;',
+    )
+    const currentId = db.prepare(
+      'INSERT OR IGNORE INTO current_concept_ids(observation_id) VALUES (?)',
+    )
+    const upsert = db.prepare(
+      'INSERT INTO concept_records(observation_id,embedding_hash,kind,summary,detail,claim_id,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(observation_id) DO UPDATE SET embedding_hash=excluded.embedding_hash,kind=excluded.kind,summary=excluded.summary,detail=excluded.detail,claim_id=excluded.claim_id,updated_at=excluded.updated_at WHERE embedding_hash!=excluded.embedding_hash',
+    )
+    const now = Date.now()
+    for (const entry of params.corpus) {
+      currentId.run(entry.observationId)
+      upsert.run(
+        entry.observationId,
+        conceptEmbeddingHash(conceptEmbedText(entry)),
+        entry.kind,
+        entry.summary,
+        entry.detail ?? '',
+        entry.claimId ?? '',
+        now,
+      )
+    }
+    db.exec(
+      'DELETE FROM concept_records WHERE observation_id NOT IN (SELECT observation_id FROM current_concept_ids)',
+    )
+  }).immediate()
   for (const entry of params.corpus) {
     if (seen.has(entry.observationId)) continue
     seen.add(entry.observationId)
@@ -349,11 +391,9 @@ async function expandConceptRecallInner(
   db.prepare(
     'INSERT OR REPLACE INTO fingerprint_lru (fingerprint, updated_at) VALUES (?, ?)',
   ).run(modelDigest, now)
-  db
-    .prepare(
-      `DELETE FROM fingerprint_lru WHERE fingerprint NOT IN (SELECT fingerprint FROM fingerprint_lru ORDER BY updated_at DESC, rowid DESC LIMIT ?)`,
-    )
-    .run(FINGERPRINT_LRU_LIMIT)
+  db.prepare(
+    `DELETE FROM fingerprint_lru WHERE fingerprint NOT IN (SELECT fingerprint FROM fingerprint_lru ORDER BY updated_at DESC, rowid DESC LIMIT ?)`,
+  ).run(FINGERPRINT_LRU_LIMIT)
   // The vector rows are the LRU's payload: a fingerprint evicted from the
   // LRU loses its persisted vectors, so the cache stays bounded to the 4
   // retained fingerprints instead of accumulating rows forever.
@@ -374,6 +414,10 @@ async function expandConceptRecallInner(
     observationIds: scored.slice(0, maxResults).map((s) => s.observationId),
     modelDigest,
     degraded: false,
+    indexedRecords: seen.size,
+    pendingEmbeddings: pending.filter(
+      (entry) => !embeddedByHash.has(entry.embeddingHash),
+    ).length,
   }
 }
 
@@ -415,18 +459,15 @@ export async function expandConceptRecall(params: {
     return await Promise.race([
       expandConceptRecallInner(params, embed, db, modelDigest, signal),
       new Promise<ConceptExpansion>((resolve) => {
-        timer = setTimeout(
-          () => {
-            signal.aborted = true
-            resolve({
-              observationIds: [],
-              modelDigest,
-              degraded: true,
-              degradedReason: 'timeout',
-            })
-          },
-          timeoutMs,
-        )
+        timer = setTimeout(() => {
+          signal.aborted = true
+          resolve({
+            observationIds: [],
+            modelDigest,
+            degraded: true,
+            degradedReason: 'timeout',
+          })
+        }, timeoutMs)
       }),
     ])
   } catch {

@@ -65,7 +65,10 @@ const runHandler = async ({
 type CodebuffToolCallFixture = ReturnType<typeof makeToolCall>
 
 describe('handleRunTerminalCommand permission_profile forwarding', () => {
-  test('resolves full-access regardless of a template-declared profile', async () => {
+  // N03: the declared profile is forwarded (the SDK decides which declared
+  // profiles bind; see sdk/src/tools/terminal-profile-bound.ts), and plan
+  // lineage is clamped to read-only.
+  test('forwards the template-declared profile', async () => {
     const call = await runHandler({
       agentTemplate: {
         ...baseAgentTemplate,
@@ -73,7 +76,7 @@ describe('handleRunTerminalCommand permission_profile forwarding', () => {
       } as AgentTemplate,
       toolCall: makeToolCall() as never,
     })
-    expect(call.input.permission_profile).toBe('full-access')
+    expect(call.input.permission_profile).toBe('git-commit')
   })
 
   test('a template without terminalPermissionProfile forwards full-access', async () => {
@@ -95,7 +98,25 @@ describe('handleRunTerminalCommand permission_profile forwarding', () => {
         permission_profile: 'full-access',
       }) as never,
     })
-    expect(call.input.permission_profile).toBe('full-access')
+    expect(call.input.permission_profile).toBe('librarian-read-only')
+  })
+
+  test('plan lineage is clamped to read-only whatever the template declares', async () => {
+    for (const terminalPermissionProfile of [
+      undefined,
+      'workspace-write',
+      'full-access',
+    ] as const) {
+      const call = await runHandler({
+        agentTemplate: {
+          ...baseAgentTemplate,
+          terminalPermissionProfile,
+          programmaticConfig: { planOnly: true },
+        } as AgentTemplate,
+        toolCall: makeToolCall({ permission_profile: 'full-access' }) as never,
+      })
+      expect(call.input.permission_profile).toBe('read-only')
+    }
   })
 })
 

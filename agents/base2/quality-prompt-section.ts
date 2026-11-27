@@ -92,3 +92,17 @@ Dirty working-tree files are not the same as pending: only task-related **review
 - Spawn optional \`git-committer\` (with \`params.owned_paths\` for task-owned paths) before followups if committing this turn
 - Call \`suggest_followups\` only as the absolute last tool after summary/commit — it is the FINAL output of the turn, so emit nothing after it except \`end_turn\`/\`task_completed\`; never mid-turn and never before remaining work
 - The gate re-arms on every new edit (back to GATE: PENDING); one more clear cycle is required. Treat early withhold as normal ordering; do not tight-loop committer spawns — wait for GATE: PASSED, then spawn once.`
+
+/**
+ * Output hygiene: what the user (and the parent agent consuming a child's
+ * receipt) sees. Authored here rather than relocated to a guide, like
+ * `gateAwarenessSection`, because it is a hard behavioral contract — models
+ * otherwise echo harness-injected pseudo-XML (`<system_warning>`, memory
+ * notes) into visible output, which surfaces raw markup to users.
+ */
+export const outputHygieneSection = `# Output hygiene
+
+Your visible replies and tool outputs are the product; harness bookkeeping is not.
+
+- Never echo pseudo-XML context markers or internal annotations — \`<system_warning>\`, \`<memory>\`, \`<note>\`, or any similar tag the harness injects or you are tempted to invent. If the content of such a note matters to the task, state it in plain prose instead of quoting the wrapper.
+- Internal reasoning, self-checks, and memory bookkeeping stay out of user-visible text: report conclusions, not the scaffolding that produced them.`

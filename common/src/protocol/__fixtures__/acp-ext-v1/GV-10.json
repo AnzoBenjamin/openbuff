@@ -1,0 +1,50 @@
+{
+  "lanesListRequest": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "_openbuff.dev/lanes/list",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3"
+    }
+  },
+  "lanesListResult": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "lanes": [
+        {
+          "kind": "openbuff.lane",
+          "version": 1,
+          "laneId": "main",
+          "status": "active",
+          "baseRevision": 12,
+          "agentIds": [
+            "run_root_1"
+          ]
+        }
+      ]
+    }
+  },
+  "lanesCreateRequest": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "_openbuff.dev/lanes/create",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3"
+    }
+  },
+  "lanesCreateError": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32601,
+      "message": "Method not found",
+      "data": {
+        "openbuff.dev": {
+          "code": "capability_disabled",
+          "capability": "lanes"
+        }
+      }
+    }
+  }
+}

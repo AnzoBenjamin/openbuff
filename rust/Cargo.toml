@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.dependencies]
+# Shared crate versions accumulate here as real dependencies land; member crates
+# inherit them via `foo.workspace = true` so version bumps stay single-sourced
+# (X-3b charter: one place to audit MSRV impact before any bump).

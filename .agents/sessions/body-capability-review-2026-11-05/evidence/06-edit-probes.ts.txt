@@ -1,0 +1,149 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { WorkspaceMutationBroker } from '/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts'
+import { createNodeFileSystem } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/node-filesystem.ts'
+import { getFilesStructured } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/read-files.ts'
+import { changeFiles } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/change-file.ts'
+import { applySemanticEdit } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/semantic-edit-apply.ts'
+import { createLanguageIntelligence } from '/home/ben/Code/CLI/openbuff/sdk/src/services/language-intelligence.ts'
+import { createTransactionIntentLog, recoverAndRevertInterruptedTransactions } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/transaction-intent-log.ts'
+import { getContentHash } from '/home/ben/Code/CLI/openbuff/common/src/util/content-hash.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = await fs.mkdtemp(path.join(evidenceDir, '06-fixtures-'))
+const exactHash = (data: string | Buffer) => `sha256:${createHash('sha256').update(data).digest('hex')}`
+const reports: Record<string, unknown> = { fixtureRoot, runtime: process.versions.bun ?? process.version }
+
+async function fixture(name: string) {
+  const root = path.join(fixtureRoot, name)
+  const cwd = path.join(root, 'workspace')
+  const stateDir = path.join(root, 'state')
+  await fs.mkdir(cwd, { recursive: true })
+  const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+  const filesystem = createNodeFileSystem({ mutationBroker: broker })
+  return { cwd, stateDir, broker, filesystem, capabilityIssuer: { projectId: cwd, runId: `probe-${name}` } }
+}
+
+function fakeMux(changes: Record<string, unknown>) {
+  return {
+    prepareRenameParams: async () => ({ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } } }),
+    rename: async () => changes,
+    dispose: async () => {},
+    syncFile: async () => {},
+    warmServerCount: () => 0,
+  } as any
+}
+
+// Real default broker and exact-byte adapter, fixture-only UTF-8 BOM file.
+{
+  const f = await fixture('bom')
+  const target = path.join(f.cwd, 'bom.ts')
+  const before = Buffer.from('\ufeffconst foo = 1\r\n')
+  await fs.writeFile(target, before)
+  const read = await getFilesStructured({ filePaths: ['bom.ts'], cwd: f.cwd, fs: f.filesystem, capabilityIssuer: f.capabilityIssuer })
+  const item = read.results[0] as any
+  const mutation = await changeFiles({ parameters: [{ type: 'file', path: 'bom.ts', content: 'const bar = 1\r\n', expectedHash: item.editAnchor?.contentHash }], cwd: f.cwd, fs: f.filesystem, capabilityIssuer: f.capabilityIssuer })
+  const after = await fs.readFile(target)
+  reports.bom = { readContent: item.content, readStatus: item.status, readHash: item.editAnchor?.contentHash, rawBeforeHash: exactHash(before), rawAfterHash: exactHash(after), bytesUnchanged: before.equals(after), mutation: mutation[0]?.value }
+}
+
+// A semantic service splice is produced from snapshot A; a fixture-only external
+// writer changes the same file before the production coordinator reads it.
+{
+  const f = await fixture('semantic-stale')
+  const target = path.join(f.cwd, 'a.ts')
+  await fs.writeFile(target, 'const foo = 1\n')
+  const service = createLanguageIntelligence({ cwd: f.cwd, fs: f.filesystem, multiplexer: fakeMux({ [`file://${target}`]: [{ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } }, newText: 'bar' }] }) })
+  const serviceOutput = await service.renameSymbol({ path: 'a.ts', line: 1, character: 6, new_name: 'bar' })
+  const external = 'const foo = 1\n// fixture external writer preserved text\n'
+  await fs.writeFile(target, external)
+  const applied = await applySemanticEdit(serviceOutput[0].value, { cwd: f.cwd, fs: f.filesystem, capabilityIssuer: f.capabilityIssuer })
+  reports.semanticStale = { serviceValue: serviceOutput[0].value, externalBeforeApply: external, final: await fs.readFile(target, 'utf8'), output: applied.output[0]?.value, mutationOutcome: applied.mutation?.outcome, receipt: applied.mutation?.authorityReceipt }
+  await service.dispose()
+}
+
+// A mixed interrupted intent has one divergent path and one untouched path.
+// The divergent bytes belong to a fixture-only external writer, not tx-owned state.
+{
+  const f = await fixture('recovery-external')
+  const first = path.join(f.cwd, 'a.ts')
+  const second = path.join(f.cwd, 'b.ts')
+  await fs.writeFile(first, 'original a\n')
+  await fs.writeFile(second, 'original b\n')
+  const intentLog = createTransactionIntentLog({ stateDir: path.join(f.stateDir, 'intents') })
+  const begin = await intentLog.beginTransaction({ transactionId: 'tx-probe', operationId: 'op-probe', callId: 'call-probe', entries: [ { path: 'a.ts', beforeHash: exactHash('original a\n'), beforeBytes: 'original a\n' }, { path: 'b.ts', beforeHash: exactHash('original b\n'), beforeBytes: 'original b\n' } ] })
+  const external = 'fixture external writer work\n'
+  await fs.writeFile(first, external)
+  const recovery = await recoverAndRevertInterruptedTransactions({ intentLog, cwd: f.cwd, fs: f.filesystem })
+  reports.recoveryExternal = { begin, externalBeforeRecovery: external, firstAfterRecovery: await fs.readFile(first, 'utf8'), secondAfterRecovery: await fs.readFile(second, 'utf8'), recovery, log: await fs.readFile(intentLog.filePath, 'utf8') }
+}
+
+// Same production callback, with an injected write failure: verify whether an
+// incomplete recovery remains pending for a subsequent startup pass.
+{
+  const f = await fixture('recovery-failure')
+  await fs.writeFile(path.join(f.cwd, 'a.ts'), 'changed a\n')
+  await fs.writeFile(path.join(f.cwd, 'b.ts'), 'original b\n')
+  const intentLog = createTransactionIntentLog({ stateDir: path.join(f.stateDir, 'intents') })
+  await intentLog.beginTransaction({ transactionId: 'tx-failed-recovery', operationId: 'op-failed', callId: 'call-failed', entries: [ { path: 'a.ts', beforeHash: exactHash('original a\n'), beforeBytes: 'original a\n' }, { path: 'b.ts', beforeHash: exactHash('original b\n'), beforeBytes: 'original b\n' } ] })
+  const injectedFs = Object.create(f.filesystem)
+  injectedFs.writeFile = async () => { throw new Error('fixture-only EACCES restore failure') }
+  const recovery = await recoverAndRevertInterruptedTransactions({ intentLog, cwd: f.cwd, fs: injectedFs })
+  reports.recoveryFailure = { recovery, stillPending: await intentLog.recoverInterruptedTransactions(), firstAfterRecovery: await fs.readFile(path.join(f.cwd, 'a.ts'), 'utf8'), log: await fs.readFile(intentLog.filePath, 'utf8') }
+}
+
+// A two-file rename has a valid declaration edit and an invalid consumer range.
+// Confirm whether the apply core commits the valid subset and publishes applied=true.
+{
+  const f = await fixture('partial-rename')
+  const first = path.join(f.cwd, 'definition.ts')
+  const second = path.join(f.cwd, 'consumer.ts')
+  await fs.writeFile(first, 'export const foo = 1\n')
+  await fs.writeFile(second, 'import { foo } from "./definition"\n')
+  const service = createLanguageIntelligence({ cwd: f.cwd, fs: f.filesystem, multiplexer: fakeMux({
+    [`file://${first}`]: [{ range: { start: { line: 0, character: 13 }, end: { line: 0, character: 16 } }, newText: 'bar' }],
+    [`file://${second}`]: [{ range: { start: { line: 30, character: 0 }, end: { line: 30, character: 3 } }, newText: 'bar' }],
+  }) })
+  const serviceOutput = await service.renameSymbol({ path: 'definition.ts', line: 1, character: 13, new_name: 'bar' })
+  const applied = await applySemanticEdit(serviceOutput[0].value, { cwd: f.cwd, fs: f.filesystem, capabilityIssuer: f.capabilityIssuer })
+  reports.partialRename = { serviceValue: serviceOutput[0].value, output: applied.output[0]?.value, definitionAfter: await fs.readFile(first, 'utf8'), consumerAfter: await fs.readFile(second, 'utf8'), mutationOutcome: applied.mutation?.outcome }
+  await service.dispose()
+}
+
+// Malformed server range: an offset that is negative within a later line can
+// cross backward into the preceding line. A reversed range duplicates text.
+{
+  const f = await fixture('malformed-ranges')
+  const target = path.join(f.cwd, 'a.ts')
+  await fs.writeFile(target, 'abcdef\nsecond\n')
+  const cases = [
+    { name: 'negative-character', start: { line: 1, character: -3 }, end: { line: 1, character: -1 } },
+    { name: 'reversed-range', start: { line: 0, character: 4 }, end: { line: 0, character: 2 } },
+    { name: 'fractional-character', start: { line: 0, character: 1.5 }, end: { line: 0, character: 2.5 } },
+  ]
+  reports.malformedRanges = []
+  for (const c of cases) {
+    const service = createLanguageIntelligence({ cwd: f.cwd, fs: f.filesystem, multiplexer: fakeMux({ [`file://${target}`]: [{ range: { start: c.start, end: c.end }, newText: 'X' }] }) })
+    const output = await service.renameSymbol({ path: 'a.ts', line: 1, character: 0, new_name: 'X' })
+    ;(reports.malformedRanges as unknown[]).push({ name: c.name, range: { start: c.start, end: c.end }, serviceValue: output[0]?.value })
+    await service.dispose()
+  }
+}
+
+// A supported 9 MiB aggregate preimage is larger than the default 8 MiB JSONL
+// limit. Confirm whether changeFiles publishes applied while omitting durability.
+{
+  const f = await fixture('intent-size')
+  const large = 'a'.repeat(9 * 1024 * 1024)
+  await fs.writeFile(path.join(f.cwd, 'a.txt'), large)
+  await fs.writeFile(path.join(f.cwd, 'b.txt'), 'old b\n')
+  const intentLog = createTransactionIntentLog({ stateDir: path.join(f.stateDir, 'intents') })
+  const warnings: unknown[] = []
+  const applied = await changeFiles({ parameters: [ { type: 'file', path: 'a.txt', content: `${large.slice(0, -1)}z`, expectedHash: getContentHash(large) }, { type: 'file', path: 'b.txt', content: 'new b\n', expectedHash: getContentHash('old b\n') } ], cwd: f.cwd, fs: f.filesystem, intentLog, logger: { warn: (...args: unknown[]) => warnings.push(args), error: () => {} } as any })
+  const mutation = applied[0]?.value as any
+  reports.intentSize = { preimageBytes: Buffer.byteLength(large) + Buffer.byteLength('old b\n'), outcome: mutation?.outcome, transactionId: mutation?.authorityReceipt?.transactionId ?? null, intentLogExists: await fs.stat(intentLog.filePath).then(() => true, () => false), warnings }
+}
+
+await fs.writeFile(path.join(evidenceDir, '06-edit-probes.json'), `${JSON.stringify(reports, null, 2)}\n`)
+console.log(JSON.stringify(reports, null, 2))

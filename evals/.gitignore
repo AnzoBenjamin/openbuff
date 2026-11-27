@@ -5,3 +5,4 @@ logs/
 *-judge-*-agent-output-error.json
 buffbench/*-base2-error-*.json
 
+buffbench/results/

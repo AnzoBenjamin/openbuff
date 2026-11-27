@@ -1,0 +1,741 @@
+{
+  "shardId": "09-execution",
+  "question": "Where are terminal/job/PTY process lifetimes, cancellation/kill, permissions and approval rerun policy, child environments/secret redaction/egress, shell parsing/enforcement and native Rust exec/sandbox availability wired into terminal, validation/hooks, LSP/MCP, sidecars and browser effect paths?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "sdk",
+    "packages",
+    "common",
+    "rust",
+    "agents",
+    "docs",
+    ".github"
+  ],
+  "selectedFiles": [
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+      "from": 1,
+      "to": 62,
+      "reason": "Actual runtime producer: assistant mode, current intentional full-access profile for every agent, spawn-bound paths/approval IDs, trusted job owner and serialized client dispatch. Compare the real producer with template declarations and the SDK comment; do not infer that a declared template profile is enforced."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts",
+      "from": 1,
+      "to": 128,
+      "reason": "Current production-contract tests explicitly expect full-access even when a template declares git-commit or librarian-read-only; approval receipt forwarding is independently asserted. This establishes the deliberate policy choice and prevents treating old clamping comments as current wiring."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2624,
+      "to": 2778,
+      "reason": "Real terminal consumer: resolves cwd, overwrites owner with trusted state, threads env and AbortSignal, classifies approvals, consumes/grants repository/workspace/root-run/snapshot/command-hash-bound receipts, and exposes denial versus unavailable approval context. Its profile-clamping comment differs from the current runtime producer above."
+    },
+    {
+      "path": "sdk/src/tools/run-terminal-command.ts",
+      "from": 1149,
+      "to": 1816,
+      "reason": "Complete SYNC/BACKGROUND execution function: cwd containment, optional lexical profiles, exact-action/hash approval rerun preserving mode/profile, staged-commit preflight, merged credential scrubbing, direct bash spawning, detach/abort races, output spool, timeout/TERM/KILL, exit/error results and dirty-path observation. Verify current default full-access runtime separately from the SDK helper's workspace-write default."
+    },
+    {
+      "path": "sdk/src/tools/terminal-command-policy.ts",
+      "from": 2095,
+      "to": 2454,
+      "reason": "Public policy evaluator and every permission-profile branch, user/full-access exemptions, quote-aware helper calls, traversal/absolute path checks, command/environment deny lists and parse-fallback behavior. Helpers are secondary slices; this is lexical policy, not OS enforcement or a shipped Rust shell parser."
+    },
+    {
+      "path": "sdk/src/env.ts",
+      "from": 57,
+      "to": 151,
+      "reason": "Raw host environment export versus copied canonical credential denylist scrub, caller override re-scrub and platform case handling. Compare actual callers below with the helper rather than inferring all spawned processes use it."
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 674,
+      "to": 879,
+      "reason": "Actual detached shell process launch, safe job log creation, owner/registry registration, chunk/line output, quota kill and child exit/error settlement. Check supplied environment and descendant cleanup against the shared termination helper in secondary files."
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 1115,
+      "to": 1345,
+      "reason": "Recovered-process identity probe, Linux start-time fencing, live/recovered TERM/KILL paths, stopping versus stopped state, bounded escalation and refusal to kill unverifiable/recycled pids. Recovery data integrity and mutation rollback remain outside pair09."
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1513,
+      "to": 1740,
+      "reason": "Real validation/hook effect path: configured/inferred hooks, no-hooks/skipped states, Promise.allSettled concurrency, default runTerminalCommand call without the terminal dispatcher approval callback or runtime profile, per-file command quoting, output diagnostics and abort rethrow. Separate this from the diagnostic-delta argv path below."
+    },
+    {
+      "path": "sdk/src/services/diagnostic-delta-runner.ts",
+      "from": 1,
+      "to": 256,
+      "reason": "Production compiler/diagnostic argv launcher and hook injector: direct injected spawn, inherited/merged host env, timeout TERM/KILL, byte-bounded capture, native AbortSignal handoff and fail-open injection/baseline policy. Trace run.ts creation and consumers through secondary ranges."
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 541,
+      "to": 647,
+      "reason": "Actual TypeScript LSP process adapter/factory: on-demand multiplexer creation, direct argv spawn with cwd-only options, child kill adapter and filesystem document-open bridge. Inspect environment, effect policy and run cancellation at this producer; semantic mutations belong to pair06 and language query semantics to pair07."
+    },
+    {
+      "path": "sdk/src/services/sidecar-supervisor.ts",
+      "from": 139,
+      "to": 560,
+      "reason": "Complete generic TypeScript sidecar supervisor class: subprocess env overrides, handshake/request framing, pending/time/output bounds, stderr error tail, stop/start/restart races, give-up and TERM/KILL cleanup. Compare its request protocol with the Rust exec role and search for an actual production constructor consumer."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1462,
+      "to": 1656,
+      "reason": "Actual browser process effects: pipe/port launch options, inherited environment, Chrome sandbox arguments, private temporary user-data dirs, protocol capability fallback, startup/exit registration and stop-during-spawn rollback. Runtime ownership and teardown/sandbox probes are secondary; browser interaction quality is pair13."
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 638,
+      "to": 812,
+      "reason": "Actual MCP launch/connect boundary: shared cache/single-flight construction, stdio subprocess env and ignored stderr, remote transport/DNS pinning, connect completion and client registration. Pair10 owns origins, descriptors and plugin trust; pair09 checks process/env/deadline/cancel/egress enforcement and adoption only."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/mod.rs",
+      "from": 1,
+      "to": 243,
+      "reason": "Real native exec role protocol: version handshake, line-delimited stdin parsing, malformed/EOF failures, ExecPlan deserialize and runner delegation, plus pure handshake tests. Compare with the generic supervisor's correlated request protocol; inspect boundedness and honest TS consumer availability."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/runner.rs",
+      "from": 1,
+      "to": 101,
+      "reason": "Real OS execution: apply Landlock first on Linux, emit enforcement/degraded status, optional env_clear, Unix exec replacement and non-Unix spawn/wait/exit. Current scope excludes brush-parser, bwrap, seccomp, Seatbelt and Windows restricted-token enforcement unless adjacent current code proves them."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+      "from": 1,
+      "to": 116,
+      "reason": "Actual Linux kernel ruleset and its test: ABI V1, path FD allow-read/allow-write, fully/partially/not-enforced classification, missing path/syscall errors and thread-scoped test isolation. Compare current guarantee with the latest D48 amendment, not obsolete D4."
+    },
+    {
+      "path": "rust/README.md",
+      "from": 1,
+      "to": 46,
+      "reason": "Shipped workspace/role/PTY charter and build/testing/package claims. Check its all-role not_implemented wording against current Exec dispatch and CI/archive consumers; docs are a claim boundary, not evidence that PTY/jobd/native adoption is shipped."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "common/src/tools/params/tool/run-terminal-command.ts",
+      "from": 1,
+      "to": 201,
+      "reason": "Provider versus client schema, mode/profile/timeout/detach/env fields and exported terminal result shape."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 980,
+      "to": 1003,
+      "reason": "Real injected/default node spawner selection and diagnostic runner/hook construction; distinguish this seam from runTerminalCommand's own direct spawn."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1117,
+      "to": 1138,
+      "reason": "Approval service creation and lazily cached language-intelligence factory with this run's spawn and filesystem."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1843,
+      "to": 1866,
+      "reason": "Run teardown timing: prompt/callback unwinding, browser-owner stop and language-server disposal after terminal completion."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2290,
+      "to": 2365,
+      "reason": "MCP approval origin gate followed by client/tool dispatch; inspect call arguments, run cancellation and effect classification while leaving detailed trust descriptors to pair10."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2838,
+      "to": 3030,
+      "reason": "Browser trusted-owner stamp, hook/diagnostic injection, check/kill job owner/signal injection and targeted-validation/LSP dispatch; stop before semantic rename mutation wiring."
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 42,
+      "to": 165,
+      "reason": "One-shot approval receipt service, exact repository/workspace/run/snapshot/action/target/command hash binding, and hash normalization."
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 170,
+      "to": 658,
+      "reason": "High-impact command/compound/substitution classifier and conservative parsing fallback; validate repeated/embedded effects and approval risk separately from optional terminal profiles."
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 697,
+      "to": 742,
+      "reason": "Balanced/strict/allow-all policy outcomes and routine versus high-impact approval conditions."
+    },
+    {
+      "path": "sdk/src/credential-env-keys.ts",
+      "from": 1,
+      "to": 58,
+      "reason": "Canonical exact-name credential denylist and custom provider-variable limitation; contains only source variable names, no credential values."
+    },
+    {
+      "path": "common/src/util/redact-secrets.ts",
+      "from": 1,
+      "to": 68,
+      "reason": "Shared secret-text redaction contract for assignment names, token shapes and URL credentials; trace use on terminal/diagnostic/MCP/browser output and provider prompt boundaries."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 176,
+      "to": 202,
+      "reason": "Actual runtime prompt-message secret redaction bridge; distinguish redacted provider prompt copies from raw job/spool/client outputs."
+    },
+    {
+      "path": "sdk/src/tools/terminal-output-spool.ts",
+      "from": 1,
+      "to": 126,
+      "reason": "Persistent full-output artifact lifecycle, pause/drain backpressure, finish/discard and failed-log pointers; compare raw output/logging with secret policy."
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 1,
+      "to": 76,
+      "reason": "Actual process-group liveness and kill helper, including Windows direct-child fallback."
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 487,
+      "to": 574,
+      "reason": "Shared terminal settlement, escalation timer cleanup and recovered liveness recheck."
+    },
+    {
+      "path": "common/src/util/job-registry.ts",
+      "from": 24,
+      "to": 303,
+      "reason": "Authoritative process/agent job ownership, lifecycle states, output/event byte limits and state reducer."
+    },
+    {
+      "path": "common/src/util/job-registry.ts",
+      "from": 519,
+      "to": 695,
+      "reason": "Owner assertion and event/output waiting/cancellation contract consumed by check_job/kill_job."
+    },
+    {
+      "path": "sdk/src/tools/kill-job.ts",
+      "from": 1,
+      "to": 55,
+      "reason": "Trusted-owner refusal before OS kill and durable unknown-owner claim policy."
+    },
+    {
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "to": 148,
+      "reason": "Snapshot pre/post validation wrapper and real hook delegation; mutation freshness belongs to pair06/07, process/effect policy belongs here."
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 263,
+      "to": 337,
+      "reason": "Actual server startup handshake and error cleanup; pair07 owns framing/root/query semantics."
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 586,
+      "to": 611,
+      "reason": "Language-server shutdown/kill/wait behavior and absence/presence of descendant escalation."
+    },
+    {
+      "path": "sdk/src/services/sidecar-artifact.ts",
+      "from": 1,
+      "to": 369,
+      "reason": "Public path/URL resolver, checksum verification, cache lock/atomic artifact lifecycle and network limits; inspect actual default SDK/CLI adoption rather than treating an exported helper as installed native integration."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 623,
+      "to": 764,
+      "reason": "Linux sandbox availability probes, root/AppArmor/user namespace behavior, fail-open warning and Chrome argument selection."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1223,
+      "to": 1275,
+      "reason": "Independent browser pipe-probe spawn and rollback path: same env/policy/lifetime audit applies before a browser session exists."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1837,
+      "to": 1975,
+      "reason": "Browser teardown wait, child.kill, deferred temporary-dir cleanup, stop/start synchronization and completion claims."
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 854,
+      "to": 903,
+      "reason": "Actual MCP callTool request options/result conversion consumer; confirm how signal, deadline and raw content reach the SDK."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 525,
+      "to": 654,
+      "reason": "Actual --version/tool-discovery process launcher, inherited environment, output/deadline and cancellation handling; primary language-target discovery is pair07."
+    },
+    {
+      "path": "packages/indexer/src/scip-runner.ts",
+      "from": 318,
+      "to": 379,
+      "reason": "Adjacent target-language SCIP indexer argv process adapter, output cap and kill behavior; index/ingest behavior is pair07/08."
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 328,
+      "to": 434,
+      "reason": "Adjacent Blender subprocess effect adapter: disabled autoexec, child env overrides, timeout/cancel cleanup and result contract. 3D product behavior is pair13."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/plan.rs",
+      "from": 1,
+      "to": 70,
+      "reason": "Native plan wire schema, serde defaults, read/write allowlists, explicit environment and no_landlock escape flag; absent cwd/network/limits fields are assessed against an actual host adapter."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "from": 1,
+      "to": 115,
+      "reason": "Current implemented Exec dispatch versus explicit unimplemented daemon/infer/plugin-host/a11y outcomes and protocol version source."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/main.rs",
+      "from": 1,
+      "to": 36,
+      "reason": "Actual CLI role dispatch/usage and exit-code consumer."
+    },
+    {
+      "path": "rust/crates/openbuff-native/Cargo.toml",
+      "from": 1,
+      "to": 26,
+      "reason": "Declared native dependencies and Linux-only Landlock platform dependency; check shell-parser/OS isolation claims against this manifest."
+    },
+    {
+      "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+      "from": 1,
+      "to": 320,
+      "reason": "Meaningful existing helper tests for exact one-shot approval/hash, rerun profile preservation, partial-output timeout, owned-job abort and quota kill. Read only: these tests create processes/temp files and are not authorized to execute in this picker task."
+    },
+    {
+      "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+      "from": 1016,
+      "to": 1114,
+      "reason": "Focused injected abort-window regression tests around dirty-snapshot await and post-spawn listener wiring."
+    },
+    {
+      "path": "sdk/src/__tests__/env.test.ts",
+      "from": 221,
+      "to": 450,
+      "reason": "Synthetic credential env scrubbing, merge-after-scrub, input immutability and Windows case behavior tests; do not inspect the live environment."
+    },
+    {
+      "path": "sdk/src/__tests__/kill-job.test.ts",
+      "from": 73,
+      "to": 203,
+      "reason": "Stopped versus stopping truthfulness, TERM-ignoring child, completed/no-pid/foreign-owner refusal and model owner spoof tests."
+    },
+    {
+      "path": "sdk/src/__tests__/sidecar-supervisor.test.ts",
+      "from": 107,
+      "to": 295,
+      "reason": "Existing generic fake-sidecar integration tests for protocol mismatch, restart/backoff/give-up, requests during restart, stop and newline-free flood. They do not prove a Rust exec adapter exists."
+    },
+    {
+      "path": "sdk/src/__tests__/browser-logs-sandbox.test.ts",
+      "from": 1,
+      "to": 151,
+      "reason": "Hermetic platform/userns/AppArmor sandbox argument tests and documented fail-open expectation."
+    },
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 43,
+      "to": 59,
+      "reason": "Actual native workspace build/unit-test CI lane; root already ran locked/offline Rust tests."
+    },
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 120,
+      "to": 148,
+      "reason": "Real per-target release build, host-runnable tests/smoke and native artifact upload; pair11 owns overall distribution/release quality."
+    },
+    {
+      "path": "rust/scripts/smoke-test-sidecar.sh",
+      "from": 1,
+      "to": 56,
+      "reason": "Actual sidecar smoke contract/role list and exit expectations after Exec implementation; read without running."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 49,
+      "to": 66,
+      "reason": "Current bundled-agent full-access policy documentation; reconcile with stale SDK forwarding comment and any historical restrictive-profile claims."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 751,
+      "to": 810,
+      "reason": "User-facing job ownership, incremental logs, polling/settlement and kill behavior claims."
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 198,
+      "to": 217,
+      "reason": "Local SDK effect dispatch and snapshot validation claim boundary."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "terminal-permissions-and-shell-policy",
+      "name": "Effective terminal authority and shell command policy",
+      "trace": [
+        "agents/basher.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/terminal-command-policy.ts"
+      ],
+      "inspect": [
+        "current deliberate full-access producer versus declared profiles and stale consumer comment",
+        "SDK hosts' optional restrictive profiles and user/full-access exemptions",
+        "quote/substitution/control syntax, unresolved parsing and path checks",
+        "lexical checks versus real kernel enforcement"
+      ],
+      "tests": [
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts",
+        "sdk/src/__tests__/terminal-command-policy.test.ts",
+        "sdk/src/__tests__/terminal-command-capability.test.ts"
+      ]
+    },
+    {
+      "id": "high-impact-approval-and-rerun",
+      "name": "Bound high-impact approval and one-shot rerun",
+      "trace": [
+        "sdk/src/run.ts",
+        "sdk/src/services/harness-enforcement.ts",
+        "sdk/src/tools/run-terminal-command.ts"
+      ],
+      "inspect": [
+        "action/target/hash/snapshot/workspace/root-run receipt binding",
+        "approval denial/unavailable/expiry/consumption/cancel states",
+        "compound/embedded effects and classification cardinality",
+        "internal rerun rechecks cwd/profile and preserves assistant mode"
+      ],
+      "tests": [
+        "sdk/src/__tests__/run-terminal-command.test.ts",
+        "sdk/src/__tests__/serve-approval-bridge.test.ts"
+      ]
+    },
+    {
+      "id": "sync-process-lifetime",
+      "name": "Synchronous subprocess cancellation, limits and output",
+      "trace": [
+        "sdk/src/tools/run-terminal-command.ts",
+        "sdk/src/tools/background-jobs.ts",
+        "sdk/src/tools/terminal-output-spool.ts"
+      ],
+      "inspect": [
+        "direct bash process group and Windows fallback",
+        "timeout default versus explicit deadline, TERM/KILL and close/error results",
+        "abort races and descendant lifetime",
+        "inline byte/character bounds, spool persistence and failure pointers"
+      ],
+      "tests": [
+        "sdk/src/__tests__/run-terminal-command.test.ts"
+      ]
+    },
+    {
+      "id": "owned-background-process-jobs",
+      "name": "Owned background process jobs and truthful settlement",
+      "trace": [
+        "sdk/src/tools/background-jobs.ts",
+        "common/src/util/job-registry.ts",
+        "sdk/src/tools/check-job.ts",
+        "sdk/src/tools/kill-job.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "trusted run/session identity and model owner override refusal",
+        "detach/run completion/abort ownership",
+        "stopping versus observed stopped, quota exit and timer cleanup",
+        "recovered PID start-time checks and uncertain liveness",
+        "incremental output/event limits and expiry"
+      ],
+      "tests": [
+        "sdk/src/__tests__/kill-job.test.ts",
+        "sdk/src/__tests__/run-session-job-ownership.test.ts",
+        "common/src/util/__tests__/job-registry.test.ts"
+      ]
+    },
+    {
+      "id": "child-env-and-output-secrets",
+      "name": "Child environment and secret output boundaries",
+      "trace": [
+        "sdk/src/env.ts",
+        "sdk/src/credential-env-keys.ts",
+        "common/src/util/redact-secrets.ts",
+        "packages/agent-runtime/src/run-agent-step.ts",
+        "sdk/src/services/diagnostic-delta-runner.ts",
+        "sdk/src/services/language-intelligence.ts",
+        "sdk/src/services/sidecar-supervisor.ts",
+        "sdk/src/tools/browser-logs.ts",
+        "common/src/mcp/client.ts"
+      ],
+      "inspect": [
+        "exact denylist versus dynamic provider apiKeyEnv names",
+        "all actual launchers, including overrides and implicit inheritance",
+        "raw log/tool/client output versus redacted provider prompt copies",
+        "case behavior and environment merge ordering",
+        "network egress policy and reported actual enforcement"
+      ],
+      "tests": [
+        "sdk/src/__tests__/env.test.ts",
+        "common/src/util/__tests__/redact-secrets.test.ts"
+      ]
+    },
+    {
+      "id": "validation-and-language-effects",
+      "name": "Validation, diagnostic and language-server effect enforcement",
+      "trace": [
+        "sdk/src/run.ts",
+        "sdk/src/tools/file-change-hooks.ts",
+        "sdk/src/tools/run-targeted-validation.ts",
+        "sdk/src/services/diagnostic-delta-runner.ts",
+        "sdk/src/services/language-intelligence.ts",
+        "sdk/src/services/lsp-multiplexer.ts"
+      ],
+      "inspect": [
+        "shell hooks versus direct argv compiler/LSP launch paths",
+        "shared or missing approval/env/policy/deadline/cancel contracts",
+        "no-hooks/skipped/fail-open/cancel result distinctions",
+        "hook concurrency and warm LSP teardown",
+        "tool-discovery/SCIP adjacent effects"
+      ],
+      "tests": [
+        "sdk/src/__tests__/file-change-hooks.test.ts",
+        "sdk/src/__tests__/diagnostic-delta.test.ts"
+      ]
+    },
+    {
+      "id": "mcp-process-effects",
+      "name": "MCP process/transport lifetime and egress enforcement",
+      "trace": [
+        "sdk/src/run.ts",
+        "common/src/mcp/client.ts"
+      ],
+      "inspect": [
+        "actual stdio environment and process ownership",
+        "connect/cache/request deadlines and cancellation propagation",
+        "remote DNS pinning/loopback exception as a transport guarantee",
+        "effect classification versus origin approval and rerun uncertainty"
+      ],
+      "tests": [
+        "common/src/mcp/__tests__/client.test.ts",
+        "sdk/src/__tests__/serve-approval-bridge.test.ts"
+      ]
+    },
+    {
+      "id": "native-exec-integration",
+      "name": "Native Rust execution and honest sandbox availability",
+      "trace": [
+        "rust/crates/openbuff-native/src/main.rs",
+        "rust/crates/openbuff-native/src/lib.rs",
+        "rust/crates/openbuff-native/src/exec/mod.rs",
+        "rust/crates/openbuff-native/src/exec/plan.rs",
+        "rust/crates/openbuff-native/src/exec/runner.rs",
+        "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+        "sdk/src/services/sidecar-supervisor.ts",
+        "sdk/src/services/sidecar-artifact.ts"
+      ],
+      "inspect": [
+        "real Exec role versus named unimplemented roles and absent PTY/jobd",
+        "host consumer/default routing and native artifact resolution",
+        "generic JSON-RPC supervisor versus handshake + raw ExecPlan protocol",
+        "plan/environment/cwd/network/deadline/encoding/status/error contracts",
+        "current ABI V1 Landlock-only enforcement and degradation versus latest D48",
+        "no assumption that Rust unit-test success establishes installed/native adoption"
+      ],
+      "tests": [
+        "rust/crates/openbuff-native/src/exec/mod.rs",
+        "rust/crates/openbuff-native/src/exec/runner.rs",
+        "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+        "sdk/src/__tests__/sidecar-supervisor.test.ts",
+        "rust/scripts/smoke-test-sidecar.sh"
+      ]
+    },
+    {
+      "id": "browser-and-sidecar-lifetime",
+      "name": "Browser and generic sidecar resource supervision",
+      "trace": [
+        "sdk/src/services/sidecar-supervisor.ts",
+        "sdk/src/tools/browser-logs.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "start/stop/restart/give-up races and truthful completion",
+        "browser probe as a separate effect path",
+        "TERM/KILL/direct child versus process-tree cleanup",
+        "pipe capability transport and unauthenticated-port fallback",
+        "Linux Chrome fail-open sandbox state and environment inheritance",
+        "trusted session ownership and teardown during run completion"
+      ],
+      "tests": [
+        "sdk/src/__tests__/sidecar-supervisor.test.ts",
+        "sdk/src/__tests__/browser-logs-sandbox.test.ts"
+      ]
+    }
+  ],
+  "searchCoverage": {
+    "primarySections": 18,
+    "primaryUniqueFiles": 17,
+    "primaryLines": 3794,
+    "inventoryFiles": 3056,
+    "retrieval": "Read cached RETRIEVAL.json command sandbox policy and serve sidecar supervisor capabilities results, then verified actual source consumers with exact reads and rg. Native query_index/read_files tools are not exposed in this Codex session; cached index line ranges were not treated as current line authority.",
+    "rootsSearched": [
+      "sdk/src",
+      "packages/agent-runtime/src",
+      "common/src",
+      "rust",
+      "agents",
+      "packages/indexer/src",
+      "packages/code-map/src",
+      "cli/src",
+      "docs",
+      ".github/workflows"
+    ],
+    "queries": [
+      "spawn/exec/execFile/spawnSync/execSync/Bun.spawn/StdioClientTransport launch surface",
+      "runTerminalCommand / runFileChangeHooks / runTargetedValidation consumer paths",
+      "getChildProcessEnv / scrubChildProcessEnv / getSystemProcessEnv / redactSecretValues",
+      "SidecarSupervisor / resolveSidecarArtifact / openbuff-native / native Exec role production consumers",
+      "word-boundary PTY/pty and process-group termination",
+      "terminalPermissionProfile / permission_profile actual producer and contract tests",
+      "native manifests/CI/smoke/release wiring and SPEC D40/D48/D49 amendments"
+    ],
+    "docsRead": [
+      {
+        "path": "docs/architecture.md",
+        "from": 46,
+        "to": 66
+      },
+      {
+        "path": "docs/request-flow.md",
+        "from": 198,
+        "to": 217
+      },
+      {
+        "path": "rust/README.md",
+        "from": 1,
+        "to": 46
+      }
+    ],
+    "verifiedConsumerReads": [
+      {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+        "from": 1,
+        "to": 62
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 980,
+        "to": 1003
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1117,
+        "to": 1138
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2624,
+        "to": 2778
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2838,
+        "to": 2862
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2908,
+        "to": 2940
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2982,
+        "to": 3029
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1843,
+        "to": 1866
+      },
+      {
+        "path": "sdk/src/services/language-intelligence.ts",
+        "from": 541,
+        "to": 639
+      },
+      {
+        "path": "common/src/mcp/client.ts",
+        "from": 712,
+        "to": 812
+      }
+    ],
+    "existingTestEvidence": [
+      {
+        "path": "/tmp/openbuff-body-review-2026-11-05/evidence/rust-tests.log",
+        "detail": "Parent supplied locked/offline Rust workspace result: 19 tests passed. Picker did not run processes or independently interpret this as native integration/OS enforcement coverage."
+      }
+    ],
+    "sampling": "18 bounded primary sections across 17 files. Secondary ranges are hypothesis-driven consumer/schema/cleanup/test edges; do not count them as inspected until read. Broad launcher search is an inventory aid, not an audit of every matched file.",
+    "nativeIntegrationSearch": "Searches of production sdk/src, packages/agent-runtime/src and common/src found SidecarSupervisor declarations but no constructor consumer or openbuff-native Exec invocation. Confirm with selected sources before classifying the native capability; CLI native ripgrep/OpenTUI are distinct paths.",
+    "policyContext": "Current handler and matching tests intentionally make all agent terminal calls full-access. Do not automatically report this as a bypass; root must preserve any explicit user/session policy preference. Report actual behavior and inconsistent promises separately.",
+    "excluded": [
+      "No source changes, real child processes, test execution, credential values, private config or historical raw logs.",
+      "Mutation broker/rollback/recovery authority and receipt truth are pair06.",
+      "MCP origin/descriptor/plugin trust and programmatic-agent isolation are pair10; only effect launch/cancel/env/egress boundaries are selected here.",
+      "Language roots/query/diagnostic semantics are pair07; indexer freshness/SCIP ingestion are pair08.",
+      "Browser/3D interaction capability quality is pair13; this pair selects their process enforcement adapters.",
+      "Full release/package quality is pair11; native consumer/artifact adoption is traced here.",
+      "Subagent process-supervision semantics are pair03 except shared env/kill/effect boundary cross-reference."
+    ],
+    "remainingQuestions": [
+      "Are runtime full-access defaults and SDK/comment/docs claims consistent with the user's explicit policy preference?",
+      "Does any installed/default CLI/SDK route construct a Rust ExecPlan, launch openbuff-native exec and consume actual enforcement status?",
+      "What shared contract, if any, binds hooks/diagnostics/LSP/MCP/browser/sidecars to environment, effect permission, network policy, deadline, ownership and cancellation?",
+      "Do cancellation/timeout results imply confirmed process-tree exit across Linux/macOS/Windows, and which states remain uncertain?",
+      "Are dynamic BYOK credential env names and raw output/log paths covered beyond the canonical denylist and prompt-only redaction?",
+      "Which latest D40/D48/D49 plan parts remain absent versus implemented-but-unwired, and what producer-to-consumer acceptance probe proves each?"
+    ]
+  },
+  "contextFiles": [
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+      "from": 234,
+      "to": 251,
+      "reason": "Historical normative context: amended D40 brush-parser authority with sh-syntax interim; latest D48 Linux bubblewrap+seccomp+BestEffort Landlock, macOS Seatbelt, Windows restricted token/dedicated user/ACL/firewall; D49 one multi-call Rust artifact with jobd merged into daemon. Older D4/D32 wording is superseded.",
+      "inventoryStatus": "historical plan context excluded from structural receipt",
+      "receiptInstruction": "Read as plan context; include only current inventory source files in structuralReceipt.files."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/AUDIT-CONTRACT.md",
+      "reason": "Review scope, capability maturity/assurance, eight domains, source immutability and report shape."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/INVENTORY.json",
+      "reason": "Pinned source paths and snapshot receipt authority."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/RETRIEVAL.json",
+      "reason": "Cached broad retrieval seeds; verify current lines with exact source reads."
+    }
+  ]
+}

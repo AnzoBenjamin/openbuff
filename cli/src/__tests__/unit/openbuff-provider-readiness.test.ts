@@ -11,18 +11,26 @@ describe('getOpenbuffProviderReadiness', () => {
   let originalCwd: string
   let tempDir: string
   let originalConfigDir: string | undefined
+  let originalProviderConfig: string | undefined
 
   beforeEach(() => {
     originalCwd = process.cwd()
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-readiness-'))
     originalConfigDir = process.env.OPENBUFF_CONFIG_DIR
+    originalProviderConfig = process.env.OPENBUFF_PROVIDER_CONFIG
     process.env.OPENBUFF_CONFIG_DIR = path.join(tempDir, 'global-config')
+    // Exercise project discovery, which reports malformed config as diagnostics.
+    delete process.env.OPENBUFF_PROVIDER_CONFIG
+    clearProviderConfigCacheForTest()
   })
 
   afterEach(() => {
     process.chdir(originalCwd)
     if (originalConfigDir === undefined) delete process.env.OPENBUFF_CONFIG_DIR
     else process.env.OPENBUFF_CONFIG_DIR = originalConfigDir
+    if (originalProviderConfig === undefined)
+      delete process.env.OPENBUFF_PROVIDER_CONFIG
+    else process.env.OPENBUFF_PROVIDER_CONFIG = originalProviderConfig
     clearProviderConfigCacheForTest()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })

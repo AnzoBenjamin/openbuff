@@ -9,13 +9,14 @@ import type {
   CacheRecallEvalResult,
   FinalCheckOutput,
   ProposalDryRunReport,
+  EvalAttemptEvidence,
 } from './types'
 import type { RetrievalFlowMetrics } from './retrieval-flow-metrics'
 import type { IdiomTraceabilityEvaluation } from './idiom-traceability-signals'
 import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
 import type { AgentDefinition, OpenbuffClient } from '@openbuff/sdk'
 
-export interface AgentTraceData {
+export interface AgentTraceData extends EvalAttemptEvidence {
   agentId: string
   commitSha: string
   prompt: string
@@ -118,11 +119,15 @@ Note: read_files tool results show [TRUNCATED] for file contents to save space.`
 }
 
 export async function analyzeAgentTraces({
+  env,
+  inheritEnv,
   client,
   traces,
   codingAgentPrompt,
   analyzerContext,
 }: {
+  env?: Record<string, string>
+  inheritEnv?: boolean
   client: OpenbuffClient
   traces: AgentTraceData[]
   codingAgentPrompt: string
@@ -197,8 +202,12 @@ Analyze how these agents approached the problem, focusing on their processes and
 Focus on the HOW, not the WHAT: We want to understand and improve how agents work, not evaluate their specific code output.`
 
     const agentOutput: string[] = []
+    const controller = new AbortController()
     const analyzerResult = await withTimeout(
       client.run({
+        signal: controller.signal,
+        env,
+        inheritEnv,
         agent: 'trace-analyzer',
         prompt,
         agentDefinitions: [traceAnalyzerAgent],
@@ -214,6 +223,7 @@ Focus on the HOW, not the WHAT: We want to understand and improve how agents wor
       }),
       20 * 60 * 1000,
       'Trace analyzer agent timed out after 20 minutes',
+      { controller },
     )
 
     const { output } = analyzerResult

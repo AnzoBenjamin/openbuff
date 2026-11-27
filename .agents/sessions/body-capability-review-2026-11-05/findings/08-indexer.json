@@ -1,0 +1,1519 @@
+{
+  "shardId": "08-indexer",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "08-indexer",
+    "subsystemIds": [
+      "packages",
+      "cli",
+      "sdk",
+      "common",
+      "docs"
+    ],
+    "files": [
+      "cli/src/commands/index-command.ts",
+      "cli/src/commands/mcp-command.ts",
+      "cli/src/components/tools/query-index.tsx",
+      "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "cli/src/utils/codebuff-client.ts",
+      "cli/src/utils/create-run-config.ts",
+      "cli/src/utils/index-dir-watch-worker.ts",
+      "cli/src/utils/index-dir-watch.ts",
+      "cli/src/utils/index-workspace-watcher.ts",
+      "common/src/tools/__tests__/query-index-schema.test.ts",
+      "common/src/tools/params/tool/query-index.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/configuration.md",
+      "packages/agent-runtime/src/tools/handlers/tool/query-index.ts",
+      "packages/indexer/package.json",
+      "packages/indexer/src/file-walker.test.ts",
+      "packages/indexer/src/file-walker.ts",
+      "packages/indexer/src/index-manager-semantic.test.ts",
+      "packages/indexer/src/index-manager.test.ts",
+      "packages/indexer/src/index-manager.ts",
+      "packages/indexer/src/index-store.test.ts",
+      "packages/indexer/src/index-store.ts",
+      "packages/indexer/src/index.ts",
+      "packages/indexer/src/metadata-indexer.test.ts",
+      "packages/indexer/src/metadata-indexer.ts",
+      "packages/indexer/src/p8-degraded-delta.test.ts",
+      "packages/indexer/src/query-cache.test.ts",
+      "packages/indexer/src/query-data.test.ts",
+      "packages/indexer/src/query-data.ts",
+      "packages/indexer/src/query-quality.test.ts",
+      "packages/indexer/src/query.ts",
+      "packages/indexer/src/retrieval-quality.test.ts",
+      "packages/indexer/src/retrieval-quality.ts",
+      "packages/indexer/src/semantic.ts",
+      "packages/indexer/src/types.ts",
+      "sdk/package.json",
+      "sdk/src/impl/embeddings.ts",
+      "sdk/src/mcp/server.ts",
+      "sdk/src/run.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "cli/src/commands/index-command.ts",
+      "from": 289,
+      "to": 354
+    },
+    {
+      "path": "cli/src/commands/mcp-command.ts",
+      "from": 124,
+      "to": 139
+    },
+    {
+      "path": "cli/src/components/tools/query-index.tsx",
+      "from": 78,
+      "to": 332
+    },
+    {
+      "path": "cli/src/components/tools/query-index.tsx",
+      "from": 402,
+      "to": 542
+    },
+    {
+      "path": "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "from": 402,
+      "to": 697
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 249,
+      "to": 359
+    },
+    {
+      "path": "cli/src/utils/create-run-config.ts",
+      "from": 210,
+      "to": 330
+    },
+    {
+      "path": "cli/src/utils/index-dir-watch-worker.ts",
+      "from": 1,
+      "to": 111
+    },
+    {
+      "path": "cli/src/utils/index-dir-watch.ts",
+      "from": 37,
+      "to": 131
+    },
+    {
+      "path": "cli/src/utils/index-dir-watch.ts",
+      "from": 148,
+      "to": 422
+    },
+    {
+      "path": "cli/src/utils/index-workspace-watcher.ts",
+      "from": 1,
+      "to": 259
+    },
+    {
+      "path": "common/src/tools/__tests__/query-index-schema.test.ts",
+      "from": 1,
+      "to": 123
+    },
+    {
+      "path": "common/src/tools/params/tool/query-index.ts",
+      "from": 1,
+      "to": 275
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 808,
+      "to": 925
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 119,
+      "to": 130
+    },
+    {
+      "path": "docs/configuration.md",
+      "from": 265,
+      "to": 357
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/query-index.ts",
+      "from": 1,
+      "to": 141
+    },
+    {
+      "path": "packages/indexer/package.json",
+      "from": 1,
+      "to": 36
+    },
+    {
+      "path": "packages/indexer/src/file-walker.test.ts",
+      "from": 213,
+      "to": 283
+    },
+    {
+      "path": "packages/indexer/src/file-walker.ts",
+      "from": 341,
+      "to": 513
+    },
+    {
+      "path": "packages/indexer/src/index-manager-semantic.test.ts",
+      "from": 45,
+      "to": 370
+    },
+    {
+      "path": "packages/indexer/src/index-manager.test.ts",
+      "from": 89,
+      "to": 272
+    },
+    {
+      "path": "packages/indexer/src/index-manager.test.ts",
+      "from": 680,
+      "to": 860
+    },
+    {
+      "path": "packages/indexer/src/index-manager.ts",
+      "from": 79,
+      "to": 1130
+    },
+    {
+      "path": "packages/indexer/src/index-store.test.ts",
+      "from": 30,
+      "to": 178
+    },
+    {
+      "path": "packages/indexer/src/index-store.test.ts",
+      "from": 990,
+      "to": 1086
+    },
+    {
+      "path": "packages/indexer/src/index-store.test.ts",
+      "from": 1108,
+      "to": 1215
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 1,
+      "to": 409
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 416,
+      "to": 1413
+    },
+    {
+      "path": "packages/indexer/src/index.ts",
+      "from": 1,
+      "to": 116
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.test.ts",
+      "from": 138,
+      "to": 342
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.test.ts",
+      "from": 578,
+      "to": 754
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 423,
+      "to": 893
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 941,
+      "to": 1068
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1073,
+      "to": 1201
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1552,
+      "to": 1712
+    },
+    {
+      "path": "packages/indexer/src/p8-degraded-delta.test.ts",
+      "from": 1,
+      "to": 138
+    },
+    {
+      "path": "packages/indexer/src/query-cache.test.ts",
+      "from": 1,
+      "to": 86
+    },
+    {
+      "path": "packages/indexer/src/query-data.test.ts",
+      "from": 1,
+      "to": 174
+    },
+    {
+      "path": "packages/indexer/src/query-data.ts",
+      "from": 1,
+      "to": 243
+    },
+    {
+      "path": "packages/indexer/src/query-quality.test.ts",
+      "from": 1,
+      "to": 334
+    },
+    {
+      "path": "packages/indexer/src/query.ts",
+      "from": 150,
+      "to": 1108
+    },
+    {
+      "path": "packages/indexer/src/query.ts",
+      "from": 1206,
+      "to": 1398
+    },
+    {
+      "path": "packages/indexer/src/retrieval-quality.test.ts",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": "packages/indexer/src/retrieval-quality.ts",
+      "from": 1,
+      "to": 148
+    },
+    {
+      "path": "packages/indexer/src/semantic.ts",
+      "from": 1,
+      "to": 241
+    },
+    {
+      "path": "packages/indexer/src/types.ts",
+      "from": 1,
+      "to": 356
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "sdk/src/impl/embeddings.ts",
+      "from": 1,
+      "to": 57
+    },
+    {
+      "path": "sdk/src/mcp/server.ts",
+      "from": 330,
+      "to": 400
+    },
+    {
+      "path": "sdk/src/mcp/server.ts",
+      "from": 423,
+      "to": 456
+    },
+    {
+      "path": "sdk/src/mcp/server.ts",
+      "from": 688,
+      "to": 775
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 585,
+      "to": 637
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2390,
+      "to": 2509
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3149,
+      "to": 3182
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3234,
+      "to": 3295
+    }
+  ],
+  "inspectionSummary": {
+    "distinctFiles": 40,
+    "inspectedLines": 11383,
+    "selectedPolicy": "All primary picker ranges read exactly; adjacent ranges expanded only to resolve lifecycle/consumer/failure hypotheses. Large files sampled by readRanges; this is not a full-line audit of all 40 files.",
+    "nativeToolAvailability": "Native audit/query_index tools are repository code, not exposed tools in this Codex session. Sources were read through local commands; no native invocation is claimed."
+  },
+  "capabilities": [
+    {
+      "id": "08-C1",
+      "name": "Lexical and heuristic graph discovery",
+      "maturity": "usable",
+      "assurance": "integration",
+      "entrypoint": "query_index input schema → CLI client-tool override / explicit MCP index seam",
+      "implementation": "IndexManager.query/queryBlended → queryIndex → postings/field+chunk scores/IDF → bounded seed neighborhoods or directional references/depth-limited paths",
+      "consumers": [
+        "cli/src/utils/codebuff-client.ts:249",
+        "packages/agent-runtime/src/tools/handlers/tool/query-index.ts:136",
+        "cli/src/components/tools/query-index.tsx:153",
+        "sdk/src/mcp/server.ts:732"
+      ],
+      "tests": [
+        "packages/indexer/src/query-cache.test.ts:9",
+        "packages/indexer/src/retrieval-quality.test.ts:80",
+        "packages/indexer/src/query-data.test.ts:64",
+        "common/src/tools/__tests__/query-index-schema.test.ts:6"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:808",
+        "docs/architecture.md:119"
+      ],
+      "states": {
+        "loading": "A cold manager builds asynchronously; CLI waits two seconds and can return a building/failure status. Existing cached metadata is not assigned for query serving until reconciliation/persistence in _build completes.",
+        "empty": "query() uses isIndexReady (fileCount>0); getStatus uses Boolean(index), so a built empty object can report ready while the query says ready=false. This split was statically traced, not added as a ranked finding.",
+        "failure": "Structured IndexBuildError/parse diagnostics and labeled last-known-good metadata; waitUntilReady's boolean means the build race completed before timeout, not necessarily a successful nonempty index.",
+        "cancellation": "Synchronous lexical traversal has no cancellation points; SDK abort racing unwinds the caller. Background builds persist beyond a readiness timeout and have no manager disposal/AbortSignal contract.",
+        "retry": "The manager gates attempts and schedules retryable age/error refreshes; parser-degraded deltas are requeued once. Status polling is read-only.",
+        "permission": "No index query executes discovered commands. Walk excludes mandatory sensitive paths, ignores and symlinks; cache writes use the configured project root and fail on unowned/denied directories."
+      },
+      "evidence": [
+        {
+          "path": "packages/indexer/src/query.ts",
+          "line": 296,
+          "detail": "Graph boosts complement direct lexical matches; seed/fanout/result caps and deterministic path ties reduce noise."
+        },
+        {
+          "path": "packages/indexer/src/query.ts",
+          "line": 960,
+          "detail": "References consult inbound references/calls rather than undirected neighbors."
+        },
+        {
+          "path": "packages/indexer/src/query.ts",
+          "line": 1053,
+          "detail": "Persisted adjacency gets semantic incidence-coverage validation before reuse."
+        }
+      ],
+      "gaps": [
+        "08-F3/08-F4 constrain recall at scale.",
+        "Depth/fanout/candidate limits can yield empty/partial graph answers without a query-level completeness reason.",
+        "Heuristic edges are discovery hints, not interface-validation proof; pair07 assesses extraction semantics."
+      ],
+      "strengths": [
+        "Always-available local lexical baseline with scoped fields, IDF, bounded snippets and graph explanations.",
+        "Accelerators avoid full corpus enumeration on representative queries and defensively rebuild incomplete adjacency.",
+        "Real repository quality test exercises built index, not only hand-populated metadata."
+      ],
+      "assuranceNotes": "Existing parent suite receipt plus exact static traces and a synthetic query differential probe; no live target-project agent task."
+    },
+    {
+      "id": "08-C2",
+      "name": "Native validation/command-neighbor discovery",
+      "maturity": "usable",
+      "assurance": "unit test",
+      "entrypoint": "query_index mode=commands or detected command-discovery phrases",
+      "implementation": "Manifest/script/CI/task-runner concepts → command-specific query scoring and bounded raw snippets",
+      "consumers": [
+        "cli/src/utils/codebuff-client.ts:297",
+        "packages/agent-runtime/src/tools/handlers/tool/query-index.ts:136"
+      ],
+      "tests": [
+        "packages/indexer/src/index-manager.test.ts:158",
+        "packages/indexer/src/query-quality.test.ts:273"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:821"
+      ],
+      "states": {
+        "loading": "A cold manager builds asynchronously; CLI waits two seconds and can return a building/failure status. Existing cached metadata is not assigned for query serving until reconciliation/persistence in _build completes.",
+        "empty": "Blank commands query enumerates recognized command files; absent candidates return [].",
+        "failure": "Structured IndexBuildError/parse diagnostics and labeled last-known-good metadata; waitUntilReady's boolean means the build race completed before timeout, not necessarily a successful nonempty index.",
+        "cancellation": "Synchronous lexical traversal has no cancellation points; SDK abort racing unwinds the caller. Background builds persist beyond a readiness timeout and have no manager disposal/AbortSignal contract.",
+        "retry": "The manager gates attempts and schedules retryable age/error refreshes; parser-degraded deltas are requeued once. Status polling is read-only.",
+        "permission": "Discovery only; execution and shell policy are owned by other shards."
+      },
+      "evidence": [
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1576,
+          "detail": "Known Cargo/Go/Python/JVM/.NET/PHP/Swift/Ruby/CMake/Godot manifests contribute validation concepts."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1654,
+          "detail": "Package scripts retain bounded raw command concepts, including script names."
+        },
+        {
+          "path": "packages/indexer/src/query.ts",
+          "line": 1234,
+          "detail": "Command snippets return actual package/CI command concepts when present."
+        }
+      ],
+      "gaps": [
+        "Known native manifest concepts are conventional command hints; they do not prove the project configured pytest/ruff/ctest or encode build/test dependency graphs.",
+        "CI extraction reads matching run/name/uses lines, not a full workflow command AST.",
+        "Command retrieval bypasses postings and scans candidate files; no large-corpus command latency envelope was measured."
+      ],
+      "strengths": [
+        "Models can discover implementation-adjacent validation documentation and familiar ecosystem commands without assuming all projects use npm.",
+        "Package script edits are verified to refresh snippets."
+      ],
+      "assuranceNotes": "Current fixtures plus script-refresh unit tests; native-project end-to-end command correctness is not established."
+    },
+    {
+      "id": "08-C3",
+      "name": "Optional BYOK semantic augmentation",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "indexing.semantic.enabled + explicitly routable model → SDK createConfiguredEmbedder → IndexManager",
+      "implementation": "Bounded file representation/exact-input hash + provider/model/text-version fingerprint → batched vectors → query cosine search → lexical blend",
+      "consumers": [
+        "sdk/src/impl/embeddings.ts:24",
+        "cli/src/utils/codebuff-client.ts:281",
+        "cli/src/commands/mcp-command.ts:131"
+      ],
+      "tests": [
+        "packages/indexer/src/index-manager-semantic.test.ts:45",
+        "packages/indexer/src/index-manager-semantic.test.ts:247",
+        "packages/indexer/src/index-manager-semantic.test.ts:294"
+      ],
+      "docs": [
+        "docs/configuration.md:267",
+        "docs/configuration.md:334"
+      ],
+      "states": {
+        "loading": "Metadata can be ready before vectors; missing/routeless embedder returns lexical results and CLI notice.",
+        "empty": "Empty query/vector set returns [] in semanticSearch; metadata remains the fallback.",
+        "failure": "Thrown query embedding returns [] with a debug log, not a query-specific fallback receipt. Batch failures disclose lastBuildError and retain prior vectors (08-F1). Invalid per-file vector gaps get a skip count on successful builds.",
+        "cancellation": "EmbedFn and createConfiguredEmbedder accept no AbortSignal/deadline; embedMany receives model/values only. CLI uses a legacy callback, so SDK abort racing cancels its wait but cannot terminate the underlying query or batch embedding.",
+        "retry": "Provider SDK may retry requests; manager retries retryable semantic errors on its normal build schedule. No total embedding-build deadline is wired.",
+        "permission": "Explicit opt-in/route only; mandatory walker exclusions precede source samples. Endpoint/model fingerprint omits API keys."
+      },
+      "evidence": [
+        {
+          "path": "packages/indexer/src/semantic.ts",
+          "line": 86,
+          "detail": "Embedding input bounds symbols/headings/concepts/chunk names and up to 4,000 implementation characters."
+        },
+        {
+          "path": "packages/indexer/src/semantic.ts",
+          "line": 128,
+          "detail": "Reuse is keyed to the exact embedding text including path, so renames invalidate vectors."
+        },
+        {
+          "path": "sdk/src/impl/embeddings.ts",
+          "line": 55,
+          "detail": "cacheKey covers provider, endpoint and provider model without credential values."
+        }
+      ],
+      "gaps": [
+        "08-F1 semantic generation consistency; 08-F2 cache scale and restart reuse.",
+        "Query-time failure/cancellation/deadline reasons are not surfaced as a typed per-query fallback.",
+        "Fresh vectors are validated for array shape/within-batch dimensions, but finite-number and cross-batch/model-dimension assurance remains narrower than persisted-vector validation.",
+        "No real BYOK embedding call or semantic relevance benchmark was run."
+      ],
+      "strengths": [
+        "Dependency-injected embedder and secret-free compatibility fingerprint.",
+        "Batch count validation and explicit per-file skipped-vector diagnostics.",
+        "Free-text semantic blending does not alter graph/commands modes."
+      ],
+      "assuranceNotes": "Actual manager/store/query paths executed with local deterministic fake vectors; production routing statically traced, not called."
+    },
+    {
+      "id": "08-C4",
+      "name": "Mutation/watch-driven freshness and lifecycle visibility",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "SDK confirmed mutation events and unknown-surface callback → CLI createRunConfig; CLI external workspace watcher",
+      "implementation": "markPathsChanged/markStale epoch+delta queue → precise or full update → labeled immutable source-content snapshot/status",
+      "consumers": [
+        "sdk/src/run.ts:3268",
+        "cli/src/utils/create-run-config.ts:281",
+        "cli/src/utils/index-workspace-watcher.ts:118",
+        "cli/src/components/tools/query-index.tsx:263"
+      ],
+      "tests": [
+        "packages/indexer/src/index-manager.test.ts:89",
+        "packages/indexer/src/index-manager.test.ts:226",
+        "packages/indexer/src/metadata-indexer.test.ts:138",
+        "packages/indexer/src/p8-degraded-delta.test.ts:74",
+        "cli/src/utils/__tests__/index-workspace-watcher.test.ts:522"
+      ],
+      "docs": [
+        "docs/configuration.md:341",
+        "docs/agents-and-tools.md:843"
+      ],
+      "states": {
+        "loading": "Queries retain a labeled old snapshot during an ongoing refresh; cold-cache immediate adoption is not wired.",
+        "empty": "query() uses isIndexReady (fileCount>0); getStatus uses Boolean(index), so a built empty object can report ready while the query says ready=false. This split was statically traced, not added as a ranked finding.",
+        "failure": "Structured IndexBuildError/parse diagnostics and labeled last-known-good metadata; waitUntilReady's boolean means the build race completed before timeout, not necessarily a successful nonempty index.",
+        "cancellation": "Synchronous lexical traversal has no cancellation points; SDK abort racing unwinds the caller. Background builds persist beyond a readiness timeout and have no manager disposal/AbortSignal contract.",
+        "retry": "Watch worker has one restart, then pathless invalidation; parser-degraded precise delta requeues once; missed/capped watch subtrees rely on the currently flawed age cadence.",
+        "permission": "No index query executes discovered commands. Walk excludes mandatory sensitive paths, ignores and symlinks; cache writes use the configured project root and fail on unowned/denied directories."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/create-run-config.ts",
+          "line": 287,
+          "detail": "Create/update/delete/move receipts become complete deltas with workspace revision; unknown shell/custom/MCP effects remain conservative."
+        },
+        {
+          "path": "cli/src/utils/index-dir-watch.ts",
+          "line": 216,
+          "detail": "Worker supervision owns restart/unref/close; pool is descriptor/depth capped."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 977,
+          "detail": "Status peek does not schedule builds; mutation epoch advances on signals and detached holders forward queued mutations."
+        }
+      ],
+      "gaps": [
+        "08-F7 same-stat changes; 08-F9 full-sweep starvation.",
+        "Watch assurance is real file-event/classifier/debounce wiring into a recording manager, not full edit→fresh query under descriptor exhaustion.",
+        "Worker threads bound ownership of handles; they are not an OS boundary guaranteeing containment of native process-fatal signals.",
+        "Diagnostics retained after read failure and empty readiness have uneven truth semantics; source reads before editing remain essential."
+      ],
+      "strengths": [
+        "Confirmed mutation deltas avoid scanning unrelated paths; revisions and epochs give consumers useful provenance.",
+        "Linux+Bun recursive-watch avoidance, bounded watch registry, worker restart policy, startup re-sweep, and explicit cleanup are real wiring.",
+        "Previous entries survive transient hashing/content-read failures instead of vanishing."
+      ],
+      "assuranceNotes": "Existing watcher integration mechanics were read and parent suite receipt retained. Local manager freshness and fake-clock cadence probes executed; no private live watcher/cache inspected."
+    },
+    {
+      "id": "08-C5",
+      "name": "Owned metadata/vector/chunk cache and snapshot persistence",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "IndexManager._build/adoptMergedIndex → index-store load/save",
+      "implementation": "Schema/root validation → rebuildable accelerators → owned cache → exclusive-create lock/CAS → fsynced temporary write+rename → source-content snapshot identity",
+      "consumers": [
+        "packages/indexer/src/index-manager.ts:599",
+        "packages/indexer/src/index-manager.ts:879"
+      ],
+      "tests": [
+        "packages/indexer/src/index-store.test.ts:30",
+        "packages/indexer/src/index-store.test.ts:134",
+        "packages/indexer/src/index-store.test.ts:990",
+        "packages/indexer/src/index-store.test.ts:1108",
+        "packages/indexer/src/index-manager.test.ts:680"
+      ],
+      "docs": [
+        "docs/configuration.md:313",
+        "docs/configuration.md:343"
+      ],
+      "states": {
+        "loading": "Stat-first load caps and root/version checks; malformed file entries dropped and structurally invalid accelerators rebuilt.",
+        "empty": "Missing/corrupt artifacts are rebuild-worthy cache misses, not user-data loss.",
+        "failure": "Non-owned cache refusal becomes nonretryable persistence error. Reduced metadata or skipped persistence can continue serving richer in-memory metadata; sidecar write is best-effort.",
+        "cancellation": "No storage AbortSignal; contended acquisition has a ten-second deadline, while critical-section I/O lacks a total deadline.",
+        "retry": "Dead-owner/age recovery and oldest-wins rejection exist, but 08-F8 defeats ownership under the verified-read→rename interleaving.",
+        "permission": "Hidden single-directory sanitization and owner marker guard accidental claims. Writes to .git/info/exclude default off."
+      },
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 65,
+          "detail": "Invalid/absolute/traversal/nonhidden cache choices fall back to the owned default."
+        },
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 207,
+          "detail": "CAS and newest-builtAt guard prevent ordinary stale replacements."
+        },
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 1337,
+          "detail": "Temp write sync and atomic rename preserve whole-artifact replacement; cleanup is finally-owned."
+        }
+      ],
+      "gaps": [
+        "08-F2 byte budget mismatch; 08-F8 cache lock reclaim race.",
+        "Content identity deliberately excludes graph/config; it cannot serve as a full retrieval generation (08-F6).",
+        "No crash/power-loss directory durability or adversarial interprocess cache mutation assurance was established.",
+        "Reduced contentSample/chunks can remain unavailable for unchanged files after reload until content changes/rebuild; sidecar consumers are outside this shard's full trace."
+      ],
+      "strengths": [
+        "Foreign-root/schema rejection, corruption safe misses and rebuildable query accelerators.",
+        "Write reduction preserves the caller's in-memory data; chunk sidecar shares metadata CAS/lock path.",
+        "Semantic identity is model/text-version bound and hash-keyed, with bounded fingerprint/carried-hash retention."
+      ],
+      "assuranceNotes": "Actual temporary-file persistence roundtrips and controlled lock interleaving; no production cache or unrelated owner directory read."
+    },
+    {
+      "id": "08-C6",
+      "name": "Optional persisted precision-graph enrichment",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "Explicit /index scip → real runner seam (pair07) → adoptMergedIndex; direct ingestScipDump package API",
+      "implementation": "Capture source snapshot → merge precise edges → guarded adoption/persistence → normal query graph consumers",
+      "consumers": [
+        "cli/src/commands/index-command.ts:313",
+        "cli/src/commands/index-command.ts:342",
+        "packages/indexer/src/query.ts:938"
+      ],
+      "tests": [
+        "packages/indexer/src/index-manager.test.ts:89",
+        "packages/indexer/src/query-quality.test.ts:253"
+      ],
+      "docs": [
+        "cli/src/commands/index-command.ts:348",
+        "packages/indexer/src/index-manager.ts:933"
+      ],
+      "states": {
+        "loading": "Requires a built snapshot; unavailable indexers are reported and installation is an explicit optional prerequisite.",
+        "empty": "No precise merged edges leaves existing graph unchanged; heuristic navigation remains.",
+        "failure": "Typed parse/runner failures owned by pair07. adoptMergedIndex returns false for differing content IDs; persistence errors degrade to in-memory adoption without a dedicated status error.",
+        "cancellation": "Runner process cancellation belongs to pair07; adoption itself lacks a signal.",
+        "retry": "User reruns after stale-base refusal; automatic refresh-time external indexer execution is intentionally deferred.",
+        "permission": "Explicit human command opts into external indexer processes; not automatically triggered by query_index."
+      },
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 864,
+          "detail": "Actual adoption and persistence seam used by the CLI."
+        },
+        {
+          "path": "cli/src/commands/index-command.ts",
+          "line": 329,
+          "detail": "CLI prints merged per-indexer totals and honest unavailable/next-rebuild messages."
+        }
+      ],
+      "gaps": [
+        "08-F5 ordinary refresh destroys enrichment; 08-F6 graph-only stale-adoption fence fails.",
+        "Edge confidence is consumer metadata and not exposed distinctly in the CLI query serialization.",
+        "Cannot graduate cross-language semantic navigation from language names or persisted synthetic edges alone."
+      ],
+      "strengths": [
+        "Optional enrichment preserves lexical/heuristic baseline and has a concrete user entrypoint.",
+        "Real query reference/neighbor paths consume the merged graph without a second parallel retrieval implementation."
+      ],
+      "assuranceNotes": "Synthetic precise edges were adopted/persisted/queried through the actual manager. No SCIP executable/extraction was invoked; pair07 owns that assurance."
+    },
+    {
+      "id": "08-C7",
+      "name": "CLI, agent, headless SDK and MCP retrieval contracts",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "Common query_index schema → runtime handler → SDK override → CLI; MCP registry → explicit session index",
+      "implementation": "CLI canonical result/status/snapshot projection and TUI rendering; SDK generic override dispatch; MCP bounded projection",
+      "consumers": [
+        "packages/agent-runtime/src/tools/handlers/tool/query-index.ts:55",
+        "sdk/src/run.ts:2461",
+        "cli/src/utils/codebuff-client.ts:341",
+        "sdk/src/mcp/server.ts:707"
+      ],
+      "tests": [
+        "common/src/tools/__tests__/query-index-schema.test.ts:76",
+        "cli/src/utils/__tests__/index-workspace-watcher.test.ts:522"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:835",
+        "sdk/src/mcp/server.ts:450"
+      ],
+      "states": {
+        "loading": "CLI renders queued/building/failed/cancelled lifecycle plus index status; MCP waits a configurable readiness window.",
+        "empty": "CLI disabled payload is canonical; MCP omitted index returns an honest disabled/no-index payload.",
+        "failure": "Headless run without query_index override falls through to 'Tool not implemented in SDK' errorMessage; this is missing default wiring rather than a secret automatic fallback.",
+        "cancellation": "SDK executeOverride races its wait against the run AbortSignal; legacy CLI callback receives only input, so underlying index/embed work continues.",
+        "retry": "Model may retry building/failed query or use read_subtree/code_search; direct SDK hosts must supply the override.",
+        "permission": "Common path scopes reject traversal/globs; host chooses an index/root and semantic route."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 311,
+          "detail": "CLI forwards indexedHash, relatedFiles, explanations, status, snapshot and epoch."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 3154,
+          "detail": "No query_index default branch exists; generic dispatch returns unsupported without an override."
+        },
+        {
+          "path": "sdk/src/mcp/server.ts",
+          "line": 743,
+          "detail": "MCP projection omits indexedHash, relatedFiles and structured chunks even when the manager supplied them."
+        },
+        {
+          "path": "common/src/tools/params/tool/query-index.ts",
+          "line": 158,
+          "detail": "Published result schema omits structured chunk identities/hashes; CLI similarly projects snippets rather than chunk records."
+        }
+      ],
+      "gaps": [
+        "Headless SDK run requires manual retrieval adapter; MCP requires explicit index injection (CLI wires it).",
+        "Transport projections do not retain the same provenance/relationship/chunk detail.",
+        "Memory-backed skip/narrow can bypass the manager; memory coverage semantics and filter fidelity are handed to pair04, not duplicated here."
+      ],
+      "strengths": [
+        "Canonical versioned CLI output and human-visible stale/error/coverage/snapshot indicators are implemented.",
+        "Model-side schemas validate modes, limits and path scopes; TUI makes relationship and matching reasons inspectable.",
+        "MCP has a single list/dispatch registry and honest missing-index behavior."
+      ],
+      "assuranceNotes": "Exact dispatch/projector/render traces; no full CLI interaction or packaged standalone consumer was run by this shard."
+    },
+    {
+      "id": "08-C8",
+      "name": "Retrieval evaluation and optional strategy comparison",
+      "maturity": "usable",
+      "assurance": "unit test",
+      "entrypoint": "Exported evaluateRetrievalQuality / compareRetrievalStrategies / optional PageRank query options",
+      "implementation": "Versioned graded corpus metrics → real queryIndex path or repo-map comparison; optional PageRank remains package-only opt-in",
+      "consumers": [
+        "packages/indexer/src/retrieval-quality.test.ts:80",
+        "packages/indexer/src/query-quality.test.ts:310"
+      ],
+      "tests": [
+        "packages/indexer/src/retrieval-quality.test.ts:38",
+        "packages/indexer/src/retrieval-quality.test.ts:80",
+        "packages/indexer/src/query-quality.test.ts:282"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:850"
+      ],
+      "states": {
+        "loading": "Operate on an already-built MetadataIndex or supplied retriever; do not build/observe filesystem themselves.",
+        "empty": "Blank/stop-word-only optional repo-map searches return no positive matches; evaluator handles empty metric sets.",
+        "failure": "Retriever failures propagate from the evaluator; no live-task recovery loop is implemented by these helpers.",
+        "cancellation": "No cancellation/evaluation budget contract; caller bounds corpus and retriever.",
+        "retry": "No automatic quality-driven production parameter promotion or learning loop.",
+        "permission": "Local developer/evaluator APIs; provider access only if a caller explicitly supplies such a retriever."
+      },
+      "evidence": [
+        {
+          "path": "packages/indexer/src/retrieval-quality.test.ts",
+          "line": 80,
+          "detail": "Actual repository is indexed and held to Recall@3/MRR/nDCG gates ≥0.9."
+        },
+        {
+          "path": "packages/indexer/src/retrieval-quality.test.ts",
+          "line": 92,
+          "detail": "Quality test injects tick++ and asserts synthetic one-unit samples; it does not establish real latency."
+        },
+        {
+          "path": "packages/indexer/src/query-quality.test.ts",
+          "line": 13,
+          "detail": "Python/Rust/Go quality data is a 13-file hand-built MetadataIndex, not parsed projects."
+        },
+        {
+          "path": "packages/indexer/src/index.ts",
+          "line": 40,
+          "detail": "Repo-map and PageRank helper exports are separate from default query_index runtime configuration."
+        }
+      ],
+      "gaps": [
+        "Curated repository quality is not held-out target-language task success or semantic quality.",
+        "No measured latency/cost/memory envelope for semantic, commands, broad fanout, restart reuse, or 100k-file configuration.",
+        "No closed-loop learning from task outcomes or automatic promotion is evidenced in this subsystem."
+      ],
+      "strengths": [
+        "Versioned relevance corpus and interpretable recall/rank/noise metrics are valuable repeatable developer gates.",
+        "Tests distinguish lexical default from optional comparison/graph ranking strategies.",
+        "Injected clock makes arithmetic deterministic; default evaluator supports actual timing when callers choose it."
+      ],
+      "assuranceNotes": "Parent reports full indexer suite 413 pass/0 fail. Read test mechanics; additional shard probes were discriminating failures rather than broad reruns."
+    }
+  ],
+  "findings": [
+    {
+      "id": "08-F1",
+      "title": "Retained semantic vectors are served against metadata that no longer describes them",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 663,
+          "detail": "_build adopts the new metadata before awaiting _buildVectors at 704."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 765,
+          "detail": "The new vector set is assigned only after the complete async build resolves; the failure branch at 779-808 retains a non-empty previous set unchanged."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 1086,
+          "detail": "With no fileTypes scope, searchSemantic does not require a vector path to exist in the pinned metadata or require its embeddingHash to match that metadata."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 579,
+          "detail": "Semantic-only hits project current metadata even when file is undefined."
+        },
+        {
+          "path": "packages/indexer/src/index-manager-semantic.test.ts",
+          "line": 336,
+          "detail": "The existing outage test adds one file and asserts prior vectors remain available; it does not change/delete an existing vector's source."
+        }
+      ],
+      "trigger": "A refresh changes/deletes an already embedded file and needs at least one new embedding, then the embedding batch fails. The same mismatched generation is observable during the awaited vector build.",
+      "consequence": "A deleted path can be returned under the new snapshot/revision without indexedHash. Changed paths can be ranked by old text while carrying the new file hash. Whole-index degradation is disclosed, but semantic state remains ready and the vector-to-metadata provenance invariant is broken.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "semanticGeneration",
+          "observation": "Current metadata contains kept.md/new.md at revision 2, yet query returns old.md; old.md has no indexedHash, and retained kept.md embeddingHash differs from the current exact embedding-input hash."
+        }
+      ],
+      "inference": "The post-failure case is executed. The in-flight case follows the same index-before-vectors assignment seam; it was not separately raced in a live provider call.",
+      "suggestedFix": "Publish a metadata/vector pair atomically, or filter retained vectors by current path membership AND exact fileEmbeddingHash before use. Preserve unchanged vectors and disclose missing changed/new vectors rather than reusing semantically stale ones.",
+      "acceptanceProbe": "Change one embedded file, delete another, add a third, and fail/hold the replacement embedding batch. Every hit must belong to the returned metadata generation and exact embedding input; unchanged valid vectors must remain queryable.",
+      "relatedPlanIds": [
+        "08-P1"
+      ]
+    },
+    {
+      "id": "08-F2",
+      "title": "Persistence can write retrieval artifacts that its own byte caps reject on reload",
+      "severity": "HIGH",
+      "domains": [
+        "performance",
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 432,
+          "detail": "saveSemanticVectors unions current hashes and bounded carried hashes, retains four fingerprints, and writes the entire JSON at 509 without a write-byte budget."
+        },
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 584,
+          "detail": "readSemanticVectorCache rejects an artifact over MAX_CHUNK_SIDECAR_BYTES (8,000,000)."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 760,
+          "detail": "A cold manager loads that cache and embeds every current file whose exact-input hash is absent."
+        },
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 362,
+          "detail": "The metadata write-cap reducer measures compact.length, which counts UTF-16 code units, while loadIndex uses stat.size bytes at 133-136."
+        },
+        {
+          "path": "packages/indexer/src/index-store.test.ts",
+          "line": 61,
+          "detail": "The roundtrip test uses a two-element vector; reducer tests at 990 onward also equate .size to string.length."
+        }
+      ],
+      "trigger": "Enable semantic indexing on a repository whose valid dense vectors serialize above 8 MB, or persist metadata containing enough multibyte text to cross the actual byte cap while its string length remains below it.",
+      "consequence": "A successful semantic save becomes a total cache miss at the next cold load, causing full re-embedding and repeated large writes. Unicode metadata can similarly enter the oversized-load/rebuild cycle. Actual provider cost and startup time are not measured by this audit.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "semanticPersistence",
+          "observation": "300 valid 1,536-dimensional vectors persist 300 hashes into 9,697,695 bytes and reload as zero vectors."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "metadataUtf8",
+          "observation": "A 1,024-byte reducer budget reports size 694 for an unreduced artifact with 1,494 UTF-8 bytes."
+        }
+      ],
+      "inference": "The save/read incompatibility is directly executed. BYOK re-embedding on cold managers follows _buildVectors/buildFileVectors; no bill or network latency was measured.",
+      "suggestedFix": "Use real UTF-8 byte accounting and symmetric read/write budgets. Partition vectors by fingerprint/hash or use a bounded indexed store so a valid working corpus remains reusable; expose persistence rejection/partial retention rather than returning a silently unusable cache.",
+      "acceptanceProbe": "Roundtrip at least 300×1,536 finite vectors and multiple fingerprints across cold managers without re-embedding unchanged inputs. Assert actual serialized bytes against budgets for ASCII, CJK, and emoji metadata.",
+      "relatedPlanIds": [
+        "08-P3"
+      ]
+    },
+    {
+      "id": "08-F3",
+      "title": "Global posting truncation runs before scope filters and can erase the only scoped result",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "performance",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/query-data.ts",
+          "line": 139,
+          "detail": "Substring expansion stops once the global candidate union reaches 4,096 paths."
+        },
+        {
+          "path": "packages/indexer/src/query.ts",
+          "line": 275,
+          "detail": "querySearch creates the global posting candidate set before filtering fileTypes/pathPrefixes at 284-286."
+        },
+        {
+          "path": "common/src/tools/params/tool/query-index.ts",
+          "line": 38,
+          "detail": "The published pathPrefixes description says outside-prefix results are excluded before ranking/limiting."
+        },
+        {
+          "path": "packages/indexer/src/query-data.test.ts",
+          "line": 116,
+          "detail": "The cap test deliberately asserts an excluded later candidate but does not combine it with a scope filter."
+        }
+      ],
+      "trigger": "A common substring matches more than 4,096 indexed files, and the requested prefix or language contains a relevant file ordered after the global expansion cap.",
+      "consequence": "A fully indexed in-scope file can produce an empty answer solely because unrelated files consumed the candidate budget. Walker/parser coverage can be complete, so the model sees no indication that query recall was truncated.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "scopedPostingRecall",
+          "observation": "With 5,001 indexed files, query aaa scoped to zzz and py returns []; the same query with queryData omitted returns zzz/aaatarget.py."
+        }
+      ],
+      "inference": "The synthetic index proves the actual query path. No frequency of this failure in customer repositories is claimed.",
+      "suggestedFix": "Apply path/type scope while constructing the candidate union or use scoped postings, and expose a query-level truncation reason when recall is intentionally bounded. Evaluate long-token exact-posting shortcuts against the scorer's actual match contract.",
+      "acceptanceProbe": "Compare accelerated and unaccelerated results for a sole scoped match beyond 4,096 unscoped substring candidates, independently for pathPrefixes and fileTypes, while retaining a bounded candidate workload.",
+      "relatedPlanIds": [
+        "08-P4"
+      ]
+    },
+    {
+      "id": "08-F4",
+      "title": "Walker fair-share trimming drops files even when all eligible files fit maxFiles",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "performance",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/file-walker.ts",
+          "line": 357,
+          "detail": "sharedPrefixCap divides maxFiles by the number of discovered prefixes, independent of each prefix's actual demand."
+        },
+        {
+          "path": "packages/indexer/src/file-walker.ts",
+          "line": 458,
+          "detail": "A newly discovered prefix trims existing buckets before the final round-robin selection."
+        },
+        {
+          "path": "packages/indexer/src/file-walker.ts",
+          "line": 484,
+          "detail": "The final loop cannot refill from discarded bucket tails."
+        },
+        {
+          "path": "packages/indexer/src/file-walker.test.ts",
+          "line": 246,
+          "detail": "The regression fixture uses equally oversubscribed prefixes, not an uneven tree that fits the global budget."
+        }
+      ],
+      "trigger": "One early prefix has most files and a later prefix has very few, with total eligible files at or below the configured maximum.",
+      "consequence": "The index unnecessarily omits discoverable implementations/tests/docs and reports partial coverage despite spare global capacity. In the probe, 40 files are dropped from a 91-file tree with maxFiles=100.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "walkerFairness",
+          "observation": "a contains 90 files, b contains one; configured maximum 100 returns 51 and reports 40 skipped under a."
+        }
+      ],
+      "inference": "This is an executed walk of owned synthetic files. Broader loss depends on the tree's prefix distribution.",
+      "suggestedFix": "Keep all candidates while the global budget is unfilled, then allocate fair shares with spillover/reclaimed unused quotas using a globally bounded selection structure.",
+      "acceptanceProbe": "For any uneven tree with eligible count≤maxFiles, return every eligible path. For oversubscribed trees, retain deterministic prefix representation, fill the global budget where possible, and keep candidate memory O(maxFiles).",
+      "relatedPlanIds": [
+        "08-P4"
+      ]
+    },
+    {
+      "id": "08-F5",
+      "title": "Persisted SCIP enrichment disappears on an ordinary unchanged refresh",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 599,
+          "detail": "Every manager build loads metadata and passes it through updateMetadataIndex before serving it."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 741,
+          "detail": "Even the no-source-change path rebuilds graph from files/parseData, ignoring prior precise graph edges."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 852,
+          "detail": "adoptMergedIndex describes persisted precise edges surviving across sessions."
+        },
+        {
+          "path": "cli/src/commands/index-command.ts",
+          "line": 348,
+          "detail": "The CLI honestly limits live adopted edges to the next rebuild; automatic refresh has no precision-expired state."
+        }
+      ],
+      "trigger": "Adopt/persist a precise edge, then mark the index stale or create a cold manager over unchanged source content.",
+      "consequence": "The optional semantic-navigation upgrade is lost through routine reconciliation, even without source invalidation. Persistence alone therefore does not establish usable cross-session precise navigation. The CLI's limited wording mitigates surprise, so this is a capability/durability gap rather than an undocumented automatic-indexer requirement.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "precisionRefresh",
+          "observation": "One precise edge is persisted and returned by references before refresh; after an unchanged refresh the persisted precise count is zero and references are empty, with the same content snapshotId."
+        }
+      ],
+      "inference": "Unchanged same-manager refresh is executed. Cold-session loss follows the identical load→update path. SCIP parser/runner correctness is owned by pair07.",
+      "suggestedFix": "Retain enrichment bound to source/config/build fingerprints when unchanged, invalidate it conservatively when its validity changes, and surface precision expiry/re-ingestion requirements. Do not run every SCIP indexer automatically as a substitute for a validity policy.",
+      "acceptanceProbe": "Adopt, restart, and refresh an unchanged project while preserving valid precise navigation. Change an input to the precise index and prove safe invalidation plus an observable expired/degraded state.",
+      "relatedPlanIds": [
+        "08-P2"
+      ]
+    },
+    {
+      "id": "08-F6",
+      "title": "Content-only snapshot identity lets a stale graph adoption overwrite a newer graph",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 658,
+          "detail": "computeIndexSnapshotId includes version/root/revision and file paths/hashes, but excludes graph and indexing configuration."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 874,
+          "detail": "adoptMergedIndex uses that ID as the sole pre-adoption snapshot guard."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 879,
+          "detail": "Persistence CAS uses the manager's current builtAt, not the caller's captured graph generation."
+        },
+        {
+          "path": "cli/src/commands/index-command.ts",
+          "line": 298,
+          "detail": "The real SCIP command captures this ID before awaiting a scan and relies on adoption to reject a replaced base."
+        }
+      ],
+      "trigger": "Two enrichment scans capture one source snapshot; the first adopts new precise edges, then the second adopts its stale merged graph under the unchanged source-content ID.",
+      "consequence": "Both adoptions can return true while the second erases the first's edges. The returned ID is useful source provenance, but does not identify an immutable retrieval generation or enforce the documented stale-adoption guard for graph-only changes.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json",
+          "section": "graphAdoption",
+          "observation": "First adoption accepted A; snapshotId stayed equal to the base. Stale second adoption was accepted and final precise labels contain only B."
+        }
+      ],
+      "inference": "Executed sequential adoptions model two overlapping scans whose results arrive in order; no live parallel SCIP binaries were invoked.",
+      "suggestedFix": "Separate source-content identity from a retrieval-generation identity/fence including graph/configuration, and compare the captured generation during adoption and persistence. Reject or explicitly rebase stale merges.",
+      "acceptanceProbe": "Capture two merges from one base, adopt the first, then require the second to reject/rebase without losing any first-adoption edge; preserve stable content identity for unchanged source.",
+      "relatedPlanIds": [
+        "08-P2"
+      ]
+    },
+    {
+      "id": "08-F7",
+      "title": "Explicit changed-path hints can be declared incorporated while same-stat content remains old",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 572,
+          "detail": "The stat-gated hash reuse applies even to a path explicitly listed in changedPaths."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 593,
+          "detail": "Matching mtime/size reuses the old indexed.hash; ctime/inode/explicit changed-path identity are not consulted."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 619,
+          "detail": "The incoming workspace revision is stamped when parserDegraded is absent, regardless of whether a known changed path was actually re-read."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 578,
+          "detail": "The code acknowledges timestamp-preserving same-size writes as a known tradeoff; the explicit-hint/safety-sweep consequence remains present."
+        }
+      ],
+      "trigger": "A same-length rewrite preserves/restores mtime, followed by a precise changed-path signal or a pathless refresh.",
+      "consequence": "Old hashes/headings persist while status returns ready and the reported workspace revision advances. Repeating the pathless 'integrity' refresh does not heal this case because it uses the same stat gate.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-freshness-lock-probes.json",
+          "section": "sameStatFreshness",
+          "observation": "Disk hash changes with equal size/mtime; a precise delta reports revision 17 but keeps the old hash. A later pathless refresh still returns heading Alpha although disk contains Bravo."
+        }
+      ],
+      "inference": "Executed with an explicitly fixed fixture timestamp. This is a known stat optimization tradeoff, not a claim that ordinary SDK writes usually preserve timestamps.",
+      "suggestedFix": "Force hash/read for explicitly changed paths; use a separate periodic full integrity mode or a richer stat identity for unknown changes. Publish incorporated revision only with honest evidence for the changed delta.",
+      "acceptanceProbe": "Same-size preserved-mtime writes must converge after an explicit changed-path hint and after the documented safety sweep, while unrelated unchanged files keep the cheap stat path.",
+      "relatedPlanIds": [
+        "08-P1"
+      ]
+    },
+    {
+      "id": "08-F8",
+      "title": "Cache lock reclamation has a verify-to-rename race that can displace a new live owner",
+      "severity": "HIGH",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 1164,
+          "detail": "reclaimStaleLock reads and compares stale bytes, then separately renames the lock path at 1176."
+        },
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 1193,
+          "detail": "The post-rename defensive check restores unexpected live bytes using link; EEXIST leaves those bytes only in a scratch path."
+        },
+        {
+          "path": "packages/indexer/src/index-store.ts",
+          "line": 1015,
+          "detail": "Other writers acquire the now-free namespace using exclusive create and can enter their critical sections."
+        },
+        {
+          "path": "packages/indexer/src/index-store.test.ts",
+          "line": 1125,
+          "detail": "Current fresh-owner tests replace the token before reclaimStaleLock begins. The tests at 1156 and 1173 also start with a fresh token, so the early mismatch return bypasses the advertised rename/restore race."
+        }
+      ],
+      "trigger": "Two waiters observed one stale lock; one reclaims and acquires a fresh lock after the other's verification but before its rename. A third waiter acquires during the displacement/restore window.",
+      "consequence": "A live holder can remain inside its critical section after losing the namespace, while another writer acquires it and proceeds. This defeats the mutual exclusion required by CAS/newest-wins metadata and sidecar persistence.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-freshness-lock-probes.json",
+          "section": "lockReclaim",
+          "observation": "Scheduling was injected at real fs rename/link calls: the helper displaced actor A's new live bytes; actor C's exclusive-create succeeded before restore; reclaim returned false, with C in the namespace and A retained only in scratch."
+        }
+      ],
+      "inference": "The deterministic local helper probe executes the actual race seam with logical actors, not three OS processes. It proves an allowed interleaving; the frequency and resulting corrupt snapshot in production were not measured.",
+      "suggestedFix": "Use a proven ownership primitive with atomic fencing (OS lock or transactional store), rather than treating read→rename as conditional replacement. Preserve ownership throughout reclaim and apply fencing at every write.",
+      "acceptanceProbe": "Pause reclamation after token verification, let another process reclaim/acquire, and prove the paused waiter cannot displace it. A three-process stress/forced-schedule test must show at most one active cache writer and consistent metadata/sidecar generations.",
+      "relatedPlanIds": [
+        "08-P3"
+      ]
+    },
+    {
+      "id": "08-F9",
+      "title": "Precise refreshes reset the safety-sweep age and can postpone external reconciliation indefinitely",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "performance",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/types.ts",
+          "line": 173,
+          "detail": "Complete deltas deliberately avoid unrelated paths and promise age-based safety sweeps for missed external changes."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 517,
+          "detail": "Complete deltas choose collectPreciseWalk, omitting unrelated filesystem discovery/reconciliation."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1095,
+          "detail": "Every successful new index has builtAt=Date.now(), including a precise refresh."
+        },
+        {
+          "path": "packages/indexer/src/index-manager.ts",
+          "line": 1112,
+          "detail": "Safety scheduling tests isIndexStale(this.index), which is based only on that most recent builtAt."
+        },
+        {
+          "path": "cli/src/utils/index-workspace-watcher.ts",
+          "line": 158,
+          "detail": "Subtrees beyond the Linux watcher cap depend on the age-based integrity sweep."
+        }
+      ],
+      "trigger": "An external edit is missed by a capped/failed watcher while the agent continues confirmed precise mutations more frequently than the five-minute stale age.",
+      "consequence": "Each unrelated precise refresh makes index age zero, so the missed external edit can remain invisible for an unbounded busy session. Watcher fallback is eventual only if enough idle age occurs, not under continuous edits.",
+      "probeEvidence": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/08-safety-sweep-probe.json",
+          "section": "revisions",
+          "observation": "Injected clock advances 12 minutes with target-only deltas every four minutes. Each index age resets to zero; the unrelated on-disk sibling's new hash is never incorporated, and final status is ready."
+        }
+      ],
+      "inference": "The finite fake-clock cadence is executed. Indefinite postponement follows repeating the same transition; no wall-clock twelve-minute or real watcher-exhaustion run was performed.",
+      "suggestedFix": "Track last successful full reconciliation separately from the latest snapshot build time, and schedule that sweep on its own monotonic deadline even while precise deltas continue. Preserve queued deltas and distinguish full-sweep coverage from incremental liveness.",
+      "acceptanceProbe": "With a fake clock and precise deltas every four minutes, an unobserved sibling edit must converge within the declared full-sweep interval without an idle period; repeat after watcher degradation and at the descriptor cap.",
+      "relatedPlanIds": [
+        "08-P1"
+      ]
+    }
+  ],
+  "domainAssessment": {
+    "security": "Mandatory sensitive-path policy, nested ignore rules and no-follow checks precede indexed source discovery. Cache directory sanitization/ownership limits accidental foreign claims; embedding egress is opt-in and fingerprints omit credentials. No secret/private config or live cache was read, and no new injection/auth/path vulnerability is claimed. These cooperative checks are not an OS sandbox, and watcher threads do not provide process-fault containment.",
+    "correctness": "Local lexical/directional graph and command query paths are real and useful, but scoped recall, below-budget walker coverage, same-stat freshness, semantic generation alignment and graph adoption have executed counterexamples (08-F1/F3/F4/F6/F7/F9). Parser/extraction semantics, including bare-extension language-family mismatch, belong to pair07.",
+    "state-mutation": "Root/config singleton identity, detached-holder forwarding, epochs/revisions, immutable-object swaps, delta retention, bounded worker lifecycle and atomic artifact replacement are strengths. Full reconciliation age, graph/vector generations and cache reclaim ownership still violate intended invariants (08-F1/F5/F6/F8/F9).",
+    "error-handling": "Structured build errors, stale last-known-good serving, timeout notices, parser-degraded requeue and worker degrade fallback are implemented. Query embedding errors fall back via debug-only [] and do not yield a typed per-query reason; a readiness wait does not cancel the underlying build. Cache oversize miss can create expensive repeated re-embedding without a persistence-error state.",
+    "performance": "Posting/adjacency acceleration, cached IDF, bounded vector batches/representations, event-loop yield gates, file/result/fanout caps and limited root/watch registries are present. Their recall/byte/cadence compromises need repair before claiming large-repo efficiency. No measured optimality or live provider latency/cost is claimed; only exact synthetic artifact sizes and bounded functional probes are recorded.",
+    "dependency-hygiene": "Indexer declares workspace code-map/common, ignore ^7.0.5, pinned oxc-resolver 11.24.2 and TypeScript 5.5.4 with Bun 1.3.5 engine. SDK declares ai/OpenAI-compatible support dependencies and documents bundling internal workspace modules. No undeclared dependency in the selected runtime path or verified advisory is established. Full lockfile/advisory/platform/packaged dependency audit is outside this shard.",
+    "test-coverage": "Parent suite receipt is 413 pass/0 fail. Read tests cover real repository lexical quality, fixture semantic pinning/fingerprint/outage behavior, precise delta boundaries/read failures, cache CAS/schema/reduction, and real Linux watcher event/classifier/debounce delivery into a recording manager. Current green tests omit deleted/changed old vectors, realistic vector-size reload, uneven under-budget walks, scoped cap recall, graph-only stale adoption, busy sweep cadence, same-stat hints and the actual post-verification lock race. Local probes discriminate those failures.",
+    "api-contract": "CLI publishes canonical query_index_result v1 with snapshot/indexedHash/status/related files; input schemas bound modes/limits/scope. Source content identity is not a full retrieval generation. Headless SDK tool default and explicit MCP index seam have different wiring, and MCP projection drops indexedHash/relatedFiles while common/CLI discard structured chunks. Empty-object readiness and persistence-vs-adoption success are not fully unified client truth."
+  },
+  "coverageLimits": [
+    "Audit snapshot ID is copied exactly from the pinned structural inventory; current source inspection is the explicit readRanges, not a guarantee of full-line inspection or correctness of every receipt file.",
+    "No source changes, credentials/private provider settings/private live indexes, real external provider calls, installations, network access, SCIP binaries, live app task or full test-suite rerun by this shard.",
+    "Additional probes use Bun 1.3.14/Linux (available local runtime), while package engine/root suite target Bun 1.3.5. Failures concern deterministic TypeScript/data/fs transitions, but runtime-specific production frequency and cross-platform behavior remain unmeasured.",
+    "Probe lock interleaving injects scheduling at fs rename/link using logical actors; it is not a three-process integration stress test or observed production cache corruption.",
+    "Parent-provided full indexer test receipt is retained separately; read test mechanics distinguish real repository indexing from synthetic metadata/provider/manager stubs.",
+    "Pair07 owns parser/LSP/import/SCIP extraction and descriptor/language-family correctness; pair06 owns mutation authority/edit byte correctness; pair04 owns memory skip/narrow/compaction semantics. No duplicate bare-extension bug is filed.",
+    "Optional repo-map/PageRank APIs exist and are tested but are not the default model-facing query path; no independent held-out target-language or semantic quality claim is made.",
+    "Graph depth/fanout/posting limits, cold cached-snapshot loading, empty readiness, query cancellation/provider deadlines, reduced-cache hydration, full sidecar consumers, process-crash durability and packaged SDK types/dependencies are narrower static observations rather than exhaustively probed features.",
+    "Dependency advisories, supported-platform native binaries and actual 100k-file peak memory/latency were not audited or benchmarked."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "08-P1",
+      "title": "Make freshness evidence and full-sweep cadence truthful",
+      "trigger": "Known path changes can retain old content (08-F7); incremental liveness suppresses safety sweeps (08-F9); semantic vectors can represent an older generation (08-F1).",
+      "sourceAnchors": [
+        "packages/indexer/src/metadata-indexer.ts:572",
+        "packages/indexer/src/index-manager.ts:663",
+        "packages/indexer/src/index-manager.ts:1112",
+        "cli/src/utils/create-run-config.ts:301"
+      ],
+      "intendedBehavior": "Every returned file/vector refers to the published generation; explicit changed paths are incorporated, and missed external edits converge within a declared full-reconciliation deadline during busy runs.",
+      "smallestScope": "Indexer manager/update state, exact embedding-hash filtering/publication, last-full-reconcile timestamp and typed status reasons; retain existing CLI/SDK delta plumbing.",
+      "prerequisites": [
+        "Choose a declared freshness interval and source/vector provenance invariant."
+      ],
+      "languageDecision": "Repair authority and scheduling in TypeScript. No new implementation language is needed for these invariants.",
+      "acceptanceProbes": [
+        "08-F1 failed/held batch plus change/delete/add.",
+        "08-F7 preserved-mtime same-size rewrite.",
+        "08-F9 fake-clock busy session with an unwatched sibling."
+      ],
+      "regressionChecks": [
+        "Current delta no-readdir/omitted-sibling/read-retention tests.",
+        "Parser-degraded requeue and snapshot pinning tests.",
+        "Existing watcher recording-manager integration."
+      ],
+      "completionEvidence": "Committed regression cases plus a repeatable edit→receipt→fresh-query trace, including expiry/cancellation/fallback reasons.",
+      "stopOrDefer": "Do not add new watcher platforms or automatic semantic/LSP surfaces until existing freshness transitions pass; defer provider performance tuning until correctness holds."
+    },
+    {
+      "id": "08-P2",
+      "title": "Give retrieval/precision generations ownership and validity",
+      "trigger": "Persisted precise graph is discarded on unchanged refresh (08-F5) and stale graph-only adoption overwrites a prior result (08-F6).",
+      "sourceAnchors": [
+        "packages/indexer/src/index-store.ts:658",
+        "packages/indexer/src/index-manager.ts:864",
+        "packages/indexer/src/metadata-indexer.ts:741",
+        "cli/src/commands/index-command.ts:298"
+      ],
+      "intendedBehavior": "Content identity remains useful while retrieval generation/config/precision validity are explicit; stale enrichment cannot erase committed edges, and valid unchanged enrichment survives restart/refresh.",
+      "smallestScope": "Versioned retrieval-generation fence plus precision source/config fingerprint/expiry policy; update adopt/persist/query status and CLI messages. Coordinate parser/runner boundary with pair07.",
+      "prerequisites": [
+        "08-P1 generation invariant.",
+        "Pair07 fixes/validates SCIP opaque descriptor identity and language-family isolation."
+      ],
+      "languageDecision": "Keep TypeScript index authority and reuse installed language ecosystem indexers. Add a versioned boundary only where a concrete analyzer needs one.",
+      "acceptanceProbes": [
+        "Two captured merges with graph-only first adoption.",
+        "Adopt→persist→cold manager→unchanged refresh.",
+        "Change a precision input and observe safe invalidation/expiry."
+      ],
+      "regressionChecks": [
+        "Current heuristic graph references/adjacency coverage.",
+        "SCIP merge dedupe/typed failure tests owned by pair07.",
+        "Content snapshot repeatability across unchanged rebuilds."
+      ],
+      "completionEvidence": "A real target-project navigation trace with descriptor/protocol versions, indexer capability receipt, source/config fingerprints, and retained/invalidation proof.",
+      "stopOrDefer": "Defer automatic full-project SCIP execution until validity, cancellation, ownership and cost envelopes are measured. A stored synthetic edge or scaffold is not semantic-navigation completion."
+    },
+    {
+      "id": "08-P3",
+      "title": "Make cache locking and byte-budget roundtrips reliable",
+      "trigger": "Read/write size mismatch loses all semantic restart reuse (08-F2), while reclaim interleaving breaks mutual exclusion (08-F8).",
+      "sourceAnchors": [
+        "packages/indexer/src/index-store.ts:432",
+        "packages/indexer/src/index-store.ts:362",
+        "packages/indexer/src/index-store.ts:1164",
+        "packages/indexer/src/index-store.ts:1015"
+      ],
+      "intendedBehavior": "Supported corpus artifacts remain reloadable under bounded actual bytes, and no live owner loses its namespace while writing; failures have observable persistence receipts.",
+      "smallestScope": "Symmetric byte policies/partitioned vector persistence, UTF-8 accounting, proven fenced lock/transaction primitive, and status for partial/in-memory persistence.",
+      "prerequisites": [
+        "Declare supported vector dimensions/file count and persistence resource budget.",
+        "Choose a proven cross-process ownership primitive available on supported platforms."
+      ],
+      "languageDecision": "First fix byte accounting/policy in TypeScript. Prefer an existing transactional/OS primitive over a retrieval-engine port; a native boundary must earn its platform/ownership benefit and keep one authority.",
+      "acceptanceProbes": [
+        "300×1536 vectors and multiple fingerprint cold roundtrip.",
+        "CJK/emoji byte-limit cases.",
+        "Forced verify→reacquire→rename schedule and three-process at-most-one-writer stress."
+      ],
+      "regressionChecks": [
+        "Current root/schema/foreign-cache safe misses.",
+        "CAS/newest-wins, metadata/sidecar generation consistency.",
+        "Reduced index never mutates in-memory source."
+      ],
+      "completionEvidence": "Persistence receipt with actual artifact bytes and cold-reuse counts; controlled crash/reclaim and concurrent-writer invariant logs.",
+      "stopOrDefer": "Do not increase byte caps as the only fix or claim durability from a green happy-path lock test; defer storage rewrite beyond the declared workload."
+    },
+    {
+      "id": "08-P4",
+      "title": "Preserve scoped recall while keeping large-repository work bounded",
+      "trigger": "Global posting cap hides scoped matches (08-F3) and fair-share walk drops below-budget files (08-F4).",
+      "sourceAnchors": [
+        "packages/indexer/src/query-data.ts:139",
+        "packages/indexer/src/query.ts:275",
+        "packages/indexer/src/file-walker.ts:458",
+        "packages/indexer/src/retrieval-quality.test.ts:80"
+      ],
+      "intendedBehavior": "Below-budget eligible files are all indexed; unrelated scopes do not consume the requested query's recall budget; intentional truncation is observable.",
+      "smallestScope": "Scope-aware candidate construction, globally bounded fair selection with spillover, query-truncation reasons, and representative workload fixtures.",
+      "prerequisites": [
+        "Keep existing schema/field-scoring contract explicit.",
+        "08-P1 freshness and 08-P3 cache bounds prevent quality comparisons on incompatible generations."
+      ],
+      "languageDecision": "Tune existing TypeScript data structures and retrieval contracts before considering a language migration. Measure memory/latency at declared corpus shapes.",
+      "acceptanceProbes": [
+        "91 eligible paths under maxFiles=100 uneven tree.",
+        "Sole scoped match after >4096 unrelated substrings.",
+        "Full budget with deterministic prefix fairness when oversubscribed."
+      ],
+      "regressionChecks": [
+        "Current query-cache no full enumeration proxy test.",
+        "Versioned real-repository Recall@K/MRR/nDCG/noise gates.",
+        "Command and graph-neighbor results under path/type filters."
+      ],
+      "completionEvidence": "Differential accelerated/baseline results and measured cold/warm latency, peak memory, corpus coverage and truncation counts for balanced/uneven and mixed-language fixtures.",
+      "stopOrDefer": "Do not replace default ranking with repo-map/PageRank/semantic complexity until held-out improvements meet the declared envelope without hidden recall loss."
+    },
+    {
+      "id": "08-P5",
+      "title": "Unify retrieval adapters and prove target-language task coverage",
+      "trigger": "Headless SDK lacks a default query adapter; MCP/CLI projections discard different provenance/chunk/relationship fields; existing non-TS quality cases are hand-populated metadata.",
+      "sourceAnchors": [
+        "sdk/src/run.ts:3154",
+        "sdk/src/mcp/server.ts:743",
+        "cli/src/utils/codebuff-client.ts:305",
+        "common/src/tools/params/tool/query-index.ts:158",
+        "packages/indexer/src/query-quality.test.ts:13"
+      ],
+      "intendedBehavior": "Clients negotiate an honest retrieval capability and preserve one result/provenance/status shape, with cancellation/fallback states. Quality claims rest on actual parsed target projects and successful observation/action/validation tasks.",
+      "smallestScope": "Shared bounded serializer/adaptor contract; documented host-injection/default SDK decision; preserve structured chunk hashes/IDs and relatedFiles where supported; add held-out TS/Python/Rust/Go projects with tests and commands.",
+      "prerequisites": [
+        "08-P1 through 08-P4 reliability gates.",
+        "Pair07 extraction/LSP/SCIP acceptance probes.",
+        "Pair04 memory skip/narrow filter/provenance checks."
+      ],
+      "languageDecision": "Keep one TypeScript run authority; use target-language compiler/indexer tooling over versioned protocols where needed, not parallel session stores or ports chosen only by file extension.",
+      "acceptanceProbes": [
+        "Same scoped query through CLI/headless SDK/MCP preserves supported provenance/relations and explicit unsupported fields.",
+        "Abort/deadline on query embedding; loading/empty/failed/disabled matrix.",
+        "Change a mixed-language contract, follow actual implementations/tests/commands, and validate each consumer."
+      ],
+      "regressionChecks": [
+        "Common schema and TUI status/render tests.",
+        "SDK override/cancellation contracts.",
+        "Repository quality gates plus held-out task/noise comparisons."
+      ],
+      "completionEvidence": "Packaged consumer trace plus a held-out mixed-language task transcript/artifact references, real latency/cost/memory and observable fallback receipts.",
+      "stopOrDefer": "Do not call package helper exports automatic production retrieval or learning. Defer language expansion until actual task and protocol capability evidence is present."
+    }
+  ],
+  "assuranceReceipts": [
+    {
+      "type": "parent-suite",
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/indexer-tests.log",
+      "summary": "413 pass / 0 fail",
+      "executedByShard": false
+    },
+    {
+      "type": "local-synthetic-integration",
+      "command": "bun /tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.ts",
+      "artifacts": [
+        "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.ts",
+        "/tmp/openbuff-body-review-2026-11-05/evidence/08-indexer-probes.json"
+      ],
+      "summary": "Seven discriminating observations, all reproduced; no source change/network."
+    },
+    {
+      "type": "local-synthetic-integration",
+      "command": "bun /tmp/openbuff-body-review-2026-11-05/evidence/08-freshness-lock-probes.ts",
+      "artifacts": [
+        "/tmp/openbuff-body-review-2026-11-05/evidence/08-freshness-lock-probes.ts",
+        "/tmp/openbuff-body-review-2026-11-05/evidence/08-freshness-lock-probes.json"
+      ],
+      "summary": "Same-stat delta/sweep false freshness and post-verification cache reclaim interleaving reproduced."
+    },
+    {
+      "type": "local-clock-integration",
+      "command": "bun /tmp/openbuff-body-review-2026-11-05/evidence/08-safety-sweep-probe.ts",
+      "artifacts": [
+        "/tmp/openbuff-body-review-2026-11-05/evidence/08-safety-sweep-probe.ts",
+        "/tmp/openbuff-body-review-2026-11-05/evidence/08-safety-sweep-probe.json"
+      ],
+      "summary": "Twelve simulated minutes of four-minute precise mutations keep missed sibling stale with index age zero."
+    }
+  ],
+  "topConclusions": [
+    "Keep the working local lexical/graph/command baseline and its schemas/status UI, but repair source/vector/graph generation ownership and freshness before adding new retrieval/language surfaces.",
+    "Semantic persistence and cache locking do not yet support their promised restart/concurrency behavior; measured synthetic byte roundtrips and forced lock scheduling provide concrete acceptance gates."
+  ]
+}

@@ -1,11 +1,18 @@
 import { endsAgentStepParam, toolNames } from '@codebuff/common/tools/constants'
+import {
+  browserActionBlockedMessage,
+  isBrowserActionAllowed,
+} from '@codebuff/common/tools/browser-policy'
 import { toolParams } from '@codebuff/common/tools/list'
-import { decodeJsonObjectString } from '@codebuff/common/tools/params/tool/set-output'
+import { executionRefusalSchema } from '@codebuff/common/tools/params/execution-refusal'
+import { decodeJsonObjectString } from '@codebuff/common/util/model-payload-recovery'
 import {
   detectTransportTruncation,
   describeTruncationRecovery,
+  MAX_TRUNCATION_RECOVERY_BYTES,
   parseJsonBounded,
   parseJsonStringWithRepair,
+  postEditCapabilitiesPartSchema,
   PAYLOAD_TRUNCATED_ERROR_CODE,
   TRANSACTION_EDIT_TYPES,
   tryRecoverTruncatedToolArguments,
@@ -13,6 +20,7 @@ import {
 import {
   buildNativeToolResultErrorOutputV1,
   buildReadFilesResultV1,
+  commitReceiptV1Schema,
   fileMutationResultV1Schema,
   mutationResultExceedsCheapBoundsV1,
   reconcileFileMutationResultV1,
@@ -23,12 +31,28 @@ import {
   removedToolNames,
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
-import { jsonToolResult } from '@codebuff/common/util/messages'
+import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
+import { jsonToolResult, userMessage } from '@codebuff/common/util/messages'
+import { withSystemTags } from '../util/messages'
+import {
+  decodeReadCapabilityToken,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
+import { reanchorRawReadCapability } from '@codebuff/common/util/byte-text'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
+import {
+  classifyActionOutput,
+  hashActionInput,
+} from '@codebuff/common/util/action-outcomes'
+import type { ActionOutcome } from '@codebuff/common/types/run-outcome'
 import type { JSONObject } from '@codebuff/common/types/json'
 import {
   isExternalReadPath,
   isOwnedTempPath,
+  resolveProjectPath,
+  resolveProjectPathForRead,
 } from '@codebuff/common/util/project-path-containment'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
@@ -36,7 +60,18 @@ import * as path from 'path'
 import { realpathSync } from 'node:fs'
 
 import { getMCPToolData } from '../mcp'
-import { MCP_TOOL_SEPARATOR } from '../mcp-constants'
+import { evaluatePlaybookGate } from '../memory/playbook-gate'
+import { reportPlaybookGateOutcome } from '../memory/playbook-outcome-reporter'
+import {
+  createSessionEvidenceLog,
+  recordSessionEvidence,
+  recordSessionValidationEvidence,
+} from '../memory/session-evidence-log'
+import {
+  correlateCompliedAfterBlock,
+  recordSessionGateOutcome,
+  sessionGateHistoryFor,
+} from '../memory/session-gate-history'
 import { getAgentShortName, getAgentToolName } from '../templates/prompts'
 import { getEffectiveAgentToolNames } from '../util/agent-tool-names'
 import {
@@ -50,6 +85,7 @@ import {
 import { formatValueForError } from '../util/format-value'
 import { lifecycleTagsForToolResult } from '../util/tool-result-lifecycle'
 import { codebuffToolHandlers } from './handlers/list'
+import { checkPlanModeToolCall } from './plan-mode-guard'
 import {
   getMatchingSpawn,
   isBaseAgent,
@@ -63,11 +99,22 @@ import {
   bufferToolEvidenceForStep,
   recordToolEvidenceInTaskMemory,
 } from '../util/task-memory'
-import { ensureZodSchema } from './prompts'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+import {
+  assertExternalToolInputSchema,
+  projectZodSchema,
+  type JsonSchema,
+} from '@codebuff/common/util/json-schema'
+import {
+  ensureZodSchema,
+  getAdvertisedExternalToolDefinitions,
+} from './prompts'
 
+import { applyHostWorkspaceState, findExecutionRefusal, recordExecutionRefusal } from '../util/execution-recovery'
 import type { AgentTemplate } from '../templates/types'
 import type { CodebuffToolHandlerFunction } from './handlers/handler-function-type'
 import type { FileProcessingState } from './handlers/tool/write-file'
+import type { SessionEvidenceLog } from '../memory/session-evidence-log'
 import type { ToolName } from '@codebuff/common/tools/constants'
 import type {
   ClientToolCall,
@@ -78,8 +125,14 @@ import type {
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
+  JournalEvent,
+  JournalWriter,
+  NativeToolObservation,
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { MemoryPlaybook, ValidationEvidenceContext } from '@codebuff/common/types/memory-playbook'
+import type { PlaybookApplicabilityContext } from '@codebuff/common/util/playbook-applicability'
+import type { PlaybookTerminalAction } from '../memory/playbook-gate'
 import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { ProviderMetadata } from '@codebuff/common/types/messages/provider-metadata'
@@ -95,6 +148,7 @@ import type {
 } from '@codebuff/common/util/file'
 import type { ToolCallPart, ToolSet } from 'ai'
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import { getReadFilesSelectorRepairStats } from '@codebuff/common/tools/params/tool/read-files'
 
 export type CustomToolCall = {
   toolName: string
@@ -149,9 +203,9 @@ function makeAbortableBarrier(
 // `errorMessage` intentionally no longer embeds the underlying handler error
 // message. It used to be `Agent spawn failed: <error message>`; that format
 // was retired because the raw handler error can carry internal detail that
-// should not be echoed into agent-visible tool output (the sibling
-// native_tool_result_error path likewise never echoes raw internals). The
-// contract is now the static, safe string below plus an optional sanitized
+// should not be echoed into agent-visible tool output. The contract uses a
+// static safe string that distinguishes recognized validation failures from
+// other handler failures, plus an optional sanitized
 // per-agent `recoveryHint` derived only from the safe prefix of a
 // validateAgentInput message (formatValidationIssues + exact params contract
 // + Recovery:); the raw `Original params/prompt value` section and any
@@ -160,6 +214,8 @@ function makeAbortableBarrier(
 // reintroduce the interpolated format, and do not pin it in tests.
 const SPAWN_HANDLER_FAILURE_MESSAGE =
   'Agent spawn failed because the handler could not validate the request.'
+const SPAWN_HANDLER_EXECUTION_FAILURE_MESSAGE =
+  'Agent spawn failed while processing the request. The underlying error was logged.'
 
 const SPAWN_RECOVERY_HINT_MAX_CHARS = 2_000
 
@@ -182,9 +238,15 @@ function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
         : undefined
   if (typeof raw !== 'string' || !raw) return undefined
   // Only validation-shaped messages are eligible; any other handler
-  // internal (bridge failures, stack traces) stays log-only.
+  // internal (bridge failures, stack traces) stays log-only. The allowlist
+  // also recognizes raw Zod-shaped validation text — a leading `Validation
+  // failed`, the `expected X, received Y` pair, `Unrecognized key`, `Too
+  // small`/`Too big`, and `Required` — so an issue dump is not silently
+  // downgraded to the static failure string. This stays a message-TEXT
+  // fallback only: the authoritative structural channel is
+  // extractSpawnValidationIssues, which needs no text match at all.
   const isValidationHint =
-    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:/.test(
+    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:|^Validation failed|expected |received |Unrecognized key|Too small|Too big|Required/.test(
       raw,
     )
   if (!isValidationHint) return undefined
@@ -207,6 +269,145 @@ function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
   return String(sanitized)
 }
 
+const SPAWN_VALIDATION_ISSUE_MAX_CHARS = 300
+const SPAWN_VALIDATION_ISSUE_MAX_COUNT = 20
+
+// Bounded, sanitized rendering of one Zod issue path segment or message. The
+// same treatment the recovery hint gets: strip control characters, collapse
+// whitespace, trim, and cap the length so a pathological issue string can
+// never blow up the parent-visible payload.
+function sanitizeSpawnValidationIssueText(value: string): string {
+  let sanitized = value
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (sanitized.length > SPAWN_VALIDATION_ISSUE_MAX_CHARS) {
+    sanitized = `${sanitized.slice(0, SPAWN_VALIDATION_ISSUE_MAX_CHARS).trimEnd()}...[truncated]`
+  }
+  return sanitized
+}
+
+/**
+ * Second, ORTHOGONAL spawn diagnostic channel: extract a bounded, sanitized
+ * issue list from a Zod-shaped validation error via duck typing.
+ *
+ * Deliberately independent of extractSanitizedSpawnRecoveryHint's
+ * message-text allowlist: spawn params actually fail as a Zod issue LIST, and
+ * the allowlist only sees the rendered message text (or nothing at all), so a
+ * parent used to receive the static failure string with zero indication of
+ * which field was wrong. Detection is structural (an `issues` array), so no
+ * `zod` import is needed here.
+ *
+ * Safety: only structural schema paths and issue messages are surfaced —
+ * never raw params/prompt values, never a stack trace.
+ */
+function extractSpawnValidationIssues(
+  error: unknown,
+): Array<{ path: string; message: string }> | undefined {
+  if (
+    !error ||
+    typeof error !== 'object' ||
+    !Array.isArray((error as { issues?: unknown }).issues)
+  ) {
+    return undefined
+  }
+  const extracted: Array<{ path: string; message: string }> = []
+  for (const issue of (error as { issues: unknown[] }).issues) {
+    if (extracted.length >= SPAWN_VALIDATION_ISSUE_MAX_COUNT) break
+    if (!issue || typeof issue !== 'object') continue
+    const record = issue as { path?: unknown; message?: unknown }
+    if (typeof record.message !== 'string') continue
+    const message = sanitizeSpawnValidationIssueText(record.message)
+    if (!message) continue
+    const path = Array.isArray(record.path)
+      ? sanitizeSpawnValidationIssueText(record.path.join('.'))
+      : ''
+    extracted.push({ path, message })
+  }
+  return extracted.length > 0 ? extracted : undefined
+}
+
+// Static truncation hint for a serialized `agents` payload the classifier
+// flagged as structurally incomplete (unbalanced JSON). The truncation
+// signature is shared by two distinct causes — a genuine transport cut AND a
+// malformed payload with missing/mismatched closers — so the hint states both
+// recovery routes instead of asserting a shape error is impossible. Static
+// text only — no payload values are interpolated (the same safety rule as the
+// MIGRATION NOTE above) — and far below SPAWN_RECOVERY_HINT_MAX_CHARS.
+const SPAWN_TRANSPORT_TRUNCATION_HINT =
+  'The serialized agents payload is structurally incomplete (unbalanced JSON — cut in transport, or missing/mismatched closers). If it was cut, resending the identical payload will fail identically: re-emit with fewer agents per batch or a more compact handoff. If the JSON is malformed, fix the structure per the issues above.'
+
+// One bounded clarifying sentence appended to an EXISTING recoveryHint when
+// the stringified `agents` array was already auto-decoded by the preprocess
+// layer (the spawn then failed for a different reason). Never used to
+// fabricate a hint on its own.
+const SPAWN_STRINGIFIED_DECODED_NOTE =
+  'Note: a stringified agents array is auto-decoded before validation and is not itself a failure cause — the issues above are the real cause.'
+
+// Bounds mirroring repairCommaSplitFragments in common: beyond these ceilings
+// the fragment array is almost certainly a genuinely malformed payload, so
+// the classifier fails closed (no signal) instead of doing unbounded
+// join/scan work on a pathological array.
+const MAX_TRUNCATION_FRAGMENT_COUNT = 256
+const MAX_TRUNCATION_REJOINED_LENGTH = 65_536
+
+/**
+ * Bounded, fail-closed classification of the RAW `agents` field for the
+ * handler-failure output. Distinguishes the two serialized-payload cases the
+ * static failure string cannot speak to:
+ *  - 'transport-truncated': structurally incomplete serialized JSON — either
+ *    a string carrying the truncation signature, or a comma-split fragment
+ *    array whose rejoined form carries it (mirrors
+ *    repairCommaSplitFragments in common). The signature is shared by a
+ *    genuine transport cut AND a malformed payload with missing/mismatched
+ *    closers, and the classifier cannot tell the two apart, so the failure
+ *    output keeps any error-derived zod guidance and appends the honest
+ *    truncation classification instead of asserting a shape error is
+ *    impossible.
+ *  - 'stringified-decoded': a stringified array the preprocess layer already
+ *    auto-decoded, so the spawn failed for a DIFFERENT reason.
+ * Every other shape — non-string/non-array values, arrays with non-string
+ * entries, and the absent-agents fallback — returns undefined.
+ * detectTransportTruncation and parseJsonBounded are fail-safe and the shape
+ * guards return early, so this never throws.
+ */
+function classifySerializedSpawnAgentsPayload(
+  rawAgents: unknown,
+): 'transport-truncated' | 'stringified-decoded' | undefined {
+  if (typeof rawAgents === 'string') {
+    if (detectTransportTruncation(rawAgents)) return 'transport-truncated'
+    if (Array.isArray(parseJsonBounded(rawAgents))) {
+      return 'stringified-decoded'
+    }
+    return undefined
+  }
+  if (
+    Array.isArray(rawAgents) &&
+    rawAgents.length <= MAX_TRUNCATION_FRAGMENT_COUNT &&
+    rawAgents.every((entry) => typeof entry === 'string')
+  ) {
+    // Requiring EVERY entry to be a string plus a truncation signature on the
+    // rejoined form keeps legitimate string arrays (prompts-style prose,
+    // bracket-prefixed labels) unclassified: detectTransportTruncation
+    // rejects balanced payloads. The would-be joined length is computed
+    // arithmetically BEFORE joining — sum of entry lengths plus one
+    // separator byte per gap — so join() only ever allocates a string
+    // already known to be within MAX_TRUNCATION_REJOINED_LENGTH and a
+    // pathological all-string fragment array cannot force a megabyte-scale
+    // allocation before the cap rejects it (fail closed, no signal).
+    let joinedLength = rawAgents.length - 1
+    for (const entry of rawAgents) {
+      joinedLength += entry.length
+      if (joinedLength > MAX_TRUNCATION_REJOINED_LENGTH) return undefined
+    }
+    const rejoined = rawAgents.join(',')
+    if (detectTransportTruncation(rejoined)) {
+      return 'transport-truncated'
+    }
+  }
+  return undefined
+}
+
 export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
   // Retained for call-site symmetry with the generic failure-output builder
@@ -220,37 +421,116 @@ export function buildSpawnAgentsHandlerFailureOutput(
       : undefined
   const agents =
     inputRecord && Array.isArray(inputRecord.agents) ? inputRecord.agents : []
+  // RAW agents value (pre-array-coercion): the serialized-payload classifier
+  // needs the original string / fragment-array shape, which the array coercion
+  // above discards. undefined when the input has no agents field, in which
+  // case the classifier no-ops.
+  const rawAgents = inputRecord ? inputRecord.agents : undefined
+  const payloadClassification = classifySerializedSpawnAgentsPayload(rawAgents)
   const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
+  const validationIssues = extractSpawnValidationIssues(error)
+  const isValidationFailure =
+    recoveryHint !== undefined ||
+    validationIssues !== undefined ||
+    payloadClassification === 'transport-truncated'
 
-  const reports = (agents.length > 0 ? agents : [{}]).map((agent): JSONObject => {
+  // A comma-split fragment array classified as transport-truncated is ONE
+  // serialized payload tokenized on commas: mapping per fragment would emit
+  // N indistinguishable 'unknown'-typed reports each carrying the identical
+  // hint (O(fragments) bloat), so emit EXACTLY ONE report for the whole
+  // payload. Normal agent arrays and the decoded stringified case keep one
+  // report per entry.
+  const reportSources: unknown[] =
+    payloadClassification === 'transport-truncated' && Array.isArray(rawAgents)
+      ? [{}]
+      : agents.length > 0
+        ? agents
+        : [{}]
+  const reports = reportSources.map((agent): JSONObject => {
     const agentType =
       agent &&
       typeof agent === 'object' &&
       typeof (agent as Record<string, unknown>).agent_type === 'string'
         ? String((agent as Record<string, unknown>).agent_type)
         : 'unknown'
+    // The per-agent value is assembled additively so an ABSENT channel never
+    // puts an `undefined` into the JSON payload (jsonToolResult<T extends
+    // JSONValue> requires concrete values). `errorMessage` is a static safe
+    // classification; diagnostic channels appear only when they have data.
+    const value: JSONObject = {
+      errorMessage: isValidationFailure
+        ? SPAWN_HANDLER_FAILURE_MESSAGE
+        : SPAWN_HANDLER_EXECUTION_FAILURE_MESSAGE,
+    }
     if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
-      // Separate explicit branch: the false branch below has no recoveryHint
-      // key at all, so no undefined ever enters the JSON payload. String() is
-      // the identity on the already-sanitized primitive and keeps the property
-      // typed as string (not string|undefined) so jsonToolResult<T extends
-      // JSONValue> accepts the payload.
-      const hintPrimitive: string = String(recoveryHint)
-      return {
-        agentType,
-        agentName: agentType,
-        value: {
-          errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-          recoveryHint: hintPrimitive,
-        },
+      // String() is the identity on the already-sanitized primitive and keeps
+      // the property typed as string (not string|undefined).
+      value.recoveryHint = String(recoveryHint)
+    }
+    if (payloadClassification === 'transport-truncated') {
+      // Unbalanced JSON is the shared root cause: the payload was either cut
+      // in transport or is genuinely malformed with missing/mismatched
+      // closers, and the classifier cannot tell the two apart. `truncated`
+      // stays the structural-incompleteness marker in both sub-cases, and an
+      // error-derived hint is never discarded — its zod guidance is exactly
+      // what fixes a malformed payload. Like the stringified-decoded branch
+      // below, the BASE hint is capped (never the combined string) so the
+      // appended truncation hint always survives in full within
+      // SPAWN_RECOVERY_HINT_MAX_CHARS; only an error that produced no hint
+      // falls back to the truncation hint alone. errorMessage and
+      // validationIssues keep their existing contracts.
+      value.truncated = true
+      if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
+        const truncationBudget =
+          SPAWN_RECOVERY_HINT_MAX_CHARS -
+          SPAWN_TRANSPORT_TRUNCATION_HINT.length -
+          1
+        const base =
+          recoveryHint.length > truncationBudget
+            ? `${recoveryHint
+                .slice(0, truncationBudget - '...[truncated]'.length)
+                .trimEnd()}...[truncated]`
+            : recoveryHint
+        value.recoveryHint = `${base} ${SPAWN_TRANSPORT_TRUNCATION_HINT}`
+      } else {
+        value.recoveryHint = SPAWN_TRANSPORT_TRUNCATION_HINT
       }
+    } else if (
+      payloadClassification === 'stringified-decoded' &&
+      typeof recoveryHint === 'string' &&
+      recoveryHint.length > 0
+    ) {
+      // The preprocess layer already auto-decoded the stringified array, so
+      // stringification is NOT the failure cause. Append one bounded
+      // clarifying sentence to the existing hint (never fabricate a hint
+      // when the error produced none). The BASE hint is capped, never the
+      // combined string: extractSanitizedSpawnRecoveryHint can already
+      // return a hint at exactly SPAWN_RECOVERY_HINT_MAX_CHARS, and capping
+      // the combination would slice the appended sentence off in precisely
+      // the long-zod-issue case it exists for. Reserving the note's own
+      // length plus its separator (and the truncation marker when the base
+      // is cut) keeps the combined hint within the same bound while the
+      // note always survives in full.
+      const noteBudget =
+        SPAWN_RECOVERY_HINT_MAX_CHARS -
+        SPAWN_STRINGIFIED_DECODED_NOTE.length -
+        1
+      const base =
+        recoveryHint.length > noteBudget
+          ? `${recoveryHint.slice(0, noteBudget - '...[truncated]'.length).trimEnd()}...[truncated]`
+          : recoveryHint
+      value.recoveryHint = `${base} ${SPAWN_STRINGIFIED_DECODED_NOTE}`
+    }
+    if (validationIssues) {
+      value.validationIssues = validationIssues.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      }))
     }
     return {
       agentType,
       agentName: agentType,
-      value: {
-        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-      },
+      value,
     }
   })
 
@@ -277,7 +557,7 @@ type SpawnGateFilterResult = {
  */
 function filterSpawnAgentsGate(params: {
   agents: unknown
-onResponseChunk: (chunk: string | PrintModeEvent) => void
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
 }): SpawnGateFilterResult {
   const { agents: inputAgents, onResponseChunk } = params
   if (!Array.isArray(inputAgents)) {
@@ -343,12 +623,81 @@ function resolveSpawnGateAbort(
   }
 }
 
+/**
+ * The playbook gate's per-session evidence ledger, held additively on agent
+ * state. Created on first use so a session that never sees a playbook (or never
+ * records an eligible tool) never allocates one. The ledger identity is stable
+ * for the session, which is what lets the gate see evidence recorded on an
+ * earlier step.
+ */
+function sessionEvidenceLogFor(agentState: AgentState): SessionEvidenceLog {
+  const state = agentState as AgentState & {
+    sessionEvidenceLog?: SessionEvidenceLog
+  }
+  state.sessionEvidenceLog ??= createSessionEvidenceLog()
+  return state.sessionEvidenceLog
+}
+
+/**
+ * True when a tool result payload carries a terminal failure. The result
+ * contract has no single error field: native failures publish a json part with
+ * an `errorMessage` string (see buildNativeToolResultErrorOutputV1), so any such
+ * part marks the call as not-successful and it is never recorded as evidence.
+ */
+function outputCarriesToolError(output: readonly unknown[]): boolean {
+  return output.some((part) => {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return false
+    const record = part as Record<string, unknown>
+    if (record.type !== 'json') return false
+    const value = record.value
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return false
+    return typeof (value as Record<string, unknown>).errorMessage === 'string'
+  })
+}
+
+/**
+ * Append one successful tool invocation to the session's playbook-gate evidence
+ * ledger (see ../memory/session-evidence-log.ts).
+ *
+ * Deliberately narrow: only `run_terminal_command` with a string `command` is
+ * recorded as legacy `toolSucceeded` evidence. This never manufactures a
+ * validation receipt: only the trusted host registry can attest validation.
+ * A result carrying an `errorMessage`
+ * is a failure and records nothing, so a broken command can never satisfy a
+ * playbook.
+ *
+ * Call site: the single post-dispatch output-finalization block in
+ * `executeToolCall` (immediately after `toolResults.push(toolResult)`), which
+ * runs exactly once per executed tool call with the validated output.
+ */
+export function recordToolEvidence<T extends ToolName>(params: {
+  agentState: AgentState
+  toolName: T
+  input: Record<string, unknown>
+  output: CodebuffToolOutput<T>
+  /** Injected by executeToolCall so evidence timing is replayable in tests. */
+  atMs?: number
+}): void {
+  const { agentState, toolName, input, output, atMs = realClock.now() } = params
+  if (toolName !== 'run_terminal_command') return
+  if (outputCarriesToolError(output)) return
+  recordSessionEvidence(sessionEvidenceLogFor(agentState), {
+    toolName,
+    ...(typeof input.command === 'string'
+      ? { commandText: input.command }
+      : {}),
+    atMs,
+  })
+}
+
 export function normalizeNativeToolOutput<T extends ToolName>(params: {
   toolName: T
   toolCallId: string
   output: CodebuffToolOutput<T>
   canonicalReceipt?: unknown
   capabilityScope?: { projectId: string; runId: string }
+  confirmedPostEditAnchorsByPath?: FileProcessingState['confirmedPostEditAnchorsByPath']
 }):
   | { valid: true; output: CodebuffToolOutput<T>; issues: [] }
   | {
@@ -371,7 +720,7 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
       (lifecycle as Record<string, unknown>).state === 'failed'
     )
   })
-  if (canonicalHandlerFailure) {
+  if (canonicalHandlerFailure && params.output.length === 1) {
     return { valid: true, output: params.output, issues: [] }
   }
   const oversizedMutationResult =
@@ -398,6 +747,106 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
   )
   if (parsed.success) {
     if (getToolMetadata(params.toolName).resultContract === 'mutation_v1') {
+      const supplemental =
+        params.output.length === 2
+          ? postEditCapabilitiesPartSchema.safeParse(params.output[1])
+          : undefined
+      if (supplemental?.success) {
+        const receipt = commitReceiptV1Schema.safeParse(params.canonicalReceipt)
+        const first = params.output[0]
+        const mutation = fileMutationResultV1Schema.safeParse(
+          first?.type === 'json' ? first.value : undefined,
+        )
+        const scope = params.capabilityScope
+        const authorityMatches =
+          receipt.success &&
+          receipt.data.status === 'committed' &&
+          receipt.data.callId === params.toolCallId &&
+          mutation.success &&
+          mutation.data.outcome === 'applied' &&
+          receipt.data.operationId === mutation.data.operationId &&
+          scope !== undefined &&
+          supplemental.data.value.postEditCapabilities.every((capability) => {
+            const decoded = decodeReadCapabilityToken(capability.readCapability)
+            if (
+              typeof decoded === 'string' ||
+              decoded.tokenVersion !== 'v4' ||
+              decoded.rawBasis?.scope !== 'whole'
+            )
+              return false
+            const rawHash = decoded.rawBasis.documentRawHash
+            if (
+              !readCapabilityMatchesScope(decoded, {
+                ...scope,
+                path: capability.path,
+              }) ||
+              receipt.data.finalHashes[capability.path] !== rawHash
+            )
+              return false
+            const receiptActions = receipt.data.actions.filter(
+              (action) =>
+                action.status === 'committed' &&
+                (action.destinationPath ?? action.path) === capability.path &&
+                action.afterHash === rawHash,
+            )
+            for (const receiptAction of receiptActions) {
+              const handlerActions = mutation.data.actions.filter(
+                (action) =>
+                  action.index === receiptAction.index &&
+                  action.actionId === receiptAction.actionId &&
+                  action.action === receiptAction.action &&
+                  action.path === receiptAction.path &&
+                  action.destinationPath === receiptAction.destinationPath &&
+                  action.beforeHash === receiptAction.beforeHash &&
+                  action.afterHash === receiptAction.afterHash,
+              )
+              if (handlerActions.length !== 1) continue
+              const content = handlerActions[0]!.afterContent
+              if (content !== undefined) {
+                if (
+                  reanchorRawReadCapability({ content, capability: decoded }).ok
+                )
+                  return true
+                continue
+              }
+              // A bounded result can omit afterContent. The coordinator has
+              // already verified its exact prepared bytes and minted this
+              // local anchor; handler output cannot supply that trusted state.
+              const anchor =
+                params.confirmedPostEditAnchorsByPath?.[capability.path]
+              if (
+                anchor?.readCapability === capability.readCapability &&
+                anchor.projectId === scope.projectId &&
+                anchor.runId === scope.runId &&
+                anchor.startLine === 1 &&
+                anchor.endLine === decoded.endLine &&
+                decoded.startLine === 1 &&
+                anchor.contentHash === decoded.hash &&
+                rawReadBasesMatch(anchor.rawBasis, decoded.rawBasis)
+              )
+                return true
+            }
+            return false
+          })
+        if (!authorityMatches) {
+          return {
+            valid: false,
+            output: buildNativeToolResultErrorOutputV1({
+              toolName: params.toolName,
+              callId: params.toolCallId,
+              issueCount: 1,
+              message:
+                'Post-edit capabilities lack matching canonical receipt and issuer evidence.',
+            }) as CodebuffToolOutput<T>,
+            issues: [
+              {
+                message:
+                  'post-edit authority did not match the canonical committed after-state',
+              },
+            ],
+          }
+        }
+      }
       const mutationPart = params.output.find(
         (part) =>
           part.type === 'json' &&
@@ -418,9 +867,16 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
           receipt: params.canonicalReceipt,
           capabilityScope: params.capabilityScope,
         })
+        // Unlike an ordinary unconfirmed result, this projection can certify
+        // disk effects. The embedded receipt alone must not authorize them.
+        const verifiedAcknowledgementPending =
+          reconciled.mutation.authorityReceipt?.status ===
+          'acknowledgement_pending'
         if (
-          mutation.outcome !== 'unconfirmed' &&
-          reconciled.mutation.outcome === 'unconfirmed'
+          reconciled.mutation.outcome === 'unconfirmed' &&
+          (mutation.outcome !== 'unconfirmed' ||
+            (mutation.authorityReceipt?.status === 'acknowledgement_pending' &&
+              !verifiedAcknowledgementPending))
         ) {
           return {
             valid: false,
@@ -435,12 +891,16 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
             ],
           }
         }
-        if (reconciled.mutation.outcome !== 'unconfirmed') {
+        if (
+          reconciled.mutation.outcome !== 'unconfirmed' ||
+          verifiedAcknowledgementPending
+        ) {
           return {
             valid: true,
-            output: jsonToolResult(
-              reconciled.mutation,
-            ) as CodebuffToolOutput<T>,
+            output: [
+              ...jsonToolResult(reconciled.mutation),
+              ...(supplemental?.success ? [supplemental.data] : []),
+            ] as CodebuffToolOutput<T>,
             issues: [],
           }
         }
@@ -590,7 +1050,10 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
           receipt: params.canonicalReceipt,
           capabilityScope: params.capabilityScope,
         })
-        if (reconciled.mutation.outcome !== 'unconfirmed') {
+        if (
+          reconciled.mutation.outcome !== 'unconfirmed' ||
+          reconciled.mutation.authorityReceipt?.status === 'acknowledgement_pending'
+        ) {
           return {
             valid: false,
             output: jsonToolResult(
@@ -625,6 +1088,10 @@ const bareStringFieldRepairAllowlist: Partial<
   read_files: ['paths'],
   read_subtree: ['paths'],
   skill: ['name'],
+  // spawn_agents is deliberately absent: its only top-level field `agents` is
+  // an array the single-field regex can never match, and stringified-array
+  // recovery already lives in normalizeSpawnAgentList plus the D21 coercion.
+  spawn_agent_inline: ['agent_type', 'prompt'],
   web_search: ['query'],
 }
 
@@ -667,15 +1134,18 @@ type TruncationRecoverySummary = {
 function parseStringifiedToolInput(
   input: unknown,
   toolName: string,
+  providerReportedTruncation?: boolean,
 ): {
   input: unknown
   parseError?: string
   sawTransportTruncation?: boolean
   truncationRecovery?: TruncationRecoverySummary
+  oversizedTruncationBytes?: number
 } {
   let parsed = input
   let parseError: string | undefined
   let truncationRecovery: TruncationRecoverySummary | undefined
+  let oversizedTruncationBytes: number | undefined
 
   // Some providers/models double-encode tool arguments, for example an input
   // value like "\"{\\\"path\\\":\\\"file.ts\\\"}\"". Repeated JSON.parse
@@ -691,9 +1161,26 @@ function parseStringifiedToolInput(
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error)
-      if (detectTransportTruncation(stringInput, errorMessage)) {
+      // The provider's finishReason === 'length' is authoritative: it is a KNOWN
+      // max-token cut, so the JSON-parse heuristic is only the fallback used
+      // when the provider reported nothing.
+      if (
+        providerReportedTruncation === true ||
+        detectTransportTruncation(stringInput, errorMessage)
+      ) {
         sawTransportTruncation = true
       }
+      // Oversized cut: truncation was detected but THIS failed parse's
+      // payload exceeds MAX_TRUNCATION_RECOVERY_BYTES, so recovery scanned
+      // nothing and no clean-boundary resume cursor can exist. Record the
+      // byte count so the error can honestly state WHY there is no cursor
+      // (split the arguments) instead of leaving the model to guess between
+      // a transport cut and malformed input.
+      oversizedTruncationBytes =
+        sawTransportTruncation &&
+        stringInput.length > MAX_TRUNCATION_RECOVERY_BYTES
+          ? stringInput.length
+          : undefined
       // A truncated payload is NEVER silently converted into a partial tool
       // call: the recovered object is not assigned to `parsed` (the retired
       // behavior that silently dropped trailing selectors). The unparseable
@@ -720,6 +1207,7 @@ function parseStringifiedToolInput(
     parseError,
     sawTransportTruncation,
     truncationRecovery,
+    oversizedTruncationBytes,
   }
 }
 
@@ -738,6 +1226,7 @@ function stringInputError(
   rawInput?: unknown,
   transportTruncated = false,
   truncationRecovery?: TruncationRecoverySummary,
+  oversizedTruncationBytes?: number,
 ): ToolCallError {
   const truncationNote = transportTruncated
     ? ` [${PAYLOAD_TRUNCATED_ERROR_CODE}] The argument payload was cut in transport — it ended mid-structure (unterminated string or unbalanced braces). This is a transport truncation, NOT a code syntax error: re-issue the same edit, ideally split so each edit's newString/content field stays well under the transport-safe band.`
@@ -750,8 +1239,21 @@ function stringInputError(
   const cursorNote = truncationRecovery
     ? ` Resume cursor: ${truncationRecovery.recoveredBytes} bytes of leading argument structure survived the cut (capped preview, never applied: ${truncationRecovery.recoveredPreview}). Continue from where transmission cut off — re-issue the call with the arguments that follow that point, splitting them into a smaller follow-up call when needed.`
     : ''
+  // No-cursor note: truncation was detected yet no clean container-close
+  // prefix was recoverable, so the cursor above is absent. State WHY instead
+  // of leaving the missing cursor unexplained — either the cut payload
+  // exceeded the recovery scan bound (the only fix is to split the
+  // arguments), or the cut landed mid-value (the whole call must be
+  // re-issued). Appended after truncationNote/cursorNote so every
+  // non-truncated and cursor-bearing message stays byte-identical.
+  const noCursorNote =
+    transportTruncated && !truncationRecovery
+      ? oversizedTruncationBytes !== undefined
+        ? ` The cut payload was ${oversizedTruncationBytes} bytes, beyond the ${MAX_TRUNCATION_RECOVERY_BYTES}-byte recovery scan bound, so no resume cursor is available: split the arguments so each call's largest string field stays well under that bound.`
+        : ` The cut was not at a clean container boundary, so no resume cursor is available: re-issue the complete call.`
+      : ''
   const parseDetails = parseError
-    ? ` Parsing as JSON failed: ${parseError}. The arguments may be malformed or incomplete.${truncationNote}${cursorNote}`
+    ? ` Parsing as JSON failed: ${parseError}. The arguments may be malformed or incomplete.${truncationNote}${cursorNote}${noCursorNote}`
     : ' Parsing succeeded, but the parsed value was still a string.'
   const heredocHint =
     toolName === 'spawn_agents' || toolName === 'basher'
@@ -864,6 +1366,17 @@ function coerceIntString(value: unknown, min?: number): number | undefined {
 // nothing changed. Mirrors the narrow, fail-closed, early-return style of the
 // per-tool repairs above.
 //
+// D21 slice 1 additionally unserializes a JSON-stringified value when the
+// DECLARED schema type of the field is array/object (e.g. `ranges`, `edits`,
+// per-entry objects), so a provider that stringifies a container is repaired
+// the same way as stringified scalars. The declared type is the only key — no
+// tool-name special-casing — so string-typed fields (oldString/newString/
+// content/path/diff/command) can never reach the unserialize branch. Fail
+// closed: an unparseable string, or one that parses to the wrong container
+// shape, is returned unchanged so the strict schema still rejects it. Every
+// successful unserialize is counted in toolArgNormalizationStats and logged
+// (never silent).
+//
 // Known intentional gaps: `allOf` compositions are not traversed (no native
 // tool schema relies on allOf for a coercible scalar), and negative integer
 // strings (e.g. "-1") are not coerced here — those are handled by the
@@ -884,7 +1397,9 @@ const TOOL_JSON_SCHEMA_CACHE = new Map<
   Record<string, unknown> | undefined
 >()
 
-function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefined {
+function toolInputJsonSchema(
+  toolName: string,
+): Record<string, unknown> | undefined {
   if (TOOL_JSON_SCHEMA_CACHE.has(toolName)) {
     return TOOL_JSON_SCHEMA_CACHE.get(toolName)
   }
@@ -902,9 +1417,49 @@ function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefi
   return jsonSchema
 }
 
-function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
+// D21 slice 1 (PR-T3): module-level observability for schema-driven
+// stringified array/object argument unserialize at the dispatch boundary.
+// Every SUCCESSFUL unserialize increments `total` and the per-tool map and
+// emits a diagnostic via the nearest available logger — a normalization
+// repair must never be silent. Exported (plus a test-only reset) so tests can
+// read and isolate counts without leaking state across files.
+export const toolArgNormalizationStats: {
+  total: number
+  byTool: Record<string, number>
+} = { total: 0, byTool: {} }
+
+export function getToolArgNormalizationStats(): {
+  total: number
+  byTool: Record<string, number>
+} {
+  return toolArgNormalizationStats
+}
+
+export function __resetToolArgNormalizationStatsForTest(): void {
+  toolArgNormalizationStats.total = 0
+  toolArgNormalizationStats.byTool = {}
+}
+
+// Fail-closed unserialize of a JSON-stringified array/object FIELD value.
+// Parses the trimmed string as JSON; any parse failure returns undefined so
+// the caller leaves the original string untouched. Never throws and never
+// repairs a truncated payload: partial JSON is never guessed into container
+// structure, matching the fail-closed truncation policy in the parse pipeline.
+function unserializeStringifiedJsonFieldValue(value: string): unknown {
+  try {
+    return JSON.parse(value.trim())
+  } catch {
+    return undefined
+  }
+}
+
+function coerceInputScalarsBySchema(
+  toolName: string,
+  input: unknown,
+  logger?: Logger,
+): unknown {
   if (
-    !(toolName in toolParams) ||
+    !Object.hasOwn(toolParams, toolName) ||
     input === null ||
     typeof input !== 'object' ||
     Array.isArray(input)
@@ -933,6 +1488,20 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
       return resolved as Record<string, unknown>
     }
     return schema
+  }
+
+  // Count + log one successful schema-driven unserialize. The counter is the
+  // always-on observability floor; the diagnostic rides the nearest available
+  // logger (debug-level, matching the existing mis-braced-spawn repair seam).
+  // Only metadata is logged — never payload values.
+  const recordUnserialize = (kind: 'array' | 'object'): void => {
+    toolArgNormalizationStats.total += 1
+    toolArgNormalizationStats.byTool[toolName] =
+      (toolArgNormalizationStats.byTool[toolName] ?? 0) + 1
+    logger?.debug(
+      { toolName, kind },
+      'schema-driven tool-arg normalization: unserialized a stringified JSON array/object field before validation',
+    )
   }
 
   const coerceNode = (
@@ -972,6 +1541,37 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
         Number.isFinite(Number(trimmed))
       ) {
         return Number(trimmed)
+      }
+    }
+
+    // D21 slice 1: schema-driven unserialize of stringified containers. When
+    // the DECLARED type is array/object and the provider sent a string, parse
+    // the trimmed string as JSON and flow the parsed container into the normal
+    // traversal branches below, so items/properties keep being visited against
+    // the schema and nested object-strings unserialize too. The declared type
+    // is the only key: string-typed fields (oldString/newString/content/path/
+    // diff/command) never reach here and no tool name is special-cased. Fail
+    // closed: a string that does not parse, or parses to the wrong container
+    // shape, is left unchanged so the strict schema still rejects it — never
+    // thrown, never guessed, and never silent (a success is counted and
+    // logged via recordUnserialize).
+    if (typeof value === 'string') {
+      if (type === 'array') {
+        const parsed = unserializeStringifiedJsonFieldValue(value)
+        if (Array.isArray(parsed)) {
+          recordUnserialize('array')
+          value = parsed
+        }
+      } else if (type === 'object') {
+        const parsed = unserializeStringifiedJsonFieldValue(value)
+        if (
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed)
+        ) {
+          recordUnserialize('object')
+          value = parsed
+        }
       }
     }
 
@@ -1357,7 +1957,7 @@ function getFieldSpecificHint(
 
   if (paths.has('basedOnRead') || fieldNames.has('basedOnRead')) {
     return [
-      'Hint: `basedOnRead` must be an authenticated cap.v3 readCapability token string returned by read_files. Object-form anchors and wrapped objects like { "$text": "..." } are not accepted.',
+      'Hint: `basedOnRead` must be an authenticated readCapability token string returned by read_files. Object-form anchors and wrapped objects like { "$text": "..." } are not accepted.',
       'Copy the `editAnchor.readCapability` value verbatim from the matching fresh read_files result.',
     ].join('\n')
   }
@@ -1427,6 +2027,45 @@ function getToolValidationHint(
       '`detach` must be a boolean (true/false) and `timeout_seconds` a number (e.g. 60, or -1 for no timeout) — do not quote them as strings. `process_type` must be the bare enum SYNC or BACKGROUND.',
     ].join('\n')
   }
+  if (toolName === 'read_files') {
+    const fieldNames = new Set(
+      (issues ?? []).flatMap(
+        (issue) => issue.path?.map((segment) => String(segment)) ?? [],
+      ),
+    )
+    const base = [
+      'Provide at least one of the combinable selectors `paths`, `ranges`, `windows`, `around`, `symbol`, `symbols`. Simplest example: { "paths": ["src/file.ts"] }.',
+      'Selector entries are objects, and `window`/`occurrence` are 1-indexed. A sole `paths` entry infers the path for selector entries that omit `path`.',
+    ].join('\n')
+    const targetedHints: string[] = []
+    if (fieldNames.has('around')) {
+      targetedHints.push(
+        [
+          '`around` is an array of objects { "path": string, "match": string, "occurrence"?: number, "contextLines"?: number }; `match` is the literal anchor string, so a bare string is not accepted.',
+          'Example: { "paths": ["src/file.ts"], "around": [{ "match": "function handleSpawnAgents" }] } — the sole `paths` entry infers the selector path.',
+        ].join('\n'),
+      )
+    }
+    if (fieldNames.has('symbols') || fieldNames.has('symbol')) {
+      targetedHints.push(
+        [
+          '`symbols` entries are objects { "path": string, "names": string[] } and singular `symbol` entries are { "path": string, "name": string } — never bare strings.',
+          'Example: { "symbols": [{ "path": "src/file.ts", "names": ["parseToolCallContent"] }] }.',
+        ].join('\n'),
+      )
+    }
+    if (fieldNames.has('windows')) {
+      targetedHints.push(
+        [
+          '`windows` entries are objects { "path": string, "windowSize"?: number, "window"?: number }.',
+          '`window` is 1-indexed: the first window is 1, not 0. Omit it to get the window manifest plus the first window.',
+        ].join('\n'),
+      )
+    }
+    return targetedHints.length > 0
+      ? [base, ...targetedHints].join('\n\n')
+      : base
+  }
   if (toolName === 'spawn_agents') {
     const base = [
       'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object, "handoff"?: object }] }.',
@@ -1456,7 +2095,7 @@ function getToolValidationHint(
     if (fieldNames.has('readCapability') || hasRemovedExpectedHash) {
       targetedHints.push(
         [
-          'For replace_range, pass one authenticated cap.v3 readCapability copied from a fresh read_files editAnchor.',
+          'For replace_range, pass one authenticated readCapability copied from a fresh read_files editAnchor.',
           'Omit startLine/endLine to replace the full observed range, or provide both to target a contained sub-range within that capability.',
           'Never pass expectedHash or other separate hash fields.',
         ].join('\n'),
@@ -1775,6 +2414,9 @@ export function getFilesystemToolPaths(
       paths: [
         ...strings(input.paths),
         ...objectPaths(input.ranges),
+        ...objectPaths(input.windows),
+        ...objectPaths(input.around),
+        ...objectPaths(input.symbol),
         ...objectPaths(input.symbols),
       ],
     }
@@ -1944,38 +2586,6 @@ const OWNED_TEMP_WRITE_EXEMPT_TOOLS = new Set([
   'write_file',
 ])
 
-const MAX_CUSTOM_INPUT_SCAN_DEPTH = 6
-const MAX_CUSTOM_INPUT_SCAN_STRINGS = 1000
-
-// Recursively collect string values from an arbitrary custom-tool input, with
-// bounded depth and count so a pathological nested/huge input cannot blow the
-// stack or stall the scan. Only own enumerable values are visited.
-function collectCustomInputStrings(
-  value: unknown,
-  out: string[],
-  depth: number = 0,
-): void {
-  if (
-    depth > MAX_CUSTOM_INPUT_SCAN_DEPTH ||
-    out.length >= MAX_CUSTOM_INPUT_SCAN_STRINGS
-  ) {
-    return
-  }
-  if (typeof value === 'string') {
-    out.push(value)
-    return
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectCustomInputStrings(item, out, depth + 1)
-    return
-  }
-  if (value !== null && typeof value === 'object') {
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      collectCustomInputStrings(child, out, depth + 1)
-    }
-  }
-}
-
 export function parseRawToolCall<T extends ToolName = ToolName>(params: {
   rawToolCall: {
     toolName: T
@@ -1984,6 +2594,12 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     providerOptions?: ProviderMetadata
   }
   logger?: Logger
+  /**
+   * Provider-authoritative truncation fact for the response that produced this
+   * call (finishReason === 'length'). Optional: absent means the JSON-parse
+   * heuristic in `detectTransportTruncation` stays the only signal.
+   */
+  providerReportedTruncation?: boolean
 }): CodebuffToolCall<T> | ToolCallError {
   const { rawToolCall, logger } = params
   const toolName = rawToolCall.toolName
@@ -1991,6 +2607,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
   const processedParameters = parseStringifiedToolInput(
     rawToolCall.input,
     toolName,
+    params.providerReportedTruncation,
   )
   const paramsSchema = toolParams[toolName].inputSchema
 
@@ -2002,6 +2619,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
       rawToolCall.input,
       processedParameters.sawTransportTruncation,
       processedParameters.truncationRecovery,
+      processedParameters.oversizedTruncationBytes,
     )
   }
 
@@ -2014,6 +2632,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
         repairSetOutputData(toolName, processedParameters.input),
       ),
     ),
+    logger,
   )
   if (toolName === 'spawn_agents') {
     const misbraced = detectMisbracedSpawnPayload({
@@ -2029,7 +2648,41 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
       repairedInput = misbraced.repairedInput
     }
   }
+  // read_files selector-shape repair telemetry (counter-plus-diagnostic
+  // contract, matching recordUnserialize above): the repair runs inside the
+  // read_files input schema's z.preprocess chain DURING the safeParse below,
+  // so a before/after snapshot of the module-global stats in common is the
+  // per-call repair signal. Emitted regardless of result.success so a
+  // repaired-but-still-rejected call still signals. Metadata only — never
+  // paths, match strings, or symbol names. Stays synchronous: the diff is
+  // O(kinds) over the bounded repair kinds. The snapshot copies VALUES (plus
+  // a shallow byKind copy) because the getter returns the live stats object
+  // the preprocess mutates in place — aliasing that reference would make the
+  // before/after delta always zero.
+  let repairStatsBefore:
+    | { total: number; byKind: Record<string, number> }
+    | undefined
+  if (toolName === 'read_files') {
+    const before = getReadFilesSelectorRepairStats()
+    repairStatsBefore = { total: before.total, byKind: { ...before.byKind } }
+  }
   const result = paramsSchema.safeParse(repairedInput)
+  if (repairStatsBefore) {
+    const afterStats = getReadFilesSelectorRepairStats()
+    if (afterStats.total > repairStatsBefore.total) {
+      const repairedKinds: Record<string, number> = {}
+      for (const [kind, count] of Object.entries(afterStats.byKind)) {
+        const delta = count - (repairStatsBefore.byKind[kind] ?? 0)
+        if (delta > 0) {
+          repairedKinds[kind] = delta
+        }
+      }
+      logger?.debug(
+        { toolName, toolCallId: rawToolCall.toolCallId, repairedKinds },
+        'read_files: repaired selector entry shape(s) before schema validation',
+      )
+    }
+  }
 
   if (!result.success) {
     // Keep the public set_output schema strict so providers are guided toward
@@ -2112,9 +2765,24 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
   queued?: boolean
   prompt: string | undefined
   providerOptions?: ProviderMetadata
+  /**
+   * Provider-authoritative truncation fact (finishReason === 'length') for the
+   * response that emitted this tool call. Threaded to the JSON parser so a
+   * provider-confirmed cut classifies as transport truncation regardless of the
+   * error-message heuristic.
+   */
+  providerReportedTruncation?: boolean
+  /**
+   * The params this agent was spawned with (browser-use's
+   * `interactionPolicy` etc). Threaded from the step loop; the tool executor
+   * is the enforcement point for spawn-param policies because it sees both
+   * the params and every outgoing tool call.
+   */
+  spawnParams?: Record<string, unknown>
   repoId: string | undefined
   repoUrl: string | undefined
   runId: string
+  stepNumber?: number
   signal: AbortSignal
   system: string
   tools: ToolSet
@@ -2133,6 +2801,313 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
   AgentRuntimeScopedDeps
 
 export async function executeToolCall<T extends ToolName>(
+  params: ExecuteToolCallParams<T>,
+): Promise<void> {
+  return trackToolAttempt(params, (tracked) => executeNativeToolCall(tracked))
+}
+
+/** Correlate final validated input without changing the original B02 basis. */
+export function nativeToolObservationInputHash(params: {
+  input: unknown
+  callId: string
+  logger: Logger
+}): string | undefined {
+  try {
+    const parsed = parseRawToolCall({
+      rawToolCall: { toolName: 'record_decision', toolCallId: params.callId, input: params.input },
+      logger: params.logger,
+    })
+    return 'error' in parsed ? undefined : hashActionInput('record_decision', parsed.input)
+  } catch { return undefined }
+}
+
+// Same scale as Memory V2's 2s finalization: metadata, never productive work.
+const NATIVE_TOOL_OBSERVATION_TIMEOUT_MS = 2_000
+async function observeCompletedNativeTool(
+  params: Pick<AgentRuntimeDeps, 'onNativeToolObservation' | 'logger'>,
+  observation: NativeToolObservation,
+): Promise<void> {
+  const observer = params.onNativeToolObservation
+  if (!observer) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => observer(observation)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Native tool observation metadata budget expired')), NATIVE_TOOL_OBSERVATION_TIMEOUT_MS)
+        timer.unref?.()
+      }),
+    ])
+  } catch (error) {
+    // Promise.race observes late rejections too. Reporting cannot affect the tool.
+    try {
+      params.logger.warn({ error, toolName: observation.toolName, callId: observation.callId },
+        'Native tool observation is unconfirmed (non-fatal)')
+    } catch { /* An observational logger is not tool authority either. */ }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+type ToolAttemptParams = {
+  toolName: string
+  input: unknown
+  toolCallId?: string
+  userInputId: string
+  agentState: AgentState
+  runId: string
+  stepNumber?: number
+  signal: AbortSignal
+  toolResults: ToolMessage[]
+  journalWriter?: JournalWriter
+  logger: Logger
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
+  requestToolCall?: import('@codebuff/common/types/contracts/client').RequestToolCallFn
+  requestFiles?: import('@codebuff/common/types/contracts/client').RequestFilesFn
+  requestOptionalFile?: import('@codebuff/common/types/contracts/client').RequestOptionalFileFn
+  fileSystem?: import('@codebuff/common/types/filesystem').CodebuffFileSystem
+  getFileSystemForActor?: (actor: import('@codebuff/common/types/contracts/client').ExecutionActor) => import('@codebuff/common/types/filesystem').CodebuffFileSystem
+  authorizeToolRead?: import('@codebuff/common/types/contracts/client').AuthorizeToolRead
+  onExecutionActionStart?: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
+  ancestorRunIds?: string[]
+  synchronizeWorkspace?: import('@codebuff/common/types/contracts/client').SynchronizeWorkspace
+  fileProcessingState?: FileProcessingState
+}
+
+// Subagents inherit client callbacks. Unwrap our own attempt decorator so a
+// parent attempt cannot overwrite the child's separately registered identity.
+const originalToolRequest = new WeakMap<NonNullable<ToolAttemptParams['requestToolCall']>, NonNullable<ToolAttemptParams['requestToolCall']>>()
+const originalFileRequest = new WeakMap<NonNullable<ToolAttemptParams['requestFiles']>, NonNullable<ToolAttemptParams['requestFiles']>>()
+const originalOptionalFileRequest = new WeakMap<NonNullable<ToolAttemptParams['requestOptionalFile']>, NonNullable<ToolAttemptParams['requestOptionalFile']>>()
+
+// An executor may publish an error for display after its handler throws. That
+// is not a recovered tool result and must not settle the journaled effect.
+const uncertainJournalHandlers = new WeakSet<object>()
+
+async function persistToolBoundary(writer: JournalWriter, runId: string, event: JournalEvent): Promise<void> {
+  if (writer.appendDurable) {
+    await writer.appendDurable(runId, event)
+    return
+  }
+  writer.append(runId, event)
+  if (writer.forceFlush) await writer.forceFlush()
+  else if (writer.flush) await writer.flush()
+}
+
+/** Keep failed attempts after recovery, including refusals before dispatch. */
+async function trackToolAttempt<P extends ToolAttemptParams>(
+  params: P,
+  execute: (tracked: P) => Promise<void>,
+): Promise<void> {
+  const toolCallId = params.toolCallId ?? generateCompactId()
+  const attemptId = generateCompactId()
+  const capturedInput = cloneDeep(params.input)
+  const capturedUserInputId = params.userInputId
+  // Capture before setup/preflight awaits. A later concurrent workspace change
+  // must still refuse this exact attempt, rather than silently renewing it.
+  params.signal.throwIfAborted()
+  if (params.agentState.runOutcome && params.agentState.runOutcome.termination !== 'completed')
+    throw new Error(params.agentState.runOutcome.cause?.message ?? 'Execution has stopped')
+  const actor = Object.freeze({ runId: params.runId, rootRunId: params.ancestorRunIds?.[0] ?? params.runId, agentId: params.agentState.agentId })
+  if (params.synchronizeWorkspace) {
+    applyHostWorkspaceState(params.agentState, await params.synchronizeWorkspace(actor), params.fileProcessingState)
+  }
+  const basis: ActionOutcome['basis'] = Object.freeze({
+    inputHash: hashActionInput(params.toolName, capturedInput),
+    ...(params.agentState.workspaceState
+      ? { workspaceRevision: params.agentState.workspaceState.revision }
+      : {}),
+  })
+  const workspaceSnapshotId = params.agentState.workspaceState?.snapshotId
+  const executionIdentity = Object.freeze({
+    ...actor, actionId: toolCallId, attemptId,
+    basis,
+    ...(workspaceSnapshotId ? { workspaceSnapshotId } : {}),
+    basisId: hashActionInput('openbuff.execution-b02-basis.v1', { basis, workspaceSnapshotId: workspaceSnapshotId ?? null }),
+  })
+  let dispatched = false
+  let refusal: string | undefined
+  let retained: ActionOutcome | undefined
+  const retain = (
+    result: Pick<ActionOutcome, 'outcome' | 'effect' | 'cause'>,
+  ): ActionOutcome => {
+    if (retained) return retained
+    retained = {
+      actionId: toolCallId,
+      attemptId,
+      runId: params.runId,
+      toolName: params.toolName,
+      basis,
+      ...result,
+    }
+    params.agentState.actionOutcomes = [
+      ...(params.agentState.actionOutcomes ?? []),
+      retained,
+    ]
+    return retained
+  }
+  const unavailable = (
+    outcome: ActionOutcome['outcome'],
+    code: string,
+    message: string,
+  ) =>
+    retain({
+      outcome,
+      cause: { code, message: message.slice(0, 4_000) },
+      effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] },
+    })
+  const originalRequest = params.requestToolCall && (originalToolRequest.get(params.requestToolCall) ?? params.requestToolCall)
+  const trackedRequest: ToolAttemptParams['requestToolCall'] = originalRequest ? async request => {
+    const result = await originalRequest({
+      ...request, callId: request.callId ?? toolCallId, executionIdentity,
+      executionRequestHash: hashActionInput(request.toolName, request.input),
+    })
+    applyHostWorkspaceState(params.agentState, result.workspaceState, params.fileProcessingState)
+    const refusal = findExecutionRefusal(result.output)
+    if (refusal) {
+      retain(classifyActionOutput(params.toolName, result.output))
+      let refreshed = false
+      if (refusal.reason === 'stale-authority' && params.synchronizeWorkspace) {
+        try {
+          const workspace = await params.synchronizeWorkspace(actor)
+          applyHostWorkspaceState(params.agentState, workspace, params.fileProcessingState)
+          refreshed = workspace !== undefined
+        } catch { /* A failed refresh consumes the recovery budget and stops the run. */ }
+      }
+      const feedback = recordExecutionRefusal(params.agentState, refusal, refreshed)
+      params.agentState.messageHistory = [...params.agentState.messageHistory,
+        userMessage({ content: withSystemTags(feedback), tags: ['EXECUTION_REFUSAL'] })]
+    }
+    return result
+  } : undefined
+  if (trackedRequest && originalRequest) originalToolRequest.set(trackedRequest, originalRequest)
+  const originalFiles = params.requestFiles && (originalFileRequest.get(params.requestFiles) ?? params.requestFiles)
+  const trackedFiles: ToolAttemptParams['requestFiles'] = originalFiles ? request => originalFiles({
+    ...request, executionActor: actor, executionIdentity,
+  }) : undefined
+  if (trackedFiles && originalFiles) originalFileRequest.set(trackedFiles, originalFiles)
+  const originalOptional = params.requestOptionalFile && (originalOptionalFileRequest.get(params.requestOptionalFile) ?? params.requestOptionalFile)
+  const trackedOptional: ToolAttemptParams['requestOptionalFile'] = originalOptional ? request => originalOptional({
+    ...request, executionActor: actor, executionIdentity,
+  }) : undefined
+  if (trackedOptional && originalOptional) originalOptionalFileRequest.set(trackedOptional, originalOptional)
+  const journal = params.journalWriter
+  const journalPayload = { toolName: params.toolName, attemptId, basis }
+  const journalBoundary = (eventType: 'tool_call' | 'tool_result', value: Record<string, unknown>) => {
+    return journal ? persistToolBoundary(journal, params.runId, {
+      eventType, stepNumber: params.stepNumber ?? 0, correlation: toolCallId,
+      payload: { ...journalPayload, ...value },
+    }) : undefined
+  }
+  const tracked = {
+    ...params,
+    toolCallId,
+    input: capturedInput,
+    userInputId: capturedUserInputId,
+    executionIdentity,
+    executionHostOperation: undefined,
+    ...(trackedRequest ? { requestToolCall: trackedRequest } : {}),
+    ...(trackedFiles ? { requestFiles: trackedFiles } : {}),
+    ...(trackedOptional ? { requestOptionalFile: trackedOptional } : {}),
+    ...(params.getFileSystemForActor ? { fileSystem: params.getFileSystemForActor(actor) } : {}),
+    onResponseChunk: (chunk: string | PrintModeEvent) => {
+      if (typeof chunk !== 'string') {
+        if (chunk.type === 'tool_call' && chunk.toolCallId === toolCallId) {
+          dispatched = true
+        }
+        if (chunk.type === 'error' && !dispatched)
+          refusal ??= chunk.userMessage ?? chunk.message
+        if (chunk.type === 'tool_result' && chunk.toolCallId === toolCallId) {
+          const actionOutcome = retain(
+            classifyActionOutput(params.toolName, chunk.output),
+          )
+          params.onResponseChunk({ ...chunk, actionOutcome })
+          return
+        }
+      }
+      params.onResponseChunk(chunk)
+    },
+  } as P
+  try {
+    params.signal.throwIfAborted()
+    // Capture the original B02 attempt before any setup/preflight await. The
+    // parent registers synchronously; supervised peers await its RPC barrier.
+    const started = params.onExecutionActionStart?.({ identity: executionIdentity,
+      toolName: params.toolName, input: cloneDeep(capturedInput), signal: params.signal })
+    if (started) await started
+    params.signal.throwIfAborted()
+    const readAccess = await params.authorizeToolRead?.({ identity: executionIdentity, toolName: params.toolName })
+    if (readAccess?.allowed === false) {
+      refusal = readAccess.reason
+      unavailable('refused', 'strict_project_reads_unavailable', readAccess.reason)
+      params.onResponseChunk({ type: 'error', message: readAccess.reason })
+    } else {
+      const firstResult = params.toolResults.length
+      if (journal) {
+        try {
+          await journalBoundary('tool_call', { input: capturedInput })
+        } catch (error) {
+          const message = 'Cannot dispatch this tool: the run journal could not retain its request.'
+          unavailable('refused', 'journal_request_unconfirmed', message)
+          throw new Error(message, { cause: error })
+        }
+      }
+      params.signal.throwIfAborted()
+      await execute(tracked)
+      params.signal.throwIfAborted()
+      const result = journal ? params.toolResults.slice(firstResult)
+        .findLast((message) => message.toolCallId === toolCallId) : undefined
+      const outcome = result && (retained?.outcome ?? (!dispatched && refusal ? 'refused' : classifyActionOutput(params.toolName, result.content).outcome))
+      if (result && !uncertainJournalHandlers.has(tracked) && outcome !== 'uncertain') {
+        try {
+          await journalBoundary('tool_result', { result: result.content, outcome })
+        } catch (error) {
+          // The live result remains visible; lack of a durable result must
+          // not trigger a new execution or pretend the effect was undone.
+          try {
+            params.logger.warn({ error, toolCallId, runId: params.runId }, 'Tool result could not be retained in the journal')
+          } catch { /* Diagnostic observers cannot change the effect. */ }
+        }
+      }
+    }
+    params.signal.throwIfAborted()
+  } catch (error) {
+    const executionRefusal = executionRefusalSchema.safeParse(
+      error && typeof error === 'object' && 'refusal' in error ? error.refusal : undefined)
+    if (executionRefusal.success) {
+      retain({ outcome: 'refused', cause: { code: `execution_${executionRefusal.data.reason}`, message: executionRefusal.data.cause },
+        effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] } })
+      recordExecutionRefusal(params.agentState, executionRefusal.data)
+    }
+    unavailable(
+      params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
+      params.signal.aborted || isAbortError(error)
+        ? 'action_cancelled'
+        : 'action_execution_error',
+      error instanceof Error ? error.message : String(error),
+    )
+    throw error
+  }
+  if (!retained) {
+    if (params.signal.aborted)
+      unavailable(
+        'cancelled',
+        'action_cancelled',
+        'Action cancelled before a result was confirmed.',
+      )
+    else if (refusal) unavailable('refused', 'action_refused', refusal)
+    else
+      unavailable(
+        'uncertain',
+        'action_result_unavailable',
+        dispatched
+          ? 'Action dispatched without a confirmed result.'
+          : 'Action produced no dispatch or result evidence.',
+      )
+  }
+}
+
+async function executeNativeToolCall<T extends ToolName>(
   params: ExecuteToolCallParams<T>,
 ): Promise<void> {
   const {
@@ -2155,6 +3130,8 @@ export async function executeToolCall<T extends ToolName>(
     onResponseChunk,
     requestToolCall,
     queued,
+    providerReportedTruncation,
+    spawnParams,
   } = params
   const toolCallId = params.toolCallId ?? generateCompactId()
   const abortablePreviousToolCallFinished = makeAbortableBarrier(
@@ -2172,7 +3149,7 @@ export async function executeToolCall<T extends ToolName>(
   // receiving the documented removed-tool migration guidance. Emitting
   // `buildUnavailableToolMessage` here keeps that guidance the single failure
   // contract for both paths.
-  if (!(toolName in toolParams)) {
+  if (!Object.hasOwn(toolParams, toolName)) {
     logger.debug(
       { toolName, agentId: agentTemplate.id, fromHandleSteps },
       `Blocked unregistered tool ${toolName} before parsing its input`,
@@ -2196,7 +3173,32 @@ export async function executeToolCall<T extends ToolName>(
       providerOptions: params.providerOptions,
     },
     logger,
+    providerReportedTruncation,
   })
+
+  // Plan mode is read-only (N03). Enforced here for every caller, including
+  // handleSteps (which skips the tool-list check below), so a plan lineage
+  // cannot reach a mutating tool through any template or programmatic step.
+  const planModeRefusal = checkPlanModeToolCall({
+    toolName,
+    input,
+    agentTemplate,
+    agentState,
+    clientSessionId: params.clientSessionId,
+  })
+  if (planModeRefusal) {
+    logger.warn(
+      { toolName, agentId: agentTemplate.id, fromHandleSteps },
+      'Refused mutating tool call in plan-mode lineage',
+    )
+    onResponseChunk({
+      type: 'error',
+      message: planModeRefusal.message,
+      userMessage: planModeRefusal.userMessage,
+      errorCode: planModeRefusal.errorCode,
+    } as PrintModeEvent & { errorCode: typeof planModeRefusal.errorCode })
+    return abortablePreviousToolCallFinished
+  }
 
   // Filter out restricted tools - emit error instead of tool call/result
   // This prevents the CLI from showing tool calls that the agent doesn't have permission to use
@@ -2219,18 +3221,47 @@ export async function executeToolCall<T extends ToolName>(
     return abortablePreviousToolCallFinished
   }
 
+  // Spawn-param policy enforcement: an explicit read-only browser spawn may
+  // only issue non-mutating browser_logs actions. Prompt text was the only
+  // previous enforcement; this is the data-driven backstop. Unknown action
+  // types fail CLOSED under read-only (allowlist, not blocklist).
+  if (toolName === 'browser_logs' && spawnParams) {
+    const actionType = (toolCall.input as Record<string, unknown> | undefined)
+      ?.type
+    if (!isBrowserActionAllowed(actionType, spawnParams.interactionPolicy)) {
+      const message = browserActionBlockedMessage(actionType)
+      logger.warn(
+        { toolName, actionType, agentId: agentTemplate.id },
+        'Blocked mutating browser_logs action under read-only interactionPolicy',
+      )
+      onResponseChunk({
+        type: 'error',
+        message,
+        autoRecovering: true,
+      })
+      return abortablePreviousToolCallFinished
+    }
+  }
+
   if ('error' in toolCall) {
     const formattedInput = toolCall.formattedInput ?? formatValueForError(input)
     const inputLabel = toolCall.formattedInput
       ? 'Relevant invalid input excerpts'
       : 'Original tool call input'
+    // Structured invalid-arguments marker: every parseRawToolCall validation
+    // failure (string-input, schema-validation, or misbraced-payload
+    // rejection) funnels through this ToolCallError emission, so the
+    // repeated-invalid-call degeneration guard in stream-parser.ts arms its
+    // signature from this flag instead of matching `message` prose, which is
+    // free to reword or localize.
     onResponseChunk({
       type: 'error',
 
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
-    })
+      invalidArgumentsValidation: true,
+    } as PrintModeEvent & { invalidArgumentsValidation?: true })
     logger.debug(
       { toolCall, error: toolCall.error },
       `${toolName} error: ${toolCall.error}`,
@@ -2251,19 +3282,25 @@ export async function executeToolCall<T extends ToolName>(
   // is a universal runtime backstop; SDK handlers remain the authoritative
   // containment layer. The declared-scope mismatch warning only applies when
   // the agent actually configured a scope for this access type.
-  if (filesystemAccess) {
+  // Containment needs a project root to compare against. Without one we cannot
+  // prove any path stays inside the project, and `path.resolve('', p)` would
+  // silently resolve against `process.cwd()` — re-anchoring the check on the
+  // wrong boundary rather than failing. Skip the backstop instead; the SDK
+  // handlers remain the authoritative containment layer either way.
+  const scopeProjectRoot = resolveProjectRootOrEmpty(params.fileContext)
+  if (filesystemAccess && scopeProjectRoot === '') {
+    logger.warn(
+      { toolName, agentId: agentTemplate.id },
+      'Skipping the filesystem-scope containment backstop: no project root is available for this call.',
+    )
+  }
+  if (filesystemAccess && scopeProjectRoot !== '') {
     const evaluatedPaths = filesystemAccess.paths.map((rawPath) => {
-      const normalized = normalizeScopedToolPath(
-        rawPath,
-        params.fileContext.projectRoot,
-      )
+      const normalized = normalizeScopedToolPath(rawPath, scopeProjectRoot)
       let canonical = normalized
-      if (params.fileContext.fileTreeSource !== 'virtual') {
+      if (params.fileContext?.fileTreeSource !== 'virtual') {
         try {
-          canonical = canonicalScopedToolPath(
-            normalized,
-            params.fileContext.projectRoot,
-          )
+          canonical = canonicalScopedToolPath(normalized, scopeProjectRoot)
         } catch {
           // SDK handlers remain the authoritative containment layer. Keep
           // lexical scope for missing paths so create operations still work.
@@ -2325,7 +3362,11 @@ export async function executeToolCall<T extends ToolName>(
       // the project, so these are always hard-blocked — except for the exempt
       // owned-temp / allowlisted-external cases above.
       const escapesProject =
-        !containmentExempt &&
+        hasFilesystemSandbox(params.fileSystem?.hostReadPolicy)
+          ? (filesystemAccess.access === 'read'
+            ? resolveProjectPathForRead(scopeProjectRoot, rawPath, params.fileSystem?.hostReadPolicy)
+            : resolveProjectPath(scopeProjectRoot, rawPath)) === null
+          : !containmentExempt &&
         (normalizedEscapesProject(normalized) ||
           normalizedEscapesProject(canonical))
       // An in-project path is a scope mismatch when it stays inside the project
@@ -2478,6 +3519,185 @@ export async function executeToolCall<T extends ToolName>(
     }
     if (resolved.agents !== effectiveInput.agents) {
       effectiveInput = { ...effectiveInput, agents: resolved.agents }
+    }
+  }
+
+  // Deterministic playbook gate (memory playbook Phase 1). Deliberately placed
+  // OUTSIDE the `canSuggestFollowups === false` condition ABOVE: a learned
+  // playbook applies whether or not the validation/reviewer gate is open, so its
+  // refusal is never conditional on the gate state. It covers the three tools a
+  // playbook may target, is skipped entirely when the coordinator never
+  // installed playbookContext (the common case), and is wrapped in try/catch so
+  // a gate bug can never break tool dispatch (fail OPEN): only a 'blocked'
+  // verdict — which requires BOTH an operator-opted 'block' mode AND a playbook
+  // enforcing 'block' — aborts the call, through the existing abort barrier.
+  const playbookContext = (
+    agentState as AgentState & { playbookContext?: MemoryPlaybook[] }
+  ).playbookContext
+  if (
+    playbookContext &&
+    playbookContext.length > 0 &&
+    (toolName === 'spawn_agents' ||
+      toolName === 'spawn_agent_inline' ||
+      toolName === 'run_terminal_command')
+  ) {
+    try {
+      // The host's captured mode follows the actor into supervised children.
+      // Legacy callers can still supply the gate's string environment key.
+      const playbookGateEnv: Record<string, string | undefined> = {}
+      for (const [key, value] of Object.entries(params.clientEnv)) {
+        if (typeof value === 'string') playbookGateEnv[key] = value
+      }
+      if (params.playbookGateMode !== undefined) {
+        playbookGateEnv.OPENBUFF_PLAYBOOK_GATE = params.playbookGateMode
+      }
+      const evidenceLog = sessionEvidenceLogFor(agentState)
+      let validationEvidence: ValidationEvidenceContext | undefined
+      if (params.getPlaybookValidationEvidence) {
+        try {
+          validationEvidence = await params.getPlaybookValidationEvidence({
+            runId: params.runId,
+            rootRunId: params.ancestorRunIds?.[0] ?? params.runId,
+            agentId: agentState.agentId,
+          })
+          // Receipt ingestion is exclusively from the host callback. Neither
+          // input, model output nor native tool-result JSON can attest a check.
+          for (const receipt of validationEvidence?.receipts ?? []) {
+            if (
+              !evidenceLog.entries.some(
+                (entry) =>
+                  entry.kind === 'validationSucceeded' &&
+                  entry.receipt.receiptId === receipt.receiptId,
+              )
+            ) {
+              recordSessionValidationEvidence(evidenceLog, receipt)
+            }
+          }
+        } catch (error) {
+          // Unavailable validation evidence must remain unsatisfied even in
+          // block mode; do not let this reach the dispatch fail-open catch.
+          validationEvidence = undefined
+          logger.debug(
+            { error, toolName },
+            'Validation receipt lookup failed; required evidence remains unsatisfied',
+          )
+        }
+      }
+      let terminalActions: readonly PlaybookTerminalAction[] | undefined
+      if (
+        toolName === 'run_terminal_command' &&
+        typeof effectiveInput.command === 'string' &&
+        params.classifyPlaybookTerminalActions
+      ) {
+        try {
+          terminalActions = await params.classifyPlaybookTerminalActions(
+            effectiveInput.command,
+          )
+        } catch (error) {
+          // The action is unknown on classifier failure. Preserve potential
+          // obligations conservatively without parsing shell text ourselves.
+          terminalActions = ['git-commit', 'git-push', 'git-stage']
+          logger.debug(
+            { error, toolName },
+            'Terminal classification failed; retaining potentially applicable procedures',
+          )
+        }
+      }
+      // One clock read shared by the gate evaluation and the verdict history
+      // below, so every recorded verdict is stamped with exactly the time the
+      // gate evaluated it.
+      const gateNowMs = (params.clock ?? realClock).now()
+      const verdicts = evaluatePlaybookGate({
+        toolName,
+        input: effectiveInput,
+        playbooks: playbookContext,
+        evidenceLog,
+        nowMs: gateNowMs,
+        env: playbookGateEnv,
+        applicability: {
+          ...(
+            agentState as AgentState & {
+              playbookApplicability?: PlaybookApplicabilityContext
+            }
+          ).playbookApplicability,
+          actorAgentType: agentTemplate.id,
+          nowMs: gateNowMs,
+        },
+        terminalActions,
+        validationEvidence,
+      })
+      const gateHistory = sessionGateHistoryFor(agentState)
+      let playbookBlocked = false
+      for (const verdict of verdicts) {
+        // Phase 4 comply detection: every verdict the gate produced lands in
+        // the per-agent-state gate history FIRST, so a later satisfied call
+        // can correlate blocked(sig) → allowed(sig) within the session.
+        recordSessionGateOutcome(gateHistory, {
+          playbookId: verdict.playbook.playbookId,
+          triggerSignature: verdict.playbook.triggerSignature,
+          outcome: verdict.outcome,
+          atMs: gateNowMs,
+        })
+        if (verdict.outcome === 'allowed') {
+          // An `allowed` verdict is behavior-invisible: no error chunk, no
+          // dispatch change, and NO store report for the allowed outcome
+          // itself (the outcome mapping's counter effect is '—'). Its only
+          // effects are the history entry above and, when this same trigger
+          // signature was BLOCKED earlier in the session, exactly ONE
+          // 'compliedAfterBlock' report through the same isolation seam —
+          // never for a heeded warn.
+          if (
+            correlateCompliedAfterBlock(gateHistory, {
+              triggerSignature: verdict.playbook.triggerSignature,
+            })
+          ) {
+            reportPlaybookGateOutcome({
+              deps: {
+                onPlaybookGateOutcome: params.onPlaybookGateOutcome,
+                logger,
+              },
+              event: {
+                playbookId: verdict.playbook.playbookId,
+                triggerSignature: verdict.playbook.triggerSignature,
+                outcome: 'compliedAfterBlock',
+              },
+            })
+          }
+          continue
+        }
+        onResponseChunk({
+          type: 'error',
+          message: verdict.message,
+          autoRecovering: true,
+        })
+        // Producer outcome report (Phase 4 counter seam): fires for every
+        // warned/blocked verdict, immediately after its error chunk and inside
+        // the SAME loop iteration — never after the abort return below. The
+        // reporter isolates the emission, so a throwing or rejecting producer
+        // can never reach this block's fail-open catch and let a BLOCKED call
+        // proceed. Additive-optional: an absent dep reports nothing.
+        reportPlaybookGateOutcome({
+          deps: {
+            onPlaybookGateOutcome: params.onPlaybookGateOutcome,
+            logger,
+          },
+          event: {
+            playbookId: verdict.playbook.playbookId,
+            triggerSignature: verdict.playbook.triggerSignature,
+            outcome: verdict.outcome,
+          },
+        })
+        // A 'warned' verdict is advisory only: it must never abort dispatch.
+        if (verdict.outcome === 'blocked') playbookBlocked = true
+      }
+      if (playbookBlocked) {
+        return abortablePreviousToolCallFinished
+      }
+    } catch (error) {
+      logger.debug(
+        { error, toolName },
+        'Playbook gate failed internally; proceeding with tool dispatch (fail-open)',
+      )
     }
   }
 
@@ -3000,8 +4220,11 @@ export async function executeToolCall<T extends ToolName>(
   }
 
   let canonicalReceipt: unknown
-  const toolResultPromise = Promise.resolve().then(() =>
-    handler({
+  let handlerSucceeded = false
+  let clientDelegated = false
+  const toolResultPromise = Promise.resolve().then(() => {
+    params.signal.throwIfAborted()
+    return handler({
       ...params,
       toolCall: finalToolCall,
       previousToolCallFinished: abortablePreviousToolCallFinished,
@@ -3009,6 +4232,7 @@ export async function executeToolCall<T extends ToolName>(
       requestClientToolCall: (async (
         clientToolCall: ClientToolCall<T extends ClientToolName ? T : never>,
       ) => {
+        clientDelegated = true
         if (params.signal.aborted) {
           return []
         }
@@ -3056,14 +4280,18 @@ export async function executeToolCall<T extends ToolName>(
           handlerResult: mutationRecord,
           receipt: canonicalReceipt,
           capabilityScope: {
-            projectId: params.fileContext.projectRoot,
+            // Empty projectId is intended: readCapabilityMatchesScope then fails to match, so the pass reports "unconfirmed" instead of throwing.
+            projectId: resolveProjectRootOrEmpty(params.fileContext),
             runId: params.runId,
           },
         })
         return jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>
       }) as any,
-    }),
-  )
+    })
+  }).then(result => {
+    handlerSucceeded = true
+    return result
+  })
 
   // NOTE (spawn-failure MIGRATION NOTE sync, RF-5): the underlying handler
   // error MUST be logged here via logger.warn. `buildSpawnAgentsHandlerFailureOutput`
@@ -3073,6 +4301,8 @@ export async function executeToolCall<T extends ToolName>(
   // `logger.warn({ error, toolName, toolCallId }, ...)` contract or the error
   // becomes silently lost for spawned agents.
   const recoverableToolResultPromise = toolResultPromise.catch((error) => {
+    uncertainJournalHandlers.add(params)
+    params.signal.throwIfAborted()
     if (isAbortError(error)) throw error
     logger.warn(
       { error, toolName, toolCallId: toolCall.toolCallId },
@@ -3092,6 +4322,11 @@ export async function executeToolCall<T extends ToolName>(
   })
 
   return recoverableToolResultPromise.then(async ({ output, creditsUsed }) => {
+    const completedLocalRecord = toolName === 'record_decision' && handlerSucceeded && !clientDelegated
+    // A completed local record must be validated/retained before cancellation
+    // stops the run. Failed, recovered and delegated results keep the old guard.
+    if (!completedLocalRecord) params.signal.throwIfAborted()
+    let nativeOutputValid = false
     let validatedOutput = output
     if (toolName === 'read_files') {
       const parsed = toolParams.read_files.outputSchema.safeParse(output)
@@ -3143,6 +4378,16 @@ export async function executeToolCall<T extends ToolName>(
           delete params.fileProcessingState.readAuthorizationHashesByPath?.[
             path
           ]
+          delete params.fileProcessingState.rawReadAuthorizationHashesByPath?.[
+            path
+          ]
+          delete params.fileProcessingState
+            .modelVisibleReadAuthorizationHashesByPath?.[path]
+          delete params.fileProcessingState
+            .modelVisibleRawReadAuthorizationHashesByPath?.[path]
+          delete params.fileProcessingState.confirmedPostEditAnchorsByPath?.[
+            path
+          ]
           params.fileProcessingState.failedEditRequiresReadByPath[path] = true
         }
         validatedOutput = jsonToolResult(
@@ -3156,10 +4401,15 @@ export async function executeToolCall<T extends ToolName>(
         output,
         canonicalReceipt,
         capabilityScope: {
-          projectId: params.fileContext.projectRoot,
+          // Empty projectId is intended: readCapabilityMatchesScope then fails to match, so the pass reports "unconfirmed" instead of throwing.
+          projectId: resolveProjectRootOrEmpty(params.fileContext),
           runId: params.runId,
         },
+        confirmedPostEditAnchorsByPath:
+          params.fileProcessingState.confirmedPostEditAnchorsByPath,
       })
+      validatedOutput = normalized.output
+      nativeOutputValid = normalized.valid
       if (!normalized.valid) {
         logger.error(
           {
@@ -3170,8 +4420,22 @@ export async function executeToolCall<T extends ToolName>(
           },
           'Native tool output failed schema validation',
         )
-        validatedOutput = normalized.output
       }
+    }
+    const completedSuccessfulRecord = completedLocalRecord && nativeOutputValid && !outputCarriesToolError(output) && !outputCarriesToolError(validatedOutput)
+    if (!completedSuccessfulRecord) params.signal.throwIfAborted()
+    if (completedSuccessfulRecord && params.onNativeToolObservation && params.executionIdentity) {
+      const identity = params.executionIdentity
+      await observeCompletedNativeTool(params, {
+        actor: Object.freeze({ runId: identity.runId, rootRunId: identity.rootRunId, agentId: identity.agentId }),
+        executionIdentity: identity,
+        toolName: 'record_decision',
+        callId: toolCall.toolCallId,
+        userInputId,
+        input: cloneDeep(finalToolCall.input) as NativeToolObservation['input'],
+        output: cloneDeep(validatedOutput) as NativeToolObservation['output'],
+        signal: params.signal,
+      })
     }
     const lifecycleTags = lifecycleTagsForToolResult(toolName)
     const toolResult: ToolMessage = {
@@ -3179,7 +4443,7 @@ export async function executeToolCall<T extends ToolName>(
       toolName,
       toolCallId: toolCall.toolCallId,
       content: validatedOutput,
-      sentAt: Date.now(),
+      sentAt: (params.clock ?? realClock).now(),
       ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
     }
 
@@ -3193,6 +4457,17 @@ export async function executeToolCall<T extends ToolName>(
     })
 
     toolResults.push(toolResult)
+
+    // Playbook-gate evidence: this is the single post-dispatch finalization
+    // point for a native tool result, so the ledger records exactly one entry
+    // per successful call (failures carry an `errorMessage` and record nothing).
+    recordToolEvidence({
+      agentState,
+      toolName,
+      input: toolCall.input as Record<string, unknown>,
+      output: validatedOutput,
+      atMs: (params.clock ?? realClock).now(),
+    })
 
     // Record this agent's own reads/edits as task-memory evidence. Only child
     // agents report through mergeAgentReceiptIntoTaskMemory, so without this the
@@ -3218,6 +4493,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
         // Identity result means the derived evidence is byte-identical to what
         // is already stored, so the commit was skipped: assigning would be a
@@ -3232,6 +4508,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
       }
     } catch (error) {
@@ -3267,14 +4544,17 @@ export function parseRawCustomToolCall(params: {
     providerOptions?: ProviderMetadata
   }
   autoInsertEndStepParam?: boolean
+  /** See `parseRawToolCall`'s `providerReportedTruncation`. */
+  providerReportedTruncation?: boolean
 }): CustomToolCall | ToolCallError {
-  const { customToolDefs, rawToolCall, autoInsertEndStepParam = false } = params
+  const { customToolDefs, rawToolCall } = params
   const toolName = rawToolCall.toolName
 
-  if (
-    !(customToolDefs && toolName in customToolDefs) &&
-    !toolName.includes(MCP_TOOL_SEPARATOR)
-  ) {
+  // MCP server membership alone is not permission to invoke an arbitrary
+  // server tool: only tools discovered for this agent are exposed. Requiring
+  // a real own entry also prevents inherited property names from bypassing
+  // discovery or validation.
+  if (!Object.prototype.hasOwnProperty.call(customToolDefs, toolName)) {
     return {
       toolName,
       toolCallId: rawToolCall.toolCallId,
@@ -3283,7 +4563,11 @@ export function parseRawCustomToolCall(params: {
     }
   }
 
-  const parsedInput = parseStringifiedToolInput(rawToolCall.input, toolName)
+  const parsedInput = parseStringifiedToolInput(
+    rawToolCall.input,
+    toolName,
+    params.providerReportedTruncation,
+  )
 
   if (typeof parsedInput.input === 'string') {
     return stringInputError(
@@ -3293,39 +4577,78 @@ export function parseRawCustomToolCall(params: {
       undefined,
       parsedInput.sawTransportTruncation,
       parsedInput.truncationRecovery,
+      parsedInput.oversizedTruncationBytes,
     )
   }
 
-  const processedParameters: Record<string, any> = {}
-  for (const [param, val] of Object.entries(parsedInput.input ?? {})) {
-    processedParameters[param] = val
-  }
-
-  // Add the required codebuff_end_step parameter with the correct value for this tool if requested
-  if (autoInsertEndStepParam) {
-    processedParameters[endsAgentStepParam] =
-      customToolDefs?.[toolName]?.endsAgentStep
-  }
-
-  const rawSchema = customToolDefs?.[toolName]?.inputSchema
-  if (rawSchema) {
-    const paramsSchema = ensureZodSchema(rawSchema)
-    const result = paramsSchema.safeParse(processedParameters)
-
-    if (!result.success) {
-      const issues = result.error.issues as ValidationIssue[]
+  const value = parsedInput.input
+  const plainObject =
+    value !== null &&
+    typeof value === 'object' &&
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
+  // The step-control field is transport metadata, not part of the tool's
+  // authoritative input contract (including additionalProperties:false).
+  // Preserve the actual root: an array or null must not validate as an object.
+  const processedParameters = plainObject
+    ? Object.fromEntries(
+        Object.entries(value).filter(([key]) => key !== endsAgentStepParam),
+      )
+    : value
+  const definition = customToolDefs[toolName]
+  const rawSchema = definition.inputSchema
+  // A host custom tool's original async Zod schema is enforced by SDK dispatch.
+  // Its provider projection cannot reproduce all Zod semantics (for example
+  // UTF-16 string lengths), so it must not reject inputs before that validator.
+  if (rawSchema !== undefined) {
+    try {
+      const isZod =
+        rawSchema &&
+        typeof (rawSchema as { safeParse?: unknown }).safeParse === 'function'
+      assertExternalToolInputSchema(
+        isZod
+          ? projectZodSchema(rawSchema as z.ZodType, 'input')
+          : (rawSchema as JsonSchema),
+      )
+      const result =
+        definition.identity?.kind === 'custom'
+          ? undefined
+          : ensureZodSchema(rawSchema).safeParse(processedParameters)
+      if (result && !result.success) {
+        const issues = result.error.issues as ValidationIssue[]
+        return {
+          toolName,
+          toolCallId: rawToolCall.toolCallId,
+          input: rawToolCall.input,
+          error: `Invalid parameters for ${toolName}: ${formatValidationIssues({ issues, toolName })}`,
+        }
+      }
+    } catch (error) {
       return {
-        toolName: toolName,
+        toolName,
         toolCallId: rawToolCall.toolCallId,
         input: rawToolCall.input,
-        error: `Invalid parameters for ${toolName}: ${formatValidationIssues({ issues, toolName })}`,
+        error: `Unsupported input schema for ${toolName}: ${String(error)}`,
       }
     }
   }
 
-  const input = JSON.parse(JSON.stringify(parsedInput.input))
-  if (endsAgentStepParam in input) {
-    delete input[endsAgentStepParam]
+  let input: CustomToolCall['input']
+  try {
+    input = JSON.parse(
+      JSON.stringify(processedParameters, (_key, member: unknown) => {
+        if (typeof member === 'number' && !Number.isFinite(member))
+          throw new TypeError('Tool parameters require finite JSON numbers')
+        return member
+      }),
+    )
+  } catch (error) {
+    return {
+      toolName,
+      toolCallId: rawToolCall.toolCallId,
+      input: rawToolCall.input,
+      error: `Invalid JSON parameters for ${toolName}: ${String(error)}`,
+    }
   }
   return {
     toolName: toolName,
@@ -3338,6 +4661,12 @@ export function parseRawCustomToolCall(params: {
 }
 
 export async function executeCustomToolCall(
+  params: ExecuteToolCallParams<string>,
+): Promise<void> {
+  return trackToolAttempt(params, (tracked) => executeExternalToolCall(tracked))
+}
+
+async function executeExternalToolCall(
   params: ExecuteToolCallParams<string>,
 ): Promise<void> {
   const {
@@ -3366,6 +4695,34 @@ export async function executeCustomToolCall(
     previousToolCallFinished,
     params.signal,
   )
+  const planModeRefusal = checkPlanModeToolCall({
+    toolName,
+    input,
+    agentTemplate,
+    agentState,
+    clientSessionId: params.clientSessionId,
+    externalTool: true,
+  })
+  if (planModeRefusal) {
+    onResponseChunk({
+      type: 'error',
+      message: planModeRefusal.message,
+      userMessage: planModeRefusal.userMessage,
+      errorCode: planModeRefusal.errorCode,
+    } as PrintModeEvent & { errorCode: typeof planModeRefusal.errorCode })
+    if (fromHandleSteps) {
+      const result: ToolMessage = {
+        role: 'tool',
+        toolName,
+        toolCallId: toolCallId ?? generateCompactId(),
+        content: jsonToolResult({ errorCode: planModeRefusal.errorCode, errorMessage: planModeRefusal.message }),
+        sentAt: (params.clock ?? realClock).now(),
+      }
+      toolResults.push(result)
+      if (!excludeToolFromMessageHistory) toolResultsToAddToMessageHistory.push(result)
+    }
+    return abortablePreviousToolCallFinished
+  }
   // Same last-tool / emitted-flag enforcement as executeToolCall. Custom and
   // MCP tools are never terminal companions, so they must not run after
   // same-step suggest_followups (or after the emitted flag is already set).
@@ -3383,32 +4740,79 @@ export async function executeCustomToolCall(
     })
     return abortablePreviousToolCallFinished
   }
-  const toolCall: CustomToolCall | ToolCallError = parseRawCustomToolCall({
-    customToolDefs: await getMCPToolData({
+  const published = getAdvertisedExternalToolDefinitions(params.tools)
+  const advertised =
+    !fromHandleSteps || Object.hasOwn(published ?? {}, toolName)
+      ? published
+      : undefined
+  const externalToolNames = [
+    ...getEffectiveAgentToolNames(agentTemplate),
+    ...(fromHandleSteps ? (agentTemplate.programmaticToolNames ?? []) : []),
+  ]
+  const catalogs: NonNullable<ProjectFileContext['mcpCatalogs']> = {}
+  const definitions =
+    advertised ??
+    (await getMCPToolData({
       ...params,
-      toolNames: getEffectiveAgentToolNames(agentTemplate),
+      executionActor: { runId: params.runId, rootRunId: params.ancestorRunIds[0] ?? params.runId, agentId: agentState.agentId },
+      toolNames: externalToolNames,
       mcpServers: agentTemplate.mcpServers,
-      writeTo: cloneDeep(fileContext.customToolDefinitions),
-    }),
+      mcpAgentId: agentTemplate.id,
+      mcpServerReferences: agentTemplate.mcpServerReferences,
+      reservedAliases: Object.keys(fileContext.customToolDefinitions ?? {}),
+      writeCatalogTo: catalogs,
+      writeTo: cloneDeep(
+        Object.fromEntries(
+          Object.entries(fileContext.customToolDefinitions ?? {}).filter(
+            ([alias, definition]) =>
+              externalToolNames.includes(alias) ||
+              (definition.identity?.kind === 'custom' &&
+                externalToolNames.includes(definition.identity.toolName)),
+          ),
+        ),
+      ),
+    }))
+  if (!advertised)
+    fileContext.mcpCatalogs = { ...fileContext.mcpCatalogs, ...catalogs }
+  let dispatchAlias = toolName
+  if (fromHandleSteps && !Object.hasOwn(definitions, toolName)) {
+    const matches = Object.entries(definitions).filter(([, definition]) =>
+      definition.identity?.kind === 'custom'
+        ? definition.identity.toolName === toolName
+        : definition.identity?.kind === 'mcp' &&
+          `${definition.identity.serverName}/${definition.identity.toolName}` ===
+            toolName,
+    )
+    if (matches.length > 1)
+      throw new Error(`Ambiguous external tool selector: ${toolName}`)
+    if (matches.length === 1) dispatchAlias = matches[0][0]
+  }
+  const toolCall: CustomToolCall | ToolCallError = parseRawCustomToolCall({
+    customToolDefs: definitions,
     rawToolCall: {
-      toolName,
+      toolName: dispatchAlias,
       toolCallId: toolCallId ?? generateCompactId(),
       input,
       providerOptions: params.providerOptions,
     },
     autoInsertEndStepParam,
+    providerReportedTruncation: params.providerReportedTruncation,
   })
+  const identity = toolCall.toolName
+    ? definitions[toolCall.toolName]?.identity
+    : undefined
 
   // Filter out restricted tools - emit error instead of tool call/result
   // This prevents the CLI from showing tool calls that the agent doesn't have permission to use
   if (
     toolCall.toolName &&
     !getEffectiveAgentToolNames(agentTemplate).includes(toolCall.toolName) &&
-    !fromHandleSteps &&
     !(
-      toolCall.toolName.includes(MCP_TOOL_SEPARATOR) &&
-      toolCall.toolName.split(MCP_TOOL_SEPARATOR)[0] in agentTemplate.mcpServers
-    )
+      identity?.kind === 'custom' &&
+      getEffectiveAgentToolNames(agentTemplate).includes(identity.toolName)
+    ) &&
+    !fromHandleSteps &&
+    identity?.kind !== 'mcp'
   ) {
     const availableTools = getEffectiveAgentToolNames(agentTemplate)
     // Emit an error event instead of tool call/result pair
@@ -3429,46 +4833,37 @@ export async function executeCustomToolCall(
     const inputLabel = toolCall.formattedInput
       ? 'Relevant invalid input excerpts'
       : 'Original tool call input'
+    // Structured invalid-arguments marker for custom/MCP tool validation
+    // failures (mirrors the native emission above): the repeated-invalid-call
+    // degeneration guard in stream-parser.ts arms its signature from this
+    // flag instead of matching `message` prose.
     onResponseChunk({
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
-    })
+      invalidArgumentsValidation: true,
+    } as PrintModeEvent & { invalidArgumentsValidation?: true })
     logger.debug(
       { toolCall, error: toolCall.error },
 
       `${toolName} error: ${toolCall.error}`,
     )
+    if (fromHandleSteps) {
+      const refusalResult: ToolMessage = {
+        role: 'tool', toolName, toolCallId: toolCall.toolCallId,
+        content: jsonToolResult({ errorMessage: toolCall.error }),
+        sentAt: (params.clock ?? realClock).now(),
+      }
+      toolResults.push(refusalResult)
+      if (!excludeToolFromMessageHistory) toolResultsToAddToMessageHistory.push(refusalResult)
+    }
     return abortablePreviousToolCallFinished
   }
 
-  // Heuristic containment backstop for custom/MCP tools. Their input schemas are
-  // arbitrary and agent-defined, so getFilesystemToolPaths cannot enumerate path
-  // fields the way it does for native tools. As defense-in-depth (SDK handlers
-  // remain the authoritative containment layer), recursively scan string inputs
-  // and hard-block the call when any value LEXICALLY resolves to a path that
-  // escapes the project root (../ traversal or absolute). This is intentionally
-  // lexical-only (no realpath): it stays cheap over arbitrary/large inputs and
-  // avoids per-string filesystem stat storms; symlink-level containment remains
-  // the SDK handler's responsibility. It can false-positive on non-path strings
-  // that happen to resolve outside the root — an explicitly accepted tradeoff.
-  const scannedInputStrings: string[] = []
-  collectCustomInputStrings(toolCall.input, scannedInputStrings)
-  const hasEscapingInput = scannedInputStrings.some(
-    (value) =>
-      value.length > 0 &&
-      normalizedEscapesProject(
-        normalizeScopedToolPath(value, fileContext.projectRoot),
-      ),
-  )
-  if (hasEscapingInput) {
-    onResponseChunk({
-      type: 'error',
-      message: `Tool \`${toolName}\` was blocked because one or more input values resolve to a path outside the project root. Tools may only operate on paths inside the project.`,
-    })
-    return abortablePreviousToolCallFinished
-  }
+  // Filesystem effects are declared by the host tool definition and checked
+  // against the parsed handler input at the SDK boundary. Ordinary routes,
+  // regexes and separator strings carry no filesystem authority.
 
   // Only emit tool_call event after permission check passes
   onResponseChunk({
@@ -3518,31 +4913,32 @@ export async function executeCustomToolCall(
 
   return abortablePreviousToolCallFinished
     .then(async () => {
-      if (params.signal.aborted) {
-        return null
-      }
+      params.signal.throwIfAborted()
 
-      const toolName = toolCall.toolName.includes(MCP_TOOL_SEPARATOR)
-        ? toolCall.toolName
-            .split(MCP_TOOL_SEPARATOR)
-            .slice(1)
-            .join(MCP_TOOL_SEPARATOR)
-        : toolCall.toolName
       const clientToolResult = await requestToolCall({
         userInputId,
-        toolName,
+        toolName: identity?.toolName ?? toolCall.toolName,
         input: toolCall.input,
-        mcpConfig: toolCall.toolName.includes(MCP_TOOL_SEPARATOR)
-          ? agentTemplate.mcpServers[
-              toolCall.toolName.split(MCP_TOOL_SEPARATOR)[0]
-            ]
-          : undefined,
+        mcpConfig:
+          identity?.kind === 'mcp'
+            ? agentTemplate.mcpServers[identity.serverName]
+            : undefined,
+        ...(identity?.kind === 'mcp'
+          ? {
+              mcpReference: identity.reference,
+              mcpAgentId: agentTemplate.id,
+              mcpServerName: identity.serverName,
+              mcpCatalogGeneration: identity.generation,
+            }
+          : {}),
         signal: params.signal,
       })
       return clientToolResult.output satisfies ToolResultOutput[]
     })
     .catch((error) => {
-      if (isAbortError(error)) throw error
+      uncertainJournalHandlers.add(params)
+      params.signal.throwIfAborted()
+      if (isAbortError(error) || fromHandleSteps) throw error
       logger.warn(
         { error, toolName, toolCallId: toolCall.toolCallId },
         'Custom tool handler failed after tool-call publication; returning a terminal failure result',
@@ -3555,6 +4951,7 @@ export async function executeCustomToolCall(
       })
     })
     .then((result) => {
+      params.signal.throwIfAborted()
       if (!result) {
         return
       }
@@ -3564,7 +4961,7 @@ export async function executeCustomToolCall(
         toolName,
         toolCallId: toolCall.toolCallId,
         content: result,
-        sentAt: Date.now(),
+        sentAt: (params.clock ?? realClock).now(),
         ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
       } satisfies ToolMessage
       logger.debug(

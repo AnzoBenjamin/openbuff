@@ -1,0 +1,21 @@
+import sys, json, pathlib
+
+ROOT = pathlib.Path('/home/ben/Code/CLI/openbuff')
+BASE = pathlib.Path('/tmp/openbuff-body-review-2026-11-05/evidence')
+receipt = BASE / '10-read-ranges.json'
+reads = json.loads(receipt.read_text()) if receipt.exists() else []
+out = []
+for spec in sys.argv[1:]:
+    relative, first, last = spec.rsplit(':', 2)
+    first, last = int(first), int(last)
+    lines = (ROOT / relative).read_text().splitlines()
+    last = min(last, len(lines))
+    item = {'path': relative, 'from': first, 'to': last}
+    reads.append(item)
+    out.append('\n' + relative + '\n')
+    out.extend(f'{i + 1:5d} {lines[i]}\n' for i in range(first - 1, last))
+receipt.write_text(json.dumps(reads, indent=2) + '\n')
+output = ''.join(out)
+with (BASE / '10-exact-reads.txt').open('a') as f:
+    f.write(output)
+sys.stdout.write(output)

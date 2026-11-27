@@ -1,9 +1,22 @@
 import type { ToolName } from '@codebuff/common/tools/constants'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { z } from 'zod/v4'
+import type { ExternalToolPathParameter } from '@codebuff/common/tools/external-tool'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 export type CustomToolExecutionContext = {
   signal?: AbortSignal
+  /** Registered process facade for cooperating host callbacks. */
+  execution?: ExecutionAdapterContext
+  /** Checked canonical targets for cooperating host callbacks. This is a
+   * preflight check; arbitrary JavaScript callbacks are not OS-confined. */
+  authorizedPaths?: ReadonlyArray<
+    Readonly<{
+      inputPath: string
+      path: string
+      access: 'read' | 'write'
+    }>
+  >
 }
 
 export type CustomToolDefinition<
@@ -14,10 +27,16 @@ export type CustomToolDefinition<
   Input extends any = any,
 > = {
   toolName: N
+  /** Object-root input schema. The host preserves its defaults, transforms and
+   * async refinements; scalar roots and declarations of the reserved root
+   * step-control field cb_easp are refused when publishing tools. */
   inputSchema: z.ZodType<Args, Input>
   description: string
   endsAgentStep: boolean
   exampleInputs: Input[]
+  /** Optional host-declared filesystem fields, checked after parsing against
+   * host containment and policies. Canonical targets are provided in context. */
+  pathParameters?: ExternalToolPathParameter[]
   execute: (
     params: Args,
     context?: CustomToolExecutionContext,
@@ -28,7 +47,9 @@ export type CustomToolDefinition<
  * Creates a CustomToolDefinition object
  *
  * @param toolName the name of the tool
- * @param inputSchema a Zod4 schema describing the input of the tool.
+ * @param inputSchema An object-root Zod4 input schema, validated by the host.
+ * The published provider schema is advisory where JSON Schema cannot express
+ * the original normalization, coercion, Unicode-length or regex semantics.
  * @param description a description of the tool to be passed to the LLM. This should describe what the tool does and when to use it.
  * @param endsAgentStep whether the tool ends the agent step. If `true`, this will be used as a "stop sequence" for the LLM. i.e. it will not be able to call any other tools after this one in a single step and must wait for the tool results. Used for tools that give more information to the LLM.
  * @param exampleInputs an array of example inputs for the tool.
@@ -47,6 +68,7 @@ export function getCustomToolDefinition<
   description,
   endsAgentStep = true,
   exampleInputs = [],
+  pathParameters,
   execute,
 }: {
   toolName: TN extends ToolName
@@ -57,9 +79,10 @@ export function getCustomToolDefinition<
   inputSchema: z.ZodType<Args, Input>
   description: string
   endsAgentStep?: boolean
-  exampleInputs?: Input[]
+  exampleInputs?: NoInfer<Input>[]
+  pathParameters?: ExternalToolPathParameter[]
   execute: (
-    params: Args,
+    params: NoInfer<Args>,
     context?: CustomToolExecutionContext,
   ) => Promise<ToolResultOutput[]> | ToolResultOutput[]
 }): CustomToolDefinition<TN, Args, Input> {
@@ -69,6 +92,7 @@ export function getCustomToolDefinition<
     description,
     endsAgentStep,
     exampleInputs,
+    ...(pathParameters ? { pathParameters } : {}),
     execute: async (params, context) => {
       return await execute(params, context)
     },

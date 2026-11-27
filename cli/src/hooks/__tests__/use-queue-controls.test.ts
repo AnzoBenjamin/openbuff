@@ -9,6 +9,7 @@ import {
 } from '../use-message-queue'
 
 import type { QueuedMessage } from '../use-message-queue'
+import type { PromptAdmissionResult } from '../../types/contracts/send-message'
 
 describe('createQueueProcessingOwnership', () => {
   test('stale owner cannot release newer queue processing owner', () => {
@@ -53,8 +54,13 @@ describe('createQueueProcessingOwnership', () => {
 describe('runQueuedMessage', () => {
   const createDeferred = () => {
     let resolvePromise!: () => void
-    const promise = new Promise<void>((resolve) => {
-      resolvePromise = resolve
+    const promise = new Promise<PromptAdmissionResult>((resolve) => {
+      resolvePromise = () =>
+        resolve({
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        })
     })
 
     return { promise, resolve: resolvePromise }
@@ -66,7 +72,9 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const queue: QueuedMessage[] = [{ content: 'queued', attachments: [] }]
+    const queue: QueuedMessage[] = [
+      { content: 'queued', attachments: [], agentMode: 'DEFAULT' as const },
+    ]
     const messageToProcess = queue[0]
     expect(messageToProcess).toBeDefined()
 
@@ -86,7 +94,12 @@ describe('runQueuedMessage', () => {
 
     completeQueuedMessageProcessing({
       messageToProcess: messageToProcess!,
-      sendMessage: () => Promise.resolve(),
+      sendMessage: () =>
+        Promise.resolve({
+          status: 'accepted',
+          disposition: 'started',
+          completion: Promise.resolve(),
+        }),
       isProcessingQueueRef,
       queueProcessingRun,
     })
@@ -96,7 +109,11 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const message = { content: 'do not lose me', attachments: [] }
+    const message = {
+      content: 'do not lose me',
+      attachments: [],
+      agentMode: 'DEFAULT' as const,
+    }
     const restored: QueuedMessage[] = []
 
     runQueuedMessage({
@@ -115,6 +132,35 @@ describe('runQueuedMessage', () => {
     expect(isProcessingQueueRef.current).toBe(false)
   })
 
+  test('explicit not-started queued outcomes are returned for retention', async () => {
+    const activeQueueProcessingOwnerRef = { current: null as symbol | null }
+    const isProcessingQueueRef = { current: false }
+    const isQueuePausedRef = { current: false }
+    const message = {
+      content: 'retain blocked queue item',
+      attachments: [],
+      agentMode: 'DEFAULT' as const,
+    }
+    const retained: QueuedMessage[] = []
+
+    runQueuedMessage({
+      messageToProcess: message,
+      sendMessage: async () => ({
+        status: 'not-started',
+        reason: 'bisection-active',
+      }),
+      onNotAccepted: (blocked) => retained.push(blocked),
+      isProcessingQueueRef,
+      isQueuePausedRef,
+      queueProcessingOwnerRef: activeQueueProcessingOwnerRef,
+      setCanProcessQueue: () => {},
+    })
+
+    await flushPromises()
+    expect(retained).toEqual([message])
+    expect(isProcessingQueueRef.current).toBe(false)
+  })
+
   test('a synchronously throwing sendMessage still releases the processing lock', async () => {
     // Reviewer advisory: a sendMessage implementation that throws instead of
     // rejecting returns nothing to attach .catch/.finally to, so the lock
@@ -123,7 +169,11 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const message = { content: 'sync throw', attachments: [] }
+    const message = {
+      content: 'sync throw',
+      attachments: [],
+      agentMode: 'DEFAULT' as const,
+    }
     const restored: QueuedMessage[] = []
 
     runQueuedMessage({
@@ -154,7 +204,11 @@ describe('runQueuedMessage', () => {
     const runB = createDeferred()
 
     runQueuedMessage({
-      messageToProcess: { content: 'run A', attachments: [] },
+      messageToProcess: {
+        content: 'run A',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
       sendMessage: () => runA.promise,
       isProcessingQueueRef,
       isQueuePausedRef,
@@ -169,7 +223,11 @@ describe('runQueuedMessage', () => {
     isProcessingQueueRef.current = false
 
     runQueuedMessage({
-      messageToProcess: { content: 'run B', attachments: [] },
+      messageToProcess: {
+        content: 'run B',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
       sendMessage: () => runB.promise,
       isProcessingQueueRef,
       isQueuePausedRef,

@@ -1,0 +1,447 @@
+[
+  {
+    "path": "common/src/util/language-capabilities.ts",
+    "from": 1,
+    "to": 300
+  },
+  {
+    "path": "common/src/util/language-capability-manifest.ts",
+    "from": 1,
+    "to": 105
+  },
+  {
+    "path": "common/src/util/language-capabilities.ts",
+    "from": 301,
+    "to": 588
+  },
+  {
+    "path": "common/src/util/language-profiles.ts",
+    "from": 1,
+    "to": 364
+  },
+  {
+    "path": "packages/agent-runtime/src/templates/strings.ts",
+    "from": 174,
+    "to": 202
+  },
+  {
+    "path": "packages/code-map/src/languages.ts",
+    "from": 1,
+    "to": 360
+  },
+  {
+    "path": "packages/code-map/src/init-node.ts",
+    "from": 1,
+    "to": 110
+  },
+  {
+    "path": "packages/code-map/__tests__/all-language-wasm.test.ts",
+    "from": 1,
+    "to": 54
+  },
+  {
+    "path": "packages/code-map/src/languages.ts",
+    "from": 361,
+    "to": 620
+  },
+  {
+    "path": "packages/code-map/src/grammar-wasm-repair.ts",
+    "from": 1,
+    "to": 220
+  },
+  {
+    "path": "sdk/scripts/build.ts",
+    "from": 28,
+    "to": 148
+  },
+  {
+    "path": "sdk/scripts/build.ts",
+    "from": 460,
+    "to": 574
+  },
+  {
+    "path": "sdk/package.json",
+    "from": 1,
+    "to": 93
+  },
+  {
+    "path": "cli/scripts/build-binary.ts",
+    "from": 626,
+    "to": 700
+  },
+  {
+    "path": ".github/workflows/cli-release-build.yml",
+    "from": 451,
+    "to": 482
+  },
+  {
+    "path": ".github/workflows/cli-release-build.yml",
+    "from": 635,
+    "to": 655
+  },
+  {
+    "path": "cli/src/pre-init/tree-sitter-wasm.ts",
+    "from": 1,
+    "to": 116
+  },
+  {
+    "path": "cli/release/index.js",
+    "from": 22,
+    "to": 118
+  },
+  {
+    "path": "packages/code-map/src/structure.ts",
+    "from": 243,
+    "to": 378
+  },
+  {
+    "path": "packages/code-map/src/structure.ts",
+    "from": 827,
+    "to": 1084
+  },
+  {
+    "path": "packages/code-map/src/parse.ts",
+    "from": 734,
+    "to": 817
+  },
+  {
+    "path": "packages/code-map/src/parse.ts",
+    "from": 878,
+    "to": 929
+  },
+  {
+    "path": "packages/code-map/src/__tests__/structure.test.ts",
+    "from": 385,
+    "to": 499
+  },
+  {
+    "path": "sdk/src/services/lsp-multiplexer.ts",
+    "from": 1,
+    "to": 262
+  },
+  {
+    "path": "sdk/src/services/lsp-multiplexer.ts",
+    "from": 263,
+    "to": 545
+  },
+  {
+    "path": "sdk/src/services/lsp-multiplexer.ts",
+    "from": 546,
+    "to": 697
+  },
+  {
+    "path": "sdk/src/services/lsp-multiplexer.ts",
+    "from": 785,
+    "to": 1056
+  },
+  {
+    "path": "sdk/src/services/lsp-multiplexer.ts",
+    "from": 1207,
+    "to": 1306
+  },
+  {
+    "path": "sdk/src/services/lsp-multiplexer.ts",
+    "from": 1385,
+    "to": 1454
+  },
+  {
+    "path": "sdk/src/services/language-intelligence.ts",
+    "from": 1,
+    "to": 198
+  },
+  {
+    "path": "sdk/src/services/language-intelligence.ts",
+    "from": 498,
+    "to": 735
+  },
+  {
+    "path": "sdk/src/services/language-intelligence.ts",
+    "from": 938,
+    "to": 1025
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1123,
+    "to": 1137
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 3226,
+    "to": 3244
+  },
+  {
+    "path": "sdk/src/__tests__/lsp-real-server.test.ts",
+    "from": 1,
+    "to": 124
+  },
+  {
+    "path": "packages/indexer/src/import-resolution.ts",
+    "from": 1,
+    "to": 413
+  },
+  {
+    "path": "packages/indexer/src/metadata-indexer.ts",
+    "from": 1244,
+    "to": 1278
+  },
+  {
+    "path": "packages/indexer/src/metadata-indexer.ts",
+    "from": 1389,
+    "to": 1514
+  },
+  {
+    "path": "packages/indexer/src/scip-ingest.ts",
+    "from": 1,
+    "to": 430
+  },
+  {
+    "path": "sdk/src/services/diagnostic-delta.ts",
+    "from": 1,
+    "to": 350
+  },
+  {
+    "path": "sdk/src/services/diagnostic-delta.ts",
+    "from": 351,
+    "to": 494
+  },
+  {
+    "path": "sdk/src/tools/file-change-hooks.ts",
+    "from": 1663,
+    "to": 1740
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1400,
+    "to": 1475
+  },
+  {
+    "path": "sdk/src/tools/run-targeted-validation.ts",
+    "from": 1,
+    "to": 148
+  },
+  {
+    "path": "sdk/src/tools/get-affected-tests.ts",
+    "from": 1,
+    "to": 46
+  },
+  {
+    "path": "sdk/src/tools/get-build-targets.ts",
+    "from": 1,
+    "to": 34
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 2982,
+    "to": 3024
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 3102,
+    "to": 3110
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 24,
+    "to": 82
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 289,
+    "to": 425
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 603,
+    "to": 823
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 1540,
+    "to": 1732
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 1733,
+    "to": 2008
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 2009,
+    "to": 2295
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 890,
+    "to": 938
+  },
+  {
+    "path": "sdk/test/tree-sitter-queries/test-query-files.js",
+    "from": 1,
+    "to": 105
+  },
+  {
+    "path": "packages/indexer/src/call-navigation.test.ts",
+    "from": 1,
+    "to": 129
+  },
+  {
+    "path": "common/src/util/__tests__/language-profiles.test.ts",
+    "from": 144,
+    "to": 377
+  },
+  {
+    "path": "packages/indexer/src/scip-runner.ts",
+    "from": 647,
+    "to": 806
+  },
+  {
+    "path": "cli/src/commands/index-command.ts",
+    "from": 277,
+    "to": 359
+  },
+  {
+    "path": "packages/code-map/src/grammar-wasm-repair.ts",
+    "from": 221,
+    "to": 404
+  },
+  {
+    "path": "sdk/src/services/harness-intelligence.ts",
+    "from": 872,
+    "to": 893
+  },
+  {
+    "path": "sdk/src/services/build-graph.ts",
+    "from": 1,
+    "to": 86
+  },
+  {
+    "path": "sdk/src/services/build-graph.ts",
+    "from": 221,
+    "to": 269
+  },
+  {
+    "path": "sdk/src/services/build-graph.ts",
+    "from": 306,
+    "to": 335
+  },
+  {
+    "path": "sdk/src/services/build-graph.ts",
+    "from": 437,
+    "to": 563
+  },
+  {
+    "path": "sdk/src/services/build-graph.ts",
+    "from": 602,
+    "to": 705
+  },
+  {
+    "path": "sdk/test/tree-sitter-queries/test-query-files.js",
+    "from": 160,
+    "to": 256
+  },
+  {
+    "path": "sdk/src/__tests__/lsp-multiplexer.test.ts",
+    "from": 191,
+    "to": 589
+  },
+  {
+    "path": "sdk/src/__tests__/language-intelligence.test.ts",
+    "from": 789,
+    "to": 1086
+  },
+  {
+    "path": "packages/code-map/src/utils.ts",
+    "from": 1,
+    "to": 41
+  },
+  {
+    "path": "sdk/scripts/build.ts",
+    "from": 147,
+    "to": 320
+  },
+  {
+    "path": "sdk/src/services/language-intelligence.ts",
+    "from": 200,
+    "to": 240
+  },
+  {
+    "path": "sdk/src/tools/language-diagnostics.ts",
+    "from": 1242,
+    "to": 1278
+  },
+  {
+    "path": "docs/architecture.md",
+    "from": 101,
+    "to": 130
+  },
+  {
+    "path": "docs/agents-and-tools.md",
+    "from": 152,
+    "to": 178
+  },
+  {
+    "path": "packages/indexer/src/scip-runner.ts",
+    "from": 1,
+    "to": 134
+  },
+  {
+    "path": "sdk/src/tools/language-diagnostics.ts",
+    "from": 1,
+    "to": 72
+  },
+  {
+    "path": "sdk/src/tools/language-diagnostics.ts",
+    "from": 594,
+    "to": 690
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1848,
+    "to": 1868
+  },
+  {
+    "path": "packages/indexer/src/scip-ingest.test.ts",
+    "from": 1,
+    "to": 135
+  },
+  {
+    "path": "packages/indexer/src/scip-ingest.test.ts",
+    "from": 340,
+    "to": 369
+  },
+  {
+    "path": "common/src/util/__tests__/language-capability-manifest.test.ts",
+    "from": 1060,
+    "to": 1150
+  },
+  {
+    "path": "sdk/src/__tests__/diagnostic-delta.test.ts",
+    "from": 912,
+    "to": 945
+  },
+  {
+    "path": "sdk/src/__tests__/harness-intelligence.test.ts",
+    "from": 1,
+    "to": 138
+  },
+  {
+    "path": "packages/indexer/src/scip-ingest.test.ts",
+    "from": 135,
+    "to": 195
+  },
+  {
+    "path": "sdk/src/services/diagnostic-delta-runner.ts",
+    "from": 1,
+    "to": 256
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 991,
+    "to": 1003
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 205,
+    "to": 263
+  }
+]

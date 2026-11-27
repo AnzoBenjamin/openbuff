@@ -59,6 +59,7 @@ function filterRedundantOptions(
 
 export function useAskUserBridge() {
   const setAskUserState = useChatStore((state) => state.setAskUserState)
+  const requestId = useChatStore((state) => state.askUserState?.toolCallId)
 
   useEffect(() => {
     const unsubscribe = AskUserBridge.subscribe((request) => {
@@ -66,7 +67,7 @@ export function useAskUserBridge() {
         // Filter out redundant "Custom"/"Other" options since UI provides its own
         const filteredQuestions = filterRedundantOptions(request.questions)
         setAskUserState({
-          toolCallId: request.toolCallId,
+          toolCallId: request.requestId,
           questions: filteredQuestions,
           // Initialize based on question type: multi-select → [], single-select → -1
           selectedAnswers: filteredQuestions.map((q) =>
@@ -90,12 +91,12 @@ export function useAskUserBridge() {
     }>,
   ) => {
     // Don't clear input value - preserve user's input from before the questionnaire
-    AskUserBridge.submit({ answers })
+    if (requestId) AskUserBridge.submit({ answers }, requestId)
   }
 
   const skip = () => {
     // Don't clear input value - preserve user's input from before the questionnaire
-    AskUserBridge.submit({ skipped: true })
+    if (requestId) AskUserBridge.submit({ skipped: true }, requestId)
   }
 
   return { submitAnswers, skip }

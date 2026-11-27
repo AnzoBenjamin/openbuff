@@ -3,9 +3,18 @@ import {
   type AgentDefinition,
   type Message,
 } from '@openbuff/sdk'
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test'
 
 import { setupE2eMocks, teardownE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
+import { createSdkCallbackFixture } from '../../sdk/src/__tests__/sdk-callback-fixture'
 
 import fileListerDefinition from '../file-explorer/file-lister'
 import filePickerDefinition from '../file-explorer/file-picker'
@@ -16,6 +25,14 @@ import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 // ends; restore the spies so later files re-apply them cleanly (cross-file
 // bleed fix matching the sdk/e2e teardown wiring).
 afterAll(() => teardownE2eMocks())
+
+// Workspace bootstrap needs a physical cwd even when the project files are
+// virtual. The shared fixture isolates host configuration and injects its fs.
+let fixture: ReturnType<typeof createSdkCallbackFixture>
+beforeEach(() => {
+  fixture = createSdkCallbackFixture('file-explorer')
+})
+afterEach(() => fixture.close())
 
 function normalizeFileEntries(entries: unknown[]): string[] {
   return entries
@@ -219,7 +236,7 @@ export interface User {
       }
 
       const client = new OpenbuffClient({
-        cwd: '/tmp/test-project',
+        ...fixture.options,
         projectFiles,
         agentDefinitions: [
           {
@@ -287,7 +304,7 @@ export interface User {
       }
 
       const client = new OpenbuffClient({
-        cwd: '/tmp/test-project',
+        ...fixture.options,
         projectFiles,
         agentDefinitions: [
           {
@@ -349,7 +366,7 @@ export interface User {
       }
 
       const client = new OpenbuffClient({
-        cwd: '/tmp/test-project',
+        ...fixture.options,
         projectFiles,
         agentDefinitions: [
           {
@@ -443,7 +460,7 @@ export class AuthService {
       const localFileListerDef = fileListerDefinition
 
       const client = new OpenbuffClient({
-        cwd: '/tmp/test-project-picker',
+        ...fixture.options,
         projectFiles,
         agentDefinitions: [
           localFilePickerDef as unknown as AgentDefinition,

@@ -41,8 +41,20 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'context',
     label: 'context',
-    description: 'Show per-turn context token budget breakdown',
+    description:
+      'Show the context token budget and the instruction files in effect',
     aliases: ['ctx'],
+  },
+  {
+    id: 'usage',
+    label: 'usage',
+    description: 'Inspect observed session tokens, cache reads, known costs and unknown coverage',
+  },
+  {
+    id: 'compact',
+    label: 'compact',
+    description:
+      'Summarize the conversation to free context; /compact [focus] keeps that focus',
   },
   {
     id: 'doctor',
@@ -66,7 +78,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'help',
     label: 'help',
-    description: 'Display keyboard shortcuts and tips',
+    description: 'Display keyboard shortcuts and the local command directory',
     aliases: ['h', '?'],
     implicitCommand: true,
   },
@@ -103,6 +115,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     description: 'Show, add, remove, connect, or disconnect providers',
   },
   {
+    id: 'permissions',
+    label: 'permissions',
+    description: 'Command approvals: balanced, strict, or allow-all',
+    aliases: ['approvals'],
+  },
+  {
     id: 'undo',
     label: 'undo',
     description:
@@ -121,6 +139,24 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
       'AI asks a series of questions to flesh out request into a spec',
   },
   {
+    id: 'plans',
+    label: 'plans',
+    description: 'List durable plan sessions and their progress',
+    aliases: ['plan-ls'],
+  },
+  {
+    id: 'plan-use',
+    label: 'plan-use',
+    description: 'Choose the active durable plan session: /plan-use <slug>',
+    aliases: ['plan-active', 'use-plan'],
+  },
+  {
+    id: 'plan-timeline',
+    label: 'plan-timeline',
+    description: 'Inspect a durable plan event timeline: /plan-timeline <slug>',
+    aliases: ['tl'],
+  },
+  {
     id: 'resume-plan',
     label: 'resume-plan',
     description: 'Resume a durable plan session from STATUS.md / PLAN.md',
@@ -137,6 +173,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     label: 'plan-status',
     description: 'Report concise status from durable plan artifacts',
     aliases: ['ps'],
+  },
+  {
+    id: 'plan-artifact',
+    label: 'plan-artifact',
+    description:
+      'Read local artifact pages: <slug> <PLAN.md|STATUS.md|SPEC.md|LESSONS.md> [--page <n>]',
   },
   {
     id: 'lessons',
@@ -177,7 +219,9 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'feedback',
     label: 'feedback',
-    description: 'Share general feedback',
+    description:
+      'Save explicit feedback locally or export it: /feedback <text>',
+    aliases: ['bug', 'report'],
   },
   {
     id: 'bash',
@@ -199,7 +243,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'image',
     label: 'image',
     description: 'Attach an image file (or Ctrl+V to paste from clipboard)',
-    aliases: ['img', 'attach'],
+    aliases: ['img'],
   },
   ...MODE_COMMANDS,
   // {
@@ -211,11 +255,40 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'update',
     label: 'update',
     description: 'Check staged CLI update status (restart to apply)',
+    aliases: ['upgrade', 'check-update'],
   },
   {
     id: 'theme:toggle',
     label: 'theme:toggle',
     description: 'Toggle between light and dark mode',
+  },
+  {
+    id: 'detach',
+    label: 'detach',
+    description:
+      'Detach from the attached session (it keeps running); /attach reattaches',
+  },
+  {
+    id: 'attach',
+    label: 'attach',
+    description: 'Reattach to the last detached session',
+  },
+  {
+    id: 'undo-turn',
+    label: 'undo-turn',
+    description: 'Preview tracked-file restore to the previous turn snapshot',
+  },
+  {
+    id: 'restore',
+    label: 'restore',
+    description:
+      'Preview a turn snapshot; restore requires its exact displayed apply action',
+  },
+  {
+    id: 'bisect-turn',
+    label: 'bisect-turn',
+    description:
+      'Find the first turn snapshot that breaks the test suite (git-based)',
   },
   {
     id: 'exit',
@@ -227,6 +300,24 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
 ]
 
 export const SLASH_COMMANDS = ALL_SLASH_COMMANDS
+
+/** Shared local help reference; insertion-only shortcuts never pretend to execute. */
+export function formatCommandDirectory(): string {
+  return [
+    'Openbuff command directory',
+    'Use /<command> in the composer. Some commands submit agent prompts; insertion-only shortcuts are marked below.',
+    '',
+    ...SLASH_COMMANDS.map((command) =>
+      [
+        `/${command.id}${command.aliases?.length ? ` (aliases: ${command.aliases.map((alias) => `/${alias}`).join(', ')})` : ''}`,
+        `  ${command.description}`,
+        ...(command.insertText
+          ? [`  Inserts into the composer only: ${command.insertText}`]
+          : []),
+      ].join('\n'),
+    ),
+  ].join('\n\n')
+}
 
 export const SLASHLESS_COMMAND_IDS = new Set(
   SLASH_COMMANDS.filter((cmd) => cmd.implicitCommand).map((cmd) =>

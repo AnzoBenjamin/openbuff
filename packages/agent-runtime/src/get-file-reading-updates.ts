@@ -9,6 +9,7 @@ import type {
   RequestFilesFn,
 } from '@codebuff/common/types/contracts/client'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import { authenticateReadFilesItem } from './util/authenticated-read-source'
 
 function sanitizePartialRangeContent(content: string): string {
   const headerEnd = content.indexOf('\n')
@@ -29,11 +30,13 @@ export async function getFileReadingUpdates(params: {
   requestedFiles: string[]
   ranges?: FileLineRange[]
   capabilityIssuer?: ReadCapabilityIssuer
+  signal?: AbortSignal
 }): Promise<ReadFilesResultV1> {
   const { requestFiles, requestedFiles, ranges = [], capabilityIssuer } = params
   const loadedFiles: unknown = await requestFiles({
     filePaths: requestedFiles,
     ranges,
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(capabilityIssuer ? { capabilityIssuer } : {}),
   })
   const expectedSelectors = [
@@ -49,6 +52,22 @@ export async function getFileReadingUpdates(params: {
       loadedFiles.results.length === expectedSelectors.length &&
       loadedFiles.results.every((result, requestIndex) => {
         const expected = expectedSelectors[requestIndex]
+        const authenticatedAnchor = capabilityIssuer
+          ? authenticateReadFilesItem(result, capabilityIssuer)
+          : undefined
+        const finalEntry =
+          result.selector === 'range' &&
+          result.status === 'ok' &&
+          expected?.selector === 'range' &&
+          expected.range.endLine !== undefined &&
+          result.endLine === result.totalLines + 1 &&
+          authenticatedAnchor?.rawBasis?.endByteExclusive ===
+            authenticatedAnchor?.rawBasis?.documentBytes &&
+          authenticatedAnchor?.rawBasis?.endTerminator === 'none'
+        const ceiling =
+          result.selector === 'range' && result.status !== 'error'
+            ? Math.max(1, result.totalLines + (finalEntry ? 1 : 0))
+            : 0
         return (
           expected !== undefined &&
           result.requestIndex === requestIndex &&
@@ -59,14 +78,10 @@ export async function getFileReadingUpdates(params: {
               (result.status === 'error' ||
                 (result.startLine ===
                   Math.max(1, expected.range.startLine ?? 1) &&
-                  result.endLine <=
-                    (expected.range.endLine ?? result.totalLines) &&
+                  result.endLine <= (expected.range.endLine ?? ceiling) &&
                   (!result.complete ||
                     result.endLine ===
-                      Math.min(
-                        expected.range.endLine ?? result.totalLines,
-                        result.totalLines,
-                      ))))))
+                      Math.min(expected.range.endLine ?? ceiling, ceiling))))))
         )
       })
     if (matchesRequest) {

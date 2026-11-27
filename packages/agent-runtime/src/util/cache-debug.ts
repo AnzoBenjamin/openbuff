@@ -1,6 +1,8 @@
-import { createHash, randomUUID } from 'crypto'
+import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 import {
   summarizeCacheDebugValue,
@@ -10,6 +12,7 @@ import {
   getCacheAnchorSummary,
   type CacheAnchorInfo,
 } from '@codebuff/common/util/messages'
+import type { IdGen } from '@codebuff/common/types/contracts/agent-runtime'
 import type { CacheDebugUsageData } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
@@ -171,6 +174,8 @@ export function createCacheDebugSnapshot(params: {
   userInputId?: string
   agentStepId?: string
   model?: string
+  /** Injectable id generator (P2-T1); resolves to realIdGen when omitted. */
+  idGen?: IdGen
 }): CacheDebugCorrelation {
   const {
     agentType,
@@ -183,12 +188,13 @@ export function createCacheDebugSnapshot(params: {
     userInputId,
     agentStepId,
     model,
+    idGen,
   } = params
 
   const cacheDebugDir = getCacheDebugDir(projectRoot)
   mkdirSync(cacheDebugDir, { recursive: true })
 
-  const snapshotId = randomUUID()
+  const snapshotId = idGen?.uuid() ?? realIdGen.uuid()
   const index = String(cacheDebugCounter++).padStart(3, '0')
   // Sanitize agentType before interpolating into a filename: path separators
   // or `..` could escape the cache-debug directory via path.join. Replace any

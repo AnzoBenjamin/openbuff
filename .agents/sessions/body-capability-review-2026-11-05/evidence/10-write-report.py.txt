@@ -1,0 +1,515 @@
+import json, pathlib, hashlib, re
+
+base = pathlib.Path('/tmp/openbuff-body-review-2026-11-05')
+inventory = json.loads((base / 'INVENTORY.json').read_text())
+snapshot = inventory['snapshotId']
+all_reads = json.loads((base / 'evidence/10-read-ranges.json').read_text())
+inventory_paths = set(inventory['files'])
+files = sorted({r['path'] for r in all_reads if r['path'] in inventory_paths})
+domains = ['security','correctness','state-mutation','error-handling','performance','dependency-hygiene','test-coverage','api-contract']
+ranges = []
+for file in files:
+    selected = sorted((r['from'],r['to']) for r in all_reads if r['path'] == file)
+    for first,last in selected:
+        if ranges and ranges[-1]['path'] == file and first <= ranges[-1]['to'] + 1:
+            ranges[-1]['to'] = max(last,ranges[-1]['to'])
+        else:
+            ranges.append({'path':file,'from':first,'to':last})
+
+def ev(path,line,detail):
+    return {'path':path,'line':line,'detail':detail}
+
+def finding(id,title,severity,ds,evidence,trigger,consequence,fix,probe,probe_keys,notes=''):
+    return {'id':id,'title':title,'severity':severity,'domains':ds,'confidence':'high','basis':'evidence',
+            'evidence':evidence,'trigger':trigger,'consequence':consequence,'suggestedFix':fix,
+            'acceptanceProbe':probe,'probeEvidence':{'artifact':'evidence/10-probe-results.json','keys':probe_keys},
+            'inferenceBoundary':notes}
+
+findings = [
+ finding('10-F1','MCP projection discards explicit failure and structured results','HIGH',
+         ['correctness','error-handling','api-contract'],
+         [ev('common/src/mcp/client.ts',862,'Only result.content is mapped; isError, structuredContent, metadata and annotations are not returned.'),
+          ev('sdk/src/run.ts',2352,'The MCP branch returns the projected array as ordinary output; only thrown errors enter errorMessage conversion.'),
+          ev('packages/agent-runtime/src/tools/tool-executor.ts',4337,'The projected content becomes the tool_result event and subsequent model history.')],
+         'An MCP server returns isError:true (including empty content), or returns useful structuredContent with content:[] or a lossy text summary.',
+         'The model/host loses the authoritative failure flag and structured observation. An empty error or structured-only observation becomes []. A mutation confirmation available only in structuredContent cannot be inspected.',
+         'Carry a versioned MCP result envelope with isError, structuredContent, original content/provenance and supported annotations into the shared tool outcome. Translate failure into explicit typed error state without discarding original content. Encode text resources as text or valid media data.',
+         'Inject empty isError, misleading-text isError, structured-only, mixed text/media, text resource and resource-link results through the actual MCP→SDK→runtime path; assert authoritative fields survive, failure never becomes an empty successful observation, and resources preserve meaning.',
+         ['mcpEmptyFailure','mcpTextFailure','mcpStructuredOnly','mcpTextResource'],
+         'Projection loss is directly executed in a source VM. No external server or real mutating effect was called; downstream recovery impact follows the statically traced consumer.'),
+ finding('10-F2','MCP origin semantics change across JSON and supervised boundaries','HIGH',
+         ['security','correctness','state-mutation','api-contract'],
+         [ev('common/src/mcp/client.ts',172,'Origins live only in an object-identity WeakMap; unknown objects resolve client.'),
+          ev('sdk/src/run.ts',1075,'Host MCP records are merged into the resolved agent template in returned session state.'),
+          ev('packages/agent-runtime/src/templates/agent-registry.ts',185,'After parsing, surviving config marks propagate; remaining local/bundled template configs are blanket-marked project.'),
+          ev('sdk/src/client.ts',46,'previousRun is documented as JSON state for conversation continuation.'),
+          ev('packages/agent-runtime/src/main-prompt.ts',204,'Each main prompt assembles templates through that provenance-restoration branch.'),
+          ev('packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts',3911,'Supervised spawn serializes templates without per-MCP provenance.'),
+          ev('packages/agent-runtime/src/supervision/parent-bridge-server.ts',1407,'MCP discovery forwards a generic object rehydration to the parent dep; no config origin is restored.')],
+         'Attach a client-marked MCP descriptor to a trusted local/bundled agent, serialize the RunState, then continue from JSON; separately, use a project/user-marked MCP descriptor from a supervised child.',
+         'JSON restoration of the mixed trusted template changes the peer descriptor from client to project, re-enabling local environment substitution and removing the first-call peer approval/description treatment. The supervised direction changes trusted local descriptors to unmarked/client, leaving $VAR literal and potentially breaking legitimate authentication or requiring unexpected approval.',
+         'Bind per-server origin to parent-owned descriptor identity/version and transport an opaque reference or authenticated provenance receipt. Restore that reference across saved runs and reverse RPC; do not infer every contained descriptor origin from template executionSource or accept self-asserted peer origin fields.',
+         'Round-trip a trusted template containing separately marked project/user/client descriptors through saved RunState and actual supervisor RPC. Assert no client descriptor upgrades, legitimate trusted substitutions survive using synthetic environment values, and unknown/forged references remain client.',
+         ['mcpBridgeOrigin','mcpSerializedMixedOrigin'],
+         'The exact registry and parent-bridge helpers reproduce both origin changes. No secret value was read/expanded and no outbound endpoint contacted. Security consequence is conditional on the documented JSON continuation plus a descriptor containing environment references.'),
+ finding('10-F3','Opted-in agent discovery imports auxiliary executable files before validating definitions','HIGH',
+         ['security','correctness','state-mutation','error-handling','performance'],
+         [ev('sdk/src/agents/load-agents.ts',66,'Recursive entrypoint walk skips only directory skills, declaration .d.ts and suffix .test.ts.'),
+          ev('sdk/src/agents/load-agents.ts',193,'Dynamic import occurs before checking default export/id/model or validating an agent.'),
+          ev('sdk/src/agents/load-agents.ts',248,'Import errors are only logged when verbose; validate:true does not return them in validationErrors.'),
+          ev('cli/src/utils/local-agent-registry.ts',167,'Real CLI trust option invokes this loader with validate:true and verbose:false.')],
+         'The user explicitly trusts project/parent agent roots, passes agentsPath, or has auxiliary .js/.ts/.mjs/.cjs/.tsx code under the trusted home .agents root; that root contains sessions, probes, tests, lib/types or node_modules.',
+         'Data/probe/dependency/test modules execute as discovery entrypoints even if they export no agent. Side effects can occur during reload and discovery work grows with artifacts/dependencies. A throwing agent silently disappears while the validation diagnostics array remains empty. This is conditional on an already trusted root, not unconsented project execution.',
+         'Separate agent entrypoints from auxiliary code using declared manifests or narrow discovery roots. Exclude sessions/probes/tests/node_modules/types/lib from automatic entrypoint enumeration while retaining explicitly imported agent dependencies. Return directory/import/definition diagnostics independently of verbose logging.',
+         'Use the actual loader with an explicit temp agentsPath containing one valid agent and side-effect markers in every auxiliary directory and test suffix variant. Assert only declared agent entrypoints execute, imported dependencies still work, and throwing/import-invalid agents produce structured diagnostics.',
+         ['loader'],
+         'The real loader imported six synthetic auxiliary files with harmless global-array markers and returned validationErrors:[] for a throwing module. The real repository .agents tree was never imported.'),
+ finding('10-F4','Production MCP discovery stops at the first page and keeps successful listings stale','MEDIUM',
+         ['correctness','state-mutation','performance','api-contract','test-coverage'],
+         [ev('sdk/src/run.ts',1594,'Production discovery calls listMCPTools without cursor and consumes only tools; nextCursor is discarded.'),
+          ev('common/src/mcp/client.ts',830,'Successful list promises remain cached per client+arguments; only rejected entries are removed here.'),
+          ev('packages/agent-runtime/src/tools/tool-executor.ts',4136,'Dispatch rediscovers through the same cached listing, so this refresh does not obtain current tools.')],
+         'A connected server paginates tools/list or changes/removes/adds tool descriptors during its lifetime.',
+         'Later-page tools are undiscoverable even when explicitly selected; removed/changed tools retain stale descriptors and new tools stay unavailable. The fast cache silently becomes the capability authority. Client eviction/close is a separate pair09 issue.',
+         'Collect bounded pages with repeated-cursor detection; expose incomplete listings explicitly. Maintain a server generation and invalidate listings on tools/list_changed, reconnect and explicit refresh, using a bounded fallback freshness policy when notifications are unavailable.',
+         'Fake a two-page server with a second-page selected tool, then change/remove/add tools and emit list_changed. Verify complete discovery and generation refresh with finite repeated-cursor/error/cancel behavior and healthy-server partial loading preserved.',
+         ['discovery']),
+ finding('10-F5','handleSteps stringification loses valid module dependencies and closures','MEDIUM',
+         ['correctness','error-handling','api-contract','test-coverage'],
+         [ev('sdk/src/agents/load-agents.ts',221,'Local handleSteps is replaced by function.toString before runtime validation.'),
+          ev('sdk/src/run-state.ts',146,'Programmatic SDK definitions are also converted with toString.'),
+          ev('cli/scripts/prebuild-agents.ts',87,'Official bundling embeds function text, not a dependency bundle.'),
+          ev('packages/agent-runtime/src/run-programmatic-step.ts',401,'new Function materializes the text in global scope.'),
+          ev('.agents/codex-cli.ts',95,'Local wrappers explicitly duplicate constants inside generators to work around serialization.')],
+         'A valid trusted TypeScript/JavaScript generator refers to a module constant, imported helper or captured factory variable.',
+         'The definition can load and validate successfully but later fails with ReferenceError after module bindings are lost. Ordinary reusable module code is unavailable in shipped/runtime/supervised extension paths despite a function-typed public API.',
+         'Preserve trusted host module/function references for the in-process path and produce real dependency bundles with content/version identity for binary/process transport. Keep programmaticConfig for explicit data injection; diagnose unsupported serialization during loading until bundling lands.',
+         'Load a generator importing a helper and capturing a factory setting. Run it from source, packaged binary and supervised process with identical yielded result; assert startup catches missing bundle dependencies and no inline helper duplication is required.',
+         ['generatorClosure']),
+ finding('10-F6','Schema transport/coercion can silently broaden extension validation','MEDIUM',
+         ['correctness','error-handling','api-contract','test-coverage'],
+         [ev('common/src/templates/agent-validation.ts',500,'Invalid, degraded or unrepresentable members become native permissive schemas without an outcome field.'),
+          ev('common/src/templates/agent-validation.ts',461,'Fallback object is loose; integer fallback is z.number without integer enforcement.'),
+          ev('common/src/templates/agent-validation.ts',623,'Transport uses unrepresentable:any and eventually a generic object fallback.'),
+          ev('packages/agent-runtime/src/tools/prompts.ts',39,'Custom/MCP local validation converts JSON Schema with the same converter.'),
+          ev('packages/agent-runtime/src/tools/tool-executor.ts',4062,'Local custom validation only checks safeParse success; parsed/coerced result is discarded and original input is forwarded.')],
+         'A schema becomes a serialized Zod husk, uses not/never or unsupported composite constraints, or contains additionalProperties:false.',
+         'A required-object schema can accept {}, a never schema can accept an object after transport, and additionalProperties:false succeeds on extra fields. The host/model sees no explicit validation-degraded state, so schema conformance becomes unreliable across extension/process boundaries.',
+         'Retain canonical JSON Schema semantics with a faithful validator or authenticated parent schema authority. Return explicit unsupported/degraded validation capability when a shape cannot be preserved. Keep SDK original Zod execution checks for callbacks; preserve transport scheduling parameters outside the validated user input.',
+         'Compare original and transported acceptance matrices for required, additionalProperties, enum, integer, not/never, refs and composites. Invalid values must remain invalid or cause an explicit unsupported contract; never silently broaden. Verify SDK default/async/transform tests still pass.',
+         ['zodHusk','neverSchema','richSchema'],
+         'These are executed helper round trips. Rich required and enum constraints did survive; loss is shape-specific, not a claim that every schema is discarded.'),
+ finding('10-F7','Prompt-schema validation rejects valid constrained strings by testing one sentinel','MEDIUM',
+         ['correctness','api-contract','test-coverage'],
+         [ev('common/src/templates/agent-validation.ts',331,'Validity is inferred from safeParse("test") or safeParse(undefined), not the schema accepted type.'),
+          ev('common/src/types/dynamic-agent-template.ts',53,'The prompt definition uses a loose object and permits additional JSON Schema constraints.')],
+         'Define a string prompt schema with minLength:5, enum:["work"] or a pattern/literal that excludes "test".',
+         'A schema that accepts legitimate string prompts is rejected during agent loading and the agent is unavailable.',
+         'Check the supported JSON Schema type/union contract structurally; validate each actual prompt at invocation. Do not use acceptance of a specific sample as a type proof.',
+         'Load minLength, enum and pattern prompt schemas excluding "test"; legitimate prompts must run while invalid invocation values are rejected with their specific constraint.',
+         ['promptSchemas']),
+ finding('10-F8','Custom/MCP arguments are blanket-classified as filesystem paths','MEDIUM',
+         ['correctness','api-contract'],
+         [ev('packages/agent-runtime/src/tools/tool-executor.ts',4201,'Every collected string in arbitrary extension input is normalized as a path and can block the call.'),
+          ev('packages/agent-runtime/src/tools/tool-executor.ts',4228,'The check runs unconditionally when a project root exists, before tool_call publication.'),
+          ev('packages/agent-runtime/src/util/filesystem-scope.ts',44,'A leading slash means absolute filesystem path regardless of argument semantics.')],
+         'Call an otherwise granted API/text tool with {route:"/api/v1"}, separator:"/", a slash-delimited regex or another ordinary absolute-looking string.',
+         'The body refuses legitimate tool data as a project escape. Recovery cannot use the same semantically valid input. The source calls false positives an accepted tradeoff, but the impact is an extension interoperability limitation, not a hypothetical security restriction request.',
+         'Apply filesystem containment to declared path/effect fields and the authoritative handler, using explicit extension capability metadata. Treat other arguments as data. Preserve current real project-path authority and intentional full-access terminal policy.',
+         'Run a non-filesystem fake tool with route, separator and regex inputs through actual dispatch; it should receive exact values. A declared filesystem tool must still refuse a real outside-project target.',
+         ['customInputPathHeuristic']),
+ finding('10-F9','Delimiter-based extension names do not round-trip through dispatch','MEDIUM',
+         ['correctness','api-contract','test-coverage'],
+         [ev('packages/agent-runtime/src/mcp.ts',71,'Internal published name is server + "__" + tool with no reversible encoding.'),
+          ev('packages/agent-runtime/src/tools/tool-executor.ts',4288,'Any custom name containing "__" is decoded as MCP; server lookup uses the first segment.'),
+          ev('common/src/types/dynamic-agent-template.ts',190,'Server keys accept arbitrary strings and do not reject the internal delimiter.'),
+          ev('sdk/src/custom-tool.ts',38,'Custom names are open strings; helper only prevents native names at type level.')],
+         'Configure server team__api with tool read, or register an ordinary SDK custom tool whose name contains __.',
+         'team__api__read is decoded as server team/tool api__read, while __ custom names are routed to the wrong handler. A granted descriptor can be visible but not callable with its advertised identity.',
+         'Keep an explicit descriptor-id→server/tool mapping with reversible provider-safe IDs. Validate supported public names consistently and use descriptor kind instead of separator presence to distinguish MCP from SDK custom tools.',
+         'Round-trip server/tool/custom names containing __, slash and provider-incompatible characters through discovery and invocation; assert the exact intended descriptor/handler is called or a clear load-time unsupported-name error occurs.',
+         ['mcpNames']),
+ finding('10-F10','CLI wrapper permission receipts report a profile the producer overrides','MEDIUM',
+         ['correctness','api-contract'],
+         [ev('.agents/lib/create-cli-agent.ts',68,'Wrapper template declares tmux-test.'),
+          ev('.agents/lib/cli-agent-schemas.ts',10,'Result permissionProfile is restricted to tmux-test and described as runtime-enforced.'),
+          ev('.agents/lib/cli-agent-prompts.ts',360,'Model is instructed to emit tmux-test as the enforced runtime profile.'),
+          ev('packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts',38,'Actual shared producer deliberately stamps every agent terminal call full-access.')],
+         'Execute any of the repository-local CLI wrapper templates through the normal model or generator terminal producer.',
+         'Its structured result claims tmux-test enforcement although Openbuff terminal dispatch uses full-access. Host decisions based on that evidence receive inaccurate capability state. External CLI process flags are separate and are not proof of the Openbuff parent policy.',
+         'Derive effective profile/capabilities from the runtime dispatch receipt and carry them into wrapper results; make the schema accept the real configured posture. Preserve the explicitly intended full-access policy.',
+         'Feed an actual runtime-produced terminal receipt into each wrapper completion path; assert the reported effective profile matches the producer, including template/profile override cases.',
+         [],'Policy behavior was verified with pair09 source evidence and exact local read. No external CLI was started; this finding concerns receipt truth, not a policy bypass.'),
+ finding('10-F11','Agent documentation promises an isolation boundary that is absent','LOW',
+         ['security','api-contract'],
+         [ev('docs/agents-and-tools.md',11,'Documentation says programmatic generators execute in a secure sandbox.'),
+          ev('packages/agent-runtime/src/run-programmatic-step.ts',401,'Trusted strings execute via host-realm new Function, with raw agentState supplied during initialization.'),
+          ev('packages/agent-runtime/src/__tests__/sandbox-generator.test.ts',163,'Existing test deliberately documents host-global visibility, not sandbox isolation.'),
+          ev('sdk/src/impl/database.ts',288,'Remote executable templates are refused rather than run in an isolate.')],
+         'A user relies on the agents guide to assess the authority of a locally installed programmatic extension.',
+         'Tool-yield grants are mistaken for general code isolation. Trusted extensions can use host APIs directly; no callable untrusted QuickJS/VM agent tier was found.',
+         'Document trusted host execution, explicit local trust opt-in and refused remote executable templates accurately. Describe any future untrusted isolation tier separately; do not restrict intentional first-party host access.',
+         'Compare published capability/help/docs with host-global test and remote provenance refusal. Current trusted execution must be described as host realm and optional unavailable isolate capability must remain false.',
+         [],'Trusted host execution is intentional and is not itself a runtime defect. This is a documentation mismatch; no escape probe was run.'),
+]
+
+def cap(id,name,maturity,assurance,entry,implementation,consumer,tests,docs,states,strengths,gaps,keys=None):
+    return {'id':id,'name':name,'maturity':maturity,'assurance':assurance,
+      'trace':{'entrypoint':entry,'implementation':implementation,'consumer':consumer,'tests':tests,'docs':docs},
+      'states':states,'strengths':strengths,'gaps':gaps,
+      'evidence':entry+implementation+consumer,
+      'testAssuranceNote':'Existing named suites were read, not run in this shard. New isolated probes, when listed, used pinned Bun 1.3.5.',
+      'probeEvidence':{'artifact':'evidence/10-probe-results.json','keys':keys or []}}
+
+capabilities = [
+ cap('mcp-config-trust-and-discovery','MCP descriptors, origins and grants','partial','unit test',
+     [ev('sdk/src/agents/load-mcp-config.ts',142,'Explicit project config opt-in; trusted local merge.')],
+     [ev('common/src/mcp/client.ts',186,'Out-of-band no-upgrade origins'),ev('packages/agent-runtime/src/mcp.ts',31,'Server/tool selector grouping and concurrent loading')],
+     [ev('sdk/src/run.ts',1594,'Actual SDK discovery'),ev('packages/agent-runtime/src/tools/tool-executor.ts',4021,'Own-key discovered membership required')],
+     ['common/src/mcp/__tests__/client.test.ts:138-427','sdk/src/__tests__/run-mcp-tool-filter.test.ts:37-123'],
+     ['common/src/templates/initial-agents-dir/types/agent-definition.ts:148-159','docs/agents-and-tools.md:13'],
+     {'failure':'Per-server allSettled + warning; one failed server does not remove healthy tools. Rejected list cache entries retry.',
+      'loading':'No independent structured loading/capability-generation state in this client path.',
+      'empty':'No selectors means all discovered tools for configured server; explicit selectors filter exact names. Empty listing is valid.',
+      'cancellation':'Tool calls receive AbortSignal; discovery callback does not thread run signal.',
+      'retry':'Rejected listing retries; successful discovery stays cached. Pager/notification refresh missing.',
+      'permission':'Client/unknown first call uses host callback when supplied; no approver is intentionally fail-open in SDK. Peer ACP bridge provides a callback. Trusted local code proceeds unchanged.',
+      'durability':'WeakMap identity is insufficient across JSON/reverse RPC; 10-F2.',
+      'scale':'Per-server concurrent loading; later listing pages are lost.'},
+     ['Trust is not claimed by config content; client no-upgrade and parse-hop propagation are real.', 'Selectors plus discovered own entries are enforced; configured membership is not arbitrary-tool permission.'],
+     ['10-F2','10-F4','10-F9'],['discovery','mcpBridgeOrigin','mcpSerializedMixedOrigin','mcpNames']),
+ cap('mcp-tool-schema-and-result-interoperability','MCP schema and result interoperability','partial','unit test',
+     [ev('packages/agent-runtime/src/mcp.ts',67,'Protocol inputSchema retained.')],
+     [ev('packages/agent-runtime/src/tools/prompts.ts',575,'Provider schema preserved without conversion'),ev('common/src/mcp/client.ts',854,'Content projection')],
+     [ev('packages/agent-runtime/src/tools/tool-executor.ts',4059,'Local validation and dispatch'),ev('sdk/src/run.ts',2352,'Actual MCP invocation')],
+     ['packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts:6-36'],
+     ['docs/agents-and-tools.md:3'],
+     {'failure':'Thrown MCP errors become errorMessage output; isError on a successful protocol response is dropped.',
+      'loading':'Uses shared discovery result; no distinct descriptor generation.',
+      'empty':'content:[] drops structured-only/error metadata.',
+      'cancellation':'signal forwarded to Client.callTool; effects remain owned by server.',
+      'retry':'Model can observe textual errors and retry; no canonical outcome preserves error/retry distinctions.',
+      'permission':'Client descriptions labeled untrusted; local data heuristic can refuse valid non-path arguments.'},
+     ['Provider-facing raw MCP schema retains constraints/annotations instead of Zod round-trip.', 'Text/image/audio/resource/resource-link variants have concrete projection branches.'],
+     ['10-F1','10-F6','10-F8'],['mcpEmptyFailure','mcpTextFailure','mcpStructuredOnly','mcpTextResource','richSchema','customInputPathHeuristic']),
+ cap('openbuff-mcp-server','Read/inspect MCP server with opt-in edit exposure','usable','static trace',
+     [ev('cli/src/commands/mcp-command.ts',57,'CLI command calls runMcp with real filesystem/index/memory seams.')],
+     [ev('sdk/src/mcp/server.ts',345,'Six read tool registry; apply_edits appended only when enabled'),ev('sdk/src/mcp/server.ts',1510,'Real protocol dispatch')],
+     [ev('cli/src/commands/mcp-command.ts',113,'Real session bindings forwarded to SDK server')],
+     ['sdk/src/__tests__/mcp-server.test.ts:149-188','sdk/src/__tests__/mcp-server.test.ts:322-453','sdk/src/__tests__/mcp-server.test.ts:478-549'],
+     ['sdk/src/mcp/server.ts:487-496','docs/agents-and-tools.md:3'],
+     {'failure':'Unknown tools return structured MCP MethodNotFound; handler exceptions return isError; invalid params reported.',
+      'loading':'query_index uses real index ready seam; disabled index/memory is explicit.',
+      'empty':'Lexical memory absence returns ready:false/results:[]/message rather than pretending recall.',
+      'cancellation':'runMcp signal closes server; mutation/process teardown authority reviewed by other pairs.',
+      'retry':'No claimed automatic external-effect replay; clients decide based on results.',
+      'permission':'Read-only default; mutations flag gates list+dispatch together; lazy broker is authority for optional edits.'},
+     ['Listed/handled tools share one registry.', 'Real CLI consumer, read-only annotations, token redaction and disabled results are implemented.', 'Public structural handle avoids transitive Zod3 declaration leakage with an explicit migration note.'],
+     ['Fresh transport/live tasks were not executed; installed external-host availability is not inferred from tests.']),
+ cap('sdk-custom-tools-and-host-callbacks','SDK custom tools and original-schema execution','usable','static trace',
+     [ev('sdk/src/custom-tool.ts',38,'Public sync/async getCustomToolDefinition helper'),ev('sdk/src/client.ts',57,'Actual backend.run consumer')],
+     [ev('sdk/src/run-state.ts',159,'Input-mode JSON projection'),ev('sdk/src/run.ts',2406,'Original async Zod execution validation')],
+     [ev('sdk/src/run.ts',1481,'Original callback definitions threaded to shared dispatch')],
+     ['sdk/src/__tests__/custom-tool-dispatch.test.ts:45-127'],
+     ['sdk/src/custom-tool.ts:27-36','sdk/src/client.ts:50'],
+     {'failure':'Original validation failure returns actionable details; handler throws become terminal runtime failure result.',
+      'loading':'Definitions attached through run options; callbacks remain host-owned, not serializable code.',
+      'empty':'Handler returns explicit ToolResultOutput[]; no callback result authority beyond reported data.',
+      'cancellation':'Async validation and execution race AbortSignal; execute receives optional context.signal.',
+      'retry':'No arbitrary callback side-effect retry promised; host must reconcile external effects.',
+      'permission':'Native-name collision helper is type-level. Arbitrary trusted host callback access is intentional.'},
+     ['Defaults, transforms and async refinements are applied at the original-schema boundary.', 'Input versus Args types are distinct; cancellation prevents execution after cancelled async validation.'],
+     ['Not a general external stdin/RPC tool registry or durable callback registry.', 'Names containing __ fail current dispatch (10-F9).', 'Full SDK/provider/serialization integration for refinements was not executed.']),
+ cap('native-overrides-and-host-observation','Versioned native overrides and host observation callbacks','usable','static trace',
+     [ev('sdk/src/run.ts',291,'v0/v1 descriptors and host observation APIs')],
+     [ev('sdk/src/run.ts',585,'v1 gets abiVersion+signal; v0 compatibility retained')],
+     [ev('sdk/src/run.ts',1466,'Single requestToolCall path threads override/callback/attestation inputs')],
+     ['sdk/src/__tests__/custom-tool-dispatch.test.ts:17-41 (adjacent dispatch seam only)'],
+     ['sdk/README.md:302-319'],
+     {'failure':'Host attestation absent leaves external mutations unconfirmed; arbitrary observer guarantees follow callback contract.',
+      'loading':'Explicit injected host options.',
+      'empty':'Optional callbacks safely absent.',
+      'cancellation':'v1 signal; v0 race drops late result; cooperative external side effects cannot be stopped by a Promise race.',
+      'retry':'Not universal lifecycle hooks, transactional replay or verification of arbitrary host work.',
+      'permission':'Host overrides are explicitly trusted integrations; filesystem authority details belong pair06.'},
+     ['Versioned ABI retains legacy functions and explicit cancellation context.', 'Observation/attestation callbacks are real consumers, not uncalled declarations.'],
+     ['Acceptance coverage for this shard is static; no generic pre/post-tool receipt-hook registry exists.']),
+ cap('local-agent-loading-and-provenance','Local executable extension loading','partial','unit test',
+     [ev('sdk/src/agents/load-agents.ts',166,'Explicit paths/project trust options')],
+     [ev('sdk/src/agents/load-agents.ts',193,'Supported module dynamic imports and local source stamping')],
+     [ev('cli/src/utils/local-agent-registry.ts',167,'Real CLI registry load'),ev('packages/agent-runtime/src/templates/agent-registry.ts',145,'Validated live-schema consumers')],
+     ['sdk/src/__tests__/load-agents.test.ts:199-383','sdk/src/__tests__/load-agents.test.ts:964-1095'],
+     ['docs/agents-and-tools.md:13','docs/architecture.md:139'],
+     {'failure':'Validation diagnostics for definitions exist; import/walk failures may silently omit files.',
+      'loading':'Generation/root/cwd ownership guards prevent stale load commit; actual scanner imports auxiliary files.',
+      'empty':'Missing roots/zero candidates return empty registry.',
+      'cancellation':'Loader has no abort signal and executes trusted modules during loading.',
+      'retry':'Reload uses cache-busting URLs; no import failure record survives verbose:false.',
+      'permission':'SDK defaults home only, CLI defaults untrusted project; trustProjectAgents/includeProjectAgents or explicit agentsPath opts in.',
+      'durability':'Winning source paths and local executionSource retained; MCP origin not reliably portable.'},
+     ['Correct home→parent→project winning precedence.', 'Registry generation and scope protect last-known-good state and derived listing cache epochs.'],
+     ['10-F3','10-F5','10-F7','Documentation overstates automatic project loading.'],['loader','generatorClosure','promptSchemas']),
+ cap('programmatic-agent-extension-abi','Trusted generator execution and yielded tool ABI','partial','unit test',
+     [ev('sdk/src/run-state.ts',146,'SDK function/string extension attachment'),ev('cli/scripts/prebuild-agents.ts',87,'Shipped text embedding')],
+     [ev('packages/agent-runtime/src/run-programmatic-step.ts',389,'Provenance guard/host materialization'),ev('packages/agent-runtime/src/run-programmatic-step.ts',499,'State/prompt/config/logger injection')],
+     [ev('packages/agent-runtime/src/run-programmatic-step.ts',622,'Yield schema/STEP modes'),ev('packages/agent-runtime/src/run-programmatic-step.ts',944,'Visible/hidden/context tool grants')],
+     ['packages/agent-runtime/src/__tests__/sandbox-generator.test.ts:104-196','packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts:218-338'],
+     ['docs/request-flow.md:140-152','docs/agents-and-tools.md:11','common/src/templates/initial-agents-dir/types/agent-definition.ts:278-399'],
+     {'failure':'Generator yield/execution errors become agent output.error and end turn; source materialization/provenance errors precede that catch.',
+      'loading':'Trusted local/bundled strings and legacy undefined provenance allowed; database/unlisted strings refused.',
+      'empty':'Return ends turn; zero-segment STEP_TEXT clears prior toolResult.',
+      'cancellation':'Yields dispatch through shared runtime cancellation; host code itself is cooperative/unbounded until it yields.',
+      'retry':'Registry retains STEP/STEP_ALL state; replay durability is pair05 ownership.',
+      'permission':'Yield grants real; trusted host code can directly use host APIs. No available untrusted isolate tier.',
+      'scale':'10,000 yielded-call backstop, not CPU isolation; bundle reuse currently constrained by toString.'},
+     ['Model-neutral programmatic result context and explicit config injection.', 'Runtime validates yields and visible/hidden grants with current tests.', 'Remote executable refusal is real; first-party host access is an intended capability.'],
+     ['10-F5','10-F11','Bun.build dependency bundles and untrusted QuickJS execution are absent.'],['generatorClosure']),
+ cap('generated-schema-extension-contracts','Generated TypeScript and JSON contract surface','usable','static trace',
+     [ev('common/src/tools/compile-tool-definitions.ts',26,'JSON schema compiler'),ev('common/src/tools/compile-tool-definitions.ts',42,'TS compiler')],
+     [ev('common/src/tools/compile-tool-definitions.ts',14,'Shared provider schema selection'),ev('common/src/tools/compile-tool-definitions.ts',125,'Fail-loud unhandled-shape checks')],
+     [ev('scripts/generate-tool-definitions.ts',17,'Real writes of canonical tool type mirrors plus CLI init source refresh'),ev('common/src/templates/initial-agents-dir/types/agent-definition.ts',394,'Native ToolCall consumes generated types')],
+     ['common/src/tools/__tests__/compile-tool-definitions.test.ts:5-54','common/src/tools/params/__tests__/x1-golden-vectors.test.ts:44-183'],
+     ['common/src/tools/compile-tool-definitions.ts:9-24','sdk/src/services/acp/ext-methods.ts:140-157'],
+     {'failure':'Unsupported TS mapping shapes throw with tool/field context; generator errors exit nonzero.',
+      'loading':'Cold generation command; no runtime schema generation dependency needed for every call.',
+      'empty':'Only explicit {} schema maps any; precise strict-empty records supported.',
+      'cancellation':'Not an I/O tool-call lifecycle; generation is synchronous/local.',
+      'retry':'Generation deterministic by publishedTools order; read-only mirrors skipped with diagnostics.',
+      'permission':'Generator script not run; no repository artifacts changed.',
+      'crossLanguage':'JSON schemas/ext-v1 provide a useful wire boundary, but not generated Python/Go SDKs or cross-language acceptance evidence.'},
+     ['Tuple/record/composite unions represented; unsupported references/composites fail loudly.', 'One generated tool surface feeds starter, agents and .agents mirrors with real command consumption.'],
+     ['Runtime schema round-trip strictness is weaker than generation (10-F6).', 'Standalone artifact packaging/foreign-client parity unverified here.']),
+ cap('local-external-cli-and-third-party-integrations','Repository-local external CLI wrappers','partial','static trace',
+     [ev('.agents/lib/create-cli-agent.ts',12,'Shared wrapper factory'),ev('.agents/codex-cli.ts',76,'Codex template')],
+     [ev('.agents/codex-cli.ts',98,'Concrete preparation/start/parse/STEP_ALL/stop generator'),ev('scripts/tmux/tmux-cli.sh',104,'Concrete start/send/capture/stop dispatcher')],
+     [ev('.agents/claude-code-cli.ts',18,'Claude wrapper'),ev('.agents/gemini-cli.ts',24,'Gemini wrapper'),ev('.agents/codebuff-local-cli.ts',43,'Local Openbuff wrapper')],
+     ['.agents/__tests__/placeholder.test.ts:1-5'],
+     ['.agents/lib/cli-agent-prompts.ts:5-34','.agents/lib/cli-agent-prompts.ts:243-299'],
+     {'failure':'Generator returns structured startup failure and script issue; helper non-JSON startup fallback can return exit0. Import/script/install errors are separate.',
+      'loading':'Requires explicitly trusted repository .agents plus repository-relative scripts, tmux and external installed CLI.',
+      'empty':'Empty startup stdout/stderr becomes failure; empty captures allowed by schema despite prompt requiring evidence.',
+      'cancellation':'Stop is after STEP_ALL, not a finally-bound ownership cleanup; generic process lifecycle is pair09.',
+      'retry':'Prompts instruct parent to inspect captures/fix helpers/re-run; no authoritative external result reconciliation.',
+      'permission':'Openbuff producer full-access; hardcoded wrapper receipt claims tmux-test (10-F10). External CLI flags do not define parent policy.'},
+     ['Self-contained generator constants work with current serializer.', 'Work task recipe avoids shell-interpolating arbitrary instructions.', 'Real terminal capture artifacts and startup failure output are described/implemented.'],
+     ['10-F10','No fresh installed-CLI/TUI live task assurance; .agents suite merely asserts true.', 'Schema permits empty captures, and evidence/review conclusions are model authored rather than verified effect receipts.']),
+ cap('notion-mcp-templates','Notion MCP template integration','partial','static trace',
+     [ev('.agents/notion-agent.ts',3,'Query template'),ev('.agents/notion-researcher.ts',5,'Research coordinator')],
+     [ev('.agents/notion-agent.ts',20,'Explicit notion-search/fetch selectors and pinned package'),ev('.agents/notion-researcher.ts',28,'Spawnable query agent')],
+     [ev('packages/agent-runtime/src/mcp.ts',53,'Real generic discovery loader'),ev('sdk/src/run.ts',2353,'Real MCP invocation')],
+     ['No Notion package/server/account task exercised; generic MCP tests only.'],
+     ['docs/architecture.md:141-143'],
+     {'failure':'Generic per-server warnings and tool errors apply.',
+      'loading':'Package @notionhq/notion-mcp-server@2.4.1 referenced through npx; existence/listed tool names not verified.',
+      'empty':'Prompt requests explicit not-found reporting.',
+      'cancellation':'Generic MCP signal path.',
+      'retry':'No server-specific retry/transaction guarantees.',
+      'permission':'Local trust before executable template/server; actual private token/config never read.',
+      'modelNeutrality':'No fixed model in the template; configured route chooses model.'},
+     ['Pinned third-party package selector, explicit tool grants and bounded research prompt retaining stable source IDs.'],
+     ['Actual pinned-package tools/list compatibility and account behavior unknown.', 'Generic result/descriptor limitations apply.']),
+ cap('extension-capability-discovery','ACP extension negotiation and MCP transport ingress','partial','static trace',
+     [ev('common/src/protocol/acp-ext-v1.ts',51,'Versioned capability map'),ev('sdk/src/services/acp/ext-methods.ts',32,'Negotiated extension set')],
+     [ev('sdk/src/services/acp/ext-methods.ts',88,'Params/result schemas; unavailable operations use never'),ev('sdk/src/serve/bridge.ts',891,'Null-prototype MCP transport conversion')],
+     [ev('sdk/src/services/acp/acp-agent.ts',935,'Real peer acceptance gate'),ev('sdk/src/serve/bridge.ts',754,'Marked same-record MCP attachment into client.run')],
+     ['Ext method/common golden suites identified; not executed/read wholesale in this shard.'],
+     ['common/src/protocol/acp-ext-v1.ts:1-10','sdk/src/services/acp/ext-methods.ts:25-30'],
+     {'failure':'Disabled client MCP refused before session creation; malformed/private URL handling traced only to selected gate.',
+      'loading':'Baseline capability map starts lexical/not-enforced/index absent/lsp empty/sidecars empty; later live updates serving-pair scope.',
+      'empty':'No advertised MCP attaches nothing; ACP-only MCP variant is skipped because core has no transport equivalent.',
+      'cancellation':'Peer invocation carries signal and host permission bridge; serving lifecycle is pair05.',
+      'retry':'No promise of arbitrary peer replay; negotiations constrain notifications.',
+      'permission':'Same record marked client before attachment; null-prototype env/header/server folding preserves own keys.'},
+     ['Explicit unsupported lanes create/land shape instead of fake usable methods.', 'Real protocol-peer MCP attachment and origin labeling reach run, not just observation callbacks.'],
+     ['No cross-client live conformance task in this shard.', 'Declared protocol surface does not prove all live service capability updates.', 'Cross-JSON origin semantics remain incomplete (10-F2).']),
+ cap('file-change-validation-hooks','Validation commands and file-change host hooks','partial','static trace',
+     [ev('sdk/src/provider-config.ts',501,'Config vocabulary: commands, file globs, per-file flag, timeout')],
+     [ev('sdk/src/tools/file-change-hooks.ts',1517,'Real matching hook executor and diagnostics')],
+     [ev('sdk/src/run.ts',1476,'Host mutation observation callbacks'),ev('sdk/src/tools/file-change-hooks.ts',1585,'Commands run through terminal helper')],
+     ['sdk/src/__tests__/file-change-hooks.test.ts identified; detailed language correctness owned by pair07.'],
+     ['docs/agents-and-tools.md:103-113'],
+     {'failure':'Per-hook allSettled + actionable execution/no-output failures; stdout/stderr bounded and diagnostics normalized.',
+      'loading':'Manifest inference/config merging exists; opt-in/default/timeout contract inconsistencies forwarded to pair07/09.',
+      'empty':'no_hooks_configured and hooks_skipped are explicit distinct observations.',
+      'cancellation':'Signal forwarded to inference/run; cancellation rethrown after settlement rather than ordinary hook failure.',
+      'retry':'Commands give observations; generic lifecycle receipt/replay hooks are absent.',
+      'permission':'Repository checks run code; exact trust/default policy is pair07/09 ownership.'},
+     ['Any installed language executable can be used as a validation command.', 'Real hooks/observers exist with empty/failure/cancel shapes and bounded observation output.'],
+     ['This is not P9 pre/post-tool, pre-commit and turn-end executable JSON receipt hooks.', 'Broader validation quality/default policy deferred to responsible pairs.']),
+ cap('declarative-agents-lifecycle-hooks-and-plugin-host','Optional declarative agents and untrusted plugin host','absent','static trace',
+     [ev('sdk/src/agents/load-agents.ts',64,'Supported modules only; no JSON/YAML agent entrypoint'),ev('rust/crates/openbuff-native/src/lib.rs',63,'plugin-host role name')],
+     [ev('rust/crates/openbuff-native/src/lib.rs',78,'PluginHost explicitly returns not_implemented'),ev('sdk/package.json',65,'QuickJS binary dependency exists without runtime importer')],
+     [ev('sdk/src/run.ts',383,'Actual extension options are custom definitions/overrides/callbacks'),ev('sdk/src/impl/database.ts',288,'Remote executable agents refused')],
+     ['No executable untrusted/declarative/plugin guest task observed; host visibility test is not isolate assurance.'],
+     ['Historical P9-T1/T2/T3/T4/T5 and P5-T6/P7-T6 plans inspected as context only.'],
+     {'failure':'PluginHost explicitly fails not_implemented; unsupported YAML/JSON agents ignored by loader.',
+      'loading':'No untrusted QuickJS/Bun.build/WIT/Wasmtime/registry/lockfile or generated foreign SDK consumer found in bounded source searches.',
+      'empty':'Names/dependencies cannot count as usable plugin capabilities.',
+      'cancellation':'No plugin lifecycle to assess.',
+      'retry':'No plugin lifecycle to assess.',
+      'permission':'Trusted first-party host code remains usable; absent optional plugin boundary is a separate maturity axis.'},
+     ['Unimplemented native role reports structured failure.', 'Existing MCP JSON protocol is an available any-language integration alternative.'],
+     ['Declarative JSON/YAML agent loading, generic executable lifecycle hooks, untrusted code isolates and WIT plugin guests are not production capabilities.', 'Generated Python/Go clients, reverse-RPC custom-tool API and signed extension lockfile not evidenced.'],['loader']),
+]
+
+plan = [
+ {'id':'10-P1','priority':'ready','problem':'10-F1/F2: lost result authority and provenance across real extension/session boundaries.',
+  'sourceAnchors':['common/src/mcp/client.ts:172','common/src/mcp/client.ts:862','sdk/src/run.ts:1075','packages/agent-runtime/src/supervision/parent-bridge-server.ts:1407'],
+  'intendedBehavior':'A versioned descriptor/outcome preserves origin, granted identity, explicit failure, original observations and typed unsupported states across in-process, saved-run and RPC paths.',
+  'smallestScope':'Repair TS MCP adapter and parent descriptor registry; integrate SDK result projection and supervisor callback references. Keep existing providers and user trust/control policies.',
+  'prerequisites':['Declare canonical tool outcome/descriptor receipt vocabulary with parent authority; align with shared result/session work.'],
+  'languageDecision':'TypeScript owns adapter/contract now; no Rust migration prerequisite.',
+  'acceptanceProbes':[findings[0]['acceptanceProbe'],findings[1]['acceptanceProbe']],
+  'regressionChecks':['Origin no-upgrade/parse-hop tests','MCP server error/disabled/mutation-list tests','saved-run and actual in-memory supervisor RPC using synthetic env'],
+  'completionEvidence':'Saved typed traces show original descriptor reference/origin plus preserved isError/structuredContent on all entrypoints; no substituted peer sentinel value.',
+  'stopOrDeferRule':'Do not add new transport/plugin surfaces until this contract survives both JSON boundaries.'},
+ {'id':'10-P2','priority':'ready','problem':'10-F4/F8/F9: incomplete/stale discovery, data/path confusion and ambiguous names.',
+  'sourceAnchors':['sdk/src/run.ts:1594','common/src/mcp/client.ts:830','packages/agent-runtime/src/tools/tool-executor.ts:4201','packages/agent-runtime/src/mcp.ts:71'],
+  'intendedBehavior':'Discover bounded complete generations, distinguish descriptor kind/effect metadata and call the exact granted descriptor with unchanged legitimate data.',
+  'smallestScope':'TS pager/list_changed cache generation + opaque provider-ID mapping; narrow filesystem inspection to declared path capabilities/authoritative handlers.',
+  'prerequisites':['10-P1 stable descriptor identity'],
+  'languageDecision':'TypeScript with upstream MCP protocol interfaces; no extra implementation language.',
+  'acceptanceProbes':[findings[3]['acceptanceProbe'],findings[7]['acceptanceProbe'],findings[8]['acceptanceProbe']],
+  'regressionChecks':['Healthy-server allSettled isolation','Own-key/discovered grant checks','Actual filesystem containment','Denied/allowed host callback behavior'],
+  'completionEvidence':'Two-page dynamic synthetic server trace, invalidation generation proof and exact handler identity/argument receipts.',
+  'stopOrDeferRule':'Keep an explicitly incomplete discovery state if bounded pages cannot finish; do not silently publish partial success.'},
+ {'id':'10-P3','priority':'ready','problem':'10-F3/F7: auxiliary code imports and incomplete loading diagnostics; valid constrained prompts rejected.',
+  'sourceAnchors':['sdk/src/agents/load-agents.ts:66','sdk/src/agents/load-agents.ts:193','common/src/templates/agent-validation.ts:331','cli/src/utils/local-agent-registry.ts:167'],
+  'intendedBehavior':'Only explicit trusted agent entrypoints execute; data/session/tests/dependency code are not entrypoints. Loading/import/invalid-definition errors are visible and constrained prompt schemas validate actual prompts.',
+  'smallestScope':'TS entrypoint manifest/exclusions, structured load diagnostics and structural prompt-type check. Permit agents to import legitimate auxiliary helpers.',
+  'prerequisites':['Preserve explicit trust flag and winning precedence; no additional user consent workflow.'],
+  'languageDecision':'TypeScript; optional declarative JSON first only if a supported pure-config workflow justifies it; YAML adapter is additive.',
+  'acceptanceProbes':[findings[2]['acceptanceProbe'],findings[6]['acceptanceProbe']],
+  'regressionChecks':['Current supported module formats','Home/parent/project precedence','Generation/root cache ownership','Local/MCP provenance stamping'],
+  'completionEvidence':'Loader side-effect matrix with zero auxiliary entrypoint executions and complete structured failure list.',
+  'stopOrDeferRule':'Do not execute repository session artifacts during discovery; defer declarative expansion if config parity is unproven.'},
+ {'id':'10-P4','priority':'dependent','problem':'10-F5/F6: valid module dependencies and schema constraints do not survive extension transport.',
+  'sourceAnchors':['sdk/src/run-state.ts:146','cli/scripts/prebuild-agents.ts:87','common/src/templates/agent-validation.ts:500','packages/agent-runtime/src/run-programmatic-step.ts:401'],
+  'intendedBehavior':'Trusted modules and canonical schema semantics remain equivalent across source, binary and child process; unsupported members produce explicit capability/failure rather than unreported permissive fallback.',
+  'smallestScope':'Preserve in-process function/module authority, content-addressed Bun.build bundles for process/binary transport, canonical JSON validator/parent schema reference; maintain original Zod SDK execution schemas.',
+  'prerequisites':['10-P1 descriptor/schema identity','10-P3 entrypoint policy'],
+  'languageDecision':'Bun/TypeScript host modules. First-party code retains host access; optional untrusted QuickJS runs are a separate future tier.',
+  'acceptanceProbes':[findings[4]['acceptanceProbe'],findings[5]['acceptanceProbe']],
+  'regressionChecks':['Current self-contained bundled generators','Async/default/transform callback tests','Shared generated tool/ACP schemas','Model-neutral tool-result history'],
+  'completionEvidence':'Same imported-helper yield and schema acceptance matrix in source, packaged and supervised paths with immutable bundle/schema hashes.',
+  'stopOrDeferRule':'Retire toString helpers only after parity; return explicit unsupported for nonportable closure/schema authority instead of claiming success.'},
+ {'id':'10-P5','priority':'ready-small','problem':'10-F10/F11: output/help contracts misstate effective extension authority.',
+  'sourceAnchors':['.agents/lib/cli-agent-schemas.ts:10','.agents/lib/cli-agent-prompts.ts:360','docs/agents-and-tools.md:11','packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts:42'],
+  'intendedBehavior':'Wrapper receipts and guides state real effective capability/profile; trusted host execution and unavailable isolates are explicit.',
+  'smallestScope':'Derive wrapper fields from runtime receipts and correct source docs; preserve current intentional full-access and external CLI flags.',
+  'prerequisites':['Shared effective-capability receipt if not already provided by runtime'],
+  'languageDecision':'TS schema/prompt/docs only; no isolation retrofit.',
+  'acceptanceProbes':[findings[9]['acceptanceProbe'],findings[10]['acceptanceProbe']],
+  'regressionChecks':['Structured startup failure','All four wrapper definitions','Host/global and remote provenance refusal tests'],
+  'completionEvidence':'Recorded effective-profile result matches producer; published docs no longer claim unavailable generator sandbox.',
+  'stopOrDeferRule':'Do not mark installed-CLI integration usable without an actual pinned CLI smoke task/capture/effect proof.'},
+ {'id':'10-P6','priority':'defer','problem':'Historical optional P9/P5/P7 surfaces are absent or scaffolds, not completed capabilities.',
+  'sourceAnchors':['sdk/src/agents/load-agents.ts:64','sdk/src/custom-tool.ts:38','sdk/src/tools/file-change-hooks.ts:1517','rust/crates/openbuff-native/src/lib.rs:78','sdk/package.json:65'],
+  'intendedBehavior':'Retain usable MCP/custom tools, consolidate lifecycle callback vocabulary, and expose optional tiers only for a concrete required workload with verified shared lifecycles.',
+  'smallestScope':'Map P9-T1/T1a to loader/config parity, T2/T3 to canonical descriptor/outcome+hook adapters, T4 to trusted bundling then separately optional isolate, T5/P5-T6 to deferred plugin/signing tier, P7-T6 to schema-derived client conformance only after transport authority is stable.',
+  'prerequisites':['10-P1/P2/P3/P4','Measured demand for untrusted guests or foreign SDK ergonomics beyond MCP'],
+  'languageDecision':'TS orchestration; Rust guest host only where WASM/OS capability is required; generate foreign clients rather than author another runtime.',
+  'acceptanceProbes':['One real guest/client task changes a versioned interface, follows its consumer, validates ABI/encoding, cancels/retries and records authoritative effects; source-only role names are not evidence.'],
+  'regressionChecks':['Existing MCP echo/read integration','Plugin not_implemented behavior','No extra model/provider restrictions'],
+  'completionEvidence':'Named workload benchmark plus fresh protocol/effect/cancel conformance receipts; explicitly false capabilities for deferred surfaces.',
+  'stopOrDeferRule':'Defer marketplaces/WIT/signing/generated Go/Python SDKs without a demonstrated integration benefit; do not count QuickJS dependency or role recognition as done.'},
+]
+
+report = {
+ 'shardId':'10-extensions','snapshotId':snapshot,
+ 'structuralReceipt':{'schemaVersion':1,'snapshotId':snapshot,'shardId':'10-extensions',
+    'subsystemIds':sorted({f.split('/')[0] for f in files}),'files':files,'domains':domains},
+ 'readRanges':ranges,
+ 'contextReadRanges':[r for r in all_reads if r['path'] not in inventory_paths],
+ 'capabilities':capabilities,'findings':findings,
+ 'domainAssessment':{
+  'security':'Explicit local/project opt-in, client origin sidecar/no-upgrade, own-key grants, protocol-peer marking and remote executable refusal are present. Conditional origin upgrade after JSON restore (10-F2) and auxiliary discovery execution inside already trusted roots (10-F3) are evidenced. Trusted first-party host/full-access policy is intentional, not a defect; secure-sandbox documentation is inaccurate (10-F11). No external exploit or credential value inspected.',
+  'correctness':'MCP metadata/content fidelity, dynamic discovery, descriptor naming, arbitrary-data classification, generator module closures, schema semantics and prompt sentinel rejection have concrete current triggers and bounded reproductions. Core custom Zod execution and MCP server dispatch are real working strengths.',
+  'state-mutation':'Origin identity cannot survive JSON; generation/root/cwd registry load ownership and derived-cache epoch bumps are sound static strengths. Aux modules mutate host state at discovery; MCP listings stay stale after first successful response. MCP eviction/close and durable replay were left to pair09/pair05.',
+  'error-handling':'Per-server allSettled isolates failures, list rejection deletes cache, custom-handler failure results settle and MCP server unknown/throwing paths are implemented. isError is lost in client projection; import errors disappear at validate:true/verbose:false; schema degradation is not part of authoritative result state. General retries/timeouts reviewed by responsible pairs.',
+  'performance':'Concurrent MCP loading and promise-cache reuse reduce redundant work; scanner caps depth 6/string count 1000. Recursive serial import of sessions/dependencies increases cold reload work and Date.now cache-busting can retain distinct modules. No latency/memory/throughput measurement was claimed. Cache freshness requires repair while keeping bounded work.',
+  'dependency-hygiene':'MCP/ACP/Zod and conversion ownership inspected in sdk/common manifests; common Zod and converter exact versions while MCP/ACP semver ranges exist. Notion package selector is pinned. QuickJS dependency is not evidence of an imported isolate implementation; Rust plugin-host explicitly not_implemented. No CVE/network/package-install checks; broad release/provenance remains pair11.',
+  'test-coverage':'Existing origin/default/refinement/cancel/schema/grant and linked-MCP server tests were read, not rerun. Fresh pinned-Bun probes used exact isolated source/helper/loader boundaries; no provider/server/CLI/model live tasks. Wrapper workspace test only asserts true; absent JSON-origin roundtrip, paginated/dynamic listing, metadata/error fidelity, auxiliary-import diagnostics and schema-acceptance equivalence coverage is material.',
+  'api-contract':'Open names and function-typed generators meet ambiguous-delimiter/stringification limitations; JSON schemas keep provider constraints but can lose execution validation semantics. Result/profile/isolation claims differ from effective behavior. MCP public handle narrowing has an explicit migration note; ext-v1 method schemas and honest disabled native role are positive boundaries. Foreign SDK/plugin promises are classified absent, not usable.'},
+ 'coverageLimits':[
+  f'{len(files)} current inventory files inspected in bounded selected/adjacent ranges; structural receipt is inspection evidence, not a full-line or whole-repository guarantee.',
+  'Current exact read ranges recorded and normalized; historical SPEC/PLAN context excluded from structuralReceipt.',
+  'Native Openbuff audit/retrieval tools are repository code, not exposed tools in this session. This JSON supplies the native-shaped receipt for root validation; no unavailable native tool invocation is claimed.',
+  'Only harmless temp synthetic modules/global-array markers, pure helper imports and source VM fake MCP callbacks used. Actual repo agent loading, private configuration/credential values, model calls, external server/app access and external CLI launches were not performed.',
+  'Process environments/kill/sandbox/approval policy and MCP eviction-close belong pair09; generic ACP session/replay/persistence pair05; physical edit authority pair06; language checks/index pair07/08; release/provenance pair11; browser/image/3D/perception pair13.',
+  'MCP client isError/pagination tests used exact source ranges in a VM with fake client registry, not a wire connection. Real SDK loader/schema/registry and reverse-RPC helper were invoked; their success does not prove full SDK/model/provider integrations.',
+  'Notion pinned package tools/list and token/account behavior remain unknown; do not infer current declared search/fetch names match a live server.',
+  'No declared best-possible implementation judgment or unmeasured performance/vulnerability assertion. Optional full-access/untrusted-isolate/plugin tiers remain separate product choices.'
+ ],
+ 'recommendedPlanWork':plan,
+ 'probeReceipt':{'runtime':'Bun 1.3.5','command':'/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun --no-env-file /tmp/openbuff-body-review-2026-11-05/evidence/10-probes.mts',
+                 'exitCode':0,'artifact':'evidence/10-probe-results.json',
+                 'sha256':hashlib.sha256((base/'evidence/10-probe-results.json').read_bytes()).hexdigest()},
+ 'nativeReceiptStatus':'Prepared for root exported native coverage validator; not yet validated by this shard.'
+}
+(base/'findings/10-extensions.json').write_text(json.dumps(report,indent=2)+'\n')
+
+markdown = r'''Openbuff already has a useful extension body: local executable agent definitions, original-schema SDK custom tools, versioned native overrides, real outgoing MCP dispatch, an incoming read/inspect MCP server, and protocol-peer MCP attachment. The main gaps concern information and authority crossing boundaries. Current result projection loses MCP failure/structured data; JSON can change MCP origin semantics; discovery imports auxiliary code; and module/schema transport can change a valid extension's meaning. These are repairable in TypeScript without postponing them for a language migration.
+
+This review follows snapshot `ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0`, with 75 current files inspected in explicit selected/adjacent ranges. Existing suites were read, not rerun. Fresh probes used pinned Bun 1.3.5, exact source in an isolated VM, real loader/schema/registry helpers, and the real parent reverse-RPC handler. No model, external server/account/app, external CLI, private configuration value, or credential was accessed. Trusted first-party host execution and the current full-access terminal policy are intentional capabilities. The review does not recommend restricting them.
+
+| Capability | Maturity | Current assurance and practical limit |
+|---|---|---|
+| Local MCP config, origins and grants | Partial | Real consumers plus fresh helper probes; origin is not portable across JSON. |
+| MCP discovery/schema/results | Partial | Provider schema preserved; metadata, later pages, freshness and identity are incomplete. |
+| Incoming read/inspect MCP server | Usable | Real CLI binding and inspected linked-transport tests; no fresh external-host task. |
+| SDK custom tools | Usable | Original async Zod validation reaches handlers; defaults/transforms/refinements/cancel tests inspected. |
+| Native overrides/host callbacks | Usable | v0/v1 ABI and actual dispatch; arbitrary external effects remain host owned. |
+| Local executable loading | Partial | Real temp loader exercised; auxiliary code imports and missing diagnostics reproduced. |
+| Programmatic agent ABI | Partial | Yield validation/grants/STEP modes real; reusable module dependencies do not serialize. |
+| Generated tool/extension contracts | Usable | Canonical TS generation and JSON-schema compilers; runtime schema parity incomplete. |
+| External CLI wrappers | Partial | Real generators/helper scripts; no installed-CLI live assurance and inaccurate profile receipts. |
+| Notion templates | Partial | Pinned server selector and real generic path; actual server tool-name compatibility unknown. |
+| ACP extension capability discovery | Partial | Versioned schemas and peer attachment real; full live client conformance not checked here. |
+| File-change validation hooks | Partial | Actual command/matching/diagnostic/cancel vocabulary; generic lifecycle receipt hooks absent. |
+| Declarative/untrusted plugin tier | Absent | YAML/JSON ignored; QuickJS dependency unwired; native plugin-host explicitly not implemented. |
+
+Existing strengths matter. MCP origins are held out of band in a WeakMap, rather than trusting a peer's `origin` property; client marks cannot be promoted on the same object (`common/src/mcp/client.ts:172–254`). Parsing propagates surviving marks before trusted blanket labeling. ACP ingests and attaches the same client-marked descriptor record, preserving identity on that direct path (`sdk/src/serve/bridge.ts:526–545,754–769`). Null-prototype record conversion protects own server/env/header keys. These are meaningful implemented boundaries, with current origin tests, rather than prompt requests to behave safely.
+
+Tool grants also have real enforcement. SDK discovery applies explicit server/tool selectors, and the custom parser requires an own discovered descriptor (`tool-executor.ts:4021`). Configuring a server permits its discovered tools by default; explicit selectors narrow that surface. Concurrent `allSettled` discovery allows healthy servers to remain available when another fails (`packages/agent-runtime/src/mcp.ts:47–95`), while rejected list promises are evicted for retry. Provider construction preserves the original MCP JSON Schema instead of losing constraints through Zod conversion (`tools/prompts.ts:575–596`). SDK custom callbacks additionally retain their original schema at execution, applying asynchronous refinements, defaults and transforms to produce the promised Args (`sdk/src/run.ts:2406–2434`).
+
+The incoming server is independently real. `openbuff mcp` binds filesystem, index and lexical memory seams before `runMcp` (`cli/src/commands/mcp-command.ts:57–122`). One listed-tool registry gates dispatch; unknown tools get structured MethodNotFound, handler failures get `isError`, and unavailable memory returns an explicit disabled observation. Optional `apply_edits` is both listed and dispatched only when mutations are armed. Mutation authority belongs to the broker reviewed elsewhere. The structural public server handle has an explicit declaration migration note instead of exposing incompatible MCP/Zod internals (`sdk/src/mcp/server.ts:487–506`).
+
+Eleven current findings are ranked in the structured report. Each includes concrete source anchors, confidence, trigger, consequence, suggested repair and an acceptance probe.
+
+1. **10-F1, HIGH — MCP failure and structured content disappear.** `callMCPTool` maps only `result.content` (`common/src/mcp/client.ts:862–902`). `isError:true` with empty content and useful `structuredContent` with empty content both became `[]` in the source-boundary probe. Text attached to a failure became an ordinary JSON string. The SDK returns this projection as normal output (`run.ts:2352–2364`), and the runtime publishes it as tool history. This prevents a model or host from reliably recovering from failure or inspecting structured evidence. Preserve a versioned full outcome, including failure, structured observations and provenance; assert those fields survive the full adapter/SDK/runtime path. Text resources also need meaningful text/media encoding rather than raw text masquerading as media data.
+
+2. **10-F2, HIGH — origin semantics change across JSON.** A peer descriptor can be attached to a trusted local template, then included in the documented JSON RunState continuation (`sdk/src/run.ts:1075–1081`; `sdk/src/client.ts:46`). JSON loses the identity mark; template assembly uses aggregate `executionSource` and blanket-marks remaining local/bundled configs project (`agent-registry.ts:185–193`). The actual helper preserved client before JSON but promoted the same mixed-template descriptor after JSON. A later environment-reference resolution would regain local substitution and lose peer treatment. Conversely, actual supervisor reverse RPC received a project-marked config as unmarked/client (`parent-bridge-server.ts:1407–1408`), which can break legitimate substitution/authentication. Bind per-server provenance to parent-owned immutable identity or an authenticated reference across saved runs and RPC. No secret expansion or outbound exploit was performed; those effects are conditional downstream consequences of the proven mark change.
+
+3. **10-F3, HIGH — discovery executes auxiliary modules.** With an explicitly trusted root or `agentsPath`, the SDK walker excludes only `skills`, `.d.ts` and `.test.ts` (`load-agents.ts:66–89`). Dynamic import precedes agent/id validation (`:193–208`). The real temp loader executed harmless marker modules in sessions, `__tests__/*.spec.ts`, node_modules, lib, types and `*.test.js`; it correctly skipped the three actual exclusions. A throwing module also disappeared with `validationErrors:[]`, matching CLI `validate:true, verbose:false`. This is not unconsented project execution: trust opt-in is required. It is excessive entrypoint discovery within that scope. Declare/narrow agent entrypoints, keep auxiliary dependencies importable by agents, and return structured import/walk diagnostics. A side-effect matrix must prove data/test/dependency artifacts are not discovery entrypoints.
+
+4. **10-F4, MEDIUM — capability discovery is incomplete and stale.** The SDK consumes only the first `tools/list` page (`run.ts:1594–1611`); successful listings remain cached (`mcp/client.ts:830–843`). The fake two-page server was called once, the second-page selector found nothing, and a changed server still returned its original tools. Dispatch's rediscovery hits the same cache. Add bounded pagination, repeated-cursor/error handling, notification/reconnect invalidation and explicit generation/incomplete state. Preserve healthy-server isolation. Client eviction and close are a distinct pair09 issue.
+
+5. **10-F5, MEDIUM — module dependencies are lost.** Local loading, SDK definitions and official prebuild convert `handleSteps` using `toString`; runtime `new Function` recreates global-scope text (`load-agents.ts:221`; `run-state.ts:146`; `prebuild-agents.ts:87`; `run-programmatic-step.ts:401`). A valid loaded generator capturing a module constant validated successfully and then raised ReferenceError. Wrappers duplicate constants inside generators to accommodate this constraint. Preserve trusted module/function references in process and use actual content-addressed dependency bundles for binary/process transport. The acceptance task must use imported helpers and captured configuration identically across all three paths. This addresses D53's actual integration gap without requiring first-party isolation.
+
+6. **10-F6, MEDIUM — schema portability can silently weaken validation.** Native fallback and `unrepresentable:'any'` prioritize avoiding conversion crashes (`agent-validation.ts:500–547,623–665`) but do not expose degradation as a result capability. A required-object Zod husk accepted `{}` after rehydration; `z.never()` transported as `not:{}` subsequently accepted an object. A rich schema retained required/enum checks but accepted extra fields despite `additionalProperties:false`. The custom parser ignores parsed output and forwards original arguments (`tool-executor.ts:4062–4075`). Retain canonical JSON Schema validation or authenticated parent schema authority, with explicit unsupported/degraded states. Compare acceptance matrices, not just successful serialization or nonthrowing conversion; preserve original SDK refinement/transform checks.
+
+7. **10-F7, MEDIUM — valid prompt constraints reject the whole agent.** Prompt-schema validation tests only the sentinel `"test"` and undefined (`agent-validation.ts:331–343`). String `minLength:5` and `enum:["work"]` were rejected despite accepting legitimate strings. Check the supported type structurally, then validate the actual invocation. The regression must load minLength/enum/pattern schemas excluding the sentinel and reject invalid prompts at call time.
+
+8. **10-F8, MEDIUM — ordinary data is mistaken for filesystem authority.** Every collected custom/MCP string is normalized as a filesystem path when a project root exists (`tool-executor.ts:4201–4233`). `/api/v1`, `/` and a slash-delimited regex all triggered the escape predicate in the bounded probe. An API route or separator can therefore prevent a valid granted tool call. The source acknowledges false positives as a tradeoff; the resulting interoperability limitation remains observable. Use declared path/effect fields and authoritative handlers for real filesystem containment, while preserving exact other arguments. Keep the intended terminal/full-access policy and real filesystem protections.
+
+9. **10-F9, MEDIUM — delimiter identity is ambiguous.** Discovery joins server/tool with `__`; dispatch interprets every name containing `__` as MCP and takes its first segment (`mcp.ts:71`; `tool-executor.ts:4288–4302`). Server `team__api` with tool `read` published `team__api__read` but decoded as `team` and `api__read`. Open custom names containing `__` also take the wrong dispatch path. Use explicit descriptor-kind/identity mapping and reversible provider IDs. Probe difficult server, tool and custom names through actual invocation, or reject unsupported names clearly during loading.
+
+10. **10-F10, MEDIUM — wrapper receipts misstate enforcement.** The shared wrapper schema/prompt requires `permissionProfile:"tmux-test"` as runtime enforced (`cli-agent-schemas.ts:10–14`; `cli-agent-prompts.ts:360`). The actual shared producer deliberately stamps `full-access` for every terminal call (`handlers/tool/run-terminal-command.ts:38–42`). External Codex/Claude/Gemini flags are separate. Derive effective-profile fields from runtime evidence and report the real posture. This is a receipt-truth repair, not a recommendation to reverse the user's full-access preference.
+
+11. **10-F11, LOW — the guide claims nonexistent isolation.** `docs/agents-and-tools.md:11` says secure sandbox; the executor uses the host realm, and the existing test explicitly documents host-global visibility (`sandbox-generator.test.ts:163`). Remote executable templates are refused (`sdk/src/impl/database.ts:288–298`), not sent to QuickJS. Document trusted host authority accurately and advertise an optional untrusted isolate only when it has an implemented consumer and verified boundary.
+
+All eight domains were considered. Security findings are tied to provenance and trusted-root entrypoint discovery, with full-access intent preserved. Correctness/API issues are supported by concrete failing values. State review found sound registry generation/root ownership and cache epoch management alongside origin/cache gaps. Error handling has real per-server and handler settlement strengths, but metadata and import diagnostics are lost. Performance conclusions are limited to bounded/concurrent structure and unnecessary recursive serial imports; no latency or memory measurements are invented. Manifests show actual MCP/ACP/Zod/converter dependencies and a pinned Notion selector, while QuickJS installation is not implementation evidence. Test assurance distinguishes inspected suites, fresh isolated probes and unperformed live integrations.
+
+The immediate ready queue should repair canonical descriptor/outcome provenance and fidelity, then discovery generations/naming/data semantics, then executable entrypoints/diagnostics. Trusted bundle and schema equivalence work depends on those boundaries; source and binary paths must prove the same behavior before retiring current generators. A small independent task can correct wrapper receipts and isolation wording. File-change command hooks already support installed executables and explicit empty/failure/cancel observations, but are not the promised generic pre/post-tool, pre-commit and turn-end JSON receipt hooks. Hook inference/timeout mismatches were handed to pair07/09 rather than duplicated.
+
+Treat P9-T1/T1a as declarative loader/config parity, T2/T3 as consolidation around canonical descriptor/outcome adapters, and T4 as trusted bundling plus a separate optional untrusted tier. Native plugin-host/WIT/signing/lockfile, generated Python/Go clients and reverse-RPC custom-tool APIs remain deferred capabilities: `PluginHost` explicitly reports `not_implemented` (`rust/.../lib.rs:78`), and YAML/JSON definitions were ignored by the real loader. A role name, dependency or schema compiler cannot graduate those promises. Demand a concrete guest/client workload with version/encoding/cancellation/effect receipts before adding another host or authored language. Existing MCP already offers an available language-neutral integration boundary worth repairing first.
+
+The detailed JSON contains the snapshot-bound structural receipt, normalized exact reads, all capability states, eleven findings and six executable plan packages with prerequisites, source anchors, acceptance probes, regression checks, completion evidence and stop/defer rules. `evidence/10-probe-results.json` and `10-probes.mts` preserve reproducibility. Native audit tools were not exposed; root must validate the prepared receipt through the exported coverage function. Notion account/tool compatibility, installed external CLI behavior, comprehensive foreign-client conformance and broad process/replay/mutation/language/perception authority remain explicit limits owned by their respective shards.
+'''
+markdown = markdown.replace('75 current files', f'{len(files)} current files')
+(base/'findings/10-extensions.md').write_text(markdown)
+word_count = len(markdown.split())
+summary = {'json':'findings/10-extensions.json','markdown':'findings/10-extensions.md','findings':len(findings),'capabilities':len(capabilities),'currentFiles':len(files),'readRanges':len(ranges),'wordCount':word_count,'domains':domains,'snapshotId':snapshot}
+(base/'evidence/10-report-receipt.json').write_text(json.dumps(summary,indent=2)+'\n')
+print(json.dumps(summary,indent=2))

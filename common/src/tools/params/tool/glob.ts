@@ -18,7 +18,7 @@ const inputSchema = z
       .string()
       .optional()
       .describe(
-        'Optional working directory or file path, relative to project root. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files remain project-relative. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root.',
+        'Optional working directory or file path, absolute or relative to project root; access follows the configured sandbox policy. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files are project-relative inside the project and absolute outside it. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root.',
       ),
   })
   .describe(

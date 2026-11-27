@@ -24,6 +24,25 @@ const corpusPath = resolve(
 )
 const corpus = JSON.parse(readFileSync(corpusPath, 'utf8')) as OpenbuffCorpus
 
+// Keep source and test distractors across the shipped workspaces. Execution
+// archives must not consume the walker's per-prefix budget or change ranking.
+const sourceRoots = [
+  'agents',
+  'cli',
+  'common',
+  'docs',
+  'evals',
+  'packages',
+  'sdk',
+  'scripts',
+]
+const sourceExcludes = [
+  '/*',
+  ...sourceRoots.map((root) => `!/${root}/`),
+  '/docs/execution/',
+  '/scripts/body-fixtures/',
+]
+
 describe('versioned Openbuff retrieval-quality corpus', () => {
   test('references files in this repository and has a meaningful fixed size', () => {
     expect(corpus.version).toBe(2)
@@ -77,12 +96,28 @@ describe('versioned Openbuff retrieval-quality corpus', () => {
     })
   })
 
-  test('holds the lexical retriever to quality gates over the actual repository index', async () => {
+  test('holds the lexical retriever to quality gates over the shipped-source repository index', async () => {
     const index = await buildMetadataIndex(repositoryRoot, {
       maxFiles: 10_000,
+      exclude: sourceExcludes,
     })
+    // Overall coverage combines walk and parser truncation. Lexical ranking
+    // requires every selected file; syntax-tier limits are reported separately.
+    expect(index.coverage).toMatchObject({
+      maxFiles: 10_000,
+      skippedFiles: 0,
+      skippedPrefixes: [],
+    })
+    expect(index.coverage?.truncated).toBe(
+      index.coverage?.parser?.truncated ?? false,
+    )
     for (const document of corpus.documents) {
       expect(index.files[document.path]).toBeDefined()
+    }
+    for (const fixture of ['test.c', 'test.php']) {
+      expect(
+        index.files[`packages/code-map/__tests__/test-langs/${fixture}`],
+      ).toBeDefined()
     }
     let tick = 0
     const report = await evaluateRetrievalQuality(
@@ -90,6 +125,17 @@ describe('versioned Openbuff retrieval-quality corpus', () => {
       (query, limit) =>
         queryIndex(index, query, { limit }).map((result) => result.path),
       { k: 3, now: () => tick++ },
+    )
+    console.info(
+      JSON.stringify({
+        evaluation: corpus.name,
+        sourceRoots,
+        exclude: sourceExcludes,
+        indexedFiles: index.fileCount,
+        coverage: index.coverage,
+        parseDiagnostics: index.parseDiagnostics,
+        report,
+      }),
     )
 
     expect(report.corpus).toEqual({
@@ -106,5 +152,5 @@ describe('versioned Openbuff retrieval-quality corpus', () => {
     expect(report.latency.samplesMs).toEqual(
       Array.from({ length: corpus.queries.length }, () => 1),
     )
-  }, 30_000)
+  }, 60_000)
 })

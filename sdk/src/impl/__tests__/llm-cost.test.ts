@@ -8,6 +8,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1_000_000,
@@ -30,6 +31,7 @@ describe('computeCostCentsFromUsage', () => {
   test('returns undefined when pricing has neither input nor output rate', () => {
     const pricing: ModelPricing = {
       cachedInputPerMillionTokens: 0.3,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = { inputTokens: 1_000_000, outputTokens: 0 }
     expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
@@ -40,6 +42,7 @@ describe('computeCostCentsFromUsage', () => {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
       cachedInputPerMillionTokens: 0.3,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1_000_000,
@@ -56,6 +59,7 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1_000_000,
@@ -70,69 +74,90 @@ describe('computeCostCentsFromUsage', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = { inputTokens: 0, outputTokens: 0 }
     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
   })
 
-  test('returns 0 when usage token counts are missing', () => {
+  test('returns unknown when usage token counts are missing', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {}
-    expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
+    expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
   })
 
-  test('treats negative / non-finite token counts as zero', () => {
+  test('rejects negative / non-finite token counts as unknown', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: -100,
       outputTokens: Number.NaN,
       cachedInputTokens: Number.POSITIVE_INFINITY,
     }
-    expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
+    expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
   })
 
   test('handles input-only pricing (no output rate)', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 500_000,
       outputTokens: 200_000,
     }
-    // input: 500K * $3/M = $1.50 ; output rate absent => 0 ; total 150 cents
-    expect(computeCostCentsFromUsage({ usage, pricing })).toBe(150)
+    // Missing output price cannot attest a complete request with positive output.
+    expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
+    expect(
+      computeCostCentsFromUsage({
+        usage: { ...usage, outputTokens: 0 },
+        pricing,
+      }),
+    ).toBe(150)
   })
 
   test('handles output-only pricing (no input rate)', () => {
     const pricing: ModelPricing = {
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 500_000,
       outputTokens: 200_000,
     }
-    // output: 200K * $15/M = $3.00 ; input rate absent => 0 ; total 300 cents
-    expect(computeCostCentsFromUsage({ usage, pricing })).toBe(300)
+    // Missing input price cannot attest a complete request with positive input.
+    expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
+    expect(
+      computeCostCentsFromUsage({
+        usage: { ...usage, inputTokens: 0 },
+        pricing,
+      }),
+    ).toBe(300)
   })
 
-  test('rounds to whole cents', () => {
+  test('preserves fractional cents until display formatting', () => {
     const pricing: ModelPricing = {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
+      currency: 'USD',
     }
     const usage: UsageTokenCounts = {
       inputTokens: 1,
       outputTokens: 1,
     }
     // input: 1 * $3/M = $0.000003 ; output: 1 * $15/M = $0.000015
-    // total = $0.000018 = 0.0018 cents -> rounds to 0
-    expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
+    // total = $0.000018 = 0.0018 cents, retained without rounding.
+    expect(computeCostCentsFromUsage({ usage, pricing })).toBeCloseTo(
+      0.0018,
+      12,
+    )
   })
 
   test('does not let cached tokens exceed raw input tokens', () => {
@@ -140,6 +165,7 @@ describe('computeCostCentsFromUsage', () => {
       inputPerMillionTokens: 3,
       outputPerMillionTokens: 15,
       cachedInputPerMillionTokens: 0.3,
+      currency: 'USD',
     }
     // cachedInputTokens > inputTokens (malformed); chargeableInput clamped to 0
     const usage: UsageTokenCounts = {
@@ -147,7 +173,7 @@ describe('computeCostCentsFromUsage', () => {
       outputTokens: 0,
       cachedInputTokens: 200_000,
     }
-    // chargeableInput = max(0, 100K - 200K) = 0 ; cachedInput clamped to safe 200K @ $0.30/M = $0.06 = 6 cents
-    expect(computeCostCentsFromUsage({ usage, pricing })).toBe(6)
+    // Impossible cached/total relationship remains unknown; do not fabricate discounted usage.
+    expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
   })
 })

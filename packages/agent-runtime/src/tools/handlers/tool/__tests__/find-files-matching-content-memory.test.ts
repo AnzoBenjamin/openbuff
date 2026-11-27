@@ -95,7 +95,7 @@ describe('handleFindFilesMatchingContent memory-first', () => {
     mock.restore()
   })
 
-  test('skips the client call on full cover and serves a receipt output', async () => {
+  test('full memory cover never short-circuits the content search', async () => {
     const agentState = buildVerifiedState(['src/auth/login.ts'])
     const toolCall = buildToolCall({ cwd: 'src/auth/login.ts' })
     let clientCalls = 0
@@ -108,13 +108,9 @@ describe('handleFindFilesMatchingContent memory-first', () => {
         clientCalls += 1
       },
     })
-    expect(clientCalls).toBe(0)
-    const value = (
-      returned as unknown as Array<{ type: string; value: Record<string, unknown> }>
-    )[0].value as { files: string[]; count: number; message: string }
-    expect(Array.isArray(value.files)).toBe(true)
-    expect(value.files).toContain('src/auth/login.ts')
-    expect(value.message).toContain('verified memory')
+    expect(clientCalls).toBe(1)
+    expect(returned).toEqual(output)
+    expect(agentState.memoryReuse?.skip ?? 0).toBe(0)
     expect(agentState.discoveryCoverage).toBeDefined()
   })
 

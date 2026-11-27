@@ -10,18 +10,24 @@ import React, {
 import { AgentBlockGrid } from './agent-block-grid'
 import { AgentBranchItem } from './agent-branch-item'
 import { trimNewlines, sanitizePreview } from './block-helpers'
+
+import { collapseHarnessTags } from '../../utils/output-hygiene'
 import { ContentWithMarkdown } from './content-with-markdown'
 import { ImplementorGroup } from './implementor-row'
 import { ThinkingBlock } from './thinking-block'
 import { ToolBlockGroup } from './tool-block-group'
+import { SingleBlock } from './single-block'
 import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { isTextBlock } from '../../types/chat'
 import {
   getAgentDisplayPrompt,
-  getBasherFinishedOutputPreview,
+  getAgentOutcomePreview,
+  getAgentOutcomeVerdict,
 } from '../../utils/agent-display'
 import { getAgentStatusInfo } from '../../utils/agent-helpers'
+import { classifyOutputOutcome } from '../../utils/output-outcome'
+import { withAnnotationDisclosure } from './annotation-disclosure'
 import {
   processBlocks,
   type BlockProcessorHandlers,
@@ -43,7 +49,10 @@ import type {
   HtmlContentBlock,
   ToolContentBlock,
 } from '../../types/chat'
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
+import {
+  hasMarkdown,
+  type MarkdownPalette,
+} from '../../utils/markdown-renderer'
 
 /**
  * Compute preview text for collapsed agent display.
@@ -60,29 +69,18 @@ function getCollapsedPreview(
     return ''
   }
 
-  if (!isStreaming) {
-    const outputPreview = getBasherFinishedOutputPreview(
+  if (!isStreaming)
+    return getAgentOutcomePreview(
       agentBlock,
       Math.max(24, Math.min(120, availableWidth - 4)),
     )
-    if (outputPreview) {
-      return outputPreview
-    }
-  }
-
-  // Default preview: use the displayed prompt or first line of text content.
-  const displayPrompt = getAgentDisplayPrompt(agentBlock)
-  if (displayPrompt) {
-    return sanitizePreview(displayPrompt)
-  }
-
-  const textContent =
-    agentBlock.blocks
-      ?.filter(isTextBlock)
-      .map((b) => b.content)
-      .join('') || ''
-  const firstLine = textContent.split('\n').find((line) => line.trim()) || ''
-  return `${sanitizePreview(firstLine)}...`
+  const scope = getAgentDisplayPrompt(agentBlock)
+  if (scope)
+    return sanitizePreview(scope.slice(0, Math.max(24, availableWidth * 2)))
+  return getAgentOutcomePreview(
+    agentBlock,
+    Math.max(24, Math.min(120, availableWidth - 4)),
+  )
 }
 
 interface AgentBodyProps {
@@ -167,9 +165,36 @@ const AgentBody = memo(
       getAgentMarkdownOptions,
     }
 
+    const renderKnownBlock = useCallback(
+      (block: ContentBlock, index: number) => {
+        const p = propsRef.current
+        return (
+          <SingleBlock
+            key={`${p.keyPrefix}-block-${index}`}
+            block={block}
+            idx={index}
+            messageId={p.keyPrefix}
+            blocks={p.nestedBlocks}
+            isLoading={p.agentBlock.status === 'running'}
+            isComplete={p.agentBlock.status !== 'running'}
+            isUser={false}
+            textColor={p.theme.foreground}
+            availableWidth={p.availableWidth}
+            markdownPalette={p.markdownPalette}
+            onToggleCollapsed={p.onToggleCollapsed}
+            onBuildFast={p.onBuildFast}
+            onInsertCommand={p.onInsertCommand}
+            isLastMessage={p.isLastMessage}
+          />
+        )
+      },
+      [],
+    )
+
     // Handlers are stable (empty deps) and read latest props from ref
     const handlers: BlockProcessorHandlers = useMemo(
       () => ({
+        onImageBlock: renderKnownBlock,
         onReasoningGroup: (reasoningBlocks, startIndex) => {
           const p = propsRef.current
           return (
@@ -248,17 +273,51 @@ const AgentBody = memo(
             const nestedStatus = textBlock.status
             const isNestedStreamingText =
               p.parentIsStreaming || nestedStatus === 'running'
-            const filteredNestedContent = isNestedStreamingText
+            // Display-only hygiene, mirroring single-block: harness-style
+            // pseudo-XML echoed by the model is collapsed out of the nested
+            // text render without touching the stored block.
+            const sourceContent = isNestedStreamingText
               ? trimNewlines(textBlock.content)
               : textBlock.content.trim()
+            const filteredNestedContent = collapseHarnessTags(sourceContent)
+            const disclose = (node: ReactNode) =>
+              sourceContent === filteredNestedContent
+                ? node
+                : withAnnotationDisclosure(
+                    node,
+                    textBlock.content,
+                    filteredNestedContent,
+                    `${p.keyPrefix}:text:${index}`,
+                  )
             if (!filteredNestedContent) {
-              return null
+              return disclose(null)
             }
             const markdownOptionsForLevel = p.getAgentMarkdownOptions(0)
             const explicitColor = textBlock.color
             const nestedTextColor = explicitColor ?? p.theme.foreground
 
-            return (
+            // D47 Stage 2: a renderable cannot nest inside a text element.
+            // When the content contains markdown, ContentWithMarkdown returns
+            // a native <markdown> renderable, so render it at box level
+            // (native wrapMode handles wrapping). Plain content degrades to a
+            // plain string and keeps its <text> wrapper for the fg color path.
+            if (hasMarkdown(filteredNestedContent)) {
+              return disclose(
+                <box
+                  key={`${p.keyPrefix}-text-${index}`}
+                  style={{ width: '100%' }}
+                >
+                  <ContentWithMarkdown
+                    content={filteredNestedContent}
+                    isStreaming={isNestedStreamingText}
+                    codeBlockWidth={markdownOptionsForLevel.codeBlockWidth}
+                    palette={markdownOptionsForLevel.palette}
+                  />
+                </box>,
+              )
+            }
+
+            return disclose(
               <text
                 key={`${p.keyPrefix}-text-${index}`}
                 style={{
@@ -272,7 +331,7 @@ const AgentBody = memo(
                   codeBlockWidth={markdownOptionsForLevel.codeBlockWidth}
                   palette={markdownOptionsForLevel.palette}
                 />
-              </text>
+              </text>,
             )
           }
 
@@ -295,11 +354,10 @@ const AgentBody = memo(
             )
           }
 
-          // Fallback for unknown block types
-          return null
+          return renderKnownBlock(block, index)
         },
       }),
-      [], // Empty deps - handlers read from propsRef.current
+      [renderKnownBlock], // Stable handlers read from propsRef.current.
     )
 
     return processBlocks(nestedBlocks, handlers) as ReactNode[]
@@ -337,7 +395,9 @@ export const AgentBranchWrapper = memo(
     )
 
     if (shouldRenderAsSimpleText(agentBlock.agentType)) {
-      const isStreaming = agentBlock.status === 'running' || agentIsStreaming
+      const isStreaming =
+        agentBlock.status === 'running' ||
+        (!agentBlock.status && agentIsStreaming)
 
       const effectiveStatus = isStreaming ? 'running' : agentBlock.status
       const { indicator: statusIndicator, color: statusColor } =
@@ -449,7 +509,9 @@ export const AgentBranchWrapper = memo(
     }
 
     const isCollapsed = agentBlock.isCollapsed ?? false
-    const isStreaming = agentBlock.status === 'running' || agentIsStreaming
+    const isStreaming =
+      agentBlock.status === 'running' ||
+      (!agentBlock.status && agentIsStreaming)
 
     // Compute collapsed preview text
     const preview = getCollapsedPreview(
@@ -466,6 +528,8 @@ export const AgentBranchWrapper = memo(
       label: statusLabel,
       color: statusColor,
     } = getAgentStatusInfo(effectiveStatus, theme)
+    const verdict = getAgentOutcomeVerdict(agentBlock)
+    const verdictTone = classifyOutputOutcome(verdict ?? undefined)
 
     const onToggle = useCallback(() => {
       onToggleCollapsed(agentBlock.agentId)
@@ -491,9 +555,25 @@ export const AgentBranchWrapper = memo(
           isCollapsed={isCollapsed}
           isStreaming={isStreaming}
           preview={preview}
-          statusLabel={statusLabel ?? undefined}
-          statusColor={statusColor}
-          statusIndicator={statusIndicator}
+          statusLabel={verdict ?? statusLabel ?? undefined}
+          statusColor={
+            verdict
+              ? verdictTone === 'bad'
+                ? theme.error
+                : verdictTone === 'warn'
+                  ? theme.warning
+                  : theme.success
+              : statusColor
+          }
+          statusIndicator={
+            verdict
+              ? verdictTone === 'bad'
+                ? '✗'
+                : verdictTone === 'warn'
+                  ? '◐'
+                  : '✓'
+              : statusIndicator
+          }
           onToggle={onToggle}
           availableWidth={availableWidth}
         >

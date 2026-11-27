@@ -1,4 +1,5 @@
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type { RunOutcome } from '@codebuff/common/types/run-outcome'
 
 export type AgentStep = PrintModeEvent
 
@@ -9,6 +10,9 @@ export type RunnerResult = {
   cachedInputTokens?: number
   inputTokens?: number
   finalMessageHistoryText?: string
+  error?: string
+  runOutcome?: RunOutcome
+  costEvidence?: { status: 'reported' | 'unknown'; source?: string }
 }
 
 export type RunnerOptions = {

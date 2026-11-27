@@ -1,0 +1,242 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:
+(pass) B14 source-specific emitted-memory usage > an unrelated full read cannot penalize either retrieved observation [0.48ms]
+(pass) B14 source-specific emitted-memory usage > only actual emitted matching-source unchanged reread gets an efficiency signal [0.07ms]
+(pass) B14 source-specific emitted-memory usage > required refresh, changed bytes, unknown use and incomplete reads never imply ignored [0.21ms]
+(pass) B14 source-specific emitted-memory usage > a skip for an unrendered observation is not measured use [0.04ms]
+
+sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:
+114 |     const context = buildContext([verifiedKnowledgeItem('observation:one', ['c1'])])
+115 |     const reuse = receipt({
+116 |       byTool: [byToolEntry({ coveredStableChunkIds: ['c1'] })],
+117 |     })
+118 | 
+119 |     expect(correlateUsage({ context, receipt: reuse })).toEqual([
+                                                              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "kind": "used",
+-     "mechanism": "gate-skip",
+-     "observationId": "observation:one",
+-   },
+- ]
++ []
+
+- Expected  - 7
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:119:57)
+(fail) correlateUsage > gate-skip: chunk covered by a skip entry yields exactly one used signal [0.63ms]
+132 |           coveredStableChunkIds: ['c1'],
+133 |         }),
+134 |       ],
+135 |     })
+136 | 
+137 |     expect(correlateUsage({ context, receipt: reuse })).toEqual([
+                                                              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "kind": "used",
+-     "mechanism": "gate-skip",
+-     "observationId": "observation:one",
+-   },
+- ]
++ []
+
+- Expected  - 7
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:137:57)
+(fail) correlateUsage > dedup: the same chunk covered by two tools produces one signal [0.17ms]
+147 |     const reuse = receipt({
+148 |       full: 1,
+149 |       byTool: [byToolEntry({ coveredStableChunkIds: ['c1'] })],
+150 |     })
+151 | 
+152 |     expect(correlateUsage({ context, receipt: reuse })).toEqual([
+                                                              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "kind": "ignored",
+-     "mechanism": "reread-despite",
+-     "observationId": "observation:missed",
+-   },
+-   {
+-     "kind": "used",
+-     "mechanism": "gate-skip",
+-     "observationId": "observation:used",
+-   },
+- ]
++ []
+
+- Expected  - 12
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:152:57)
+(fail) correlateUsage > ignored: full>=1 marks non-used injected observations reread-despite and never double-marks used ones [0.15ms]
+163 |     const context = buildContext([verifiedKnowledgeItem('observation:one', ['c1'])])
+164 |     const reuse = receipt({
+165 |       byTool: [byToolEntry({ coveredStableChunkIds: ['c1'] })],
+166 |     })
+167 | 
+168 |     expect(correlateUsage({ context, receipt: reuse })).toEqual([
+                                                              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "kind": "used",
+-     "mechanism": "gate-skip",
+-     "observationId": "observation:one",
+-   },
+- ]
++ []
+
+- Expected  - 7
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:168:57)
+(fail) correlateUsage > no ignored signals when the turn performed no full read [0.15ms]
+186 |     const first = correlateUsage({ context, receipt: reuse })
+187 |     const second = correlateUsage({ context, receipt: reuse })
+188 |     expect(first).toEqual(second)
+189 |     const ids = first.map((signal: UsageSignal) => signal.observationId)
+190 |     expect([...ids].sort()).toEqual(ids)
+191 |     expect(first).toEqual([
+                        ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "kind": "used",
+-     "mechanism": "gate-skip",
+-     "observationId": "observation:a",
+-   },
+-   {
+-     "kind": "used",
+-     "mechanism": "gate-skip",
+-     "observationId": "observation:b",
+-   },
+-   {
+-     "kind": "ignored",
+-     "mechanism": "reread-despite",
+-     "observationId": "observation:c",
+-   },
+- ]
++ []
+
+- Expected  - 17
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:191:19)
+(fail) correlateUsage > determinism: identical inputs produce deep-equal, code-point-ordered output [0.28ms]
+215 |         }),
+216 |       ],
+217 |     })
+218 | 
+219 |     const signals = correlateUsage({ context, receipt: reuse })
+220 |     expect(signals).toHaveLength(128)
+                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 128
+Received length: 0
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:220:21)
+(fail) correlateUsage > caps: more than 128 signals is sliced to 128 after sorting [1.64ms]
+(pass) correlateUsage > no-op: empty byTool or empty injected categories yield [] [0.19ms]
+
+sdk/src/services/memory-v2/__tests__/coordinator.test.ts:
+(pass) Memory V2 event factory > derives stable, source-isolated IDs from trusted identity fields [0.27ms]
+(pass) MemoryV2Coordinator lifecycle > explicit authority wins over legacy mode and json-v1 performs no V2 operations [0.56ms]
+(pass) MemoryV2Coordinator lifecycle > invalid runtime authority safely selects json-v1 and performs no V2 work [0.40ms]
+(pass) MemoryV2Coordinator lifecycle > explicit opt-in without a repository remains active with empty context [0.09ms]
+(pass) MemoryV2Coordinator lifecycle > isolates fresh tasks and reuses an interrupted persisted turn [7.08ms]
+(pass) MemoryV2Coordinator lifecycle > passes reconciled workspace state and injects only successful inject-mode results [2.99ms]
+(pass) MemoryV2Coordinator lifecycle > bounds rejected query failures and keeps opt-in fail-closed [0.73ms]
+(pass) MemoryV2Coordinator lifecycle > bounds failed query failures and keeps opt-in fail-closed [0.41ms]
+(pass) MemoryV2Coordinator lifecycle > bounds throw query failures and keeps opt-in fail-closed [0.26ms]
+(pass) MemoryV2Coordinator lifecycle > bounds invalid query failures and keeps opt-in fail-closed [0.52ms]
+(pass) MemoryV2Coordinator lifecycle > rejects a mismatched query project and keeps opt-in fail-closed [1.05ms]
+(pass) MemoryV2Coordinator lifecycle > treats resource-budget retrieval degradation as fail-closed [1.12ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow rejected query failure non-fatal [0.64ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow failed query failure non-fatal [0.21ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow throw query failure non-fatal [0.21ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow invalid query failure non-fatal [0.32ms]
+(pass) MemoryV2Coordinator lifecycle > computes match parity from migration source item counts [1.15ms]
+(pass) MemoryV2Coordinator lifecycle > computes v1-ahead parity from migration source item counts [0.21ms]
+(pass) MemoryV2Coordinator lifecycle > computes v2-ahead parity from migration source item counts [0.07ms]
+(pass) MemoryV2Coordinator lifecycle > computes unavailable parity from migration source item counts [0.11ms]
+(pass) MemoryV2Coordinator lifecycle > extracts summed source counts and one direct safe truncated-field count [0.13ms]
+(pass) MemoryV2Coordinator lifecycle > rebases retryable append conflicts and retries the same deterministic batch at most twice [8.99ms]
+(pass) MemoryV2Coordinator lifecycle > serializes concurrent captures in invocation order with exact cursor chaining through terminal append [7.42ms]
+(pass) MemoryV2Coordinator lifecycle > serializes concurrent captures, advances cursors, and finishes once [1.82ms]
+(pass) MemoryV2Coordinator lifecycle > parks a failed terminal append and later commits the unchanged decision [0.87ms]
+(pass) MemoryV2Coordinator lifecycle > records completed terminal lifecycle status [0.65ms]
+(pass) MemoryV2Coordinator lifecycle > records failed terminal lifecycle status [0.43ms]
+(pass) MemoryV2Coordinator lifecycle > records cancelled terminal lifecycle status [0.63ms]
+(pass) MemoryV2Coordinator lifecycle > captures only recognized successful native structured metadata with bounded paths [1.36ms]
+(pass) MemoryV2Coordinator lifecycle > filters private memory, generated, dependency, binary, secret, log, and build paths [1.07ms]
+(pass) MemoryV2Coordinator lifecycle > captures only confirmed mutation actions [4.53ms]
+(pass) MemoryV2Coordinator lifecycle > append failure keeps opt-in fail-closed and remains non-fatal in shadow [1.21ms]
+(pass) MemoryV2Coordinator lifecycle > rejects a mismatched query id without context or parity [3.78ms]
+(pass) MemoryV2Coordinator lifecycle > replays persisted terminal data before a new lifecycle [1.29ms]
+(pass) MemoryV2Coordinator lifecycle > emits coverage.recorded events from evaluate_audit_coverage results [1.75ms]
+(pass) MemoryV2Coordinator lifecycle > captures chunk selectors from read line-ranges with file fallback [2.34ms]
+(pass) MemoryV2Coordinator lifecycle > captures chunk selectors from query_index hits and enqueues chunk verifies best-effort [1.80ms]
+(pass) MemoryV2Coordinator lifecycle > swallows chunk verify throws best-effort and ignores invalid digests [1.19ms]
+(pass) MemoryV2Coordinator lifecycle > fails closed when conflict tail export cannot produce a valid page [2.71ms]
+(pass) MemoryV2Coordinator lifecycle > clears a CAS conflict by deriving the raw tail from a skipped future-type row [1.78ms]
+(pass) MemoryV2Coordinator lifecycle > classifies decision tools deterministically [0.36ms]
+(pass) MemoryV2Coordinator lifecycle > records decision-classified tool output as kind=decision [0.74ms]
+(pass) MemoryV2Coordinator lifecycle > records record_decision tool output as kind=decision with evidence selectors [1.31ms]
+(pass) MemoryV2Coordinator lifecycle > stores explicit decision text so the captured observation reaches a later compiled prompt [2.06ms]
+(pass) MemoryV2Coordinator lifecycle > redacts recognized secrets before persisting explicit decision text and excerpts [1.08ms]
+(pass) MemoryV2Coordinator lifecycle > records record_decision constraint kind echoed in output as kind=constraint [0.88ms]
+(pass) MemoryV2Coordinator lifecycle > reinforces an existing claim instead of recording a duplicate decision [1.38ms]
+(pass) MemoryV2Coordinator lifecycle > records observation.recorded with claimId metadata when the dedup projection is missing [0.91ms]
+(pass) MemoryV2Coordinator lifecycle > falls back to observation.recorded when the dedup lookup fails [0.95ms]
+(pass) MemoryV2Coordinator lifecycle > emits claim.superseded drafts and one observation.reused citation for echoed supersedes [2.20ms]
+(pass) MemoryV2Coordinator lifecycle > skips supersede drafts when store validation fails: retracted [0.95ms]
+(pass) MemoryV2Coordinator lifecycle > skips supersede drafts when store validation fails: foreign-task [0.61ms]
+(pass) MemoryV2Coordinator lifecycle > skips supersede drafts when store validation fails: error [0.56ms]
+(pass) MemoryV2Coordinator lifecycle > records constraint-classified think_deeply output as kind=constraint [0.98ms]
+(pass) MemoryV2Coordinator playbook context > installs seeded playbooks into agentState.playbookContext during prepareTurn [0.94ms]
+(pass) MemoryV2Coordinator playbook context > clears playbookContext when the turn degrades [0.48ms]
+(pass) MemoryV2Coordinator playbook context > clears playbookContext on the json-v1 authority path without repository playbook work [0.18ms]
+(pass) MemoryV2Coordinator playbook context > installs an empty playbookContext and completes the turn when listPlaybooks throws [0.38ms]
+2737 | 
+2738 |     const events = allEvents(repository).slice(before)
+2739 |     const reused = events.find(
+2740 |       (candidate) => candidate.eventType === 'observation.reused',
+2741 |     )
+2742 |     expect(reused).toBeDefined()
+                          ^
+error: expect(received).toBeDefined()
+
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/coordinator.test.ts:2742:20)
+(fail) MemoryV2Coordinator usage correlation (P4) > appends one batched observation.reused event and clears the snapshot [1.74ms]
+(pass) MemoryV2Coordinator usage correlation (P4) > stale queryId or missing receipt appends no usage event [1.18ms]
+
+7 tests failed:
+(fail) correlateUsage > gate-skip: chunk covered by a skip entry yields exactly one used signal [0.63ms]
+(fail) correlateUsage > dedup: the same chunk covered by two tools produces one signal [0.17ms]
+(fail) correlateUsage > ignored: full>=1 marks non-used injected observations reread-despite and never double-marks used ones [0.15ms]
+(fail) correlateUsage > no ignored signals when the turn performed no full read [0.15ms]
+(fail) correlateUsage > determinism: identical inputs produce deep-equal, code-point-ordered output [0.28ms]
+(fail) correlateUsage > caps: more than 128 signals is sliced to 128 after sorting [1.64ms]
+(fail) MemoryV2Coordinator usage correlation (P4) > appends one batched observation.reused event and clears the snapshot [1.74ms]
+
+ 64 pass
+ 7 fail
+ 299 expect() calls
+Ran 71 tests across 3 files. [167.00ms]

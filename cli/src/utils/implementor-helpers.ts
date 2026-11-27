@@ -1,3 +1,4 @@
+import { countCapturedDiffChanges } from './diff-summary'
 import type {
   AgentContentBlock,
   ContentBlock,
@@ -7,6 +8,7 @@ import { getToolMetadata } from '@codebuff/common/tools/metadata'
 import {
   getCanonicalMutationPrimaryAction,
   getCanonicalMutationResult,
+  getConfirmedMutationActionsFromOutput,
 } from './tool-result-normalizer'
 
 export const IMPLEMENTOR_AGENT_IDS = ['editor-implementor'] as const
@@ -19,9 +21,35 @@ const isTransactionToolName = (
  * Extract per-file { path, diff } entries from a transaction tool block.
  * A failed transaction result has no files array.
  */
-function extractTransactionFiles(
-  toolBlock: ToolContentBlock,
-): Array<{ path: string; diff: string | null }> {
+function extractTransactionFiles(toolBlock: ToolContentBlock): Array<{
+  path: string
+  diff: string | null
+  changeType?: FileChangeType
+  sourcePath?: string
+}> {
+  const canonical = getCanonicalMutationResult(toolBlock.outputRaw)
+  if (canonical && Array.isArray(canonical.actions))
+    return getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).map(
+      (action) => ({
+        path:
+          typeof action.destinationPath === 'string'
+            ? action.destinationPath
+            : String(action.path),
+        sourcePath:
+          typeof action.destinationPath === 'string'
+            ? String(action.path)
+            : undefined,
+        diff: typeof action.patch === 'string' ? action.patch : null,
+        changeType:
+          action.action === 'create'
+            ? 'A'
+            : action.action === 'delete'
+              ? 'D'
+              : action.action === 'move'
+                ? 'R'
+                : 'M',
+      }),
+    )
   const outputRaw = toolBlock.outputRaw as unknown
   const value =
     Array.isArray(outputRaw) && outputRaw[0]?.value
@@ -324,7 +352,8 @@ export function extractDiff(toolBlock: ToolContentBlock): string | null {
   const canonicalAction = getCanonicalMutationPrimaryAction(toolBlock.outputRaw)
   if (canonicalMutation) {
     if (typeof canonicalAction?.patch === 'string') return canonicalAction.patch
-    hasSuccessfulOutput = canonicalMutation.outcome === 'applied'
+    hasSuccessfulOutput =
+      getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).length > 0
   }
 
   // First try to get from outputRaw (for executed tool results)
@@ -431,6 +460,11 @@ function hasFailedEditOutput(params: {
 }
 
 function isFailedEditToolBlock(toolBlock: ToolContentBlock): boolean {
+  if (getCanonicalMutationResult(toolBlock.outputRaw)) {
+    return (
+      getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).length === 0
+    )
+  }
   const outputRaw = toolBlock.outputRaw as unknown
   if (Array.isArray(outputRaw) && outputRaw[0]?.value) {
     const value = outputRaw[0].value as Record<string, unknown>
@@ -463,7 +497,7 @@ function isFailedEditToolBlock(toolBlock: ToolContentBlock): boolean {
   return hasFailedEditOutput({ outputStr, message, diffFromOutput })
 }
 
-function isSuccessfulEditMessage(message: unknown): boolean {
+export function isSuccessfulEditMessage(message: unknown): boolean {
   if (typeof message !== 'string') {
     return false
   }
@@ -601,6 +635,7 @@ export interface FileStats {
   path: string
   changeType: FileChangeType
   stats: DiffStats
+  previousPath?: string
 }
 
 /**
@@ -609,25 +644,9 @@ export interface FileStats {
 export function parseDiffStats(diff: string | undefined): DiffStats {
   if (!diff) return { linesAdded: 0, linesRemoved: 0, hunks: 0 }
 
-  const lines = diff.split('\n')
-  let linesAdded = 0
-  let linesRemoved = 0
-  let hunks = 0
-
-  for (const line of lines) {
-    // Count hunk headers (lines starting with @@)
-    if (line.startsWith('@@')) {
-      hunks++
-    }
-    // Count additions (lines starting with + but not +++ header)
-    else if (line.startsWith('+') && !line.startsWith('+++')) {
-      linesAdded++
-    }
-    // Count deletions (lines starting with - but not --- header)
-    else if (line.startsWith('-') && !line.startsWith('---')) {
-      linesRemoved++
-    }
-  }
+  const { added: linesAdded, removed: linesRemoved } =
+    countCapturedDiffChanges(diff)
+  let hunks = diff.match(/^@@/gm)?.length ?? 0
 
   // If no @@ markers found but we have +/- lines, count as 1 hunk
   if (hunks === 0 && (linesAdded > 0 || linesRemoved > 0)) {
@@ -672,6 +691,7 @@ export function getFileStatsFromBlocks(
     filePath: string,
     diff: string | null,
     changeType: FileChangeType,
+    previousPath?: string,
   ) => {
     const stats = parseDiffStats(diff ?? undefined)
     const existing = fileMap.get(filePath)
@@ -685,6 +705,7 @@ export function getFileStatsFromBlocks(
         path: filePath,
         changeType,
         stats,
+        ...(previousPath ? { previousPath } : {}),
       })
     }
   }
@@ -698,7 +719,12 @@ export function getFileStatsFromBlocks(
       // check it before the single-file failed-edit heuristics.
       if (isTransactionToolName(block.toolName)) {
         for (const file of extractTransactionFiles(block)) {
-          addFileStats(file.path, file.diff, 'M')
+          addFileStats(
+            file.path,
+            file.diff,
+            file.changeType ?? 'M',
+            file.sourcePath,
+          )
         }
         continue
       }

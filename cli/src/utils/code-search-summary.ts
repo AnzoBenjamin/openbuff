@@ -17,6 +17,8 @@ export function countCodeSearchResults(output?: string): number {
 
   return lines.reduce((total, line) => {
     const trimmed = line.trim()
-    return /^(?:Line\s+)?\d+:/.test(trimmed) ? total + 1 : total
+    return /^(?:Line\s+)?\d+:/.test(trimmed) || /^.+?:\d+:/.test(trimmed)
+      ? total + 1
+      : total
   }, 0)
 }

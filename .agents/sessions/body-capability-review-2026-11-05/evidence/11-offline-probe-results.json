@@ -1,0 +1,66 @@
+{
+  "invalidNumericPromotion": {
+    "pairs": "12 pairs with NaN after-values",
+    "wilcoxon": {
+      "statistic": 0,
+      "n": 12,
+      "z": -3.020188481128034,
+      "pValueTwoSided": 0.002526312806196973,
+      "applicable": true
+    },
+    "bootstrap": {
+      "meanDiff": "NaN",
+      "lower": "NaN",
+      "upper": "NaN",
+      "iterations": 2000
+    },
+    "decision": {
+      "accepted": true,
+      "reasons": [
+        "meets promotion threshold with no regressions"
+      ],
+      "proposalSummary": [
+        "[dry-run] probe-agent: append system-prompt guidance (19 chars) — APPLIED"
+      ],
+      "comparisonSummary": "score +0.50, cost +0c, runs 0→0, wilcoxon p=0.0025, bootstrap meanDiff=NaN CI=[NaN, NaN]"
+    }
+  },
+  "identifierOnlyFidelity": {
+    "originalFact": "FACT[src/services/retry-policy.ts]=retry-backoff-base-1500ms",
+    "postContainsOriginalValue": false,
+    "verification": {
+      "expected": 1,
+      "missing": []
+    },
+    "droppedHistoryButCitedPath": {
+      "expected": 1,
+      "missing": []
+    }
+  },
+  "sdkErrorOutcome": {
+    "sdkOutput": "error",
+    "runnerFulfilled": true,
+    "runnerHasErrorField": false,
+    "runError": null,
+    "scoringStatus": "scored",
+    "score": 9,
+    "measuredRunCount": 1
+  },
+  "finalCheckEnvironment": {
+    "fixtureToken": "dummy-audit-token",
+    "parentFixtureToken": "dummy-audit-token",
+    "childFileValue": "dummy-audit-token",
+    "capturedStdout": "",
+    "stdoutType": "string",
+    "childReceivedFixtureToken": true,
+    "outcome": "passed"
+  },
+  "finalCheckCancellation": {
+    "outcome": "cancelled",
+    "exitCode": 130,
+    "childAliveWhenCheckSettled": true,
+    "childProducedWorkAfterCancellation": true,
+    "childPid": 47,
+    "fixtureChildKilledInFinally": true
+  }
+}

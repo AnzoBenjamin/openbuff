@@ -1,0 +1,31 @@
+{
+  "review": "N12 ACP attachment intake: focused read-only correctness/security review",
+  "result": "no_confirmed_finding",
+  "findings": [],
+  "testsRun": false,
+  "hashAlgorithm": "sha256",
+  "reviewedSourceHashes": {
+    "sdk/src/serve/prompt-content.ts": "f01bdc64d23075ee80339c86f0b44440437d5ce4b096a7284287cadb0d6a12d7",
+    "sdk/src/serve/prompt-resource-file.ts": "45aff8afbe7aaab2a5456bc7ec379f546848dfa47f384180350a97a5fafe95fd",
+    "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
+    "sdk/src/serve/serve.ts": "e9ee47c4c761af0b845933d8482927d772574f5ef930d3fa0e8835c0c524f5a8",
+    "sdk/src/services/acp/acp-agent.ts": "a6adb379a9252c1be7108aecf5f95de199401bffda9b63b40dcc15d7a4b2a53e",
+    "sdk/src/__tests__/acp-prompt-content-files.test.ts": "753258ae9f78c81beeec35dab8d75d6062db2e35e993bf04e9716a5fbd1f7bed",
+    "sdk/src/__tests__/acp-prompt-content-races.test.ts": "9aba5ab954adf5898521c8f9039d193f6eab45d6615f36b548d4646a3b5e5a47",
+    "sdk/src/__tests__/acp-prompt-content.test.ts": "d75ff01e4996bff08d92504a37fda5ce6cb139b5968326008dac2f6fe472920d",
+    "sdk/src/__tests__/acp-prompt-content-wire.test.ts": "356560af7d490d6f7b883014c8c470511bfb7243e610398f540337f746d815e5"
+  },
+  "coverage": [
+    "Complete pre-split and formatted post-split prompt-content.ts; complete prompt-resource-file.ts; changed bridge/serve/ACP wiring and relevant surrounding lifecycle; all four formatted attachment test files.",
+    "Captured host-root/cwd authority, conversion before SDK/listener/timer/MCP entry, expanded-byte budgets, canonical base64 and strict UTF-8, order/text-only compatibility and typed refusals.",
+    "URI normalization, sensitive-path checks on decoded and mapped paths, no-follow held descriptors, regular/single-link checks, open-time symlink replacement controls, metadata/path race checks and descriptor/cancel cleanup.",
+    "No remote/UNC fetch, client-file reverse dereference or attachment-derived edit capability in the reviewed path."
+  ],
+  "limits": [
+    "Static review only; no tests or runtime race experiments were executed. Main owns the validation rerun.",
+    "Sensitive-path policy completeness was not independently audited: isMandatorySensitiveReadPath is imported from outside the exact scope.",
+    "Stable host-selected root and ordinary Linux /proc/self/fd semantics are assumed; metadata checks are not adversarial same-inode snapshot isolation.",
+    "Filesystem operations are awaited without native cancellation: cleanup/no-SDK-entry checks do not establish a cancellation-latency bound for stalled host I/O.",
+    "Plain JSON wire values are the reviewed trust boundary; executable caller-controlled JS Proxies are outside it."
+  ]
+}

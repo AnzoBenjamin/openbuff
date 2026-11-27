@@ -15,6 +15,8 @@ export interface AttachmentCardProps {
   onRemove?: () => void
   /** Whether to show the remove button (default: true). Ignored if onRemove is not provided. */
   showRemoveButton?: boolean
+  onInspect?: () => void
+  onRetry?: () => void
 }
 
 /**
@@ -26,6 +28,8 @@ export const AttachmentCard = ({
   children,
   onRemove,
   showRemoveButton = true,
+  onInspect,
+  onRetry,
 }: AttachmentCardProps) => {
   const theme = useTheme()
   const [isCloseHovered, setIsCloseHovered] = useState(false)
@@ -45,6 +49,20 @@ export const AttachmentCard = ({
         customBorderChars={IMAGE_CARD_BORDER_CHARS}
       >
         {children}
+        {(onInspect || onRetry) && (
+          <box style={{ flexDirection: 'row', gap: 1 }}>
+            {onInspect && (
+              <Button onClick={onInspect}>
+                <text fg={theme.primary}>Inspect</text>
+              </Button>
+            )}
+            {onRetry && (
+              <Button onClick={onRetry}>
+                <text fg={theme.primary}>Retry</text>
+              </Button>
+            )}
+          </box>
+        )}
       </box>
 
       {shouldShowClose ? (
@@ -55,7 +73,7 @@ export const AttachmentCard = ({
           style={{ marginLeft: 1, paddingLeft: 0, paddingRight: 0 }}
         >
           <text style={{ fg: isCloseHovered ? theme.error : theme.muted }}>
-            X
+            Remove
           </text>
         </Button>
       ) : (

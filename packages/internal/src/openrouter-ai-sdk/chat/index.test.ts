@@ -1249,6 +1249,10 @@ describe('doStream', () => {
         delta: '"}',
       },
       {
+        type: 'tool-input-end',
+        id: 'call_O17Uplv4lJvD6DVdIvFFeRMw',
+      },
+      {
         type: 'tool-call',
         toolCallId: 'call_O17Uplv4lJvD6DVdIvFFeRMw',
         toolName: 'test-tool',
@@ -1470,6 +1474,100 @@ describe('doStream', () => {
       input: malformedArguments,
     })
   })
+
+  it('preserves an initial partial argument, closes the input, and emits the call once', async () => {
+    const event = (delta: object, finishReason: string | null = null) =>
+      `data: ${JSON.stringify({
+        id: 'stream-partial',
+        object: 'chat.completion.chunk',
+        created: 1711357598,
+        model: 'test-model',
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+      })}\n\n`
+    server.urls['https://openrouter.ai/api/v1/chat/completions']!.response = {
+      type: 'stream-chunks',
+      chunks: [
+        event({
+          tool_calls: [
+            {
+              index: 0,
+              id: 'partial-1',
+              type: 'function',
+              function: { name: 'test-tool', arguments: '{"value":' },
+            },
+          ],
+        }),
+        event({
+          tool_calls: [{ index: 0, function: { arguments: '"hello"}' } }],
+        }),
+        event({ tool_calls: [{ index: 0, function: { arguments: '' } }] }),
+        event({}, 'tool_calls'),
+        'data: [DONE]\n\n',
+      ],
+    }
+    const { stream } = await model.doStream({ prompt: TEST_PROMPT })
+    const elements = await convertReadableStreamToArray(stream)
+    const inputEvents = elements.filter((element) =>
+      element.type.startsWith('tool-'),
+    )
+    expect(inputEvents).toEqual([
+      { type: 'tool-input-start', id: 'partial-1', toolName: 'test-tool' },
+      { type: 'tool-input-delta', id: 'partial-1', delta: '{"value":' },
+      { type: 'tool-input-delta', id: 'partial-1', delta: '"hello"}' },
+      { type: 'tool-input-end', id: 'partial-1' },
+      {
+        type: 'tool-call',
+        toolCallId: 'partial-1',
+        toolName: 'test-tool',
+        input: '{"value":"hello"}',
+      },
+    ])
+  })
+
+  it.each(['tool_calls', 'length'])(
+    'flushes an incomplete first call whose provider omits the index on %s',
+    async (finishReason) => {
+      const event = (delta: object, finishReason: string | null = null) =>
+        `data: ${JSON.stringify({
+          id: 'stream-no-index',
+          object: 'chat.completion.chunk',
+          created: 1711357598,
+          model: 'test-model',
+          choices: [{ index: 0, delta, finish_reason: finishReason }],
+        })}\n\n`
+      server.urls['https://openrouter.ai/api/v1/chat/completions']!.response = {
+        type: 'stream-chunks',
+        chunks: [
+          event({
+            tool_calls: [
+              {
+                id: 'no-index-1',
+                type: 'function',
+                function: { name: 'test-tool', arguments: '{"value":' },
+              },
+            ],
+          }),
+          event({}, finishReason),
+          'data: [DONE]\n\n',
+        ],
+      }
+      const { stream } = await model.doStream({ prompt: TEST_PROMPT })
+      const elements = await convertReadableStreamToArray(stream)
+      expect(
+        elements.filter((element) => element.type.startsWith('tool-')),
+      ).toEqual([
+        { type: 'tool-input-start', id: 'no-index-1', toolName: 'test-tool' },
+        { type: 'tool-input-delta', id: 'no-index-1', delta: '{"value":' },
+        { type: 'tool-input-end', id: 'no-index-1' },
+        {
+          type: 'tool-call',
+          toolCallId: 'no-index-1',
+          toolName: 'test-tool',
+          input: '{"value":',
+        },
+      ])
+    },
+  )
 
   it('should handle error stream parts', async () => {
     server.urls['https://openrouter.ai/api/v1/chat/completions']!.response = {

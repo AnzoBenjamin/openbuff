@@ -1,0 +1,20 @@
+{
+  "binary": "/tmp/openbuff-body-review-2026-11-05/evidence/rust-target/debug/openbuff-native",
+  "build": "cargo build --workspace --locked --offline --target-dir /tmp/openbuff-body-review-2026-11-05/evidence/rust-target completed successfully before this probe",
+  "smoke": {
+    "observedExitCode": 1,
+    "stdout": "smoke: version ok: openbuff-native protocol 1 (crate version 0.1.0)\nsmoke: unknown-role exit 1 ok\n",
+    "stderr": "smoke: 'exec' exited 1, expected 2\n"
+  },
+  "nativeEcho": {
+    "observedExitCode": 0,
+    "stdout": "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{\"protocolVersion\":\"1\"}}\n09_NATIVE_SENTINEL\n",
+    "stderr": "{\"degraded\":true,\"landlock\":false,\"ok\":true}\n"
+  },
+  "nativeLandlock": {
+    "observedExitCode": 0,
+    "stdout": "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{\"protocolVersion\":\"1\"}}\n{\"allowedRead\": true, \"allowedWrite\": true, \"deniedRead\": 13, \"deniedWrite\": 13}\n",
+    "stderr": "{\"degraded\":false,\"landlock\":true,\"ok\":true}\n"
+  },
+  "constraints": "No external requests. Native target effects touch only two evidence/09-work fixture directories. Landlock is applied only in the thrown-away native child, never the parent."
+}

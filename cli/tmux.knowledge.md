@@ -1,8 +1,13 @@
 # tmux Knowledge for CLI Testing
 
+## OpenTUI 0.8 verification
+
+- Use Bun 1.4.4 and OpenTUI 0.8.3 for current CLI captures. The launch screen has a compact wordmark and project path; tool results use grouped readable fields with Inspect for captured data.
+- Start a fresh pane for each launch scenario. Native component fixtures must draw/flush a frame before reading text or geometry; light-theme Markdown checks also assert captured foreground colors. Current light/dark previews and live launch scope are recorded in [the UI refinement](../docs/design/cli-overhaul/REFINEMENT.md).
+
 ## Long-run Checkpoint Verification
 
-- When exercising a long agent run, distinguish a resumable `Agent step limit reached` or `No-progress watchdog` checkpoint from a crash. The checkpoint should remain visible in the final capture and must not be rendered as `No response from agent`.
+- When exercising a long agent run, distinguish a resumable `Agent step limit reached` checkpoint from a crash. The checkpoint should remain visible in the final capture and must not be rendered as `No response from agent`.
 - Completion-summary captures should report recovered nested tool attempts only inside the expanded agent card, not inflate the terminal `errors` count after the agent ultimately succeeds.
 - Changes limited to generated agent/tool type sources are non-visual; validate generator idempotence and CLI typechecking instead of requiring a tmux interaction capture.
 
@@ -62,7 +67,7 @@ All session data is saved to `debug/tmux-sessions/{session}/` in YAML format:
 
 ### Viewing Session Data
 
-Use the **tmux-viewer** to inspect sessions:
+Use the **tmux-viewer** to inspect sessions (tmux-viewer is the capture-harness viewer for tmux sessions; the user-facing viewer for agent RUNS is `openbuff dash`, which reads the live run journal — keep the two roles distinct):
 
 ```bash
 # Interactive TUI (for humans)
@@ -343,3 +348,18 @@ Tests that need CLI environment variables call `tmux set-environment -g` before 
 When updating CLI interaction tests, keep tmux knowledge current with any changed readiness waits, input encoding, or capture behavior so the memory-drift guard can distinguish intentionally refreshed notes from stale runtime documentation.
 
 The CLI `src/` changes since the last refresh — safe git slash-command argument parsing, the gate-state renderer, the edit-transaction tool card, and background-job event handling — are non-visual or covered by unit tests, and none of them changed tmux readiness waits, input encoding, or capture behavior. The best-effort `tmux set-environment -g` propagation and the `*integration*.test.ts` / `*e2e*.test.ts` filename conventions remain current.
+
+## Command approvals
+
+- Use `--approval-mode balanced|strict|allow-all` to choose command approvals at startup, including `run` and `serve`. `/permissions` displays the current policy; `/permissions <mode>` changes the next run in this CLI session and `/permissions reset` returns to config. Attached clients use the server's policy. These controls do not change tmux readiness or input encoding.
+
+## Live TUI Exercise Lessons (2026-10-18)
+
+From driving the compiled CLI binary in tmux sessions for bounded live exercises (edit-transaction smoke checks against `~/.local/share/openbuff-test/openbuff-branch`):
+
+- **Never pipe the TUI through `tee`** (`... | tee log`): tee shares the pty stdin and steals keystrokes — the TUI renders fine but ignores all input. Redirect stderr instead: `... 2>/path/session.log`.
+- Enable `tmux set-option -g focus-events on` and `tmux set-option -g allow-passthrough on` on the server before launch: the CLI emits passthrough-wrapped capability queries (DECRQM/OSC) that tmux must forward.
+- Send prompts as literal bracketed paste with `-l`: `tmux send-keys -t <sess> -l $'\e[200~<text>\e[201~'`, verify the text appears in the input box, then send Enter separately. A wedged paste (keystrokes swallowed afterward) is not recoverable by typing — kill the session and relaunch.
+- Use a grep on the target file on disk as the completion signal instead of re-capturing the pane each poll: an edit lands in seconds, so one poll iteration usually suffices. Give each tool call a generous timeout (wait-idle helpers can run up to 120s internally).
+- A scratch directory that is not a git repo makes every `git_status` observation emit `fatal: not a git repository` tool output; the run summary then reports `Errors: 3–6` although nothing failed. Initialize a git repo in the scratch dir (`git init`) to zero the count; an empty session.log (stderr) is the real health signal.
+- About 8 seconds after launch is sufficient boot wait before sending input; the TUI renders fully by then.

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "scope": "Editorial finalization after the completed Architect review. Frozen recovery provenance and historical reports remain unchanged; these edits are separately identified.",
+  "coreBefore": {
+    "PLAN-DRAFT.md": "8ffbb2268dc0b5641ded1201bdd6b15964630d08575f73369512c9798ab7b368",
+    "SPEC.md": "3bf9585bc801bc718c4f8e5fa8816d1b0d1b922fa8ff66e359a94ab18c6bddf6",
+    "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+    "CAPABILITIES.md": "f5953baaded163f3268db9c3ab516806c5eb7a688b601f865424d13cc17c3265"
+  },
+  "rootCorrections": [
+    {
+      "file": "COVERAGE.md",
+      "beforeSha256": "b8f1016273bd555e0174553bebd27bd4e6cb07785fd85b2161890e47662554b7",
+      "reason": "Use reconstructed 147555-line count; distinguish historical count and missing original hash map; link actual current binding and archived historical coverage."
+    },
+    {
+      "file": "COVERAGE-RESULT.json",
+      "beforeSha256": "02f8bf299f565783c0226290f61bfe11738d4b0a9cd02c567f93917aa6c117cd",
+      "reason": "Regenerated pure native coverage result with corrected current source-binding qualification; all structural and feature-readiness outcomes are preserved."
+    },
+    {
+      "file": "evaluate-coverage.ts",
+      "beforeSha256": null,
+      "reason": "Artifact-only generator reference correction; the before hash was not separately captured. No product source changed."
+    },
+    {
+      "file": "PLAN-DRAFT.md",
+      "reason": "Correct B19 SCIP path and move current independent-review status to the resolution ledger, without changing task contracts, dependencies or acceptance."
+    },
+    {
+      "file": "SPEC.md",
+      "reason": "Move independent-review status to the resolution ledger, without changing requirements or acceptance."
+    }
+  ],
+  "after": {
+    "PLAN-DRAFT.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+    "SPEC.md": "4354e0932a9c33e4fc6b931d8099c1ceaf2669eac226e05406b502bd8c6c8c10",
+    "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+    "CAPABILITIES.md": "f5953baaded163f3268db9c3ab516806c5eb7a688b601f865424d13cc17c3265",
+    "COVERAGE.md": "146e899468b88866bd617b39578d2b0998c36f442347050bef7ffaf5509f7874",
+    "COVERAGE-RESULT.json": "11729baed6794035088c70e1be32daafb1782fb27272a50eef534f76b7e18ab2",
+    "evaluate-coverage.ts": "e809772e403b24bead3323fc2d8fef70cc34c34feabc008868da210fcf67a4d9"
+  },
+  "architectInputArchives": [
+    "review-rounds/02-PLAN-REVIEWED.md",
+    "review-rounds/02-SPEC-REVIEWED.md"
+  ],
+  "criticStatus": "APPROVED planning artifact; no blocking revision remains",
+  "criticReview": {
+    "path": "CRITIC-REVIEW.md",
+    "sha256": "2784f1dee5499951b3d39958d83f46de7a793f2e3f02b49d74e893fca3cf460e",
+    "bytes": 17135,
+    "reviewedCoreHashes": {
+      "PLAN-DRAFT.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+      "SPEC.md": "4354e0932a9c33e4fc6b931d8099c1ceaf2669eac226e05406b502bd8c6c8c10",
+      "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+      "CAPABILITIES.md": "f5953baaded163f3268db9c3ab516806c5eb7a688b601f865424d13cc17c3265"
+    }
+  },
+  "completedAt": "2026-11-06T06:59:40.187151+00:00",
+  "exactReviewInputs": {
+    "architect": [
+      "evidence/02-PLAN-REVIEWED.md.txt",
+      "evidence/02-SPEC-REVIEWED.md.txt"
+    ],
+    "criticManifest": "evidence/02-CRITIC-INPUTS.json"
+  },
+  "approvalScope": "Planning architecture and prospective acceptance only; no product implementation or live-quality acceptance."
+}

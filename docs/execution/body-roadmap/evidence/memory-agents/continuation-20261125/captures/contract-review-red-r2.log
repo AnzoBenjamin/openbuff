@@ -1,0 +1,74 @@
+bun test v1.4.4 (38afee6c8)
+
+agents/memory/memory-agents.test.ts:
+(pass) read-only memory-management agents > knowledge-retriever has a usable schema and no source/canonical mutation tools [18.78ms]
+(pass) read-only memory-management agents > knowledge-reviewer has a usable schema and no source/canonical mutation tools [6.93ms]
+(pass) read-only memory-management agents > memory-manager has a usable schema and no source/canonical mutation tools [13.76ms]
+(pass) read-only memory-management agents > all root modes can discover the read-only roles [1.07ms]
+(pass) read-only memory-management agents > the leaf roles cannot spawn a writer and the manager has an exact read-only ceiling [0.07ms]
+(pass) read-only memory-management agents > reports are untrusted suggestions, not a forged verification or application receipt [29.13ms]
+(pass) read-only memory-management agents > unsafe targets, uncited verification and false completeness are rejected [10.56ms]
+201 | 
+202 |   test('reviewed schema gaps reject multiline traversal and blank host references', () => {
+203 |     const readSchema = jsonSchemaToZod(retriever.outputSchema)
+204 |     const reviewSchema = jsonSchemaToZod(reviewer.outputSchema)
+205 |     for (const refs of [[''], ['  '], ['\t\n']]) {
+206 |       expect(readSchema.safeParse({ ...retrieval, records: [{ ...retrieval.records[0], canonicalCategory: 'verifiedKnowledge', hostEvidenceRefs: refs }] }).success).toBe(false)
+                                                                                                                                                                           ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/memory/memory-agents.test.ts:206:166)
+(fail) read-only memory-management agents > reviewed schema gaps reject multiline traversal and blank host references [8.62ms]
+(pass) read-only memory-management agents > serialized manager always retrieves before review and only publishes joined suggestions [27.90ms]
+266 |         child('knowledge-retriever', retrieval, failure) as never,
+267 |       ).value as { toolName: string; input: Record<string, unknown> }
+268 |       expect(final.toolName).toBe('set_output')
+269 |       expect(final.input.status).toBe('unavailable')
+270 |       expect(final.input.proposals).toEqual([])
+271 |       expect(JSON.stringify(final.input.retrieval)).toContain(failure)
+                                                          ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "failed"
+Received: "{\"schemaVersion\":1,\"status\":\"unavailable\",\"scope\":[\"knowledge.md\"],\"summary\":\"No confirmed retriever report.\",\"records\":[],\"omissions\":[{\"scope\":\"retrieval\",\"reason\":\"No confirmed retriever report.\"}]}"
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/memory/memory-agents.test.ts:271:53)
+(fail) read-only memory-management agents > a failed child cannot turn its complete prose into success [0.26ms]
+266 |         child('knowledge-retriever', retrieval, failure) as never,
+267 |       ).value as { toolName: string; input: Record<string, unknown> }
+268 |       expect(final.toolName).toBe('set_output')
+269 |       expect(final.input.status).toBe('unavailable')
+270 |       expect(final.input.proposals).toEqual([])
+271 |       expect(JSON.stringify(final.input.retrieval)).toContain(failure)
+                                                          ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "cancelled"
+Received: "{\"schemaVersion\":1,\"status\":\"unavailable\",\"scope\":[\"knowledge.md\"],\"summary\":\"No confirmed retriever report.\",\"records\":[],\"omissions\":[{\"scope\":\"retrieval\",\"reason\":\"No confirmed retriever report.\"}]}"
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/memory/memory-agents.test.ts:271:53)
+(fail) read-only memory-management agents > a cancelled child cannot turn its complete prose into success [0.05ms]
+266 |         child('knowledge-retriever', retrieval, failure) as never,
+267 |       ).value as { toolName: string; input: Record<string, unknown> }
+268 |       expect(final.toolName).toBe('set_output')
+269 |       expect(final.input.status).toBe('unavailable')
+270 |       expect(final.input.proposals).toEqual([])
+271 |       expect(JSON.stringify(final.input.retrieval)).toContain(failure)
+                                                          ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "step_exhausted"
+Received: "{\"schemaVersion\":1,\"status\":\"unavailable\",\"scope\":[\"knowledge.md\"],\"summary\":\"No confirmed retriever report.\",\"records\":[],\"omissions\":[{\"scope\":\"retrieval\",\"reason\":\"No confirmed retriever report.\"}]}"
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/memory/memory-agents.test.ts:271:53)
+(fail) read-only memory-management agents > a step_exhausted child cannot turn its complete prose into success [0.06ms]
+(pass) read-only memory-management agents > partial retrieval stays partial even after a complete review [0.06ms]
+(pass) read-only memory-management agents > missing or wrong-child output is not fabricated into a complete report [0.06ms]
+
+ 10 pass
+ 4 fail
+ 146 expect() calls
+Ran 14 tests across 1 file. [177.00ms]

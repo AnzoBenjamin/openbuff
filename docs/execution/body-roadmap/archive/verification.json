@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-08T23:50:04.533210+00:00",
+  "scope": "Publication checkpoint only; no B19 acceptance or affected-source renewal.",
+  "manifestSha256": "f007ac73599e36dcb494171d010d5b91cff946ecd61f545fa0a2e85644654d52",
+  "restoration": {
+    "createdAt": "2026-11-08T23:23:02.039015+00:00",
+    "manifestSha256": "f007ac73599e36dcb494171d010d5b91cff946ecd61f545fa0a2e85644654d52",
+    "restoredFiles": 26776,
+    "verifiedBytesAndPermissions": 26776,
+    "requiredEvidencePaths": 3431,
+    "requiredContextPaths": 1212,
+    "missingRequiredEvidence": [],
+    "missingRequiredContext": [],
+    "restorationFailures": []
+  },
+  "legacyHelpers": {
+    "originalArchive": {
+      "verified": true,
+      "restoredIntoEmptyDestination": 186,
+      "refusedDifferingCurrentCliContext": true
+    },
+    "gitFixture": {
+      "verified": true,
+      "alreadyPresentAfterCurrentRestoration": 27
+    }
+  },
+  "preDeletionVerification": {
+    "publishedFiles": 26776,
+    "publishedObjects": 18472,
+    "localFiles": 15416,
+    "localObjects": 6925,
+    "bothCapsulesVerified": true,
+    "originalBytesAndSymlinkTargetsVerified": true
+  },
+  "cleanup": {
+    "archivedPathsRemoved": 40972,
+    "savedSymlinksRemoved": 10,
+    "legacyDirectFilesRetained": 8,
+    "priorTrackedNotesRemoved": 223,
+    "disposableRestorationCheckoutsRemoved": true
+  },
+  "ledger": {
+    "exitCode": 1,
+    "acceptedNodeCount": 10,
+    "remainingNodeCount": 29,
+    "b19Status": "in_progress",
+    "distinctCurrentSourceHashMismatches": 131,
+    "missingEvidenceErrors": 0,
+    "hashMismatchMessages": 102435,
+    "nonHashMismatchErrors": 0
+  },
+  "tests": {
+    "bunVersion": "1.3.5",
+    "sealedRestoreAdversarial": {
+      "passed": 15,
+      "exitCode": 0
+    },
+    "benchmarkFixture": {
+      "passed": 7,
+      "exitCode": 0
+    },
+    "scriptsAfterCleanup": {
+      "passed": 386,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "workspaceTypecheckAfterCleanup": {
+      "workspacesPassed": 11,
+      "exitCode": 0
+    },
+    "fileExplorerFixture": {
+      "passed": 4,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "agentsAfterFixtureRepair": {
+      "passed": 1359,
+      "skipped": 5,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "commonAfterFixtureRepair": {
+      "passed": 1816,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "agentsTypecheckAfterFixtureRepair": {
+      "exitCode": 0
+    }
+  },
+  "retainedExecutionLogs": {
+    "location": ".openbuff/archives/body-roadmap-20261109/checkpoint-logs/",
+    "published": false,
+    "files": [
+      {
+        "name": "perf-targeted-pinned-final.log",
+        "sha256": "1f912087b784504499ddf6894098049204a8326fdd00721b4ed5b0ac625ca367",
+        "compressedSha256": "cf8fca63243c59f1786e2ca2e15cf97adeea8bc7790736a32faf81a7b9e85a64"
+      },
+      {
+        "name": "perf-targeted-pinned-r2.log",
+        "sha256": "f629631c15143e969f87fa37b54112bec59fa5a994fb4444180d38b4d1da51dc",
+        "compressedSha256": "29d4e3ccce6b990a37f737326d9ac4c60479e68fa9d84dad4eb5eb6fbbb0933e"
+      },
+      {
+        "name": "perf-targeted-pinned.log",
+        "sha256": "bb4160f577dc49c89b084af4d9a666d02526d6294010dc72bf9b13a143a23807",
+        "compressedSha256": "365fc6a47d3efb044987290479016a0600e0f4f2063102de9633515944265f34"
+      },
+      {
+        "name": "restored-ledger.log",
+        "sha256": "5303609c09400b9cb2018f13a4436f596d998827279607253a38ace7eaef4d36",
+        "compressedSha256": "0bed44c1329870728a56513bf73bdd0b4d3dbcfab4718254d31398df8cf874cf"
+      },
+      {
+        "name": "scripts-pinned-final.log",
+        "sha256": "4b15dad1d4b006b9732d3a246a72f8cc6e99ef2473afd0bec0c2575c7a6db906",
+        "compressedSha256": "2615f3b3c96155fa7085b9f2ca3fa4fe4a326d363e210dc2c76a6f65fad564cc"
+      },
+      {
+        "name": "scripts-pinned.log",
+        "sha256": "bc99246e77d117a202afea02487518d27aecd755e59c54bdca160fc8258fbb30",
+        "compressedSha256": "9f959a1cb0ee4d32a1b3c14f3884fecd37f16c198e9859f1bdef6dc6b3e6a8c3"
+      },
+      {
+        "name": "scripts-post-cleanup.log",
+        "sha256": "397f3e3bd9718f5112f882d68e80e1096966d1d989893bcf2273c5914b92752c",
+        "compressedSha256": "4bc9ef5f13dd7f8b353a598aa26729f3e22909bae4054113af017375d63f5855"
+      },
+      {
+        "name": "typecheck-post-cleanup.log",
+        "sha256": "65f046693ec31f55827806e53946eaca7d1ee9945bcb5315cc53a3f2cebdbe2a",
+        "compressedSha256": "b6579b4ebdebeecf169db4d5e86530903ef0a535a6cfe8a81724fe1eda87e830"
+      },
+      {
+        "name": "restored-ledger.json",
+        "sha256": "5303609c09400b9cb2018f13a4436f596d998827279607253a38ace7eaef4d36",
+        "compressedSha256": "ba13eb45c18555e0c6e2794e0f56fe1712da1286c4a9e06908301f7e41a58f13"
+      },
+      {
+        "name": "file-explorer-before.log",
+        "sha256": "e502e641d3eba45932190aca96b5639bb0b119b9e1a7e2bd4f837438a55d4dca",
+        "compressedSha256": "b9ca93856666e7d3d94df9ac8542a2560ecd7387687e7e887e4542163d102c73"
+      },
+      {
+        "name": "file-explorer-after1.log",
+        "sha256": "8e094b66839880f072b5323da11569b00b6d2ba2fb0e6dd2d6a6e1a4819ab1bc",
+        "compressedSha256": "2e6534d8be15502af05dd40bb4e14ccc5843143a8bb1feff43f280d5a8f7070b"
+      },
+      {
+        "name": "agents-final.log",
+        "sha256": "9a925694c278e47a06128b02ea974cb847b23a14c3ddb67947e8ec877a8c88d4",
+        "compressedSha256": "a7fbaf46a42328ee0cd0dd583370deb0bf46c7510ed2a35355c986531d9a138c"
+      },
+      {
+        "name": "common-final.log",
+        "sha256": "b39c5e2a33b8f1acc0e7bb599b13cf51b8a3007574521cd2a1e91cdf7ce5539b",
+        "compressedSha256": "b7bf6a6270bf858c83fd991da97a2847fc312894de900468e7cb2ade2ac27bf2"
+      },
+      {
+        "name": "agents-typecheck-final.log",
+        "sha256": "59e4bf9eb13f4bd6e406580995e26f58f9434e6867aeb63df4ff013e97661ab1",
+        "compressedSha256": "356e5ad70b8a49c949edc421bea51f0f54c847a96aa8204d2ddc9d398baed78c"
+      }
+    ]
+  },
+  "limits": [
+    "Ledger statuses retain original acceptance history; current sources need renewal.",
+    "Recorded preflight18/publication19 checks precede the benchmark fixture repair.",
+    "No provider requests, installs, native matrix or installed CLI assurance were added."
+  ]
+}

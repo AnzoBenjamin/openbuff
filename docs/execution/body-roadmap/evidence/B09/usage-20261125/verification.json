@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "card": "B09",
+  "scope": "local-process-session-usage-observations",
+  "status": "local-verified-not-full-card-acceptance",
+  "basisHead": "628b34ae7dac4365583db0ae3776cf4fa769567f",
+  "sourcePins": [
+    {
+      "path": "cli/src/utils/usage-observations.ts",
+      "sha256": "e49efbe6782d255e97c7043f1660d6263784cc0022a554278b3eb9c02d4e8d46",
+      "bytes": 3632
+    },
+    {
+      "path": "cli/src/utils/sdk-event-handlers.ts",
+      "sha256": "0648f587a7bf8cd1a6039b397163c29dacec6d5042cea8dac3f254fc2f16e98d",
+      "bytes": 90083
+    },
+    {
+      "path": "cli/src/commands/usage.ts",
+      "sha256": "2fa2abe41e7a917937a9023b4bad351416d4ddecdc54fec4f13f6b88be882a7f",
+      "bytes": 3498
+    },
+    {
+      "path": "cli/src/commands/command-registry.ts",
+      "sha256": "acef40ef2815791ed6c91e3c88199f2f9c3481b998bbffce5ea440263d8bb228",
+      "bytes": 57937
+    },
+    {
+      "path": "cli/src/data/slash-commands.ts",
+      "sha256": "28b1b8ecb8463053e8421ab2ae9bcf2c943d6e626669793382efd7a0ad9f6c49",
+      "bytes": 10068
+    },
+    {
+      "path": "cli/src/utils/__tests__/usage-observations.test.ts",
+      "sha256": "8dee517ad6486e940351036448c2021e540f3a8da575f50e0818a4661e06115a",
+      "bytes": 2957
+    },
+    {
+      "path": "cli/src/commands/__tests__/usage.test.ts",
+      "sha256": "45726cd73c24335a2771ad768c3eea00f9518401894024a6b32bf57a97582892",
+      "bytes": 4112
+    },
+    {
+      "path": "cli/src/commands/__tests__/usage-wire.test.ts",
+      "sha256": "3eaffacdd81898d4b14d55fceb935eecf94d2a5c081fa9b36d25acacd9febf3c",
+      "bytes": 3501
+    },
+    {
+      "path": "sdk/src/impl/llm.ts",
+      "sha256": "a0bfdc51af53157ec41f061565f87ee86f59fa366775da6fc76905e687de77e3",
+      "bytes": 96774
+    },
+    {
+      "path": "cli/knowledge.md",
+      "sha256": "64b5b20d1d6cd13da9da8df995dba425f3f5d1b7457a3ec90f4c2d24d4bc02de",
+      "bytes": 191460
+    },
+    {
+      "path": "sdk/knowledge.md",
+      "sha256": "44f2cf959eb6aa12939f810c17942efe8f32e5294cc57586decf2c121d52055c",
+      "bytes": 37208
+    },
+    {
+      "path": "docs/local-mode.md",
+      "sha256": "8f01464ea1c11780641f85facbccd52c33b72a20ff0237d994db3abda96e3446",
+      "bytes": 27539
+    }
+  ],
+  "captures": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/regression-final.log",
+      "sha256": "f4960aaff15862d2f9bdea578d064736a8dcb6c43a409df5bb6b91f452ea7316",
+      "bytes": 20929
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/regression-r2.log",
+      "sha256": "d6dea01e38706b021969e7dd7e6f1dcdf83b8c0e48ce88ffd4eb5f0b6f581a4e",
+      "bytes": 19721
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/focused-r1.log",
+      "sha256": "54c7c92babdb0634f9bac356c3496d20d85af872af5298290061f050caa1e380",
+      "bytes": 11538
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/focused-r2.log",
+      "sha256": "f6c58baf1de434d8c8438fb47f74778f082270574289cefaa797e41839d86c15",
+      "bytes": 11009
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/census-initial-red.log",
+      "sha256": "c5196a3ee0a2c46684fb5284d27ef4abd1ef124a0c1c2d1ae33358905e29b185",
+      "bytes": 590576
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/census-initial-red.json",
+      "sha256": "8b16d831d976871a63bec06849f0feb5c30f2ba8ebe6521ba4efcb85287b5305",
+      "bytes": 18262
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/cli-bounded.log",
+      "sha256": "e91445e0142b8bf0cd1d5475540b5c2e21b605939ea098585098cf4d0e105d3f",
+      "bytes": 589229
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/cli-result.json",
+      "sha256": "a60e16eb9c8a35e282c52ce90ac3be73aabe6b284c6e75d2e8ce20125e35a64f",
+      "bytes": 18262
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/cli-schedule.json",
+      "sha256": "67aa2545117006f6f0085fa0d4282ce05a05dd8258011a670b93a6a019463af5",
+      "bytes": 18185
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/sdk-regression.log",
+      "sha256": "75e2e07ef54616a028a449d4057b2bec15d26e98601e2b5638cf0b7d88ad864b",
+      "bytes": 16270
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/typecheck-latest.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/sdk-build-latest.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/cli-build-latest.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/cli-help-latest.txt",
+      "sha256": "2e113eb04bc57eafed9a1e6fb4e25d1a207a430c26c87ca8ee5f33d90aa9473b",
+      "bytes": 2563
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/cli-version-latest.txt",
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+      "bytes": 6
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/doc-defaults.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B09/usage-20261125/captures/format-final.log",
+      "sha256": "aa01d1cc9e4e945e892d65fb8dfa14789dfec280ab74d82cae3f63e278393025",
+      "bytes": 225
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "ad0170fce505f3db3de9555cef2b8d74efc34b443b1fc64cbcf4806278a90e81",
+      "bytes": 7391949
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "f0e5af3caa70e36105c8a725b63b2a88904b471152720ac62ff97bd14b4c97cf",
+      "bytes": 7277354
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "71064dd07f64477e8fd7ebd6eb061bd71c6b1d554e38804176229f938017ba44",
+      "bytes": 2084509
+    },
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "35724799f8d140ac2cb267820b18d08170860eee27dd64d417db459cf1b192e6",
+      "bytes": 149723312
+    }
+  ],
+  "validation": {
+    "focusedCli": {
+      "pass": 161,
+      "assertions": 898
+    },
+    "sdkWire": {
+      "pass": 19,
+      "assertions": 81
+    },
+    "workspaceTypechecks": 11,
+    "boundedCli": {
+      "pass": 4924,
+      "skip": 200,
+      "fail": 0,
+      "assertions": 25016,
+      "selected": 322,
+      "discovered": 323,
+      "excluded": [
+        "src/__tests__/utils/env.test.ts"
+      ],
+      "exactCiSchedule": false
+    }
+  },
+  "coverage": [
+    "Actual compatible provider usage\u2192CLIeventhandler\u2192/usagereport preserves fractional costs and provider/model identity.",
+    "Root/child model attribution, late old conversation isolation, unknown and subscription status, incomplete token totals, bounded detail with cumulative totals, aggregate overflow.",
+    "Command registry/menu/help parity and no provider entry for local command."
+  ],
+  "limits": [
+    "Scope is process-local observed events, not restored/history billing, provider invoice or durable spending authorization.",
+    "Cache-write tokens/prices, built-in price catalog, compatible include_usage negotiation and strict shared reservations remain open.",
+    "Failed requests without events are not reconstructed; report explicitly discloses coverage.",
+    "Only8recentprocess-localsessions,100detailrows,newest20visible; aggregateknownsubtotals omitted rows disclosed.",
+    "Independent tinyreview unavailable after two peak-capacity failures; no approval.",
+    "No formal acceptance, historical receipt reconstruction, public publish or userconfig/userinstall changes."
+  ],
+  "ledger": {
+    "path": "docs/execution/body-roadmap/ledger.json",
+    "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb",
+    "bytes": 145983
+  },
+  "registry": {
+    "path": "docs/execution/body-roadmap/execution-plan.json",
+    "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095",
+    "bytes": 10989
+  }
+}

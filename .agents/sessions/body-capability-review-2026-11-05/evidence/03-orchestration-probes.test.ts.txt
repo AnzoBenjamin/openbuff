@@ -1,0 +1,160 @@
+import { test, expect, afterAll } from 'bun:test'
+import { writeFileSync } from 'node:fs'
+import z from '/home/ben/Code/CLI/openbuff/node_modules/zod/v4'
+import { createTestAgentRuntimeParams, mockFileContext } from '/home/ben/Code/CLI/openbuff/common/src/testing/fixtures/agent-runtime'
+import { getInitialSessionState } from '/home/ben/Code/CLI/openbuff/common/src/types/session-state'
+import { AbortError } from '/home/ben/Code/CLI/openbuff/common/src/util/error'
+import { loopAgentSteps } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/run-agent-step'
+import { clearAgentGeneratorCache } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/run-programmatic-step'
+import { buildRuntimeAgentReceipt } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils'
+
+const receipts: Record<string, unknown>[] = []
+const forbiddenCalls: string[] = []
+const forbid = (name: string) => {
+  forbiddenCalls.push(name)
+  throw new Error(`Forbidden external call in diagnostic probe: ${name}`)
+}
+globalThis.fetch = (async () => forbid('global fetch')) as typeof fetch
+
+function setup(id: string, overrides: Record<string, unknown> = {}) {
+  const deps = createTestAgentRuntimeParams()
+  const finishStatuses: string[] = []
+  const journalEvents: unknown[] = []
+  const template = {
+    ...deps.agentTemplate,
+    id,
+    toolNames: [],
+    spawnableAgents: [],
+    ...overrides,
+  }
+  const agentState = {
+    ...getInitialSessionState(mockFileContext).mainAgentState,
+    agentId: `${id}-instance`,
+    messageHistory: [],
+    output: undefined,
+    stepsRemaining: 1,
+  }
+  const params: any = {
+    ...deps,
+    agentTemplate: template,
+    localAgentTemplates: { [id]: template },
+    agentType: id,
+    agentState,
+    repoId: undefined,
+    repoUrl: undefined,
+    userInputId: id,
+    prompt: 'Synthetic diagnostic work.',
+    spawnParams: undefined,
+    fingerprintId: 'synthetic-diagnostic',
+    fileContext: mockFileContext,
+    userId: undefined,
+    clientSessionId: id,
+    ancestorRunIds: [],
+    onResponseChunk: () => {},
+    signal: new AbortController().signal,
+    processSupervision: false,
+    startAgentRun: async () => `${id}-run`,
+    finishAgentRun: async (p: any) => { finishStatuses.push(p.status) },
+    addAgentStep: async () => 'synthetic-step',
+    promptAiSdk: async () => forbid('promptAiSdk'),
+    promptAiSdkStructured: async () => forbid('promptAiSdkStructured'),
+    promptAiSdkStream: async function* () { forbid('promptAiSdkStream') },
+    fetch: Object.assign(async () => forbid('fetch'), { preconnect: () => forbid('fetch.preconnect') }),
+    journalWriter: { append: (_runId: string, event: unknown) => { journalEvents.push(event) } },
+  }
+  return { params, finishStatuses, journalEvents }
+}
+
+test('cost stop repeats missing-output correction without consuming the one available step', async () => {
+  clearAgentGeneratorCache()
+  const { params, finishStatuses } = setup('probe-budget', {
+    outputMode: 'structured_output',
+    outputSchema: z.object({ result: z.string() }),
+    maxCostCents: 0,
+  })
+  const controller = new AbortController()
+  params.signal = controller.signal
+  let budgetMessages = 0
+  params.onResponseChunk = (chunk: unknown) => {
+    if (typeof chunk === 'string' && chunk.includes('cost budget exceeded')) {
+      budgetMessages++
+      // The probe supplies the terminating cancellation after observing three
+      // repeats. The production path has no such counter/guard.
+      if (budgetMessages === 3) controller.abort(new Error('probe observation complete'))
+    }
+  }
+  const result = await loopAgentSteps(params)
+  const correctionMessages = result.agentState.messageHistory.filter((m: any) =>
+    JSON.stringify(m).includes('must use the') && JSON.stringify(m).includes('set_output'),
+  ).length
+  expect(budgetMessages).toBe(3)
+  expect(result.agentState.stepsRemaining).toBe(1)
+  expect(correctionMessages).toBeGreaterThanOrEqual(2)
+  expect(forbiddenCalls).toEqual([])
+  receipts.push({
+    probe: 'budget-missing-output-loop',
+    budgetMessages,
+    remainingSteps: result.agentState.stepsRemaining,
+    correctionMessages,
+    finishStatuses,
+    outputType: result.output.type,
+    terminator: 'probe explicitly aborted after the third budget stop; no natural termination was observed',
+  })
+})
+
+test('generator exception is published as a successful run and completed child receipt', async () => {
+  clearAgentGeneratorCache()
+  const { params, finishStatuses, journalEvents } = setup('probe-generator', {
+    outputMode: 'last_message',
+    handleSteps: function* () { throw new Error('synthetic generator failure') },
+  })
+  const result = await loopAgentSteps(params)
+  const childReceipt = buildRuntimeAgentReceipt({
+    agentType: 'probe-generator', agentId: result.agentState.agentId,
+    output: result.output, agentState: result.agentState,
+  })
+  const terminalStatuses = journalEvents
+    .filter((e: any) => e.payload?.terminal === true)
+    .map((e: any) => e.payload.status)
+  expect(finishStatuses).toEqual(['completed'])
+  expect(terminalStatuses).toEqual(['completed'])
+  expect(childReceipt.status).toBe('completed')
+  expect(childReceipt.outcome).toBe('ok')
+  expect(childReceipt.errors).toEqual([])
+  expect(forbiddenCalls).toEqual([])
+  receipts.push({ probe: 'generator-error-false-completion', finishStatuses,
+    terminalStatuses, outputType: result.output.type, receiptStatus: childReceipt.status,
+    receiptOutcome: childReceipt.outcome, receiptErrors: childReceipt.errors,
+    outputCarriesSyntheticFailure: JSON.stringify(result.output).includes('synthetic generator failure') })
+})
+
+test('abort thrown from the active generator takes the same successful finish path', async () => {
+  clearAgentGeneratorCache()
+  const controller = new AbortController()
+  const { params, finishStatuses, journalEvents } = setup('probe-generator-abort', {
+    outputMode: 'last_message',
+    handleSteps: function* () {
+      controller.abort(new Error('synthetic parent abort'))
+      throw new AbortError()
+    },
+  })
+  params.signal = controller.signal
+  const result = await loopAgentSteps(params)
+  const terminalStatuses = journalEvents
+    .filter((e: any) => e.payload?.terminal === true)
+    .map((e: any) => e.payload.status)
+  expect(finishStatuses).toEqual(['completed'])
+  expect(terminalStatuses).toEqual(['completed'])
+  expect(result.output.type).toBe('lastMessage')
+  expect(forbiddenCalls).toEqual([])
+  receipts.push({ probe: 'generator-abort-false-completion', parentSignalAborted: controller.signal.aborted,
+    finishStatuses, terminalStatuses, outputType: result.output.type })
+})
+
+afterAll(() => {
+  clearAgentGeneratorCache()
+  writeFileSync('/tmp/openbuff-body-review-2026-11-05/evidence/03-orchestration-probes.json',
+    JSON.stringify({ runtime: Bun.version, assurance: 'DI/stub-only current-source runtime probes',
+      providerRequests: forbiddenCalls.length, externalNetworkCalls: forbiddenCalls.filter(c => c.includes('fetch')).length,
+      probes: receipts }, null, 2) + '\n')
+})

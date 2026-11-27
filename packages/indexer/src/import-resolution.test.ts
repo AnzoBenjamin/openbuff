@@ -4,7 +4,11 @@ import { join } from 'path'
 
 import { afterAll, describe, expect, test } from 'bun:test'
 
-import { buildMetadataIndex } from './metadata-indexer'
+import { buildMetadataIndex, updateMetadataIndex } from './metadata-indexer'
+
+import { resolveImportToFile } from './import-resolution'
+
+import type { ImportResolutionFile } from './import-resolution'
 
 const roots: string[] = []
 afterAll(() => {
@@ -37,6 +41,23 @@ function hasReferenceEdge(
       e.from === `file:${fromPath}` &&
       e.to === `file:${toPath}`,
   )
+}
+
+function referenceTargets(
+  graph: {
+    edges: { from: string; to: string; type: string; label?: string }[]
+  },
+  fromPath: string,
+  specifier: string,
+): string[] {
+  return graph.edges
+    .filter(
+      (edge) =>
+        edge.type === 'references' &&
+        edge.from === `file:${fromPath}` &&
+        edge.label === specifier,
+    )
+    .map((edge) => edge.to)
 }
 
 describe('import graph: alias + re-export resolution', () => {
@@ -242,5 +263,330 @@ describe('import graph: alias + re-export resolution', () => {
     expect(index.files['pom.xml'].concepts).toContain('mvn test')
     expect(index.files['service.csproj'].concepts).toContain('dotnet test')
     expect(index.files['project.godot'].concepts).toContain('godot test')
+  })
+
+  test('does not resolve Python absolute imports against loose same-named files', async () => {
+    const root = project({
+      'json.py': 'value = 1\n',
+      'main.py': 'import json\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+    // A bare `import json` with only a loose local json.py must stay
+    // unresolved (conservative-unresolved contract).
+    expect(hasReferenceEdge(index.graph, 'main.py', 'json.py')).toBe(false)
+  })
+
+  test('resolves Python absolute imports under indexed top-level package dirs', async () => {
+    const root = project({
+      'mypkg/__init__.py': '',
+      'mypkg/mod.py': 'def run():\n    pass\n',
+      'main.py': 'import mypkg.mod\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+    expect(hasReferenceEdge(index.graph, 'main.py', 'mypkg/mod.py')).toBe(true)
+  })
+
+  test('resolves Rust crate, self and super against the nearest Cargo package', async () => {
+    const root = project({
+      'Cargo.toml': '[package]\nname = "outer"\nversion = "0.1.0"\n',
+      'src/lib.rs': 'mod config;\n',
+      'src/config.rs': 'pub struct Outer;\n',
+      'crates/inner/Cargo.toml':
+        '[package]\nname = "inner"\nversion = "0.1.0"\n',
+      'crates/inner/src/lib.rs': 'mod config;\nmod service;\n',
+      'crates/inner/src/config.rs': 'pub struct Inner;\n',
+      'crates/inner/src/service.rs': 'mod worker;\nmod settings;\n',
+      'crates/inner/src/service/settings.rs': 'pub struct Settings;\n',
+      'crates/inner/src/service/worker.rs': [
+        'use crate::config;',
+        'use self::local;',
+        'use super::settings;',
+        'use super::super::config as root_config;',
+        'use super::super::super::outside;',
+        'mod local;',
+        'mod foreign;',
+        'mod ambiguous;',
+        'mod outer_only;',
+      ].join('\n'),
+      'crates/inner/src/service/config.rs': 'pub struct Shadow;\n',
+      'crates/inner/src/service/worker/local/mod.rs': 'pub struct Local;\n',
+      'crates/inner/src/service/worker/foreign.ts': 'export const decoy = 1\n',
+      'crates/inner/src/service/worker/ambiguous.rs': 'pub struct Flat;\n',
+      'crates/inner/src/service/worker/ambiguous/mod.rs':
+        'pub struct Nested;\n',
+      'crates/inner/src/outer_only.rs': 'pub struct WrongScope;\n',
+      'crates/inner/outside.rs': 'pub struct Outside;\n',
+    })
+
+    const { files, graph } = await buildMetadataIndex(root)
+    const worker = 'crates/inner/src/service/worker.rs'
+    for (const [specifier, target] of [
+      ['crate::config', 'crates/inner/src/config.rs'],
+      ['self::local', 'crates/inner/src/service/worker/local/mod.rs'],
+      ['super::settings', 'crates/inner/src/service/settings.rs'],
+      ['super::super::config', 'crates/inner/src/config.rs'],
+      ['local', 'crates/inner/src/service/worker/local/mod.rs'],
+    ]) {
+      expect(files[worker].imports).toContain(specifier)
+      expect(referenceTargets(graph, worker, specifier)).toEqual([
+        `file:${target}`,
+      ])
+    }
+    for (const specifier of [
+      'super::super::super::outside',
+      'foreign',
+      'ambiguous',
+      'outer_only',
+    ]) {
+      expect(files[worker].imports).toContain(specifier)
+      expect(referenceTargets(graph, worker, specifier)).toEqual([])
+    }
+  })
+
+  test('does not guess a Rust crate root outside a supported source tree', async () => {
+    const root = project({
+      'src/lib.rs': 'mod config;\n',
+      'src/config.rs': 'pub struct Root;\n',
+      'loose/caller.rs': 'use crate::config;\nuse self::config;\n',
+      'loose/config.rs': 'pub struct Decoy;\n',
+    })
+    const { files, graph } = await buildMetadataIndex(root)
+    expect(files['loose/caller.rs'].imports).toEqual([
+      'crate::config',
+      'self::config',
+    ])
+    for (const specifier of files['loose/caller.rs'].imports) {
+      expect(referenceTargets(graph, 'loose/caller.rs', specifier)).toEqual([])
+    }
+  })
+
+  test('scopes Go package references to the exact directory of the owning module', async () => {
+    const root = project({
+      'go.mod': 'module example.com/outer\n',
+      'service.go': 'package outer\n',
+      'main/main.go':
+        'package main\nimport "example.com/outer/nested/pkg/single"\n',
+      'nested/go.mod': 'module example.com/inner\n',
+      'nested/root.go': 'package inner\n',
+      'nested/cmd/main.go': [
+        'package main',
+        'import (',
+        '  "example.com/inner"',
+        '  "example.com/inner/pkg/single"',
+        '  "example.com/inner/pkg/typescript"',
+        '  "example.com/inner/missing/pkg/suffix"',
+        '  "example.com/inner/pkg/ambiguous"',
+        '  "example.com/inner/pkg/testonly"',
+        '  "example.com/outer"',
+        ')',
+      ].join('\n'),
+      'nested/pkg/single/source.go': 'package single\n',
+      'nested/pkg/single/source_test.go': 'package single\n',
+      'pkg/single/outer.go': 'package single\n',
+      'nested/pkg/typescript/source.ts': 'export const decoy = 1\n',
+      'nested/pkg/suffix/source.go': 'package suffix\n',
+      'pkg/suffix/outer.go': 'package suffix\n',
+      'nested/pkg/ambiguous/a.go': 'package ambiguous\n',
+      'nested/pkg/ambiguous/b.go': 'package ambiguous\n',
+      'nested/pkg/testonly/source_test.go': 'package testonly\n',
+    })
+
+    const { files, graph } = await buildMetadataIndex(root)
+    const caller = 'nested/cmd/main.go'
+    for (const [specifier, expected] of [
+      ['example.com/inner', ['file:nested/root.go']],
+      ['example.com/inner/pkg/single', ['file:nested/pkg/single/source.go']],
+      ['example.com/inner/pkg/typescript', []],
+      ['example.com/inner/missing/pkg/suffix', []],
+      ['example.com/inner/pkg/ambiguous', []],
+      ['example.com/inner/pkg/testonly', []],
+      ['example.com/outer', []],
+    ] as const) {
+      expect(files[caller].imports).toContain(specifier)
+      expect(referenceTargets(graph, caller, specifier)).toEqual([...expected])
+    }
+    const childModule = 'example.com/outer/nested/pkg/single'
+    expect(files['main/main.go'].imports).toContain(childModule)
+    expect(referenceTargets(graph, 'main/main.go', childModule)).toEqual([])
+  })
+
+  test('reconciles inbound Go package edges when only the declaration changes', async () => {
+    const caller = 'nested/cmd/main.go'
+    const target = 'nested/pkg/util/util.go'
+    const specifier = 'example.com/inner/pkg/util'
+    const library = 'package util\nfunc main() {}\n'
+    const root = project({
+      'nested/go.mod': 'module example.com/inner\n',
+      [caller]: `package main\nimport _ "${specifier}"\nfunc main() {}\n`,
+      [target]: library,
+    })
+    const first = await buildMetadataIndex(root)
+    expect(referenceTargets(first.graph, caller, specifier)).toEqual([
+      `file:${target}`,
+    ])
+
+    const delta = { changedPaths: [target], complete: true }
+    writeFileSync(join(root, target), 'package main\nfunc main() {}\n')
+    const removed = await updateMetadataIndex(first, root, {}, delta)
+    expect(removed.updateStats?.changedFiles).toEqual([target])
+    expect(removed.files[caller].imports).toEqual([specifier])
+    expect(referenceTargets(removed.graph, caller, specifier)).toEqual([])
+
+    writeFileSync(join(root, target), library)
+    const restored = await updateMetadataIndex(removed, root, {}, delta)
+    expect(restored.updateStats?.changedFiles).toEqual([target])
+    expect(referenceTargets(restored.graph, caller, specifier)).toEqual([
+      `file:${target}`,
+    ])
+  })
+
+  test('only resolves Python imports to exact Python modules and package initializers', async () => {
+    const root = project({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { alias_only: ['./lib/alias.ts'] } },
+      }),
+      'lib/alias.ts': 'export const decoy = 1\n',
+      'pkg/__init__.py': '',
+      'pkg/service.py': [
+        'from .models import Model',
+        'from .rust_only import Rust',
+        'from .index_only import Value',
+        'from .ambiguous import Value',
+        'from . import models',
+        'from ..outside import Value',
+        'import alias_only',
+        'import pkg.rust_only',
+        'import pkg',
+        'import loose',
+      ].join('\n'),
+      'pkg/models.pyi': 'class Model: ...\n',
+      'pkg/models.ts': 'export class Model {}\n',
+      'pkg/rust_only.rs': 'pub struct Rust;\n',
+      'pkg/index_only/index.py': 'Value = 1\n',
+      'pkg/ambiguous.py': 'Value = 1\n',
+      'pkg/ambiguous/__init__.py': 'Value = 2\n',
+      'outside.py': 'Value = 1\n',
+      'pkg.py': 'Value = 1\n',
+      'loose.py': 'Value = 1\n',
+      'loose/decoy.ts': 'export const value = 1\n',
+    })
+
+    const { files, graph } = await buildMetadataIndex(root)
+    const caller = 'pkg/service.py'
+    for (const [specifier, expected] of [
+      ['.models', ['file:pkg/models.pyi']],
+      ['.', ['file:pkg/__init__.py']],
+      ['pkg', ['file:pkg/__init__.py']],
+      ['.rust_only', []],
+      ['pkg.rust_only', []],
+      ['.index_only', []],
+      ['.ambiguous', []],
+      ['..outside', []],
+      ['alias_only', []],
+      ['loose', []],
+    ] as const) {
+      expect(files[caller].imports).toContain(specifier)
+      expect(referenceTargets(graph, caller, specifier)).toEqual([...expected])
+    }
+  })
+})
+
+describe('Python absolute-import top-level directory guard', () => {
+  test('resolves repeatedly against one files snapshot via the memoized top-level set', () => {
+    const files: Record<string, ImportResolutionFile> = {
+      'pkg/__init__.py': { path: 'pkg/__init__.py', ext: '.py' },
+      'pkg/mod.py': { path: 'pkg/mod.py', ext: '.py' },
+      'loose.py': { path: 'loose.py', ext: '.py' },
+    }
+    // The index-build shape: one files snapshot resolved for every import
+    // site. Results must be stable across repeated calls on the same snapshot
+    // (the memoized top-level-directory set serves every lookup).
+    expect(resolveImportToFile('main.py', '.py', 'pkg.mod', files)).toBe(
+      'pkg/mod.py',
+    )
+    expect(resolveImportToFile('main.py', '.py', 'pkg.mod', files)).toBe(
+      'pkg/mod.py',
+    )
+    // A loose same-named top-level file never satisfies an absolute import
+    // (conservative-unresolved contract), memoized or not.
+    expect(resolveImportToFile('main.py', '.py', 'loose', files)).toBeNull()
+  })
+
+  test('does not re-derive the top-level set when the record is mutated in place (documented memoization contract)', () => {
+    const files: Record<string, ImportResolutionFile> = {
+      'pkg/__init__.py': { path: 'pkg/__init__.py', ext: '.py' },
+    }
+    expect(resolveImportToFile('main.py', '.py', 'other', files)).toBeNull()
+    // Documented on resolveImportToFile: the top-level-directory set is
+    // memoized per `files` record object identity; mutating the same record
+    // in place between calls is NOT reflected, so a caller that mutates the
+    // record must pass a fresh record to see the mutation.
+    files['other/__init__.py'] = { path: 'other/__init__.py', ext: '.py' }
+    expect(resolveImportToFile('main.py', '.py', 'other', files)).toBeNull()
+  })
+})
+
+describe('TS module-resolution tier wiring', () => {
+  const files: Record<string, ImportResolutionFile> = {
+    'src/util.ts': { path: 'src/util.ts', ext: '.ts' },
+    'src/stub.ts': { path: 'src/stub.ts', ext: '.ts' },
+  }
+  const stubResolver = () => 'src/stub.ts'
+
+  test('the relative arm still wins before the injected ts tier', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.ts',
+        '.ts',
+        './util',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBe('src/util.ts')
+  })
+
+  test('the injected ts tier resolves what the conservative arms miss', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.ts',
+        '.ts',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBe('src/stub.ts')
+  })
+
+  test('omitting the resolver keeps conservative behavior byte-identical', () => {
+    expect(
+      resolveImportToFile('src/a.ts', '.ts', '@stub/thing', files),
+    ).toBeNull()
+  })
+
+  test('the ts tier is not consulted for non-TS/JS extensions', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.py',
+        '.py',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBeNull()
+    expect(
+      resolveImportToFile(
+        'src/main.go',
+        '.go',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBeNull()
   })
 })

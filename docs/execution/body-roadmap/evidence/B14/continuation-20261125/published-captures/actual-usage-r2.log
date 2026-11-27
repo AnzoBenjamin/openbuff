@@ -1,0 +1,49 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+Using environment: test
+51 |   const result = await client.run({ agent: agent.id, prompt: 'Inspect routing B14 source evidence without changing it.', params: { path: `src/${selected}.ts` } })
+52 |   expect(result.runOutcome?.termination, JSON.stringify(result.output)).toBe('completed')
+53 |   expect(server.requests).toHaveLength(1)
+54 |   const request = JSON.stringify(server.requests[0].body.messages)
+55 |   expect(request).toContain('observation:b14-a'); expect(request).toContain('observation:b14-b')
+56 |   expect([...(result.sessionState?.mainAgentState.memoryV2EmittedObservationIds ?? [])].sort()).toEqual(['observation:b14-a', 'observation:b14-b'])
+                                                                                 ^
+error: expect(received).toEqual(expected)
+
+  [
+-   "observation:b14-a",
+    "observation:b14-b",
++   "observation:b14-a",
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/b14-memory-usage.test.ts:56:77)
+(fail) B14 actual SDK request and native read a persists only the matching emitted-source efficiency signal [317.15ms]
+51 |   const result = await client.run({ agent: agent.id, prompt: 'Inspect routing B14 source evidence without changing it.', params: { path: `src/${selected}.ts` } })
+52 |   expect(result.runOutcome?.termination, JSON.stringify(result.output)).toBe('completed')
+53 |   expect(server.requests).toHaveLength(1)
+54 |   const request = JSON.stringify(server.requests[0].body.messages)
+55 |   expect(request).toContain('observation:b14-a'); expect(request).toContain('observation:b14-b')
+56 |   expect([...(result.sessionState?.mainAgentState.memoryV2EmittedObservationIds ?? [])].sort()).toEqual(['observation:b14-a', 'observation:b14-b'])
+                                                                                 ^
+error: expect(received).toEqual(expected)
+
+  [
+-   "observation:b14-a",
+    "observation:b14-b",
++   "observation:b14-a",
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/b14-memory-usage.test.ts:56:77)
+(fail) B14 actual SDK request and native read c persists only the matching emitted-source efficiency signal [162.76ms]
+
+ 0 pass
+ 2 fail
+ 18 expect() calls
+Ran 2 tests across 1 file. [1374.00ms]

@@ -2,6 +2,7 @@ export type * from '@codebuff/common/types/json'
 export type * from '@codebuff/common/types/messages/codebuff-message'
 export type * from '@codebuff/common/types/messages/data-content'
 export type * from '@codebuff/common/types/print-mode'
+export type * from '@codebuff/common/types/run-outcome'
 export type {
   TextPart,
   ImagePart,
@@ -10,9 +11,80 @@ export type {
 // persisted task-memory evidence OUTSIDE a run (the CLI `/memory` command)
 // can read the same journal-recorded moves hydration uses; without them,
 // moved-file evidence reconciles stale and prune deletes it.
-export { collectWorkspaceMoves, run } from './run'
+export { captureRunDeadline, collectWorkspaceMoves, run } from './run'
+export {
+  createDirectHostExecution,
+  createHostExecutionServices,
+} from './host-execution'
+export type {
+  ExecutionScope,
+  HostExecutionOptions,
+  RunHostServices,
+} from './host-execution'
+export { createConfiguredDirectHostExecution } from './services/direct-host-execution'
+export type {
+  TerminalTimeoutPolicy,
+  TerminalTimeoutResolution,
+} from './services/terminal-timeout-policy'
+export type {
+  ConfiguredDirectHostExecution,
+  ConfiguredDirectHostExecutionOptions,
+  ConfiguredDirectHostExecutionResult,
+} from './services/direct-host-execution'
+export {
+  verifyNativeInstallation,
+  calibrateNativeClock,
+} from './services/native-exec'
+export type {
+  NativeArtifactIdentity,
+  NativeToolIdentity,
+  NativeClockMapping,
+  NativeCalibrationSetup,
+  VerifiedNativeInstallation,
+} from './services/native-exec'
+export type { NativeHostExecution } from './services/native-host-execution'
+export {
+  captureAmbientHostInputs,
+  loadHostConfigSnapshot,
+  nodeConfigReadFs,
+} from './host-config'
+export type {
+  CapturedCredentialPort,
+  DeepReadonly,
+  HostConfigurationInputs,
+  HostConfigSnapshot,
+  ProviderHostContext,
+  SnapshotResult,
+} from './host-config'
+export { captureRootDeadline } from '@codebuff/common/util/execution-context'
+export type * from '@codebuff/common/types/contracts/execution-context'
+export type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+export type { JobOwner } from '@codebuff/common/util/job-registry'
+export type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
+// The `changeFiles` `intentLog` parameter above is typed with
+// TransactionIntentLog, so the type closure and its factory/recovery helpers
+// are published beside it: external consumers must be able to name the
+// parameter type (and construct/recover a log) without reaching into
+// unpublished internals.
+export {
+  createTransactionIntentLog,
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  revertPathToPreImage,
+  transactionIntentLogFileName,
+} from './tools/transaction-intent-log'
+export type {
+  BeginTransactionParams,
+  IntentOutcome,
+  RecoveredInterruptedTransaction,
+  RecoveryOutcome,
+  RevertTransactionOutcome,
+  TransactionCurrentState,
+  TransactionIntentEntry,
+  TransactionIntentLog,
+} from './tools/transaction-intent-log'
 export { replaceRange } from './tools/replace-range'
 export { readImages } from './tools/read-image'
 export { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
@@ -21,6 +93,7 @@ export type { NodeFileSystemOptions } from './tools/node-filesystem'
 export {
   diagnosticParsers,
   parseLanguageDiagnostics,
+  structuredDiagnosticParsers,
 } from './tools/language-diagnostics'
 export type {
   DiagnosticParser,
@@ -28,7 +101,10 @@ export type {
   LanguageDiagnostic,
   LanguageDiagnosticPosition,
   LanguageDiagnosticRange,
+  LanguageDiagnosticRelatedInfo,
   LanguageDiagnosticSeverity,
+  LanguageDiagnosticTextEdit,
+  LanguageDiagnosticTextEditApplicability,
 } from './tools/language-diagnostics'
 export {
   FilesystemAuthority,
@@ -136,12 +212,116 @@ export type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 export * from './client'
+export {
+  openReplayableReadJournal,
+  type ReplayableReadJournal,
+  type ReplayableReadsOptions,
+} from './services/replayable-reads'
+export { runReplayableProgram } from './services/replayable-program'
+export {
+  handleSupervisedReplayWorker,
+  runSupervisedReplayableProgram,
+  type SupervisedProgramOptions,
+  type SupervisedProgramResult,
+  type SupervisedReplayBoundary,
+} from './services/supervised-replay-worker'
+export type {
+  ReplayProgram,
+  ReplayProgramModel,
+  ReplayProgramOperation,
+  ReplayProgramOutput,
+  ReplayProgramPart,
+  ReplayProgramRequest,
+  ReplayProgramResult,
+} from './services/immutable-replay-program'
+// P1-T3 backend seam + ACP-remote backend.
+export type { ClientBackend } from './client/backend'
+export { InProcessBackend, resolveClientBackend } from './client/backend'
+export {
+  AcpRemoteBackend,
+  acpSessionUpdateToPrintModeEvents,
+} from './client/acp-client'
+export { createServeBridge } from './serve/bridge'
+export type { ServeBridgeClient, ServeBridgeOptions } from './serve/bridge'
+export { sanitizeOutbound } from './serve/outbound-filter'
+// Published so hosts (the CLI serve command) can build a credential-only
+// `credentialEnv` for runServe: the well-known holdback keys plus every
+// `apiKeyEnv` name the provider configuration declares.
+export {
+  getConfiguredCredentialEnvKeys,
+  CREDENTIAL_ENV_KEYS as WELL_KNOWN_CREDENTIAL_ENV_KEYS,
+} from './serve/outbound'
+export { serveAcpOverSocket } from './serve/socket-listener'
+export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
+export { runServe } from './serve/serve'
+export type { RunServeOptions } from './serve/serve'
+// P2-T7: local dashboard over run journals, receipts, and gate timelines —
+// a localhost+token HTTP server (127.0.0.1 ONLY, constant-time bearer/query
+// token auth) plus a static HTML export that inlines the data (never the
+// token). The provider is injectable; createDashProviderFromJournal adapts
+// a P2-T2 JournalReader (plus optional receipt/gate seams).
+export {
+  startDashServer,
+  generateDashToken,
+  renderDashHtml,
+  DASH_MAX_EVENTS,
+} from './dash/server'
+export type {
+  DashDataProvider,
+  DashRunEvent,
+  DashRunSummary,
+  DashServerHandle,
+  DashSnapshot,
+  StartDashServerParams,
+} from './dash/server'
+export {
+  createDashProviderFromJournal,
+  summarizePayload,
+} from './dash/provider'
+export type { CreateDashProviderFromJournalParams } from './dash/provider'
+export { exportDashStatic } from './dash/export'
+export type {
+  ExportDashStaticParams,
+  ExportDashStaticResult,
+} from './dash/export'
+export { createMcpServer, runMcp } from './mcp/server'
+export type {
+  CreateMcpServerOptions,
+  McpIndexManager,
+  McpServerClient,
+  McpSessionData,
+  RunMcpOptions,
+} from './mcp/server'
+export { AcpSessionData } from './services/acp/session-data'
+export type { AcpSessionDataOptions } from './services/acp/session-data'
 export * from './custom-tool'
 export * from './native/ripgrep'
 export * from './run-state'
 export { ToolHelpers } from './tools'
 export * from './constants'
 export * from './provider-config'
+export {
+  USD_MICROS_PER_CENT,
+  centsToUsdMicros,
+  capCentsToUsdMicros,
+  usdMicrosToCents,
+  computeStrictReservationUsdMicros,
+  createRequestAdmissionStore,
+  requestAdmissionRecordPath,
+  spendingPolicySchema,
+} from './services/request-admission-store'
+export type {
+  RequestAdmissionStore,
+  RequestAdmissionSnapshot,
+  RequestAdmissionReference,
+  SpendingPolicy,
+} from '@codebuff/common/types/request-admission'
+export {
+  MODELS_DEV_CATALOG_PROVENANCE,
+  MODELS_DEV_UPSTREAM_LICENSE_NOTICE,
+} from './model-capability-catalog'
+export type { ModelsDevCatalogProvenance } from './model-capability-catalog'
+export * from './project-trust'
 export * from './model-discovery'
 export { getUserInfoFromApiKey } from './impl/database'
 export * from './credentials'
@@ -187,6 +367,8 @@ export {
   RECONNECTION_RETRY_DELAY_MS,
   computeBackoffDelayMs,
 } from './retry-config'
+// Session route health (N07): `/provider` clears auth-degraded routes.
+export { clearDegradedProviderRoutes } from './impl/failover'
 
 // The complete `CodebuffFileSystem` type closure. Every alias the adapter
 // surface reaches is published, so a consumer's generated `.d.ts` resolves an
@@ -199,14 +381,21 @@ export type {
   CodebuffRangeReadResult,
   CodebuffConditionalCommitOptions,
   CodebuffConditionalCommitResult,
+  CodebuffConditionalDeleteOptions,
   CodebuffConditionalDeleteResult,
+  CodebuffTransactionParentIdentity,
+  CodebuffTransactionRestoreGuard,
   CodebuffConditionalMoveOptions,
   CodebuffConditionalMoveResult,
   // Required to implement the public `streamDirectory` capability, including
   // its mandatory `readdirView` pairing.
   CodebuffStreamDirectory,
   CodebuffTextRangeReadResult,
+  CodebuffTextReadOptions,
+  CodebuffTextRangeRead,
+  CodebuffTextFileRead,
 } from '@codebuff/common/types/filesystem'
+export type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
 
 // Tree-sitter / code-map exports
 export {
@@ -217,6 +406,12 @@ export {
 export type { FileTokenData, TokenCallerMap } from '@codebuff/code-map'
 
 export { runTerminalCommand } from './tools/run-terminal-command'
+export type { CapturedTerminalLaunchMetadata } from './tools/run-terminal-command'
+export type {
+  CapturedHookConfiguration,
+  FileChangeHook,
+} from './tools/file-change-hooks'
+export type { LlmHostDeps } from './impl/llm'
 export { evaluateTerminalCommandPolicy } from './tools/terminal-command-policy'
 export type {
   TerminalPermissionProfile,
@@ -251,6 +446,7 @@ export {
 export { resetChatGptOAuthRateLimit } from './impl/model-provider'
 export { LocalHarnessStore } from './services/local-harness-store'
 export { WorkspaceJournalService } from './services/workspace-journal'
+export type { WorkspaceIdentitySource } from './services/workspace-bootstrap'
 export {
   WORKSPACE_MUTATION_AUTHORITY,
   WorkspaceMutationBroker,
@@ -304,3 +500,14 @@ export type {
 } from './services/harness-enforcement'
 export { createConfiguredEmbedder } from './impl/embeddings'
 export type { EmbedFn } from './impl/embeddings'
+
+export {
+  RepositoryIntelligenceService,
+  createRepositoryIntelligenceSource,
+  createVirtualRepositoryIntelligenceSource,
+} from './services/repository-intelligence'
+export type {
+  RepositoryIntelligenceSource,
+  RepositoryContextPacket,
+  PrepareRepositoryContextRequest,
+} from '@codebuff/common/types/contracts/repository-intelligence'

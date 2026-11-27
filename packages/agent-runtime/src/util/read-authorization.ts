@@ -4,6 +4,10 @@ import {
   hasAuthoritativeReadCapabilityScope,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  rawReadBasisV1Schema,
+  rawReadBasesMatch,
+} from '@codebuff/common/util/raw-read-basis'
 
 import { normalizeToolPath } from '../tools/handlers/tool/write-file'
 
@@ -30,7 +34,11 @@ function isWellFormedStoredAnchor(
     typeof anchor.contentHash === 'string' &&
     CONTENT_HASH_PATTERN.test(anchor.contentHash) &&
     typeof anchor.readCapability === 'string' &&
-    anchor.readCapability.length > 0
+    anchor.readCapability.length > 0 &&
+    anchor.readCapability.length <= 4096 &&
+    (anchor.rawBasis === undefined ||
+      (rawReadBasisV1Schema.safeParse(anchor.rawBasis).success &&
+        anchor.rawBasis.scope === 'whole'))
   )
 }
 
@@ -43,7 +51,8 @@ function isSafeAnchorPath(path: string): boolean {
 
 /**
  * Remint durable confirmed post-edit anchors only when issuer-bound to the
- * current project/run. cap.v3 is reminted when the stored token authenticates
+ * current project/run. The original token version and raw basis are retained
+ * when the stored token authenticates
  * for that scope (Path 3), or — ONLY when the caller explicitly opts in via
  * `allowUnauthenticatedIssuerRestamp` — when stamped projectId+runId match
  * (Path 4, the process-restart path). Default is FAIL CLOSED: an anchor whose
@@ -63,7 +72,8 @@ export function remintConfirmedPostEditAnchors(params: {
    */
   allowUnauthenticatedIssuerRestamp?: boolean
 }): Record<string, ConfirmedPostEditAnchor> {
-  const { anchors, projectId, runId, allowUnauthenticatedIssuerRestamp } = params
+  const { anchors, projectId, runId, allowUnauthenticatedIssuerRestamp } =
+    params
   const result: Record<string, ConfirmedPostEditAnchor> = {}
   if (!anchors) return result
 
@@ -102,6 +112,23 @@ export function remintConfirmedPostEditAnchors(params: {
       continue
     }
 
+    // Preserve the original authenticated raw basis. The explicitly trusted
+    // local restart path may restamp persisted v4 data, never upgrade a v3 read.
+    const rawBasis =
+      typeof decoded !== 'string' && decoded.tokenVersion === 'v4'
+        ? decoded.rawBasis
+        : stored.readCapability.startsWith('cap.v4.') &&
+            allowUnauthenticatedIssuerRestamp
+          ? stored.rawBasis
+          : undefined
+    if (stored.rawBasis && !rawReadBasesMatch(stored.rawBasis, rawBasis))
+      continue
+    if (
+      stored.readCapability.startsWith('cap.v4.') &&
+      rawBasis?.scope !== 'whole'
+    )
+      continue
+
     result[path] = {
       startLine: stored.startLine,
       endLine: stored.endLine,
@@ -111,7 +138,9 @@ export function remintConfirmedPostEditAnchors(params: {
         endLine: stored.endLine,
         hash: stored.contentHash,
         scope,
+        ...(rawBasis ? { rawBasis } : {}),
       }),
+      ...(rawBasis ? { rawBasis } : {}),
       projectId,
       runId,
     }
@@ -133,6 +162,7 @@ export function revokeImplicitReadAuthorizationsAfterCompaction(
   const paths = new Set([
     ...Object.keys(agentState.readAuthorizationsByPath ?? {}),
     ...Object.keys(agentState.readAuthorizationHashesByPath ?? {}),
+    ...Object.keys(agentState.rawReadAuthorizationHashesByPath ?? {}),
   ])
   if (paths.size === 0) return
 

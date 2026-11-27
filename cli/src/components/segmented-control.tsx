@@ -169,7 +169,7 @@ export const processSegments = (
     const isBold = !!(seg.isBold || isHovered || (isSelected && isHighlighted))
 
     // Colors
-    const frameColor = isHighlighted ? theme.foreground : theme.border
+    const frameColor = isHighlighted ? theme.primary : theme.border
     const textMuted = isDisabled || (isSelected && !isHighlighted)
     const textColor = textMuted ? theme.muted : theme.foreground
 

@@ -19,10 +19,18 @@ import { useChatStore } from '../state/chat-store'
  */
 const BANNER_REGISTRY: Record<
   string,
-  (ctx: { showTime: number; fileTree?: FileTreeNode[] }) => React.ReactNode
+  (ctx: {
+    showTime: number
+    fileTree?: FileTreeNode[]
+    onManageAttachments?: () => void
+  }) => React.ReactNode
 > = {
-  default: () => <PendingAttachmentsBanner />,
-  image: () => <PendingAttachmentsBanner />,
+  default: (ctx) => (
+    <PendingAttachmentsBanner onManageAttachments={ctx.onManageAttachments} />
+  ),
+  image: (ctx) => (
+    <PendingAttachmentsBanner onManageAttachments={ctx.onManageAttachments} />
+  ),
   help: (ctx) => <HelpBanner fileTree={ctx.fileTree} />,
   ...(CHATGPT_OAUTH_ENABLED
     ? { 'connect:chatgpt': () => <ChatGptConnectBanner /> }
@@ -38,8 +46,10 @@ const BANNER_REGISTRY: Record<
  */
 export const InputModeBanner = ({
   fileTree,
+  onManageAttachments,
 }: {
   fileTree?: FileTreeNode[]
+  onManageAttachments?: () => void
 } = {}) => {
   const inputMode = useChatStore((state) => state.inputMode)
 
@@ -49,5 +59,7 @@ export const InputModeBanner = ({
     return null
   }
 
-  return <>{renderBanner({ showTime: Date.now(), fileTree })}</>
+  return (
+    <>{renderBanner({ showTime: Date.now(), fileTree, onManageAttachments })}</>
+  )
 }

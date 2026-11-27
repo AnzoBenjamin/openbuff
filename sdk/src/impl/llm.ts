@@ -1,5 +1,10 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import {
+  isOpenAIProviderModel,
+  isChatGptOAuthModelAllowed,
+} from '@codebuff/common/constants/chatgpt-oauth'
 import { models } from '@codebuff/common/old-constants'
+import { withTransportTruncation } from '@codebuff/common/types/contracts/llm'
 import { buildArray } from '@codebuff/common/util/array'
 import { normalizeProviderRequestBodyForCacheDebug } from '@codebuff/common/util/cache-debug'
 import {
@@ -17,7 +22,6 @@ import {
   generateObject,
   NoSuchToolError,
   APICallError,
-  NoOutputGeneratedError,
   ToolCallRepairError,
   InvalidToolInputError,
   TypeValidationError,
@@ -28,26 +32,70 @@ import {
   markChatGptOAuthRateLimited,
   resolveModelContextWindow,
 } from './model-provider'
-import { resolveModelsToTry, isFailoverEligibleError } from './failover'
+import {
+  ROUTE_DEGRADING_STATUS_CODES,
+  isFailoverEligibleError,
+  orderModelsByRouteHealth,
+  resolveModelsToTry,
+  getScopedSessionRouteHealth,
+} from './failover'
+import type { RouteHealthRegistry } from './failover'
 import { buildSpawnAgentsInputForDirectAgentCall } from './direct-agent-tool-repair'
 import {
+  getMaxOutputBytesForModel,
   loadProviderConfigSync,
   resolveConfiguredAgentModelConfig,
+  resolveConfiguredProviderModelMetadata,
 } from '../provider-config'
+import {
+  getCapturedProviderConfig,
+  getProviderCredentialHealthIdentity,
+} from '../host-config'
+import type { ProviderHostContext } from '../host-config'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type {
+  RequestAdmissionStore,
+  RequestAdmissionBasis,
+  RequestCostProvenance,
+  SpendingPolicy,
+} from '@codebuff/common/types/request-admission'
+import {
+  centsToUsdMicros,
+  computeStrictReservationUsdMicros,
+} from '../services/request-admission-store'
+import { observeRetryWait } from '../services/retry-wait-status'
 import { refreshChatGptOAuthToken } from '../credentials'
+import { getSystemProcessEnv } from '../env'
+
+export type LlmHostDeps = Readonly<{
+  providerContext: ProviderHostContext
+  getModel?: typeof getModelForRequest
+  /** Explicit session health; otherwise scoped to config and captured credential values. */
+  routeHealth?: RouteHealthRegistry
+  /** Host-owned durable authority shared by root and descendant attempts. */
+  requestAdmission?: RequestAdmissionStore
+}>
 import {
   getProviderContentPolicyFinishError,
   getErrorStatusCode,
-  isRetryableStatusCode,
+  isProviderAbortError,
   normalizeProviderContentPolicyError,
 } from '../error-utils'
 import {
-  MAX_RETRIES_PER_MESSAGE,
-  RETRY_BACKOFF_BASE_DELAY_MS,
-  computeBackoffDelayMs,
-  isTransientNetworkError,
+  RETRY_POLICY,
+  classifyRetryableError,
+  createRequestRetryBudget,
+  admitRequestAttempt,
+  canAdmitRequestAttempt,
+  getRouteAttemptLimit,
+  getRetryDelayMs,
   runWithRetryPolicy,
   waitForBackoffDelay,
+} from '../retry-config'
+import type {
+  RetryExecutionOptions,
+  RequestRetryBudget,
+  RetryPolicy,
 } from '../retry-config'
 
 import type { ModelRequestParams } from './model-provider'
@@ -61,8 +109,12 @@ import type {
 } from '@codebuff/common/types/contracts/llm'
 import type { ParamsOf } from '@codebuff/common/types/function-params'
 import type { JSONObject } from '@codebuff/common/types/json'
+import type {
+  StreamChunk,
+  ToolCallStreamChunk,
+} from '@codebuff/common/types/contracts/llm'
 import type { OpenRouterProviderOptions } from '@codebuff/internal/openrouter-ai-sdk'
-import type { GenerateObjectResult, LanguageModel } from 'ai'
+import type { GenerateObjectResult, LanguageModel, ModelMessage } from 'ai'
 import type z from 'zod/v4'
 import { trimMessagesToFitTokenLimit } from '@codebuff/agent-runtime/util/messages'
 import { getModelContextMessageLimit } from '@codebuff/agent-runtime/util/context-pruning'
@@ -211,10 +263,9 @@ export function repairTruncatedToolInputJson(
     // M2-T5 repair: a reconstruction that discards EVERY key the model
     // produced (parses to an empty `{}`/`[]`) loses all content and must
     // fail explicitly instead.
-    const isEmptyContainer =
-      Array.isArray(parsedClosed)
-        ? parsedClosed.length === 0
-        : Object.keys(parsedClosed).length === 0
+    const isEmptyContainer = Array.isArray(parsedClosed)
+      ? parsedClosed.length === 0
+      : Object.keys(parsedClosed).length === 0
     if (!isEmptyContainer) return closed
   }
 
@@ -249,80 +300,157 @@ function valueContainsImageInput(value: unknown): boolean {
   return valueContainsImageInput(record.content)
 }
 
-function calculateProviderCostCents(params: { costDollars: number }): number {
-  const { costDollars } = params
+export { computeCostCentsFromUsage } from './cost-accounting'
+export type { ModelPricing, UsageTokenCounts } from './cost-accounting'
+import type { ModelPricing } from './cost-accounting'
+import {
+  computeCostCentsFromUsage,
+  calculateProviderCostCents,
+  providerCostDollars,
+  normalizeProviderUsage,
+} from './cost-accounting'
 
-  return Math.round(costDollars * 100)
+class RequestSpendRefusalError extends Error {
+  readonly code = 'request_spend_refused'
+  readonly retryable = false
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'RequestSpendRefusalError'
+  }
 }
 
-/**
- * Configured per-million-token pricing for a model (from openbuff.json
- * `modelCapabilities.pricing`). Used to compute BYOK cost when the provider
- * does not return OpenRouter-style cost metadata.
- */
-export interface ModelPricing {
-  inputPerMillionTokens?: number
-  outputPerMillionTokens?: number
-  cachedInputPerMillionTokens?: number
+type RequestAdmissionHandle = {
+  authorityId: string
+  attemptId: string
 }
 
-/**
- * Token usage reported by the AI SDK for a completed request.
- * `cachedInputTokens` is the cache-hit portion of `inputTokens` and is billed
- * at the (usually discounted) `cachedInputPerMillionTokens` rate when present.
- */
-export interface UsageTokenCounts {
-  inputTokens?: number
-  outputTokens?: number
-  cachedInputTokens?: number
-}
-
-/**
- * Compute cost in cents for a BYOK request from token usage and the
- * configured `modelCapabilities.pricing` capability. Returns `undefined` when
- * pricing is unavailable or insufficient (no input/output rates) so callers
- * can fall back to provider-reported cost or skip cost tracking.
- *
- * `cachedInputTokens` is charged at `cachedInputPerMillionTokens` when that
- * rate is configured, otherwise at the regular `inputPerMillionTokens` rate.
- * Only non-negative token counts contribute; NaN/undefined contribute 0.
- */
-export function computeCostCentsFromUsage(params: {
-  usage: UsageTokenCounts
+function reserveProviderAttempt(params: {
+  policy: SpendingPolicy | undefined
+  authorityId: string | undefined
+  store: RequestAdmissionStore | undefined
+  runId: string
+  effectiveModel: string
   pricing: ModelPricing | undefined
-}): number | undefined {
-  const { usage, pricing } = params
-  if (!pricing) return undefined
+  contextWindowTokens: number | undefined
+  maxOutputTokens: number | undefined
+  cacheWritesPossible: boolean
+}): RequestAdmissionHandle | undefined {
+  const policy = params.policy
+  if (!policy || policy.mode === 'uncapped') return undefined
+  if (!params.authorityId)
+    throw new RequestSpendRefusalError(
+      'Capped request admission requires a durable authority identity.',
+    )
+  if (!params.store)
+    throw new RequestSpendRefusalError(
+      'Capped request admission requires an available durable store.',
+    )
 
-  const inputRate = pricing.inputPerMillionTokens
-  const outputRate = pricing.outputPerMillionTokens
-  if (inputRate === undefined && outputRate === undefined) {
-    return undefined
+  let reservationUsdMicros: number
+  let basis: RequestAdmissionBasis
+  if (policy.mode === 'strict-capped') {
+    const bound = computeStrictReservationUsdMicros({
+      pricing: params.pricing,
+      contextWindowTokens: params.contextWindowTokens,
+      maxOutputTokens: params.maxOutputTokens,
+      cacheWritesPossible: params.cacheWritesPossible,
+    })
+    if (!bound.ok)
+      throw new RequestSpendRefusalError(
+        `Strict capped request refused: ${bound.reason}.`,
+      )
+    reservationUsdMicros = bound.reservationUsdMicros
+    basis = { kind: 'strict-bound', description: bound.description }
+  } else {
+    reservationUsdMicros = centsToUsdMicros(policy.estimator.reservationCents)
+    basis = {
+      kind: 'estimated-reservation',
+      estimatorId: policy.estimator.id,
+      description: `Explicit degraded reservation: ${policy.estimator.reservationCents} USD cents per provider attempt.`,
+    }
   }
 
-  const safeNonNeg = (value: number | undefined): number =>
-    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+  const provider = params.effectiveModel.split('/')[0] || 'unknown'
+  let reservation
+  try {
+    reservation = params.store.reserve({
+      authorityId: params.authorityId,
+      runId: params.runId,
+      provider,
+      model: params.effectiveModel,
+      reservationUsdMicros,
+      basis,
+    })
+  } catch (error) {
+    throw new RequestSpendRefusalError(
+      `Capped request admission store failed closed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (!reservation.ok) throw new RequestSpendRefusalError(reservation.message)
+  return {
+    authorityId: params.authorityId,
+    attemptId: reservation.attemptId,
+  }
+}
 
-  const rawInputTokens = safeNonNeg(usage.inputTokens)
-  const cachedInputTokens = safeNonNeg(usage.cachedInputTokens)
-  const chargeableInputTokens = Math.max(0, rawInputTokens - cachedInputTokens)
-  const outputTokens = safeNonNeg(usage.outputTokens)
+function markProviderAttemptIncomplete(params: {
+  handle: RequestAdmissionHandle | undefined
+  store: RequestAdmissionStore | undefined
+  reason:
+    | 'missing-usage'
+    | 'provider-error'
+    | 'cancelled'
+    | 'timeout'
+    | 'invalid-usage'
+    | 'unknown'
+  logger: Logger
+}): void {
+  if (!params.handle || !params.store) return
+  try {
+    params.store.markIncomplete({
+      authorityId: params.handle.authorityId,
+      attemptId: params.handle.attemptId,
+      reason: params.reason,
+    })
+  } catch (error) {
+    params.logger.warn(
+      { error, attemptId: params.handle.attemptId },
+      'Request admission incomplete-attempt persistence failed closed',
+    )
+  }
+}
 
-  const effectiveInputRate = inputRate !== undefined ? inputRate : 0
-  const cachedInputRate =
-    pricing.cachedInputPerMillionTokens !== undefined
-      ? pricing.cachedInputPerMillionTokens
-      : effectiveInputRate
-  const effectiveOutputRate = outputRate !== undefined ? outputRate : 0
-
-  const inputCostDollars =
-    (chargeableInputTokens * effectiveInputRate +
-      cachedInputTokens * cachedInputRate) /
-    1_000_000
-  const outputCostDollars = (outputTokens * effectiveOutputRate) / 1_000_000
-
-  const totalCents = Math.round((inputCostDollars + outputCostDollars) * 100)
-  return totalCents > 0 ? totalCents : 0
+function reconcileProviderAttempt(params: {
+  handle: RequestAdmissionHandle | undefined
+  store: RequestAdmissionStore | undefined
+  costCents: number | undefined
+  provenance: RequestCostProvenance | undefined
+  logger: Logger
+}): void {
+  if (!params.handle || !params.store) return
+  if (params.costCents === undefined || !params.provenance) {
+    markProviderAttemptIncomplete({
+      handle: params.handle,
+      store: params.store,
+      reason: 'missing-usage',
+      logger: params.logger,
+    })
+    return
+  }
+  try {
+    params.store.reconcile({
+      authorityId: params.handle.authorityId,
+      attemptId: params.handle.attemptId,
+      costUsdMicros: centsToUsdMicros(params.costCents),
+      provenance: params.provenance,
+    })
+  } catch (error) {
+    params.logger.warn(
+      { error, attemptId: params.handle.attemptId },
+      'Request admission reconciliation failed closed',
+    )
+  }
 }
 
 export function getProviderOptions(params: {
@@ -385,15 +513,6 @@ export function getProviderOptions(params: {
       },
       provider: providerConfig,
     },
-  }
-}
-
-// Provider usage accounting type for OpenRouter-compatible responses.
-// Forked from https://github.com/OpenRouterTeam/ai-sdk-provider/
-type OpenRouterUsageAccounting = {
-  cost: number | null
-  costDetails: {
-    upstreamInferenceCost: number | null
   }
 }
 
@@ -497,21 +616,38 @@ function emitCacheDebugUsage(params: {
     outputTokens: number
     cachedInputTokens: number
     totalTokens: number
+    inputTokensIncludesCache?: boolean
+    cacheWriteInputTokens?: number
+    cacheUsageComplete?: boolean
   }) => void
   usage: {
     inputTokens?: number
     outputTokens?: number
     totalTokens?: number
+    cacheWriteInputTokens?: number
+    accountingComplete?: boolean
     cachedInputTokens?: number
   }
 }) {
   if (!params.callback) return
+
+  const isValidTokenCount = (value: number | undefined) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+  const cacheUsageComplete =
+    params.usage.accountingComplete !== false &&
+    isValidTokenCount(params.usage.inputTokens) &&
+    isValidTokenCount(params.usage.cachedInputTokens) &&
+    params.usage.cachedInputTokens! <= params.usage.inputTokens! &&
+    Number.isSafeInteger(params.usage.inputTokens!)
 
   params.callback({
     inputTokens: params.usage.inputTokens ?? 0,
     outputTokens: params.usage.outputTokens ?? 0,
     cachedInputTokens: params.usage.cachedInputTokens ?? 0,
     totalTokens: params.usage.totalTokens ?? 0,
+    cacheUsageComplete,
+    inputTokensIncludesCache: true,
+    cacheWriteInputTokens: params.usage.cacheWriteInputTokens,
   })
 }
 
@@ -612,6 +748,74 @@ function getPlainToolInputSchema(inputSchema: unknown): unknown {
   if (isJsonData(record.jsonSchema)) return record.jsonSchema
   if (isJsonData(record)) return record
   return undefined
+}
+
+/** Render the actual active tool surface for providers without native tools. */
+export function buildTextToolInstructions(tools: unknown): string {
+  if (!tools || typeof tools !== 'object' || Object.keys(tools).length === 0)
+    return ''
+  const entries = Object.entries(tools as Record<string, unknown>).map(
+    ([name, value]) => {
+      const definition = value as {
+        description?: string
+        inputSchema?: unknown
+      }
+      let schema = getPlainToolInputSchema(definition.inputSchema)
+      if (schema === undefined) {
+        try {
+          schema = asSchema(
+            definition.inputSchema as Parameters<typeof asSchema>[0],
+          ).jsonSchema
+        } catch {
+          throw new Error(
+            `Cannot render input schema for tool ${name} on a provider without native tools`,
+          )
+        }
+      }
+      if (schema === undefined)
+        throw new Error(
+          `Missing input schema for tool ${name} on a provider without native tools`,
+        )
+      return JSON.stringify({
+        name,
+        description: definition.description,
+        inputSchema: schema,
+      })
+    },
+  )
+  return [
+    'You can call only the tools listed below. Each inputSchema describes the JSON object parameters for that tool.',
+    'To call a tool, output <codebuff_tool_call> followed by one JSON object with "cb_tool_name" set to the tool name and the tool parameters as other fields, followed by </codebuff_tool_call>. Use JSON arrays and objects, not strings containing JSON.',
+    ...entries,
+  ].join('\n')
+}
+
+/** Convert prior native tool exchanges into text for providers without tool roles. */
+export function textOnlyToolHistory(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message): ModelMessage => {
+    if (message.role === 'tool') {
+      return {
+        role: 'user',
+        content: message.content.map((part) => ({
+          type: 'text' as const,
+          text: `Tool result for ${part.toolName} (${part.toolCallId}): ${JSON.stringify(part.output)}`,
+        })),
+      }
+    }
+    if (message.role !== 'assistant' || typeof message.content === 'string')
+      return message
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === 'tool-call'
+          ? {
+              type: 'text' as const,
+              text: `<codebuff_tool_call>\n${JSON.stringify({ cb_tool_name: part.toolName, ...(part.input as object) })}\n</codebuff_tool_call>`,
+            }
+          : part,
+      ),
+    }
+  })
 }
 
 /**
@@ -977,8 +1181,9 @@ function withConfiguredReasoningEffort(
 
   return {
     ...(providerOptions ?? {}),
-    openaiCompatible: {
-      ...((providerOptions?.openaiCompatible as JSONObject | undefined) ?? {}),
+    'openai-compatible': {
+      ...((providerOptions?.['openai-compatible'] as JSONObject | undefined) ??
+        {}),
       reasoningEffort,
     },
     openai: {
@@ -994,6 +1199,79 @@ function hasProviderOptions(
   return Object.keys(providerOptions ?? {}).length > 0
 }
 
+/**
+ * Token cost of the TOOL surface only (names, descriptions, input schemas) —
+ * {@link countRequestOverheadTokens} minus its system component, exposed so a
+ * caller that prices `system` itself can still charge the same tool bytes the
+ * provider does.
+ *
+ * sec-tc-calibration-denominator-bypass: the runtime's calibration loop records
+ * provider `inputTokens` against a pre-request estimate. That estimate used to
+ * be `countTokensJson({system, messages})` only, while an OpenAI-routed request
+ * also charges the serialized function definitions. A workspace-controlled
+ * tool config (large read-only schemas with verbose descriptions) could then
+ * inflate the ESTIMATE — the ratio's denominator — until every observation sat
+ * inside the calibration credibility band and drove the persisted family factor
+ * to its floor, shrinking the agent's context budget across runs. Counting the
+ * tool surface through the same projection the provider charges removes that
+ * free knob. `includeTools` is false when the provider-compatibility layer
+ * strips tools from the request; the result is then 0 and callers must not
+ * charge anything.
+ */
+export function countToolSurfaceTokensForCalibration(
+  tools: unknown,
+  includeTools: boolean,
+): number {
+  if (!includeTools) return 0
+  return countToolSurfaceTokens(tools)
+}
+
+/**
+ * N01: put prompt-cache metadata on the selected tool definition, defaulting
+ * to the last tool. A template can select an earlier stable prefix boundary
+ * when later tools vary by mode. The message anchors placed by
+ * `convertCbToModelMessages` use at most three breakpoints, so this remains
+ * the fourth and last one Anthropic allows. An absent configured tool leaves
+ * the input unchanged rather than placing a misleading breakpoint.
+ */
+export function withToolsCacheBreakpoint<T>(
+  tools: T,
+  requestedName?: string,
+): T {
+  if (!tools || typeof tools !== 'object') return tools
+  const record = tools as Record<
+    string,
+    { providerOptions?: Record<string, Record<string, unknown>> }
+  >
+  const names = Object.keys(record)
+  const breakpointName = requestedName ?? names[names.length - 1]
+  if (
+    breakpointName === undefined ||
+    !Object.prototype.hasOwnProperty.call(record, breakpointName)
+  ) {
+    return tools
+  }
+  const breakpointTool = record[breakpointName]
+  if (!breakpointTool || typeof breakpointTool !== 'object') return tools
+  return {
+    ...record,
+    [breakpointName]: {
+      ...breakpointTool,
+      providerOptions: {
+        ...(breakpointTool.providerOptions ?? {}),
+        anthropic: {
+          ...(breakpointTool.providerOptions?.anthropic ?? {}),
+          cacheControl: { type: 'ephemeral' },
+        },
+        openaiCompatible: {
+          ...(breakpointTool.providerOptions?.openaiCompatible ?? {}),
+          cache_control: { type: 'ephemeral' },
+        },
+      },
+    },
+  } as T
+}
+
 export function classifyChatGptOAuthStreamError(params: {
   isChatGptOAuth: boolean
   skipChatGptOAuth?: boolean
@@ -1005,6 +1283,8 @@ export function classifyChatGptOAuthStreamError(params: {
   if (!isChatGptOAuth || skipChatGptOAuth || hasYieldedContent) {
     return 'ignore'
   }
+  if (isProviderAbortError(error) || normalizeProviderContentPolicyError(error))
+    return 'fail-fast'
 
   if (isOAuthRateLimitError(error)) {
     return 'fallback-rate-limit'
@@ -1018,10 +1298,13 @@ export function classifyChatGptOAuthStreamError(params: {
 }
 
 export async function* promptAiSdkStream(
-  params: ParamsOf<PromptAiSdkStreamFn> & {
-    skipChatGptOAuth?: boolean
-    chatGptOAuthRetried?: boolean
-  },
+  params: ParamsOf<PromptAiSdkStreamFn> &
+    RetryExecutionOptions & {
+      skipChatGptOAuth?: boolean
+      chatGptOAuthRetried?: boolean
+      retryBudget?: RequestRetryBudget
+    },
+  deps?: LlmHostDeps,
 ): ReturnType<PromptAiSdkStreamFn> {
   const { providerOptions: originalProviderOptions, ...streamParams } = params
 
@@ -1034,6 +1317,30 @@ export async function* promptAiSdkStream(
   } = params
   const agentChunkMetadata =
     params.agentId != null ? { agentId: params.agentId } : undefined
+
+  // Tool-call chunks are held here until the provider's finishReason is known.
+  // `finishReason === 'length'` (max-token cut) is the provider's AUTHORITATIVE
+  // truncation fact, and it only resolves after the stream ends — so the only
+  // way to ride that fact on the tool-call chunks the runtime parses is to
+  // publish them once the finish reason has resolved. Text and reasoning chunks
+  // are untouched and still stream through immediately.
+  const pendingToolCallChunks: ToolCallStreamChunk[] = []
+  async function* flushPendingToolCallChunks(
+    truncated: boolean,
+  ): AsyncGenerator<StreamChunk> {
+    if (pendingToolCallChunks.length === 0) return
+    const drained = pendingToolCallChunks.splice(0)
+    for (const pending of drained) {
+      // Delivery — not buffering — is what makes a retry or failover unsafe:
+      // the runtime executes every chunk it receives, so a stream counts as
+      // having yielded content only here, at the yield.
+      anyContentYielded = true
+      // The marker is applied through the shared contract helper, so the
+      // producer and its consumers agree on one name for the transport fact
+      // (see `ToolCallStreamChunk` in common/src/types/contracts/llm.ts).
+      yield truncated ? withTransportTruncation(pending) : pending
+    }
+  }
 
   if (params.signal.aborted) {
     logger.info(
@@ -1057,7 +1364,11 @@ export async function* promptAiSdkStream(
     attempt?: number
     maxAttempts?: number
     delayMs?: number
+    remainingDelayMs?: number
     statusCode?: number
+    providerId?: string
+    apiKeyEnv?: string
+    degraded?: boolean
   }) => {
     params.sendAction({
       action: {
@@ -1068,7 +1379,9 @@ export async function* promptAiSdkStream(
     })
   }
 
-  const loadedConfig = loadProviderConfigSync()
+  const loadedConfig = deps
+    ? getCapturedProviderConfig(deps.providerContext.snapshot)
+    : loadProviderConfigSync()
   // When the caller's `model` is undefined (e.g. bundled agents whose model
   // is intentionally deferred to openbuff.json routing), resolve the effective
   // primary model from the agentId now so the failover loop below has at least
@@ -1077,18 +1390,74 @@ export async function* promptAiSdkStream(
   // surfacing as "Agent run error: undefined" at the post-loop `throw lastError`.
   // getModelForRequest performs the same resolution inside the loop, but only
   // after resolveModelsToTry gates entry — so we must resolve up front.
-  const effectiveRequestedModel =
-    params.model ||
-    (params.agentId
-      ? resolveConfiguredAgentModelConfig({
-          agentId: params.agentId,
-          loadedConfig,
-        }).model
-      : undefined)
-  const modelsToTry = resolveModelsToTry(effectiveRequestedModel, loadedConfig)
+  const effectiveRequestedModel = resolveConfiguredAgentModelConfig({
+    agentId: params.agentId,
+    model: params.model,
+    loadedConfig,
+  }).model
+  const configuredModels = resolveModelsToTry(
+    effectiveRequestedModel,
+    loadedConfig,
+  )
+  const isOAuthHealthRoute = (model: string) => {
+    const route = resolveConfiguredProviderModelMetadata({
+      model,
+      loadedConfig,
+    })
+    return (
+      route?.provider.type === 'chatgpt-oauth' ||
+      (!route &&
+        isOpenAIProviderModel(model) &&
+        isChatGptOAuthModelAllowed(model))
+    )
+  }
+  const routeHealth =
+    deps?.routeHealth ??
+    getScopedSessionRouteHealth({
+      loadedConfig,
+      configurationIdentity: deps
+        ? JSON.stringify([
+            deps.providerContext.snapshot.inputs.projectRoot,
+            deps.providerContext.snapshot.configDir ?? null,
+            deps.providerContext.snapshot.inputs.selection,
+          ])
+        : undefined,
+      credentialSourceIdentity: deps
+        ? (model) =>
+            getProviderCredentialHealthIdentity(
+              deps.providerContext,
+              isOAuthHealthRoute(model),
+            )
+        : undefined,
+      environment:
+        deps?.providerContext.credentialEnvironment ?? getSystemProcessEnv(),
+      apiKey: params.apiKey,
+    })
+  // N07: a route that failed authentication earlier in this session goes to
+  // the back of the list, so the request starts on the working backup.
+  const modelsToTry = orderModelsByRouteHealth(configuredModels, routeHealth)
+  if (modelsToTry[0] !== effectiveRequestedModel) {
+    logger.debug(
+      {
+        primaryModel: effectiveRequestedModel,
+        firstModel: modelsToTry[0],
+        degraded: routeHealth.get(effectiveRequestedModel),
+      },
+      'Primary route is degraded for this session; starting on the backup',
+    )
+  }
+  const policy: RetryPolicy = params.retryPolicy ?? RETRY_POLICY
+  const retryBudget =
+    params.retryBudget ??
+    createRequestRetryBudget(
+      policy,
+      modelsToTry[0] ?? effectiveRequestedModel,
+      modelsToTry.length,
+    )
   const routeContextWindowTokens = resolveModelContextWindow({
     agentId: params.agentId,
     model: effectiveRequestedModel,
+    loadedConfig,
   })
   params.onModelContextResolved?.(routeContextWindowTokens)
 
@@ -1098,22 +1467,42 @@ export async function* promptAiSdkStream(
     failoverIndex++
   ) {
     const failoverModel = modelsToTry[failoverIndex]
+    // Image routing may select a different model. Keep the resolved route
+    // available when this retry loop exits into the failover handler.
+    let attemptModel = failoverModel
     let promptTooLongRetried = false
     let providerMessageLimitOverride: number | undefined
     try {
-      for (let attempt = 0; attempt <= MAX_RETRIES_PER_MESSAGE; attempt++) {
-        // Track if we've yielded content in THIS attempt (for ChatGPT OAuth fallback)
-        let hasYieldedContent = false
+      for (
+        let attempt = 0;
+        attempt <=
+        (failoverIndex === 0
+          ? policy.maxRetries
+          : (policy.backupMaxRetries ?? policy.maxRetries));
+        attempt++
+      ) {
+        // Tool-call chunks are buffered until THIS attempt's finishReason
+        // resolves, so every attempt must start with an empty buffer. Without
+        // this reset a stream that fails after buffering leaves its payloads
+        // behind, and the next attempt flushes them as though the failed model
+        // had produced them — a stale partial edit payload would be executed a
+        // second time.
+        pendingToolCallChunks.length = 0
         let response: ReturnType<typeof streamText>
         let aiSDKModel: LanguageModel
         let isChatGptOAuth: boolean
+        let requestAdmissionAttempt: RequestAdmissionHandle | undefined
         let compatibility: {
           supportsTools: boolean
           stripProviderMetadata: boolean
           stripCacheControl: boolean
+          reasoningReplay?: 'required' | 'none'
         }
 
         try {
+          if (params.signal.aborted) throw params.signal.reason
+          if (retryBudget.attempts >= retryBudget.maxAttempts)
+            throw retryBudget.lastError
           const modelParams: ModelRequestParams = {
             apiKey: params.apiKey,
             model: failoverModel,
@@ -1126,9 +1515,36 @@ export async function* promptAiSdkStream(
             // failoverModel over openbuff.json mode/agent/defaultModel routing;
             // otherwise every backup model would silently re-resolve to the same
             // primary and failover would be a no-op (M8.1).
-            preferModelParam: failoverIndex > 0,
+            // A degraded primary moved behind its backup (N07) puts a backup at
+            // index 0, and that backup must also bypass the routing.
+            preferModelParam:
+              failoverIndex > 0 || failoverModel !== effectiveRequestedModel,
           }
-          const modelResult = await getModelForRequest(modelParams)
+          const modelResult = await (deps?.getModel ?? getModelForRequest)({
+            ...modelParams,
+            providerContext: deps?.providerContext,
+          }).catch((error) => {
+            if (retryBudget.lastError === undefined) throw error
+            throw Object.assign(
+              new Error(
+                error instanceof Error ? error.message : String(error),
+                { cause: retryBudget.lastError },
+              ),
+              {
+                name: 'ProviderConfigurationError',
+                code: 'provider_configuration',
+                routeError: error,
+              },
+            )
+          })
+          attemptModel = modelResult.effectiveModel
+          if (
+            retryBudget.attempts === 0 &&
+            !loadedConfig.config.failoverModels?.includes(attemptModel)
+          ) {
+            retryBudget.primaryModel = attemptModel
+          }
+          if (params.signal.aborted) throw params.signal.reason
           aiSDKModel = modelResult.model
           isChatGptOAuth = modelResult.isChatGptOAuth
           compatibility = modelResult.compatibility
@@ -1137,6 +1553,7 @@ export async function* promptAiSdkStream(
             effectiveModel,
             contextWindowTokens,
             pricing,
+            usageFormat,
           } = modelResult
           const safeContextWindowTokens =
             routeContextWindowTokens === undefined
@@ -1145,6 +1562,20 @@ export async function* promptAiSdkStream(
                 ? routeContextWindowTokens
                 : Math.min(routeContextWindowTokens, contextWindowTokens)
           params.onModelContextResolved?.(safeContextWindowTokens)
+          const effectiveMaxOutputTokens =
+            streamParams.maxOutputTokens ?? modelResult.maxOutputTokens
+          requestAdmissionAttempt = reserveProviderAttempt({
+            policy: params.spendingPolicy,
+            authorityId: params.requestAdmissionAuthorityId,
+            store: deps?.requestAdmission,
+            runId: params.runId,
+            effectiveModel,
+            pricing,
+            contextWindowTokens: safeContextWindowTokens,
+            maxOutputTokens: effectiveMaxOutputTokens,
+            cacheWritesPossible: usageFormat === 'anthropic',
+          })
+          admitRequestAttempt(policy, retryBudget, attemptModel)
 
           if (isChatGptOAuth && failoverIndex === 0 && attempt === 0) {
             trackEvent({
@@ -1179,21 +1610,70 @@ export async function* promptAiSdkStream(
           // and retries can resolve a different model whose compatibility
           // layer strips `tools` from the request, and the emergency brake
           // must subtract the overhead of the request actually sent.
-          const requestOverheadTokens = countRequestOverheadTokens({
-            system: streamParams.system,
+          const textToolInstructions =
+            compatibility.supportsTools === false
+              ? buildTextToolInstructions(streamParams.tools)
+              : ''
+          const requestSystem = [streamParams.system, textToolInstructions]
+            .filter(Boolean)
+            .join('\n\n')
+          let requestOverheadTokens = countRequestOverheadTokens({
+            system: requestSystem,
             tools: streamParams.tools,
             includeTools: compatibility.supportsTools !== false,
           })
+          if (compatibility.supportsTools === false) {
+            // Reserve the expansion from rendering historical calls/results as
+            // text before trimming. Counting the complete history is a safe
+            // upper bound even if trimming subsequently removes some calls.
+            const history = convertCbToModelMessages({
+              messages: params.messages,
+              includeCacheControl: false,
+              logger,
+            })
+            requestOverheadTokens += Math.max(
+              0,
+              countTokensJson(textOnlyToolHistory(history)) -
+                countTokensJson(history),
+            )
+          }
 
+          const requestCacheControl = compatibility.stripCacheControl === false
+          const requestMessages = convertCbToModelMessages({
+            ...params,
+            messages: getMessagesForModelContext({
+              messages: params.messages,
+              contextWindowTokens: safeContextWindowTokens,
+              maxTotalTokensOverride: providerMessageLimitOverride,
+              systemTokens: requestOverheadTokens,
+              logger,
+              trackEvent,
+              userId,
+              userInputId,
+              model: effectiveModel,
+              onTrimmed: params.onRequestContextTrimmed,
+            }),
+            // N01: same gate as the non-streaming paths. The route's resolved
+            // compatibility decides; the provider type and the caller's hint do not.
+            includeCacheControl: requestCacheControl,
+          })
           response = streamText({
             ...streamParams,
+            ...(requestCacheControl && compatibility.supportsTools !== false
+              ? {
+                  tools: withToolsCacheBreakpoint(
+                    streamParams.tools,
+                    streamParams.cacheControlToolBreakpoint,
+                  ),
+                }
+              : {}),
+            system: requestSystem || undefined,
             // Provider-config default output ceiling (defaultCapabilities/modelCapabilities
             // context.outputTokens). The caller's explicit maxOutputTokens (agent template)
             // always wins; this only fills the gap when the template leaves it unset.
-            ...(streamParams.maxOutputTokens === undefined &&
-            modelResult.maxOutputTokens !== undefined
-              ? { maxOutputTokens: modelResult.maxOutputTokens }
-              : {}),
+            ...(effectiveMaxOutputTokens === undefined
+              ? {}
+              : { maxOutputTokens: effectiveMaxOutputTokens }),
             // M3-T1: finite default request timeout so a hung provider
             // stream cannot hang the harness; the caller's own signal
             // (streamParams.signal) is merged and keeps taking precedence.
@@ -1203,24 +1683,11 @@ export async function* promptAiSdkStream(
               : {}),
             prompt: undefined,
             model: aiSDKModel,
-            messages: convertCbToModelMessages({
-              ...params,
-              messages: getMessagesForModelContext({
-                messages: params.messages,
-                contextWindowTokens: contextWindowTokens ?? undefined,
-                maxTotalTokensOverride: providerMessageLimitOverride,
-                systemTokens: requestOverheadTokens,
-                logger,
-                trackEvent,
-                userId,
-                userInputId,
-                model: effectiveModel,
-                onTrimmed: params.onRequestContextTrimmed,
-              }),
-              includeCacheControl:
-                isChatGptOAuth && compatibility.stripCacheControl === false,
-            }),
-            ...(isChatGptOAuth && { maxRetries: 0 }),
+            messages:
+              compatibility.supportsTools === false
+                ? textOnlyToolHistory(requestMessages)
+                : requestMessages,
+            maxRetries: 0,
             ...(hasProviderOptions(requestProviderOptions)
               ? { providerOptions: requestProviderOptions }
               : {}),
@@ -1346,11 +1813,18 @@ export async function* promptAiSdkStream(
             params.stopSequences,
           )
 
+          // The provider's AUTHORITATIVE finish reason, preferring the in-stream
+          // `finish` chunk (captured in the loop below) over the late-resolved
+          // `response.finishReason` promise.
+          let streamFinishReason:
+            | Awaited<typeof response.finishReason>
+            | undefined
+
           for await (const chunkValue of response.fullStream) {
+            if (params.signal.aborted) throw params.signal.reason
             if (chunkValue.type !== 'text-delta') {
               const flushed = stopSequenceHandler.flush()
               if (flushed) {
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'text',
@@ -1385,6 +1859,7 @@ export async function* promptAiSdkStream(
                 ToolCallRepairError.isInstance(chunkValue.error) ||
                 TypeValidationError.isInstance(chunkValue.error)
               ) {
+                yield* flushPendingToolCallChunks(false)
                 logger.warn(
                   {
                     chunk: { ...chunkValue, error: undefined },
@@ -1393,7 +1868,6 @@ export async function* promptAiSdkStream(
                   },
                   'Tool call error in AI SDK stream - passing through to agent to retry',
                 )
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'error',
@@ -1405,7 +1879,7 @@ export async function* promptAiSdkStream(
               const chatGptErrorPolicy = classifyChatGptOAuthStreamError({
                 isChatGptOAuth,
                 skipChatGptOAuth: params.skipChatGptOAuth,
-                hasYieldedContent,
+                hasYieldedContent: anyContentYielded,
                 error: chunkValue.error,
               })
 
@@ -1431,10 +1905,14 @@ export async function* promptAiSdkStream(
                 // configured openbuff.json providers instead.
                 // Prevent parent retry while delegating to child stream
                 anyContentYielded = true
-                const fallbackResult = yield* promptAiSdkStream({
-                  ...params,
-                  skipChatGptOAuth: true,
-                })
+                const fallbackResult = yield* promptAiSdkStream(
+                  {
+                    ...params,
+                    retryBudget,
+                    skipChatGptOAuth: true,
+                  },
+                  deps,
+                )
                 return fallbackResult
               }
 
@@ -1455,8 +1933,15 @@ export async function* promptAiSdkStream(
                 })
 
                 // Try refreshing the token and retrying once before failing/falling back
-                if (!params.chatGptOAuthRetried) {
-                  const refreshed = await refreshChatGptOAuthToken()
+                retryBudget.lastError = chunkValue.error
+                if (
+                  !params.chatGptOAuthRetried &&
+                  canAdmitRequestAttempt(policy, retryBudget, attemptModel)
+                ) {
+                  const refreshed = await (deps
+                    ? (deps.providerContext.credentials.refreshChatGptOAuthToken?.() ??
+                      Promise.resolve(null))
+                    : refreshChatGptOAuthToken())
                   if (refreshed) {
                     logger.info(
                       { model: requestedModel },
@@ -1464,10 +1949,14 @@ export async function* promptAiSdkStream(
                     )
                     // Prevent parent retry while delegating to child stream
                     anyContentYielded = true
-                    const retryResult = yield* promptAiSdkStream({
-                      ...params,
-                      chatGptOAuthRetried: true,
-                    })
+                    const retryResult = yield* promptAiSdkStream(
+                      {
+                        ...params,
+                        retryBudget,
+                        chatGptOAuthRetried: true,
+                      },
+                      deps,
+                    )
                     return retryResult
                   }
                   logger.warn(
@@ -1480,17 +1969,23 @@ export async function* promptAiSdkStream(
                 // the configured openbuff.json providers instead.
                 // Prevent parent retry while delegating to child stream
                 anyContentYielded = true
-                const fallbackResult = yield* promptAiSdkStream({
-                  ...params,
-                  skipChatGptOAuth: true,
-                })
+                const fallbackResult = yield* promptAiSdkStream(
+                  {
+                    ...params,
+                    retryBudget,
+                    skipChatGptOAuth: true,
+                  },
+                  deps,
+                )
                 return fallbackResult
               }
 
               logger.error(
                 {
                   chunk: { ...chunkValue, error: undefined },
-                  error: getErrorObject(chunkValue.error),
+                  error: getErrorObject(chunkValue.error, {
+                    includeRequestBody: false,
+                  }),
                   model: params.model,
                 },
                 'Error in AI SDK stream',
@@ -1510,19 +2005,24 @@ export async function* promptAiSdkStream(
                       | undefined
                   )?.reasoning?.exclude,
               )
-              if (!reasoningExcluded) {
-                hasYieldedContent = true
+              if (
+                !reasoningExcluded ||
+                compatibility.reasoningReplay === 'required'
+              ) {
                 anyContentYielded = true
                 yield {
                   type: 'reasoning',
                   text: chunkValue.text,
+                  ...(compatibility.reasoningReplay === 'required' && {
+                    replayRequired: true,
+                  }),
+                  ...(reasoningExcluded && { suppressDisplay: true }),
                 }
               }
             }
             if (chunkValue.type === 'text-delta') {
               if (!params.stopSequences) {
                 if (chunkValue.text) {
-                  hasYieldedContent = true
                   anyContentYielded = true
                   yield {
                     type: 'text',
@@ -1537,7 +2037,6 @@ export async function* promptAiSdkStream(
                 chunkValue.text,
               )
               if (stopSequenceResult.text) {
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'text',
@@ -1550,17 +2049,31 @@ export async function* promptAiSdkStream(
               }
             }
             if (chunkValue.type === 'tool-call') {
-              hasYieldedContent = true
-              anyContentYielded = true
+              // The model produced output, but nothing has reached the caller
+              // yet: the chunk is only buffered until finishReason resolves.
+              // `anyContentYielded` is therefore set by
+              // flushPendingToolCallChunks, at the actual yield — otherwise a
+              // stream that emits only tool calls and then throws could never
+              // be retried or failed over.
               const { providerMetadata, ...toolCall } = chunkValue
-              yield {
+              pendingToolCallChunks.push({
                 ...toolCall,
                 ...(providerMetadata
                   ? { providerOptions: providerMetadata }
                   : {}),
-              }
+              })
+            }
+            if (chunkValue.type === 'finish') {
+              // Capture the provider's finish reason as soon as the stream
+              // reports it. Some providers only report it on the in-stream
+              // `finish` chunk (the late-resolved `response.finishReason`
+              // promise can disagree or resolve to 'unknown'), and a missed
+              // 'length' would leave the buffered tool calls unflagged — the
+              // exact silent max-token cut this signal exists to remove.
+              streamFinishReason = chunkValue.finishReason
             }
           }
+          if (params.signal.aborted) throw params.signal.reason
           const flushed = stopSequenceHandler.flush()
           if (flushed) {
             anyContentYielded = true
@@ -1571,10 +2084,62 @@ export async function* promptAiSdkStream(
             }
           }
 
-          const finishReason = await response.finishReason
+          const finishReason =
+            streamFinishReason ?? (await response.finishReason)
+          // Band diagnostic (config-side envelope, not a producer comparison):
+          // the marker below is set solely from the provider's 'length' report.
+          // When pending payloads exceed the configured transport band WITHOUT
+          // that report, the configured band looks stale for this model —
+          // surface it for operators instead of leaving the number unobserved.
+          // Runs once per stream and only when tool calls are pending; the
+          // check must precede the flush, which drains the pending buffer.
+          if (finishReason !== 'length' && pendingToolCallChunks.length > 0) {
+            const configured = resolveConfiguredProviderModelMetadata({
+              model: attemptModel,
+              loadedConfig,
+            })
+            if (configured) {
+              // Pass providerId so a per-model override keyed by the
+              // provider-mapped or unprefixed id is found through the same
+              // capability-key candidates resolveModelCapabilities uses.
+              const band = getMaxOutputBytesForModel(
+                configured.provider,
+                attemptModel,
+                configured.providerId,
+              )
+              // Serialized UTF-8 byte count, matching the byte-band semantics
+              // of MAX_TRANSPORT_SAFE_PAYLOAD_BYTES (string .length counts
+              // UTF-16 code units and undercounts non-ASCII payloads).
+              const serializedBytes = pendingToolCallChunks.reduce(
+                (total, pending) => {
+                  try {
+                    const serialized = JSON.stringify(pending.input)
+                    return serialized === undefined
+                      ? total
+                      : total + Buffer.byteLength(serialized, 'utf8')
+                  } catch {
+                    return total
+                  }
+                },
+                0,
+              )
+              if (serializedBytes > band) {
+                logger.warn(
+                  { model: attemptModel, band, serializedBytes },
+                  'Tool-call payloads exceeded the configured maxOutputBytes transport band without a provider length report; the configured band for this model looks stale.',
+                )
+              }
+            }
+          }
+          // Only 'length' marks the payloads as cut; every other value (stop,
+          // tool-calls, error, content-filter, unknown) leaves them unflagged.
+          // Flushing happens BEFORE the content-policy check so a
+          // content-filter throw still leaves the tool calls published, exactly
+          // as when they were yielded inline.
+          yield* flushPendingToolCallChunks(finishReason === 'length')
           const contentPolicyError = getProviderContentPolicyFinishError({
             finishReason,
-            model: failoverModel,
+            model: attemptModel,
           })
           if (contentPolicyError) throw contentPolicyError
 
@@ -1604,85 +2169,161 @@ export async function* promptAiSdkStream(
             }
           }
 
-          if (params.onCacheDebugUsageReceived) {
-            const usageResult = await awaitOptionalPostStreamMetadata({
-              promise: response.usage,
-              label: 'provider usage metadata',
-              logger,
-            })
-            if (usageResult) {
-              emitCacheDebugUsage({
-                callback: params.onCacheDebugUsageReceived,
-                usage: usageResult,
-              })
-            }
-          }
-
-          // Skip provider-cost tracking for ChatGPT OAuth because the request runs
-          // under the user's provider-owned ChatGPT/Codex subscription.
-          if (!isChatGptOAuth && !compatibility.stripProviderMetadata) {
-            const providerMetadataResult =
-              await awaitOptionalPostStreamMetadata({
+          const usageResult = await awaitOptionalPostStreamMetadata({
+            promise: response.usage,
+            label: 'provider usage metadata',
+            logger,
+          })
+          const metadata = !isChatGptOAuth
+            ? await awaitOptionalPostStreamMetadata({
                 promise: response.providerMetadata,
-                label: 'provider usage metadata',
+                label: 'provider cost metadata',
                 logger,
               })
-            const providerMetadata = providerMetadataResult ?? {}
-
-            let costOverrideDollars: number | undefined
-            if (providerMetadata.codebuff) {
-              if (providerMetadata.codebuff.usage) {
-                const openrouterUsage = providerMetadata.codebuff
-                  .usage as OpenRouterUsageAccounting
-
-                costOverrideDollars =
-                  (openrouterUsage.cost ?? 0) +
-                  (openrouterUsage.costDetails?.upstreamInferenceCost ?? 0)
-              }
-            }
-
-            // Fallback (M8.2): when the provider does not return OpenRouter-style
-            // cost metadata, compute cost from token usage × the configured
-            // `modelCapabilities.pricing` capability so BYOK providers get cost
-            // tracking too.
-            if (costOverrideDollars === undefined && pricing) {
-              const usageResult = await awaitOptionalPostStreamMetadata({
-                promise: response.usage,
-                label: 'provider usage metadata for cost',
-                logger,
-              })
-              if (usageResult) {
-                const fallbackCents = computeCostCentsFromUsage({
-                  usage: usageResult,
-                  pricing,
-                })
-                if (fallbackCents !== undefined && params.onCostCalculated) {
-                  await params.onCostCalculated(fallbackCents)
-                }
-              }
-            } else if (params.onCostCalculated && costOverrideDollars) {
-              // Report provider cost in cents for local/BYOK telemetry only.
-              await params.onCostCalculated(
-                calculateProviderCostCents({
-                  costDollars: costOverrideDollars,
-                }),
-              )
-            }
+            : undefined
+          const normalizedUsage = normalizeProviderUsage(
+            usageResult,
+            metadata,
+            usageFormat,
+          )
+          if (usageResult)
+            emitCacheDebugUsage({
+              callback: params.onCacheDebugUsageReceived,
+              usage: normalizedUsage,
+            })
+          const reportedCost = calculateProviderCostCents(
+            providerCostDollars(metadata),
+          )
+          const requestCostCents = isChatGptOAuth
+            ? undefined
+            : (reportedCost ??
+              (usageResult
+                ? computeCostCentsFromUsage({ usage: normalizedUsage, pricing })
+                : undefined))
+          const costStatus = isChatGptOAuth
+            ? ('subscription' as const)
+            : reportedCost !== undefined
+              ? ('observed' as const)
+              : requestCostCents !== undefined
+                ? ('estimated' as const)
+                : ('unknown' as const)
+          reconcileProviderAttempt({
+            handle: requestAdmissionAttempt,
+            store: deps?.requestAdmission,
+            costCents: requestCostCents,
+            provenance:
+              reportedCost !== undefined
+                ? 'provider-reported'
+                : requestCostCents !== undefined
+                  ? 'usage-plus-configured-pricing'
+                  : undefined,
+            logger,
+          })
+          // Per-request NDJSON telemetry uses observed counts only. Missing
+          // metadata remains unknown; an observer cannot trigger model retries.
+          const tokenCount = (value: unknown) =>
+            typeof value === 'number' &&
+            Number.isSafeInteger(value) &&
+            value >= 0
+              ? value
+              : undefined
+          const inputTokens = tokenCount(normalizedUsage.inputTokens)
+          const outputTokens = tokenCount(normalizedUsage.outputTokens)
+          try {
+            params.sendAction({
+              action: {
+                type: 'response-chunk',
+                userInputId,
+                chunk: {
+                  type: 'usage',
+                  runId: params.runId,
+                  agentId: params.agentId,
+                  model: attemptModel,
+                  inputTokens,
+                  outputTokens,
+                  cacheWriteInputTokens: tokenCount(
+                    normalizedUsage.cacheWriteInputTokens,
+                  ),
+                  cachedInputTokens: tokenCount(
+                    normalizedUsage.cachedInputTokens,
+                  ),
+                  totalTokens: tokenCount(normalizedUsage.totalTokens),
+                  complete:
+                    normalizedUsage.accountingComplete &&
+                    inputTokens !== undefined &&
+                    outputTokens !== undefined,
+                  costCents: requestCostCents,
+                  costStatus,
+                  ...(costStatus === 'unknown'
+                    ? {
+                        costReason:
+                          !usageResult ||
+                          inputTokens === undefined ||
+                          outputTokens === undefined
+                            ? 'Provider usage is incomplete; request cost is unknown.'
+                            : !pricing
+                              ? 'No provider cost or configured USD token pricing is available.'
+                              : 'Configured pricing/usage is incomplete, invalid, or not USD; request cost is unknown.',
+                      }
+                    : {}),
+                },
+              },
+            })
+          } catch (error) {
+            logger.debug(
+              { error },
+              'Provider usage observer failed (non-fatal)',
+            )
           }
+
+          // Report a zero only when it is explicitly attested, not because metadata was absent.
+          if (requestCostCents !== undefined && params.onCostCalculated)
+            await params.onCostCalculated(requestCostCents)
 
           if (attempt > 0 || failoverIndex > 0) {
-            emitProviderStatus({ status: 'recovered', model: failoverModel })
+            // Deliberately NO `model` on recovery: `failoverModel` names the
+            // outer loop's current candidate, which can be stale after the
+            // inner fallback paths (prompt-too-long retry, OAuth fallback)
+            // complete on a different model, and the CLI printed the wrong id
+            // as a result. 'failover' events carry the authoritative
+            // from→to pair; recovery only needs to say the stream is back.
+            emitProviderStatus({ status: 'recovered' })
           }
+          // Stream-only finish marker (the `finish` StreamChunk variant in
+          // common/src/types/contracts/llm.ts): publishes the provider's
+          // authoritative finish reason so the runtime's stream parser can
+          // tell a max-token cut from an oversized payload in its tool-call
+          // error reports. Yielded ONLY here, at successful completion —
+          // nothing after this point can re-enter the retry/failover paths,
+          // so the marker can never block a retry or failover
+          // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+          yield { type: 'finish', finishReason }
           return promptSuccess(messageId)
         } catch (caughtError) {
           const error =
             normalizeProviderContentPolicyError(caughtError) ?? caughtError
+          markProviderAttemptIncomplete({
+            handle: requestAdmissionAttempt,
+            store: deps?.requestAdmission,
+            reason: params.signal.aborted
+              ? 'cancelled'
+              : error instanceof Error && /timed?\s*out/i.test(error.message)
+                ? 'timeout'
+                : 'provider-error',
+            logger,
+          })
           lastError = error
+          retryBudget.lastError = error
 
           // Don't retry user-cancelled requests
           if (params.signal.aborted) {
-            throw error
+            throw params.signal.reason
           }
+          if (
+            isProviderAbortError(error) ||
+            normalizeProviderContentPolicyError(error)
+          )
+            throw error
 
           if (anyContentYielded) {
             // Content was already yielded to the caller — cannot safely retry
@@ -1697,7 +2338,7 @@ export async function* promptAiSdkStream(
           if (
             providerContextLimit !== undefined &&
             !promptTooLongRetried &&
-            attempt < MAX_RETRIES_PER_MESSAGE
+            canAdmitRequestAttempt(policy, retryBudget, attemptModel)
           ) {
             promptTooLongRetried = true
             // Leave room for system/tool overhead and provider-side tokenization
@@ -1707,7 +2348,7 @@ export async function* promptAiSdkStream(
               getModelContextMessageLimit(providerContextLimit)
             logger.warn(
               {
-                model: failoverModel,
+                model: attemptModel,
                 providerContextLimit,
                 messageLimit: providerMessageLimitOverride,
               },
@@ -1715,81 +2356,80 @@ export async function* promptAiSdkStream(
             )
             emitProviderStatus({
               status: 'retrying',
-              model: failoverModel,
+              model: attemptModel,
               attempt: attempt + 2,
-              maxAttempts: MAX_RETRIES_PER_MESSAGE + 1,
+              maxAttempts: getRouteAttemptLimit(
+                policy,
+                retryBudget,
+                attemptModel,
+              ),
             })
             continue
           }
 
-          // Retry on transient network errors OR retryable HTTP status codes
-          // (408/429/500/502/503/504). The AI SDK surfaces provider 5xx responses
-          // as APICallError with a `statusCode`/`status` property; without this
-          // check, a provider 500 would be thrown immediately rather than retried.
           const statusCode = getErrorStatusCode(error)
-          const isRetryableStatus = isRetryableStatusCode(statusCode)
-          // The AI SDK rejects `response.finishReason` with NoOutputGeneratedError
-          // ("No output generated. Check the stream for errors.") when the provider
-          // opened a stream, sent zero chunks (no text, no tool call, no error
-          // chunk), and closed cleanly. That error carries no HTTP status and is
-          // not a network error, so without this case it would be thrown
-          // immediately. Treat it as retryable — the `anyContentYielded` check
-          // above already throws once output was streamed, so a retry here can
-          // never duplicate content.
-          const isEmptyStreamNoOutput =
-            NoOutputGeneratedError.isInstance(error) && !anyContentYielded
+          const decision = classifyRetryableError(error, policy)
           if (
-            !isTransientNetworkError(error) &&
-            !isRetryableStatus &&
-            !isEmptyStreamNoOutput
-          ) {
+            !decision.retryable ||
+            !canAdmitRequestAttempt(policy, retryBudget, attemptModel)
+          )
+            throw error
+          const delayMs = getRetryDelayMs(
+            error,
+            (retryBudget.routeAttempts.get(attemptModel) ?? 1) - 1,
+            policy,
+          )
+          if (retryBudget.waitMs + delayMs > retryBudget.maxWaitMs) {
+            retryBudget.exhausted = true
             throw error
           }
-
-          if (attempt >= MAX_RETRIES_PER_MESSAGE) {
-            logger.error(
-              {
-                error: getErrorObject(error),
-                attempts: attempt + 1,
-                statusCode,
-              },
-              'Stream failed after all retry attempts',
-            )
-            throw error
-          }
-
-          const delayMs = computeBackoffDelayMs({
-            attempt,
-            baseDelayMs: RETRY_BACKOFF_BASE_DELAY_MS,
-          })
+          retryBudget.waitMs += delayMs
           logger.warn(
             {
-              error: getErrorObject(error),
+              error: getErrorObject(error, { includeRequestBody: false }),
               attempt: attempt + 1,
-              maxRetries: MAX_RETRIES_PER_MESSAGE,
+              maxRetries:
+                getRouteAttemptLimit(policy, retryBudget, attemptModel) - 1,
               delayMs,
               statusCode,
             },
-            isRetryableStatus
+            statusCode !== undefined
               ? `Retryable HTTP ${statusCode} during stream, retrying with delay`
               : 'Transient network error during stream, retrying with delay',
           )
-          emitProviderStatus({
-            status: 'retrying',
-            model: failoverModel,
+          const retryStatus = {
+            status: 'retrying' as const,
+            model: attemptModel,
             attempt: attempt + 2,
-            maxAttempts: MAX_RETRIES_PER_MESSAGE + 1,
+            maxAttempts: getRouteAttemptLimit(
+              policy,
+              retryBudget,
+              attemptModel,
+            ),
             delayMs,
             ...(statusCode !== undefined ? { statusCode } : {}),
+          }
+          emitProviderStatus({ ...retryStatus, remainingDelayMs: delayMs })
+          await observeRetryWait({
+            delayMs,
+            signal: params.signal,
+            sleep: (ms, signal) =>
+              params.retrySleep?.(ms, signal) ??
+              waitForBackoffDelay({ delayMs: ms, signal }),
+            onRemaining: (remainingDelayMs) =>
+              emitProviderStatus({ ...retryStatus, remainingDelayMs }),
           })
-          await waitForBackoffDelay({ delayMs, signal: params.signal })
+          if (params.signal.aborted) throw params.signal.reason
         }
       }
     } catch (error) {
       lastError = error
 
       const canFailover =
+        !params.signal.aborted &&
         !anyContentYielded &&
+        !retryBudget.exhausted &&
+        retryBudget.attempts < retryBudget.maxAttempts &&
         failoverIndex < modelsToTry.length - 1 &&
         isFailoverEligibleError(error)
 
@@ -1802,7 +2442,7 @@ export async function* promptAiSdkStream(
         event: AnalyticsEvent.PROVIDER_FAILOVER,
         userId: userId ?? '',
         properties: {
-          fromModel: failoverModel,
+          fromModel: attemptModel,
           toModel: modelsToTry[failoverIndex + 1],
           statusCode,
           userInputId,
@@ -1811,18 +2451,39 @@ export async function* promptAiSdkStream(
       })
       logger.warn(
         {
-          fromModel: failoverModel,
+          fromModel: attemptModel,
           toModel: modelsToTry[failoverIndex + 1],
           statusCode,
           failoverIndex,
         },
         'Provider failover: primary model failed, trying next configured model',
       )
+      const failedRoute = resolveConfiguredProviderModelMetadata({
+        model: attemptModel,
+        loadedConfig,
+      })
+      const apiKeyEnv =
+        failedRoute?.provider.type === 'openai-compatible' ||
+        failedRoute?.provider.type === 'anthropic-compatible'
+          ? failedRoute.provider.apiKeyEnv
+          : undefined
+      const degraded =
+        statusCode !== undefined && ROUTE_DEGRADING_STATUS_CODES.has(statusCode)
+      if (degraded) {
+        routeHealth.markDegraded({
+          model: failoverModel,
+          statusCode,
+          replacementModel: modelsToTry[failoverIndex + 1],
+        })
+      }
       emitProviderStatus({
         status: 'failover',
-        model: failoverModel,
+        model: attemptModel,
         nextModel: modelsToTry[failoverIndex + 1],
         ...(statusCode !== undefined ? { statusCode } : {}),
+        ...(failedRoute ? { providerId: failedRoute.providerId } : {}),
+        ...(apiKeyEnv ? { apiKeyEnv } : {}),
+        ...(degraded ? { degraded: true } : {}),
       })
     }
   }
@@ -1833,7 +2494,8 @@ export async function* promptAiSdkStream(
 }
 
 export async function promptAiSdk(
-  params: ParamsOf<PromptAiSdkFn>,
+  params: ParamsOf<PromptAiSdkFn> & RetryExecutionOptions,
+  deps?: LlmHostDeps,
 ): ReturnType<PromptAiSdkFn> {
   const { logger } = params
 
@@ -1863,7 +2525,12 @@ export async function promptAiSdk(
     effectiveModel: effectiveModelSdk,
     contextWindowTokens,
     pricing,
-  } = await getModelForRequest(modelParams)
+    usageFormat,
+    maxOutputTokens: configuredMaxOutputTokens,
+  } = await (deps?.getModel ?? getModelForRequest)({
+    ...modelParams,
+    providerContext: deps?.providerContext,
+  })
 
   const providerOptionsWithReasoning = withConfiguredReasoningEffort(
     (params as { providerOptions?: Record<string, JSONObject> })
@@ -1909,15 +2576,33 @@ export async function promptAiSdk(
   })
 
   let response: Awaited<ReturnType<typeof generateText>>
+  let completedAdmission: RequestAdmissionHandle | undefined
+  const effectiveMaxOutputTokens =
+    params.maxOutputTokens ?? configuredMaxOutputTokens
   try {
     // M3-T4: non-streaming paths retry transient failures exactly like the
     // streaming path — same shared policy object, same backoff helpers.
     response = await runWithRetryPolicy({
       signal: params.signal,
+      policy: params.retryPolicy,
+      sleep: params.retrySleep,
       operation: async () => {
+        let attemptAdmission: RequestAdmissionHandle | undefined
         try {
-          return await generateText({
+          attemptAdmission = reserveProviderAttempt({
+            policy: params.spendingPolicy,
+            authorityId: params.requestAdmissionAuthorityId,
+            store: deps?.requestAdmission,
+            runId: params.runId,
+            effectiveModel: effectiveModelSdk,
+            pricing,
+            contextWindowTokens,
+            maxOutputTokens: effectiveMaxOutputTokens,
+            cacheWritesPossible: usageFormat === 'anthropic',
+          })
+          const generated = await generateText({
             ...params,
+            maxRetries: 0,
             // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
             // the caller's params.signal is merged and keeps precedence.
             abortSignal: withDefaultRequestTimeout(params.signal),
@@ -1927,11 +2612,22 @@ export async function promptAiSdk(
             prompt: undefined,
             model: aiSDKModel,
             messages: requestMessages,
+            ...(effectiveMaxOutputTokens === undefined
+              ? {}
+              : { maxOutputTokens: effectiveMaxOutputTokens }),
             ...(hasProviderOptions(requestProviderOptions)
               ? { providerOptions: requestProviderOptions }
               : {}),
           })
+          completedAdmission = attemptAdmission
+          return generated
         } catch (error) {
+          markProviderAttemptIncomplete({
+            handle: attemptAdmission,
+            store: deps?.requestAdmission,
+            reason: params.signal.aborted ? 'cancelled' : 'provider-error',
+            logger,
+          })
           // Normalize before the retry classifier sees the error so a
           // content-policy refusal is never retried.
           throw normalizeProviderContentPolicyError(error) ?? error
@@ -1951,56 +2647,57 @@ export async function promptAiSdk(
     finishReason: response.finishReason,
     model: effectiveModelSdk,
   })
-  if (contentPolicyError) throw contentPolicyError
+  if (contentPolicyError) {
+    markProviderAttemptIncomplete({
+      handle: completedAdmission,
+      store: deps?.requestAdmission,
+      reason: 'provider-error',
+      logger,
+    })
+    throw contentPolicyError
+  }
   emitCacheDebugProviderRequest({
     callback: params.onCacheDebugProviderRequestBuilt,
     provider: getModelProvider(aiSDKModel),
     rawBody: response.request?.body,
   })
+  const normalizedUsage = normalizeProviderUsage(
+    response.usage,
+    response.providerMetadata,
+    usageFormat,
+  )
   emitCacheDebugUsage({
     callback: params.onCacheDebugUsageReceived,
-    usage: response.usage,
+    usage: normalizedUsage,
   })
   const content = response.text
 
-  const providerMetadata = response.providerMetadata ?? {}
-  let costOverrideDollars: number | undefined
-  if (providerMetadata.codebuff) {
-    if (providerMetadata.codebuff.usage) {
-      const openrouterUsage = providerMetadata.codebuff
-        .usage as OpenRouterUsageAccounting
-
-      costOverrideDollars =
-        (openrouterUsage.cost ?? 0) +
-        (openrouterUsage.costDetails?.upstreamInferenceCost ?? 0)
-    }
-  }
-
-  // Report provider cost in cents for local/BYOK telemetry only.
-  // Fallback (M8.2): when the provider does not return OpenRouter-style
-  // cost metadata, compute cost from token usage × the configured
-  // `modelCapabilities.pricing` capability so BYOK providers get cost
-  // tracking too.
-  if (costOverrideDollars === undefined && pricing) {
-    const fallbackCents = computeCostCentsFromUsage({
-      usage: response.usage,
-      pricing,
-    })
-    if (fallbackCents !== undefined && params.onCostCalculated) {
-      await params.onCostCalculated(fallbackCents)
-    }
-  } else if (params.onCostCalculated && costOverrideDollars) {
-    // Report provider cost in cents for local/BYOK telemetry only.
-    await params.onCostCalculated(
-      calculateProviderCostCents({ costDollars: costOverrideDollars }),
-    )
-  }
+  const reported = calculateProviderCostCents(
+    providerCostDollars(response.providerMetadata),
+  )
+  const cents =
+    reported ?? computeCostCentsFromUsage({ usage: normalizedUsage, pricing })
+  reconcileProviderAttempt({
+    handle: completedAdmission,
+    store: deps?.requestAdmission,
+    costCents: cents,
+    provenance:
+      reported !== undefined
+        ? 'provider-reported'
+        : cents !== undefined
+          ? 'usage-plus-configured-pricing'
+          : undefined,
+    logger,
+  })
+  if (cents !== undefined && params.onCostCalculated)
+    await params.onCostCalculated(cents)
 
   return promptSuccess(content)
 }
 
 export async function promptAiSdkStructured<T>(
-  params: PromptAiSdkStructuredInput<T>,
+  params: PromptAiSdkStructuredInput<T> & RetryExecutionOptions,
+  deps?: LlmHostDeps,
 ): PromptAiSdkStructuredOutput<T> {
   const { logger } = params
 
@@ -2029,7 +2726,12 @@ export async function promptAiSdkStructured<T>(
     effectiveModel: effectiveModelStructured,
     contextWindowTokens,
     pricing,
-  } = await getModelForRequest(modelParams)
+    usageFormat,
+    maxOutputTokens: configuredMaxOutputTokens,
+  } = await (deps?.getModel ?? getModelForRequest)({
+    ...modelParams,
+    providerContext: deps?.providerContext,
+  })
 
   const providerOptionsWithReasoning = withConfiguredReasoningEffort(
     (params as { providerOptions?: Record<string, JSONObject> })
@@ -2069,15 +2771,32 @@ export async function promptAiSdkStructured<T>(
   })
 
   let response: GenerateObjectResult<T>
+  let completedAdmission: RequestAdmissionHandle | undefined
+  const effectiveMaxOutputTokens = params.maxTokens ?? configuredMaxOutputTokens
   try {
     // M3-T4: non-streaming paths retry transient failures exactly like the
     // streaming path — same shared policy object, same backoff helpers.
     response = await runWithRetryPolicy({
       signal: params.signal,
+      policy: params.retryPolicy,
+      sleep: params.retrySleep,
       operation: async () => {
+        let attemptAdmission: RequestAdmissionHandle | undefined
         try {
-          return await generateObject<z.ZodType<T>, 'object'>({
+          attemptAdmission = reserveProviderAttempt({
+            policy: params.spendingPolicy,
+            authorityId: params.requestAdmissionAuthorityId,
+            store: deps?.requestAdmission,
+            runId: params.runId,
+            effectiveModel: effectiveModelStructured,
+            pricing,
+            contextWindowTokens,
+            maxOutputTokens: effectiveMaxOutputTokens,
+            cacheWritesPossible: usageFormat === 'anthropic',
+          })
+          const generated = await generateObject<z.ZodType<T>, 'object'>({
             ...params,
+            maxRetries: 0,
             // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
             // the caller's params.signal is merged and keeps precedence.
             abortSignal: withDefaultRequestTimeout(params.signal),
@@ -2088,11 +2807,22 @@ export async function promptAiSdkStructured<T>(
             model: aiSDKModel,
             output: 'object',
             messages: requestMessages,
+            ...(effectiveMaxOutputTokens === undefined
+              ? {}
+              : { maxOutputTokens: effectiveMaxOutputTokens }),
             ...(hasProviderOptions(requestProviderOptions)
               ? { providerOptions: requestProviderOptions }
               : {}),
           })
+          completedAdmission = attemptAdmission
+          return generated
         } catch (error) {
+          markProviderAttemptIncomplete({
+            handle: attemptAdmission,
+            store: deps?.requestAdmission,
+            reason: params.signal.aborted ? 'cancelled' : 'provider-error',
+            logger,
+          })
           // Normalize before the retry classifier sees the error so a
           // content-policy refusal is never retried.
           throw normalizeProviderContentPolicyError(error) ?? error
@@ -2113,51 +2843,52 @@ export async function promptAiSdkStructured<T>(
     model: effectiveModelStructured,
     responseLabel: 'structured response',
   })
-  if (contentPolicyError) throw contentPolicyError
+  if (contentPolicyError) {
+    markProviderAttemptIncomplete({
+      handle: completedAdmission,
+      store: deps?.requestAdmission,
+      reason: 'provider-error',
+      logger,
+    })
+    throw contentPolicyError
+  }
 
   emitCacheDebugProviderRequest({
     callback: params.onCacheDebugProviderRequestBuilt,
     provider: getModelProvider(aiSDKModel),
     rawBody: response.request?.body,
   })
+  const normalizedUsage = normalizeProviderUsage(
+    response.usage,
+    response.providerMetadata,
+    usageFormat,
+  )
   emitCacheDebugUsage({
     callback: params.onCacheDebugUsageReceived,
-    usage: response.usage,
+    usage: normalizedUsage,
   })
 
   const content = response.object
 
-  const providerMetadata = response.providerMetadata ?? {}
-  let costOverrideDollars: number | undefined
-  if (providerMetadata.codebuff) {
-    if (providerMetadata.codebuff.usage) {
-      const openrouterUsage = providerMetadata.codebuff
-        .usage as OpenRouterUsageAccounting
-
-      costOverrideDollars =
-        (openrouterUsage.cost ?? 0) +
-        (openrouterUsage.costDetails?.upstreamInferenceCost ?? 0)
-    }
-  }
-
-  // Fallback (M8.2): when the provider does not return OpenRouter-style
-  // cost metadata, compute cost from token usage × the configured
-  // `modelCapabilities.pricing` capability so BYOK providers get cost
-  // tracking too.
-  if (costOverrideDollars === undefined && pricing) {
-    const fallbackCents = computeCostCentsFromUsage({
-      usage: response.usage,
-      pricing,
-    })
-    if (fallbackCents !== undefined && params.onCostCalculated) {
-      await params.onCostCalculated(fallbackCents)
-    }
-  } else if (params.onCostCalculated && costOverrideDollars) {
-    // Report provider cost in cents for local/BYOK telemetry only.
-    await params.onCostCalculated(
-      calculateProviderCostCents({ costDollars: costOverrideDollars }),
-    )
-  }
+  const reported = calculateProviderCostCents(
+    providerCostDollars(response.providerMetadata),
+  )
+  const cents =
+    reported ?? computeCostCentsFromUsage({ usage: normalizedUsage, pricing })
+  reconcileProviderAttempt({
+    handle: completedAdmission,
+    store: deps?.requestAdmission,
+    costCents: cents,
+    provenance:
+      reported !== undefined
+        ? 'provider-reported'
+        : cents !== undefined
+          ? 'usage-plus-configured-pricing'
+          : undefined,
+    logger,
+  })
+  if (cents !== undefined && params.onCostCalculated)
+    await params.onCostCalculated(cents)
 
   return promptSuccess(content)
 }

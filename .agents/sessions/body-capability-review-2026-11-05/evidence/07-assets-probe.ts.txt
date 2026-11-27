@@ -1,0 +1,60 @@
+import { createHash } from 'node:crypto'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { getLanguageConfig, setWasmDir } from '/home/ben/Code/CLI/openbuff/packages/code-map/src/languages.ts'
+import { PINNED_GRAMMAR_ASSETS } from '/home/ben/Code/CLI/openbuff/packages/code-map/src/grammar-wasm-repair.ts'
+import { parseFileStructureDetailed } from '/home/ben/Code/CLI/openbuff/packages/code-map/src/structure.ts'
+
+const repo = '/home/ben/Code/CLI/openbuff'
+const evidence = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixture = mkdtempSync(path.join(evidence, '07-assets-'))
+const grammarDir = path.join(fixture, 'grammars')
+mkdirSync(grammarDir)
+// Explicitly prevent binary-only download repair in this offline component probe.
+process.env.CODEBUFF_IS_BINARY = 'false'
+const cases = [
+  { wasm: 'tree-sitter-php.wasm', path: 'demo.php', source: '<?php function phpDemo() {}' },
+  { wasm: 'tree-sitter-swift.wasm', path: 'App.swift', source: 'func swiftDemo() {}' },
+  { wasm: 'tree-sitter-kotlin.wasm', path: 'Main.kt', source: 'fun kotlinDemo() {}' },
+  { wasm: 'tree-sitter-gdscript.wasm', path: 'Player.gd', source: 'extends Node\nclass_name Player\nvar speed: float = 3.0\nfunc move() -> void:\n    pass\nsignal health_changed(amount: int)\n' },
+]
+const localGrammarEvidence: any[] = []
+for (const entry of cases) {
+  const source = path.join(repo, 'cli/bin', entry.wasm)
+  const bytes = readFileSync(source)
+  const hash = createHash('sha256').update(bytes).digest('hex')
+  if (hash !== PINNED_GRAMMAR_ASSETS[entry.wasm].sha256) throw new Error(`Existing ${entry.wasm} differs from current source pin; refusing probe`)
+  copyFileSync(source, path.join(grammarDir, entry.wasm))
+}
+setWasmDir(grammarDir)
+for (const entry of cases) {
+  const cfg = await getLanguageConfig(entry.path)
+  localGrammarEvidence.push({ path: entry.path, wasm: entry.wasm, parser: !!cfg?.parser, query: !!cfg?.query, structure: await parseFileStructureDetailed(entry.source, entry.path) })
+}
+
+const staged = path.join(fixture, 'staged-package')
+const stagedDist = path.join(staged, 'dist')
+mkdirSync(path.join(stagedDist, 'wasm'), { recursive: true })
+mkdirSync(path.join(staged, 'node_modules'), { recursive: true })
+symlinkSync(path.join(repo, 'node_modules/web-tree-sitter'), path.join(staged, 'node_modules/web-tree-sitter'), 'dir')
+const entrypoint = path.join(fixture, 'entry.ts')
+writeFileSync(entrypoint, `export { getLanguageConfig, setWasmDir } from '${repo}/packages/code-map/src/languages.ts';\nexport { parseFileStructureDetailed } from '${repo}/packages/code-map/src/structure.ts';\n`)
+for (const format of ['cjs', 'esm'] as const) {
+  const result = await Bun.build({ entrypoints: [entrypoint], target: 'node', format, outdir: stagedDist, naming: format === 'cjs' ? 'index.cjs' : 'index.mjs', external: ['web-tree-sitter'], env: 'disable', loader: { '.scm': 'text' }, ...(format === 'cjs' ? { define: { 'import.meta.url': 'undefined', 'import.meta': 'undefined' } } : {}) })
+  if (!result.success) throw new Error(`Fixture build failed: ${result.logs.join('\n')}`)
+}
+for (const entry of cases) copyFileSync(path.join(grammarDir, entry.wasm), path.join(stagedDist, 'wasm', entry.wasm))
+copyFileSync(path.join(repo, 'node_modules/web-tree-sitter/tree-sitter.wasm'), path.join(stagedDist, 'wasm', 'tree-sitter.wasm'))
+const probe = `const m=FORMAT_LOAD; const a=await m.getLanguageConfig('demo.php'); m.setWasmDir(WASM_DIR); const b=await m.getLanguageConfig('demo.php'); console.log(JSON.stringify({ defaultResolution:{parser:!!a?.parser,query:!!a?.query},explicitWasmDirectory:{parser:!!b?.parser,query:!!b?.query} }));`
+const stagedEvidence: any[] = []
+for (const format of ['cjs', 'esm']) {
+  const load = format === 'cjs' ? `require('./dist/index.cjs')` : `await import('./dist/index.mjs')`
+  const script = `const timer=setTimeout(()=>{console.error('component probe did not settle');process.exit(2)},5000); (async()=>{ ${probe.replace('FORMAT_LOAD', load).replace('WASM_DIR', JSON.stringify(path.join(stagedDist, 'wasm')))} })().catch(e=>{ console.error(e); process.exitCode=1 }).finally(()=>clearTimeout(timer));`
+  writeFileSync(path.join(staged, `probe-${format}.cjs`), script)
+  const result = spawnSync('node', ['-e', script], { cwd: staged, timeout: 10000, encoding: 'utf8' })
+  stagedEvidence.push({ format, status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() })
+}
+const output = { runtime: Bun.version, nodeVersion: spawnSync('node', ['--version'], { encoding: 'utf8' }).stdout.trim(), fixture, offlinePinnedLocalGrammarEvidence: localGrammarEvidence, stagedCurrentSourceComponentBundles: stagedEvidence, assuranceLimit: 'Current source code-map component built with SDK format/loader/external treatment; not a full SDK release build or installed binary. Existing grammar bytes accepted only after matching current source SHA-256 pins. No download or source/build-output mutation.' }
+writeFileSync(path.join(evidence, '07-assets.json'), JSON.stringify(output, null, 2) + '\n')
+console.log(JSON.stringify(output, null, 2))

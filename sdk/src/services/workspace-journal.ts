@@ -1,13 +1,12 @@
-import { createHash } from 'node:crypto'
-import path from 'node:path'
-
 import {
   advanceWorkspaceState,
   createInitialWorkspaceState,
 } from '@codebuff/common/types/workspace-state'
 
 import { LocalHarnessStore } from './local-harness-store'
-import { resolveWorkspaceIdentity } from './repository-identity'
+import { resolveBootstrapWorkspaceIdentity } from './workspace-bootstrap'
+import type { WorkspaceIdentitySource } from './workspace-bootstrap'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 import type { LocalHarnessRecord } from './local-harness-store'
 import type {
@@ -19,33 +18,26 @@ type WorkspaceJournalRecord = LocalHarnessRecord & {
   state: WorkspaceStateV1
 }
 
-function fallbackIdentity(cwd: string) {
-  const canonical = path.resolve(cwd)
-  const digest = createHash('sha256')
-    .update(canonical)
-    .digest('hex')
-    .slice(0, 24)
-  return { repositoryId: digest, workspaceId: digest }
-}
-
 export class WorkspaceJournalService {
   private constructor(
     private readonly store: LocalHarnessStore,
     readonly repositoryId: string,
     readonly workspaceId: string,
+    readonly identitySource: WorkspaceIdentitySource,
   ) {}
 
   static async create(params: {
     rootDir: string
     cwd: string
+    executionContext?: ExecutionAdapterContext
   }): Promise<WorkspaceJournalService> {
-    const identity = await resolveWorkspaceIdentity({ cwd: params.cwd }).catch(
-      () => fallbackIdentity(params.cwd),
-    )
+    const captured = { ...params }
+    const identity = await resolveBootstrapWorkspaceIdentity(captured)
     return new WorkspaceJournalService(
-      new LocalHarnessStore(params.rootDir),
+      new LocalHarnessStore(captured.rootDir),
       identity.repositoryId,
       identity.workspaceId,
+      identity.identitySource,
     )
   }
 

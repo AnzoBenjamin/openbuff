@@ -26,9 +26,12 @@ describe('hasDecisionRationale', () => {
     expect(
       hasDecisionRationale('Used a queue instead of a cron loop for throughput'),
     ).toBe(true)
+  })
+
+  test('rejects bare must/require instructions without reasoning', () => {
     expect(
       hasDecisionRationale('Sessions must survive restarts across deployments'),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   test('is case-insensitive', () => {

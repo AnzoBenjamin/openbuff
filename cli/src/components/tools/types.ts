@@ -13,6 +13,8 @@ export type ToolRenderOptions = {
 }
 
 export type ToolRenderConfig = {
+  /** Human-facing heading; the persisted tool name remains unchanged. */
+  displayName?: string
   /** Optional path to display in the tool header */
   path?: string
   /** Custom content to render in the tool body */

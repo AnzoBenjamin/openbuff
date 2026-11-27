@@ -5,7 +5,7 @@ import { updateFileResultSchema } from './str-replace'
 import {
   $getNativeToolCallExampleString,
   isObviousEditPlaceholder,
-  jsonToolResultSchema,
+  editToolResultSchema,
 } from '../utils'
 
 import type { $ToolParams } from '../../constants'
@@ -17,7 +17,7 @@ const inputSchema = z
     path: z
       .string()
       .min(1, 'Path cannot be empty')
-      .describe(`Path to the file relative to the **project root**`),
+      .describe(`Path to the file absolute or relative to the **project root**; access follows the configured sandbox policy`),
     instructions: z
       .string()
       .describe('What the change is intended to do in only one sentence.'),
@@ -29,7 +29,7 @@ const inputSchema = z
       })
       .describe(`Complete file content to write to the file.`),
     basedOnRead: basedOnReadSchema.describe(
-      'Optional whole-file-covering cap.v3 from a fresh complete whole-file read (paths or full-file range). Only a capability that covers the entire current file (startLine=1 through the current line count) with a hash matching current content may authorize overwrite; partial range capabilities never authorize write_file.',
+      'Optional cap.v4 with an explicit whole raw basis from a complete read_files.paths read. Its exact bytes must match the current file. Line and structural capabilities stay scoped even when their slice covers the visible file.',
     ),
   })
   .describe(`Create or overwrite a file with the given content.`)
@@ -94,5 +94,5 @@ export const writeFileParams = {
   endsAgentStep,
   description,
   inputSchema,
-  outputSchema: jsonToolResultSchema(updateFileResultSchema),
+  outputSchema: editToolResultSchema(updateFileResultSchema),
 } satisfies $ToolParams

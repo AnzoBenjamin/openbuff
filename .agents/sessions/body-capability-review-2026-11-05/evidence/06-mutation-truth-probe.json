@@ -1,0 +1,169 @@
+{
+  "fixtureRoot": "/tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn",
+  "outcomes": [
+    {
+      "name": "stale-document-version",
+      "rawEdit": {
+        "documentChanges": [
+          {
+            "textDocument": {
+              "uri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+              "version": 999
+            },
+            "edits": [
+              {
+                "range": {
+                  "start": {
+                    "line": 0,
+                    "character": 6
+                  },
+                  "end": {
+                    "line": 0,
+                    "character": 9
+                  }
+                },
+                "newText": "bar"
+              }
+            ]
+          }
+        ]
+      },
+      "openedDocument": {
+        "textDocument": {
+          "uri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+          "languageId": "typescript",
+          "version": 1,
+          "text": "const foo = 1\nsecond\n"
+        }
+      },
+      "serviceValue": {
+        "changedFiles": [
+          {
+            "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+            "newContent": "const bar = 1\nsecond\n"
+          }
+        ]
+      },
+      "output": {
+        "applied": true,
+        "results": [
+          {
+            "path": "a.ts",
+            "applied": true
+          }
+        ]
+      },
+      "final": "const bar = 1\nsecond\n",
+      "renamedFileExists": false
+    },
+    {
+      "name": "omitted-resource-operation",
+      "rawEdit": {
+        "documentChanges": [
+          {
+            "kind": "rename",
+            "oldUri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+            "newUri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/renamed.ts"
+          },
+          {
+            "textDocument": {
+              "uri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+              "version": 1
+            },
+            "edits": [
+              {
+                "range": {
+                  "start": {
+                    "line": 0,
+                    "character": 6
+                  },
+                  "end": {
+                    "line": 0,
+                    "character": 9
+                  }
+                },
+                "newText": "bar"
+              }
+            ]
+          }
+        ]
+      },
+      "openedDocument": {
+        "textDocument": {
+          "uri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+          "languageId": "typescript",
+          "version": 1,
+          "text": "const foo = 1\nsecond\n"
+        }
+      },
+      "serviceValue": {
+        "changedFiles": [
+          {
+            "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+            "newContent": "const bar = 1\nsecond\n"
+          }
+        ]
+      },
+      "output": {
+        "applied": true,
+        "results": [
+          {
+            "path": "a.ts",
+            "applied": true
+          }
+        ]
+      },
+      "final": "const bar = 1\nsecond\n",
+      "renamedFileExists": false
+    },
+    {
+      "name": "raw-negative-position",
+      "rawEdit": {
+        "changes": {
+          "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts": [
+            {
+              "range": {
+                "start": {
+                  "line": 1,
+                  "character": -3
+                },
+                "end": {
+                  "line": 1,
+                  "character": -1
+                }
+              },
+              "newText": "X"
+            }
+          ]
+        }
+      },
+      "openedDocument": {
+        "textDocument": {
+          "uri": "file:///tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+          "languageId": "typescript",
+          "version": 1,
+          "text": "const foo = 1\nsecond\n"
+        }
+      },
+      "serviceValue": {
+        "changedFiles": [
+          {
+            "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-workspace-edit-fixture-A4oJrn/workspace/a.ts",
+            "newContent": "const foo =X\nsecond\n"
+          }
+        ]
+      },
+      "output": {
+        "applied": true,
+        "results": [
+          {
+            "path": "a.ts",
+            "applied": true
+          }
+        ]
+      },
+      "final": "const foo =X\nsecond\n",
+      "renamedFileExists": false
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { handleCheckJob } from '../check-job'
+import { checkJobParams } from '@codebuff/common/tools/params/tool/check-job'
 
 import type {
   ClientToolCall,
@@ -10,12 +11,22 @@ import type {
 } from '@codebuff/common/tools/list'
 
 describe('handleCheckJob', () => {
+  test('the published schema accepts an explicit zero cursor', () => {
+    expect(
+      checkJobParams.inputSchema.parse({ jobId: 'job-123', cursor: 0 }).cursor,
+    ).toBe(0)
+    expect(
+      checkJobParams.inputSchema.safeParse({ jobId: 'job-123', cursor: -1 })
+        .success,
+    ).toBe(false)
+  })
   test('forwards wait/timeout/kill_on_timeout and stamps the trusted owner onto the client tool call', async () => {
     const toolCall: CodebuffToolCall<'check_job'> = {
       toolName: 'check_job',
       toolCallId: 'tool-call-1',
       input: {
         jobId: 'job-123',
+        cursor: 0,
         wait_for: 'ready',
         timeout_seconds: 1,
         kill_on_timeout: false,
@@ -58,6 +69,7 @@ describe('handleCheckJob', () => {
       toolCallId: 'tool-call-1',
       input: {
         jobId: 'job-123',
+        cursor: 0,
         wait_for: 'ready',
         timeout_seconds: 1,
         kill_on_timeout: false,

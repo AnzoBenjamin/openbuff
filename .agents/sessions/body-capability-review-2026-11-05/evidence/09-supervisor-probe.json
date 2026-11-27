@@ -1,0 +1,53 @@
+{
+  "observations": [
+    {
+      "case": "SYNC timeout: leader exits, redirected child ignores TERM",
+      "result": [
+        {
+          "type": "json",
+          "value": {
+            "command": "python3 '/tmp/openbuff-body-review-2026-11-05/evidence/09-work/09-resistant-child.py' '/tmp/openbuff-body-review-2026-11-05/evidence/09-work/09-sync-pid.txt' >/dev/null 2>&1 & wait",
+            "errorMessage": "Command timed out after 0.25 seconds",
+            "timedOut": true,
+            "startingCwd": "/tmp/openbuff-body-review-2026-11-05/evidence/09-work",
+            "stdout": ""
+          }
+        }
+      ],
+      "descendantStateAfterGrace": "S"
+    },
+    {
+      "case": "BACKGROUND kill: leader exits, redirected child ignores TERM",
+      "firstKill": {
+        "jobId": "job-1-215d5cf9",
+        "status": "stopping",
+        "killed": true,
+        "signal": "SIGTERM",
+        "exitCode": null
+      },
+      "statusAfterGrace": "stopped",
+      "descendantStateAfterGrace": "S",
+      "secondKill": {
+        "jobId": "job-1-215d5cf9",
+        "status": "stopped",
+        "killed": false,
+        "signal": "SIGKILL",
+        "exitCode": null
+      }
+    },
+    {
+      "case": "BACKGROUND output quota: TERM-ignoring process",
+      "statusAfterGrace": "error",
+      "processStateAfterGrace": "S",
+      "killAfterQuota": {
+        "jobId": "job-2-89597792",
+        "status": "error",
+        "killed": false,
+        "signal": "SIGKILL",
+        "exitCode": null
+      },
+      "logBytes": 10485760
+    }
+  ],
+  "constraints": "Only three temporary Python fixture children; fixed nine-second self-exit plus verified argv/PID cleanup; all job logs/sweeps isolated by TMPDIR under evidence/09-work. State S means still sleeping, excluding zombie/dead children."
+}

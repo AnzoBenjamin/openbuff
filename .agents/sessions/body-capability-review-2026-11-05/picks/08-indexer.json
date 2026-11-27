@@ -1,0 +1,444 @@
+{
+  "shardId": "08-indexer",
+  "question": "Where do lexical/graph/semantic retrieval, index snapshot/freshness/invalidation/watchers/persistence/config fingerprints, query precision/coverage, large-repository scaling, and retrieval of cross-language implementation/test/command neighbors run through SDK/CLI consumers?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "packages",
+    "cli",
+    "sdk",
+    "common",
+    "docs"
+  ],
+  "selectedFiles": [
+    {
+      "path": "packages/indexer/src/index-manager.ts",
+      "from": 79,
+      "to": 817,
+      "reason": "Real manager lifecycle: per-root/config singleton identity, bounded root registry, detached-holder mutation forwarding, monotonic epoch, background build/retry, readiness timeout, stale lexical query, asynchronous snapshot/vector pinning, CAS persistence handoff, snapshot identity, and failed embedding recovery."
+    },
+    {
+      "path": "packages/indexer/src/index-manager.ts",
+      "from": 969,
+      "to": 1130,
+      "reason": "Status and query failure surface consumed by the CLI: readiness/staleness/refreshing, parser versus budget coverage classification, semantic availability and skipped vectors, errors/timeouts, semantic file/path filtering, query-embedding fallback, and age/error refresh scheduling."
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 120,
+      "to": 409,
+      "reason": "Persistence entrypoints: stat-first read cap, version/root and file-shape validation, accelerator rebuild, optional snapshot verification, ownership/CAS/newest-wins save, write/readback verification, tiered reduction, and chunk sidecar write relationship."
+    },
+    {
+      "path": "common/src/tools/params/tool/query-index.ts",
+      "from": 1,
+      "to": 275,
+      "reason": "Published model-facing contract for graph/query modes, limits, extension/path scopes and traversal validation; result provenance, related files/snippets, canonical snapshot/status, structured build failures, and walker/parser coverage."
+    },
+    {
+      "path": "packages/indexer/src/query.ts",
+      "from": 150,
+      "to": 598,
+      "reason": "Actual query entrypoint and ranking: mode routing, path/file-type scopes, posting prefilter, lexical field/chunk scores, command intent, graph augmentation, tie ordering, neighbor/path output construction, explanation, and bounded snippets/results."
+    },
+    {
+      "path": "packages/indexer/src/query.ts",
+      "from": 725,
+      "to": 1108,
+      "reason": "Graph consumers: top-seed neighborhood scoring, direct and gated shared-node expansion, second-hop fanout limits, relation provenance, shortest-path depth/queue bounds, seed resolution, directional reference/call results, and persisted adjacency coverage validation."
+    },
+    {
+      "path": "packages/indexer/src/query-data.ts",
+      "from": 1,
+      "to": 243,
+      "reason": "Large-index query accelerators: persisted postings/document frequencies/edge-index adjacency, yielding build variant, exact and substring candidate selection with union limits, per-query expansion scratch, capped frequency fallback, and chunk/name token coverage."
+    },
+    {
+      "path": "packages/indexer/src/semantic.ts",
+      "from": 1,
+      "to": 241,
+      "reason": "Semantic retrieval contract and implementation: credential-free provider/model/text-version fingerprint, bounded file embedding representation, exact-input vector reuse, batch/dimension checks and skipped-path diagnostics, query cosine ranking, and semantic/lexical score blending."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 423,
+      "to": 893,
+      "reason": "Index build/update orchestration rather than parser internals: walk versus precise-delta routing, stale revision rejection, stat/hash freshness gate, unchanged parse-result reuse, transient hash/content read retention, no-change diagnostic healing, degraded delta retention, deletions, graph/query-data regeneration, and coverage handoff."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1552,
+      "to": 1712,
+      "reason": "Query-facing command metadata: native manifests across Rust/Go/Python/JVM/.NET/PHP/Swift/Ruby/CMake/Godot, package-script raw command concepts, task-runner concepts, CI extraction, and bounded concept payloads."
+    },
+    {
+      "path": "packages/indexer/src/file-walker.ts",
+      "from": 341,
+      "to": 513,
+      "reason": "Large-repository eligibility and coverage boundary: nested ignore matchers, sensitive/operational/binary/oversized filtering, no-follow traversal checks, fair-share prefix buckets, round-robin file cap, and skipped-file/prefix accounting."
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 249,
+      "to": 359,
+      "reason": "Actual CLI query_index client-tool override: live indexing config, disabled output, configured embedder, 2-second readiness wait, queryBlended invocation, canonical result/status/snapshot conversion, semantic notice, related-file propagation, and mutation epoch publication."
+    },
+    {
+      "path": "cli/src/utils/create-run-config.ts",
+      "from": 210,
+      "to": 330,
+      "reason": "Real run consumer wiring: watcher construction, paths-only initial project context, successful SDK create/update/delete/move deltas with workspace revision, conservative onFilesChanged invalidation for unknown mutation surfaces, and best-effort callback failures."
+    },
+    {
+      "path": "cli/src/utils/index-workspace-watcher.ts",
+      "from": 1,
+      "to": 259,
+      "reason": "External-edit invalidation lifecycle: platform branch, classification of cache/file/delete/directory events, root cap and cleanup, debounced precise versus pathless invalidation, Linux worker pool callbacks, dynamic directory add/remove, and recursive/worker failure fallback."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2390,
+      "to": 2509,
+      "reason": "Real SDK client-tool execution boundary: custom-handler validation/cancellation, client-tool recognition, override resolution and execution, and entry into default dispatch; inspect the final unsupported-tool/error-envelope branch in the secondary SDK range."
+    },
+    {
+      "path": "packages/indexer/src/index-manager.test.ts",
+      "from": 89,
+      "to": 272,
+      "reason": "Existing behavioral evidence for labeled stale snapshots during refresh, refreshed command snippets, age-driven background refresh, precise delta revision/snapshot/hash outputs, and structured nonretryable cache-ownership failure."
+    },
+    {
+      "path": "packages/indexer/src/index-manager-semantic.test.ts",
+      "from": 247,
+      "to": 370,
+      "reason": "Existing adversarial semantic evidence: snapshot replacement during query embedding, changed provider cacheKey rewiring, and prior-vector availability after a failing refresh embedder. Read the actual test mechanics before assigning assurance."
+    },
+    {
+      "path": "packages/indexer/src/retrieval-quality.test.ts",
+      "from": 1,
+      "to": 110,
+      "reason": "Versioned quality gates against the actual repository index plus evaluator metric contract: Recall@K/MRR/nDCG/noise, corpus/file expectations, injected timing behavior, and explicit lexical retrieval path."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "packages/indexer/src/types.ts",
+      "from": 1,
+      "to": 356,
+      "reason": "Public IndexedFile/MetadataIndex/query options, graph provenance, config weights, mutation deltas, snapshot/status/build-error/coverage contracts."
+    },
+    {
+      "path": "packages/indexer/src/index.ts",
+      "from": 1,
+      "to": 116,
+      "reason": "Export surface distinguishing runtime manager/query APIs from optional repo-map, precision, quality, and freshness helpers."
+    },
+    {
+      "path": "packages/indexer/package.json",
+      "from": 1,
+      "to": 36,
+      "reason": "Package exports, dependency declarations, and isolated test command."
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 1,
+      "to": 119,
+      "reason": "Cache directory sanitization, ownership/lock constants, write-git-exclude configuration, and cache path derivation."
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 416,
+      "to": 866,
+      "reason": "Vector persistence/fingerprint retention, ownership checks, schema migration, canonical snapshot hash, chunk sidecar bounds/snapshot matching, and sidecar load/save consumers."
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 875,
+      "to": 983,
+      "reason": "Metadata/file/query-data validation used by the primary load path; inspect shape validation versus semantic completeness."
+    },
+    {
+      "path": "packages/indexer/src/index-store.ts",
+      "from": 984,
+      "to": 1413,
+      "reason": "Interprocess lock acquisition/heartbeat/dead-owner recovery, verified reclaim/release, atomic JSON replacement and cleanup, and freshness/ready predicates."
+    },
+    {
+      "path": "packages/indexer/src/index-manager.ts",
+      "from": 818,
+      "to": 968,
+      "reason": "Optional precision-graph adoption/SCIP ingestion consumer and persistence semantics only; pair07 owns SCIP production/parsing mechanics."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1073,
+      "to": 1201,
+      "reason": "Index/graph/query-data assembly, combined coverage record, precise stat-only walk overlay, path delta normalization, and revision-preserving snapshot handoff."
+    },
+    {
+      "path": "packages/indexer/src/query.ts",
+      "from": 599,
+      "to": 724,
+      "reason": "IDF miss/cache behavior and optional PageRank blend invoked by the primary ranking path."
+    },
+    {
+      "path": "packages/indexer/src/query.ts",
+      "from": 1206,
+      "to": 1398,
+      "reason": "Native command file classification/snippet formatting and actual natural-language token/stopword normalization."
+    },
+    {
+      "path": "packages/indexer/src/retrieval-quality.ts",
+      "from": 1,
+      "to": 148,
+      "reason": "Evaluator implementation and real/injected latency distinction behind the selected quality suite."
+    },
+    {
+      "path": "packages/indexer/src/repo-map.ts",
+      "from": 1,
+      "to": 368,
+      "reason": "Optional structural-map comparison helpers; trace exported API versus default query_index runtime use."
+    },
+    {
+      "path": "sdk/src/impl/embeddings.ts",
+      "from": 1,
+      "to": 57,
+      "reason": "Real BYOK embedding factory: provider routing restrictions, model/endpoint identity, actual embedMany call, and null fallback without reading private config values."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3149,
+      "to": 3182,
+      "reason": "End of default tool dispatch and unsupported-tool error envelope/cancellation behavior; complements primary override selection."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3234,
+      "to": 3295,
+      "reason": "Confirmed mutation event production and host onFilesystemMutation/onFilesChanged notification, linking SDK receipts to CLI invalidation."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/query-index.ts",
+      "from": 1,
+      "to": 141,
+      "reason": "Agent/runtime consumer wrapper: memory skip/narrow/fallback, client dispatch, discovery coverage recording, and model-visible memory-backed query result."
+    },
+    {
+      "path": "cli/src/components/tools/query-index.tsx",
+      "from": 78,
+      "to": 219,
+      "reason": "Actual TUI result consumer and display of indexed results/related metadata; primary status extraction is later in this file."
+    },
+    {
+      "path": "cli/src/components/tools/query-index.tsx",
+      "from": 402,
+      "to": 542,
+      "reason": "Structured status and snapshot extraction/rendering, parser coverage and last error semantics, unknown/building/empty states."
+    },
+    {
+      "path": "cli/src/utils/index-dir-watch.ts",
+      "from": 37,
+      "to": 131,
+      "reason": "Real watchable-directory collection, fd/depth caps, ignore/symlink handling, and bounded directory discovery."
+    },
+    {
+      "path": "cli/src/utils/index-dir-watch.ts",
+      "from": 148,
+      "to": 422,
+      "reason": "Worker lifecycle/single-restart/permanent-degrade behavior and actual startDirectoryIndexWatch construction/cleanup."
+    },
+    {
+      "path": "cli/src/utils/index-dir-watch-worker.ts",
+      "from": 1,
+      "to": 111,
+      "reason": "Actual worker fs.watch handle ownership, capped add/remove subscriptions, posted event payloads, and close path."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.test.ts",
+      "from": 138,
+      "to": 342,
+      "reason": "Precise delta boundaries: no full readdir, omitted sibling, newly created ignored path, filtered/deleted path, and unreadable-file retention."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.test.ts",
+      "from": 578,
+      "to": 754,
+      "reason": "Stat-gated refresh, failed stat/hash/content reads, root cache bounds, and bounded read-failure diagnostics."
+    },
+    {
+      "path": "packages/indexer/src/p8-degraded-delta.test.ts",
+      "from": 1,
+      "to": 138,
+      "reason": "Injected degraded update/delta requeue/convergence and revision evidence; read before inferring real parser/process failure assurance."
+    },
+    {
+      "path": "packages/indexer/src/index-manager.test.ts",
+      "from": 680,
+      "to": 860,
+      "reason": "Cross-root persisted-index isolation and status classifier regression tests for parser failures versus expected coverage budgets."
+    },
+    {
+      "path": "packages/indexer/src/index-manager-semantic.test.ts",
+      "from": 45,
+      "to": 246,
+      "reason": "Persisted vector/model fingerprints, disabled/unavailable tier, semantic-only file-type filtering, and config weighting."
+    },
+    {
+      "path": "packages/indexer/src/index-store.test.ts",
+      "from": 30,
+      "to": 178,
+      "reason": "Ownership, semantic schema/fingerprint/corrupt-cache misses, and concurrent newest-snapshot writes."
+    },
+    {
+      "path": "packages/indexer/src/index-store.test.ts",
+      "from": 990,
+      "to": 1086,
+      "reason": "Write-cap reduction contract and preservation of the original in-memory index."
+    },
+    {
+      "path": "packages/indexer/src/query-data.test.ts",
+      "from": 1,
+      "to": 174,
+      "reason": "Posting completeness, exact versus substring matching, capped candidate union/frequency, and bounded per-query expansion reuse."
+    },
+    {
+      "path": "packages/indexer/src/query-cache.test.ts",
+      "from": 1,
+      "to": 86,
+      "reason": "Accelerator regression evidence; verify that query paths avoid full-corpus enumeration and retain graph behavior."
+    },
+    {
+      "path": "packages/indexer/src/file-walker.test.ts",
+      "from": 213,
+      "to": 283,
+      "reason": "Deterministic partial coverage and top-level-prefix cap/fairness tests relevant to large polyglot monorepos."
+    },
+    {
+      "path": "packages/indexer/src/query-quality.test.ts",
+      "from": 1,
+      "to": 334,
+      "reason": "Constructed Python/Rust/Go and idiom/command fixtures, expected ranking, and repo-map comparison tests; distinguish fixture assurance from actual-project coverage."
+    },
+    {
+      "path": "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "from": 402,
+      "to": 521,
+      "reason": "Worker restart/degrade/close behavior with controlled worker fakes."
+    },
+    {
+      "path": "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "from": 522,
+      "to": 697,
+      "reason": "Real Linux+Bun watcher worker/classification/debounce wiring with a recording manager; actual file-event observation and cleanup."
+    },
+    {
+      "path": "common/src/tools/__tests__/query-index-schema.test.ts",
+      "from": 1,
+      "to": 123,
+      "reason": "Published query input/output contract tests and canonical result shape."
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 119,
+      "to": 130,
+      "reason": "Documented indexer package responsibilities and dependency boundary."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 808,
+      "to": 925,
+      "reason": "Documented modes, languages/native commands, snapshot versus live-read authority, refresh/invalidation behavior, optional repo-map API, and walker/parser filtering limits."
+    }
+  ],
+  "capabilityCandidates": [
+    "Lexical discovery by file path, symbols, imports, headings, concepts, and chunks",
+    "Graph neighbor, shortest-path, reference/call, and related-file retrieval",
+    "Native cross-language implementation/test/manifest/validation-command discovery",
+    "Canonical retrieval provenance, indexed content hashes, immutable snapshots, and incorporated workspace revisions",
+    "Stale snapshot serving, background refresh, retry, timeouts, and structured failure/coverage reporting",
+    "Precise SDK mutation deltas and conservative unknown/external mutation invalidation",
+    "External-editor watcher lifecycle, bounded Linux worker pools, restart/degradation, and root cleanup",
+    "Persistent metadata/vector/chunk caches, ownership, concurrent writers, schema compatibility, and configuration fingerprints",
+    "Large-repository fair coverage, postings/adjacency/IDF accelerators, event-loop yielding, and payload/fanout caps",
+    "Optional BYOK semantic retrieval, exact embedding-input reuse, partial-vector reporting, and mixed-generation avoidance",
+    "SDK override/default dispatch, runtime memory/discovery wrapper, CLI serialization, and TUI consumers",
+    "Retrieval quality corpus/metrics/gates and optional structural repo-map comparisons"
+  ],
+  "searchCoverage": {
+    "method": "Pinned native INVENTORY.json and saved RETRIEVAL.json, then rg file/symbol/caller/test searches and exact bounded source/test/doc reads. Native query_index/read_files tools are not exposed in this Codex session; no unavailable tool invocation is claimed. Only the assigned picker JSON is written. No tests, model/API calls, private config values, credentials, or logs are read/executed.",
+    "roots": [
+      "packages/indexer/src",
+      "packages/indexer/fixtures",
+      "sdk/src",
+      "cli/src/utils",
+      "cli/src/components/tools",
+      "packages/agent-runtime/src/tools/handlers/tool",
+      "common/src/tools",
+      "agents/base2",
+      "docs"
+    ],
+    "queryIndexQueries": [
+      "language capabilities validation diagnostics",
+      "commands build test typecheck smoke release"
+    ],
+    "sourceFamiliesSearched": [
+      "query_index schema/runtime handler/client override/TUI consumer",
+      "IndexManager getInstance/query/queryBlended/waitUntilReady/ensureBuilt/getStatus",
+      "snapshot/hash/revision/mutation epoch/precise delta/pathless stale/age refresh",
+      "metadata/index/vector/chunk persistence/cache ownership/CAS/byte caps/locks",
+      "semantic embedder routing/cacheKey/fingerprint/vector reuse/filter/blend",
+      "postings/document frequencies/adjacency/IDF/PageRank/graph seeds/fanout/path depth",
+      "walk coverage/fair prefix caps/ignores/oversized sources/no-follow traversal",
+      "native manifests/package scripts/CI/task runners/validation concepts",
+      "external workspace watcher/Linux worker fd cap/restart/degrade/cleanup",
+      "quality corpora/metrics/non-TS fixtures/actual-repository gates",
+      "agent retrieval result consumers and mutation-epoch/proactive-cache symbol references"
+    ],
+    "entrypointConsumerTraces": [
+      "common queryIndexParams -> runtime handleQueryIndex -> requestClientToolCall -> sdk run override selection -> CLI codebuff-client query_index override -> IndexManager.waitUntilReady/queryBlended",
+      "IndexManager.query/queryBlended -> queryIndex -> postings + lexical scoring + graph related/reference/path expansion -> CLI serialization -> QueryIndexComponent",
+      "CLI configured embedding model -> sdk createConfiguredEmbedder -> IndexManager._buildVectors -> semantic fingerprint/file input hash -> vector store/buildFileVectors -> semanticSearch/blendSemanticScores",
+      "SDK confirmed mutation receipt -> sdk run onFilesystemMutation event -> CLI create-run-config -> manager.markPathsChanged -> updateMetadataIndex precise walk -> snapshot.workspaceRevision",
+      "SDK terminal/custom/MCP unknown mutation callback -> CLI onFilesChanged -> manager.markStale -> full refresh detection",
+      "CLI run config -> ensureIndexWorkspaceWatcher -> recursive watcher or directory worker pool -> classification/debounce -> precise/pathless manager invalidation",
+      "IndexManager._build -> loadIndex -> build/update metadata -> saveIndex CAS -> snapshot adoption -> semantic vectors; secondary lock/ownership/sidecar helpers complete persistence trace",
+      "queryIndex -> versioned retrieval-quality evaluator/test; constructed polyglot quality fixtures -> optional compareRetrievalStrategies/repo-map helpers"
+    ],
+    "selectedRangeCount": 18,
+    "selectedDistinctFileCount": 15,
+    "selectedLineCount": 4617,
+    "secondaryPolicy": "Secondary entries are bounded expansion candidates and do not claim a full-line audit. Primary exact ranges are the requested digest. Follow SDK final dispatch, public contracts, actual watch workers, native command scoring, and targeted failure tests when a hypothesis requires adjacent evidence.",
+    "testSurfacesDiscovered": [
+      "stale last-known-good queries during refresh and script changes",
+      "age refresh and precise path/revision/hash/snapshot outputs",
+      "cache ownership, concurrent newest-wins persistence, schema/corruption, reduction caps",
+      "mixed-generation semantic query metadata and changed provider fingerprints",
+      "embedding outage and retained/recovered prior vectors",
+      "precise delta omitted sibling/ignored path/deletion/unreadable read retention",
+      "parser-degraded delta requeue and later convergence",
+      "large-root cap fairness and posting/adjacency accelerator completeness",
+      "real Linux+Bun worker file-event classification/debounce with recording manager",
+      "constructed non-TS quality fixtures versus actual repository lexical gates"
+    ],
+    "failureStatesToVerify": [
+      "index disabled, empty, building, wait timeout, stale refresh, failed/nonretryable persistence",
+      "query embedding unavailable/throws/returns invalid or dimension-incompatible vectors",
+      "config/root/provider changes sharing or replacing persisted generations",
+      "changed/deleted/renamed/ignored files and unchanged stat identity",
+      "complete delta concurrent with unrelated external edits or later revisions",
+      "parser/read failure while prior source/graph/vector state remains available",
+      "corrupt/partial accelerators, foreign cache root, over-cap artifacts, CAS loss",
+      "live/dead/ambiguous cache lock owner and write/readback/sidecar mismatch",
+      "worker spawn/crash/fd-cap/unwatched subtree and closed/evicted root",
+      "query seed/scope/filter truncation and graph fanout/path-depth boundaries",
+      "SDK query entrypoint with or without a supplied host override",
+      "canonical result fields through runtime memory skip/narrow and CLI rendering"
+    ],
+    "scopeBoundaries": [
+      "Pair07 owns code-map parser/language/AST/LSP/import resolver and SCIP extraction/runner mechanics. This shard selects their returned metadata, graph/query consumption, and persistence seams only.",
+      "Pair06 owns mutation authority, exact-byte edit correctness, and broker/transaction durability; this shard traces emitted mutations into retrieval freshness.",
+      "Pair04 owns memory quality and compaction; query runtime memory skip/narrow is an adjacent retrieval consumer to inspect only as needed.",
+      "Polyglot quality is to be assessed from actual fixtures/corpora and implementation/test/command neighbors, without inferring target-project quality from named language support.",
+      "Parent reports the existing indexer suite receipt separately; picker does not read test logs, rerun tests, make conclusions, or change source."
+    ]
+  }
+}

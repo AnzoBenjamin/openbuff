@@ -1,0 +1,188 @@
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { IndexManager } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager.ts'
+import { buildIndexQueryData, getPostingCandidates } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/query-data.ts'
+import { queryIndex } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/query.ts'
+import { walkProjectDetailed } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/file-walker.ts'
+import { computeIndexSnapshotId, loadIndex, loadSemanticVectors, MAX_CHUNK_SIDECAR_BYTES, reduceIndexForByteCap, saveSemanticVectors } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/index-store.ts'
+import { fileEmbeddingHash } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/semantic.ts'
+import type { EmbedFn } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/semantic.ts'
+import type { IndexedFile, MetadataIndex, IndexEdge } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/types.ts'
+
+// All filesystem fixtures and artifacts are synthetic, local, and owned by this
+// probe. No user configuration, live cache, credentials, provider, or subprocess
+// is consulted. The code under review is imported without source modifications.
+const evidenceRoot = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixturesRoot = join(evidenceRoot, '08-fixtures')
+mkdirSync(fixturesRoot, { recursive: true })
+const results: Record<string, unknown> = {
+  runtime: { bun: Bun.version, platform: process.platform, node: process.versions.node },
+  snapshotId: 'ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0',
+}
+const temporaryRoot = (name: string) => mkdtempSync(join(fixturesRoot, name + '-'))
+const fixtureFile = (path: string, symbols: string[] = []): IndexedFile => ({
+  path, symbols, mtime: 1, size: 1, hash: createHash('sha256').update(path).digest('hex'),
+  ext: path.endsWith('.py') ? '.py' : path.endsWith('.md') ? '.md' : '.ts',
+  imports: [], headings: [], concepts: [],
+})
+const preciseEdge = (from: string, to: string, label: string): IndexEdge => ({
+  from: `file:${from}`, to: `file:${to}`, type: 'references', weight: 1,
+  confidence: 'precise', label,
+})
+const withEdge = (base: MetadataIndex, edge: IndexEdge): MetadataIndex => {
+  const graph = { ...base.graph, edges: [...base.graph.edges, edge] }
+  return { ...base, graph, queryData: buildIndexQueryData(base.files, graph) }
+}
+
+// 1. Actual manager build/update/query with an embedding-only outage.
+{
+  const root = temporaryRoot('semantic-generation')
+  writeFileSync(join(root, 'old.md'), '# Old billing\nLegacy payment source\n')
+  writeFileSync(join(root, 'kept.md'), '# Kept file\nInitial implementation\n')
+  let calls = 0
+  const embed: EmbedFn = async (texts) => {
+    calls++
+    if (calls === 2) throw new Error('synthetic embedding outage')
+    return texts.map(() => [1, 0])
+  }
+  embed.cacheKey = 'synthetic-local-two-dimensional-v1'
+  const manager = IndexManager.getInstance(root, {
+    semantic: { enabled: true, model: 'synthetic-v1' },
+  }, embed)
+  await manager.waitUntilReady(10_000)
+  const prior = manager.getSnapshot()!
+  const priorHash = fileEmbeddingHash(prior.files['kept.md'])
+  rmSync(join(root, 'old.md'))
+  writeFileSync(join(root, 'kept.md'), '# Kept revised\nDifferent implementation and topic\n')
+  writeFileSync(join(root, 'new.md'), '# New source\nNew implementation\n')
+  manager.markPathsChanged({ changedPaths: ['kept.md', 'new.md'], deletedPaths: ['old.md'], complete: true, revision: 2 })
+  await manager.waitUntilReady(10_000)
+  const current = manager.getSnapshot()!
+  const blended = await manager.queryBlended('quuxnomatch', { limit: 10 })
+  const obsolete = blended.results.find((entry) => entry.path === 'old.md')
+  results.semanticGeneration = {
+    root, embedCalls: calls, indexedPaths: Object.keys(current.files),
+    oldPathInMetadata: Boolean(current.files['old.md']), oldPathInQuery: Boolean(obsolete),
+    oldPathHasIndexedHash: Boolean(obsolete?.indexedHash),
+    keptEmbeddingTextChanged: priorHash !== fileEmbeddingHash(current.files['kept.md']),
+    keptRetainedVectorHash: (manager as unknown as { fileVectors: Array<{ path: string; embeddingHash: string }> }).fileVectors.find((entry) => entry.path === 'kept.md')?.embeddingHash,
+    keptCurrentEmbeddingHash: fileEmbeddingHash(current.files['kept.md']),
+    snapshotRevision: blended.snapshot?.workspaceRevision,
+    semanticState: blended.status.semantic, lastBuildError: blended.status.lastBuildError?.stage,
+    returnedPaths: blended.results.map((entry) => entry.path),
+  }
+}
+
+// 2. Persistence's save/read invariant at a plausible embedding dimension.
+{
+  const root = temporaryRoot('semantic-byte-cap')
+  const count = 300
+  const dimension = 1536
+  const vectors = Array.from({ length: count }, (_, n) => ({
+    path: `src/file-${n}.ts`, embeddingHash: createHash('sha256').update(`file-${n}`).digest('hex'),
+    vector: Array.from({ length: dimension }, () => 0.012345678901234567),
+  }))
+  await saveSemanticVectors(root, 'synthetic-fingerprint', vectors)
+  const artifact = join(root, '.codebuff-index', 'semantic-vectors.json')
+  const saved = JSON.parse(readFileSync(artifact, 'utf8'))
+  const loaded = await loadSemanticVectors(root, 'synthetic-fingerprint')
+  results.semanticPersistence = {
+    root, vectors: count, dimension, artifactBytes: statSync(artifact).size,
+    readCapBytes: MAX_CHUNK_SIDECAR_BYTES,
+    persistedHashes: Object.keys(saved.fingerprints['synthetic-fingerprint'].vectors).length,
+    reloadedVectors: loaded.length,
+  }
+}
+
+// 3. Global capped postings eliminate a fully indexed scoped candidate.
+{
+  const files: Record<string, IndexedFile> = {}
+  for (let n = 0; n < 5000; n++) {
+    const path = `a/aaa${String(n).padStart(4, '0')}.ts`
+    files[path] = fixtureFile(path)
+  }
+  const target = 'zzz/aaatarget.py'
+  files[target] = fixtureFile(target)
+  const graph = { nodes: {}, edges: [] }
+  const index: MetadataIndex = { version: '2', projectRoot: '/synthetic', builtAt: Date.now(), fileCount: Object.keys(files).length, files, graph, queryData: buildIndexQueryData(files, graph) }
+  const options = { pathPrefixes: ['zzz'], fileTypes: ['py'], limit: 10 }
+  const candidates = getPostingCandidates(index, ['aaa'])!
+  results.scopedPostingRecall = {
+    indexedFiles: index.fileCount, target, candidateCount: candidates.size,
+    targetInCandidates: candidates.has(target),
+    accelerated: queryIndex(index, 'aaa', options).map((entry) => entry.path),
+    withoutAccelerator: queryIndex({ ...index, queryData: undefined }, 'aaa', options).map((entry) => entry.path),
+  }
+}
+
+// 4. An uneven tree whose entire eligible set fits maxFiles.
+{
+  const root = temporaryRoot('walker-fairness')
+  mkdirSync(join(root, 'a'))
+  mkdirSync(join(root, 'b'))
+  for (let n = 0; n < 90; n++) writeFileSync(join(root, 'a', `file-${n}.txt`), 'x')
+  writeFileSync(join(root, 'b', 'only.txt'), 'x')
+  const walk = await walkProjectDetailed(root, [], 100)
+  results.walkerFairness = {
+    root, eligibleFiles: 91, configuredMaxFiles: 100, returnedFiles: walk.files.length,
+    truncated: walk.truncated, skippedFiles: walk.skippedFiles, skippedPrefixes: walk.skippedPrefixes,
+  }
+}
+
+// 5. Persisted graph enrichment before and after an unchanged refresh.
+{
+  const root = temporaryRoot('precision-refresh')
+  for (const path of ['a.md', 'b.md', 'c.md']) writeFileSync(join(root, path), `# ${path}\nStandalone documentation\n`)
+  const manager = IndexManager.getInstance(root)
+  await manager.waitUntilReady(10_000)
+  const base = manager.getSnapshot()!
+  const beforeId = computeIndexSnapshotId(base)
+  const adopted = await manager.adoptMergedIndex(withEdge(base, preciseEdge('a.md', 'b.md', 'synthetic-A')), beforeId)
+  const savedBefore = await loadIndex(root)
+  const before = manager.query('', { mode: 'references', from: 'b.md' })
+  manager.markStale()
+  await manager.waitUntilReady(10_000)
+  const savedAfter = await loadIndex(root)
+  const after = manager.query('', { mode: 'references', from: 'b.md' })
+  results.precisionRefresh = {
+    root, adopted, savedPreciseBefore: savedBefore?.graph.edges.filter((edge) => edge.confidence === 'precise').length,
+    savedPreciseAfter: savedAfter?.graph.edges.filter((edge) => edge.confidence === 'precise').length,
+    beforeReferences: before.results.map((entry) => entry.path), afterReferences: after.results.map((entry) => entry.path),
+    beforeSnapshotId: beforeId, afterSnapshotId: after.snapshot?.snapshotId,
+  }
+}
+
+// 6. Two scans captured from one base can overwrite each other's graph result.
+{
+  const root = temporaryRoot('graph-adoption')
+  for (const path of ['a.md', 'b.md', 'c.md']) writeFileSync(join(root, path), `# ${path}\nStandalone documentation\n`)
+  const manager = IndexManager.getInstance(root)
+  await manager.waitUntilReady(10_000)
+  const base = manager.getSnapshot()!
+  const expected = computeIndexSnapshotId(base)
+  const first = withEdge(base, preciseEdge('a.md', 'b.md', 'synthetic-A'))
+  const staleSecond = withEdge(base, preciseEdge('c.md', 'b.md', 'synthetic-B'))
+  const firstAccepted = await manager.adoptMergedIndex(first, expected)
+  const idAfterFirst = computeIndexSnapshotId(manager.getSnapshot()!)
+  const secondAccepted = await manager.adoptMergedIndex(staleSecond, expected)
+  results.graphAdoption = {
+    root, firstAccepted, staleSecondAccepted: secondAccepted,
+    baseSnapshotId: expected, afterFirstSnapshotId: idAfterFirst,
+    finalPreciseLabels: manager.getSnapshot()!.graph.edges.filter((edge) => edge.confidence === 'precise').map((edge) => edge.label),
+  }
+}
+
+// 7. The metadata 'byte' reducer measures UTF-16 code units.
+{
+  const unicode = fixtureFile('a.md')
+  unicode.concepts = ['界'.repeat(400)]
+  const index: MetadataIndex = { version: '2', projectRoot: '/synthetic', builtAt: 1, fileCount: 1, files: { 'a.md': unicode }, graph: { nodes: {}, edges: [] } }
+  const budget = 1024
+  const reduced = reduceIndexForByteCap(index, budget)
+  const compact = JSON.stringify(reduced.index)
+  results.metadataUtf8 = { budgetBytes: budget, reportedSize: reduced.size, utf8Bytes: Buffer.byteLength(compact, 'utf8'), reduced: reduced.reduced, tiers: reduced.tiers }
+}
+
+writeFileSync(join(evidenceRoot, '08-indexer-probes.json'), JSON.stringify(results, null, 2) + '\n')
+console.log(JSON.stringify(results, null, 2))

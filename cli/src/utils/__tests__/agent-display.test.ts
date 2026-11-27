@@ -137,3 +137,78 @@ describe('truncateToSingleLinePreview', () => {
     )
   })
 })
+
+describe('folded agent outcome previews', () => {
+  test('failed, partial and completed content leads before the original request', async () => {
+    const { getAgentOutcomePreview } = await import('../agent-display')
+    for (const status of ['failed', 'partial', 'complete'] as const) {
+      const block = createAgentBlock({
+        status,
+        agentType: 'custom',
+        initialPrompt: 'Original request',
+        content: 'Captured final outcome',
+      })
+      expect(getAgentOutcomePreview(block)).toContain('Captured final outcome')
+      expect(getAgentOutcomePreview(block)).not.toContain('Original request')
+      expect(getAgentDisplayPrompt(block)).toBe('Original request')
+    }
+  })
+  test('empty output and failed retained tool evidence are explicit', async () => {
+    const { getAgentOutcomePreview } = await import('../agent-display')
+    expect(getAgentOutcomePreview(createAgentBlock({ status: 'failed' }))).toBe(
+      'Failed · no captured output',
+    )
+    expect(
+      getAgentOutcomePreview(
+        createAgentBlock({
+          status: 'failed',
+          blocks: [
+            {
+              type: 'tool',
+              toolName: 'read_files',
+              toolCallId: 'f',
+              input: {},
+              outputRaw: [
+                {
+                  type: 'json',
+                  value: { errorMessage: 'captured failure cause' },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toContain('captured failure cause')
+  })
+
+  test('restored agents with missing lifecycle do not imply completion', async () => {
+    const { getAgentOutcomePreview } = await import('../agent-display')
+    expect(
+      getAgentOutcomePreview(createAgentBlock({ status: undefined })),
+    ).toBe('Outcome unknown · no captured output')
+  })
+  test('accepted NON_BLOCKING retains its exact verdict and pending proposal cannot attest it', async () => {
+    const { getAgentOutcomeVerdict } = await import('../agent-display')
+    const receipt = {
+      type: 'tool' as const,
+      toolName: 'set_output' as const,
+      toolCallId: 'r',
+      input: { status: 'NON_BLOCKING' } as never,
+      lifecycle: 'succeeded' as const,
+      outputRaw: [{ type: 'json', value: { success: true } }],
+    }
+    expect(
+      getAgentOutcomeVerdict(
+        createAgentBlock({ status: 'complete', blocks: [receipt] }),
+      ),
+    ).toBe('NON_BLOCKING')
+    expect(
+      getAgentOutcomeVerdict(
+        createAgentBlock({
+          status: 'complete',
+          blocks: [{ ...receipt, lifecycle: 'running' }],
+        }),
+      ),
+    ).toBeNull()
+  })
+})

@@ -1,10 +1,14 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
-import { runTerminalCommand } from '@openbuff/sdk'
+import {
+  createConfiguredDirectHostExecution,
+  runTerminalCommand,
+} from '@openbuff/sdk'
 
 import {
   findCommand,
   findCommandSuggestions,
+  sendPromptCommand,
   type RouterParams,
   type CommandResult,
 } from './command-registry'
@@ -13,6 +17,7 @@ import { handleChatGptAuthCode } from '../components/chatgpt-connect-banner'
 import { buildInterviewPrompt, buildReviewPrompt } from './prompt-builders'
 import { getProjectRoot } from '../project-files'
 import { useChatStore } from '../state/chat-store'
+import { createRevisionBoundInputWriter } from '../utils/draft-writer'
 import { trackEvent } from '../utils/analytics'
 import {
   buildBashHistoryMessages,
@@ -21,27 +26,22 @@ import {
 import { showClipboardMessage } from '../utils/clipboard'
 import { getSystemProcessEnv } from '../utils/env'
 import { getSystemMessage, getUserMessage } from '../utils/message-history'
+import {} from '../utils/openbuff-provider'
 import {
-  handleOpenbuffModelsWizardInput,
-  handleOpenbuffProviderWizardInput,
-} from '../utils/openbuff-provider'
-import {
-  capturePendingAttachments,
-  hasProcessingFiles,
-  hasProcessingImages,
+  getPromptAttachmentBlockReason,
   validateAndAddImage,
 } from '../utils/pending-attachments'
 import {
   finishBashCommand,
   registerBashCommand,
 } from '../utils/bash-command-controller'
-const INTERACTIVE_BASH_TIMEOUT_SECONDS = 10 * 60
+import * as turnSnapshots from '../utils/turn-snapshots'
 
 /**
  * Run a bash command with automatic ghost/direct mode selection.
  * Uses ghost mode when streaming or chain in progress, otherwise adds directly to chat history.
  */
-export function runBashCommand(command: string) {
+export async function runBashCommand(command: string) {
   const {
     streamingAgents,
     isChainInProgress,
@@ -50,10 +50,26 @@ export function runBashCommand(command: string) {
     updatePendingBashMessage,
   } = useChatStore.getState()
 
+  // Fail closed at the single execution choke point so every dispatch path
+  // (routeUserPrompt bash mode, '!'-prefixed input, and the /bash <args>
+  // slash command) is covered: a running bisection is rewriting the tracked
+  // working tree, and a shell command mutating tracked files mid-probe would
+  // be silently clobbered by the bisection's final restore.
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    setMessages((prev) => [
+      ...prev,
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before running a shell command.',
+      ),
+    ])
+    return
+  }
+
   const ghost = streamingAgents.size > 0 || isChainInProgress
   const id = crypto.randomUUID()
   const abortController = registerBashCommand(id)
   const commandCwd = process.cwd()
+  const commandEnv = { ...getSystemProcessEnv() }
   const startTime = Date.now()
 
   if (ghost) {
@@ -79,18 +95,106 @@ export function runBashCommand(command: string) {
     setMessages((prev) => [...prev, assistantMessage])
   }
 
-  runTerminalCommand({
-    command,
-    process_type: 'SYNC',
-    cwd: commandCwd,
-    timeout_seconds: INTERACTIVE_BASH_TIMEOUT_SECONDS,
-    env: getSystemProcessEnv(),
-    signal: abortController.signal,
-  })
+  // Bounded pre-dispatch snapshot (finding a, p2-c-turn-snapshots): the
+  // capture is AWAITED before dispatch so a fast mutating command (`rm
+  // tracked-file`) cannot beat the snapshot's `git write-tree` and make the
+  // 'shell' snapshot record the POST-mutation tree (which /undo-turn would
+  // then restore). Shell commands are long-lived, so the bounded capture
+  // (5s timeout inside capturePreDispatchSnapshot; on timeout it logs once
+  // and the outcome is 'skipped' so dispatch proceeds) is acceptable
+  // latency. Single choke point covering both ghost and direct modes;
+  // The after-state is covered by the next turn's snapshot. Failures surface through
+  // logTurnSnapshotFailure (finding b): one latched warning per distinct
+  // error — never silent, never spammy.
+  // An owned overlapping capture is different from a bounded timeout on
+  // our own capture. A command must not mutate the tree ahead of the other
+  // snapshot's git add -u and attribute its bytes to that earlier turn.
+  const snapshot = await turnSnapshots
+    .capturePreDispatchSnapshot({ label: 'shell' })
+    .catch(() => undefined)
+  if (snapshot) turnSnapshots.logTurnSnapshotFailure(snapshot, 'shell')
+
+  return Promise.resolve()
+    .then(() => {
+      if (snapshot && (snapshot.status === 'skipped' || snapshot.status === 'error') && snapshot.dispatchBlocked) {
+        const cause = snapshot.status === 'skipped' ? snapshot.reason : snapshot.message
+        throw new Error(`Shell command not dispatched: ${cause}`)
+      }
+      return createConfiguredDirectHostExecution({
+        cwd: commandCwd,
+        projectRoot: getProjectRoot(),
+        mode: 'user',
+        limit: { kind: 'unbounded' },
+        env: commandEnv,
+        inheritEnv: false,
+        signal: abortController.signal,
+      })
+    })
+    .then(async (host) => {
+      if (!host.ok) throw new Error(host.cause)
+      let result: Awaited<ReturnType<typeof runTerminalCommand>> | undefined
+      try {
+        result = await runTerminalCommand({
+          command,
+          process_type: 'SYNC',
+          cwd: commandCwd,
+          timeoutPolicy: host.value.hostServices.terminalTimeoutPolicy,
+          env: commandEnv,
+          signal: abortController.signal,
+          executionContext: host.value.executionContext,
+          terminalShell: host.value.hostServices.terminalShell,
+          getTerminalLaunchMetadata:
+            host.value.hostServices.getTerminalLaunchMetadata,
+        })
+      } finally {
+        try {
+          const cleanup = await host.value.close()
+          if (
+            cleanup.some((observation) => observation.status !== 'complete')
+          ) {
+            throw new Error('Shell command process cleanup remains unconfirmed')
+          }
+        } catch (error) {
+          if (!result) throw error
+          const value = result[0].value
+          const priorError =
+            'errorMessage' in value ? value.errorMessage : undefined
+          const cleanupError =
+            error instanceof Error ? error.message : String(error)
+          result = [
+            {
+              ...result[0],
+              value: {
+                ...value,
+                errorMessage: [priorError, cleanupError]
+                  .filter(Boolean)
+                  .join('\n'),
+              },
+            },
+          ]
+        }
+      }
+      return result
+    })
     .then(([{ value }]) => {
       const stdout = 'stdout' in value ? value.stdout || '' : ''
-      const stderr = 'stderr' in value ? value.stderr || '' : ''
-      const exitCode = 'exitCode' in value ? (value.exitCode ?? 0) : 0
+      let stderr = 'stderr' in value ? value.stderr || '' : ''
+      const targetExitCode = 'exitCode' in value ? value.exitCode : undefined
+      const hasExitCode =
+        typeof targetExitCode === 'number' && Number.isFinite(targetExitCode)
+      const refusal =
+        'executionRefusal' in value ? value.executionRefusal : undefined
+      const errorMessage =
+        ('errorMessage' in value ? value.errorMessage : undefined) ||
+        refusal?.cause ||
+        (!hasExitCode ? 'Shell command returned no target exit status' : '')
+      const exitCode =
+        hasExitCode && !(errorMessage && targetExitCode === 0)
+          ? targetExitCode
+          : 1
+      if (errorMessage && !stderr.includes(errorMessage)) {
+        stderr = [stderr, errorMessage].filter(Boolean).join('\n')
+      }
 
       // Track terminal command completion
       const durationMs = Date.now() - startTime
@@ -259,25 +363,45 @@ export function addBashMessageToHistory(params: {
 export async function routeUserPrompt(
   params: RouterParams,
 ): Promise<CommandResult> {
+  if (params.preserveInputValue) {
+    params = { ...params, setInputValue: () => {} }
+  } else {
+    const draft = useChatStore.getState()
+    const setInputValue = createRevisionBoundInputWriter(
+      params.setInputValue,
+      () => useChatStore.getState().inputRevision,
+    )
+    params = {
+      ...params,
+      submittedDraft:
+        draft.inputValue === params.inputValue
+          ? {
+              text: draft.inputValue,
+              cursorPosition: draft.cursorPosition,
+              lastEditDueToNav: draft.lastEditDueToNav,
+            }
+          : undefined,
+      setInputValue,
+      isSubmittedDraftCurrent: setInputValue.isCurrent,
+    }
+  }
   const {
     agentMode,
     inputRef,
     inputValue,
-    isChainInProgressRef,
-    isStreaming,
-    streamMessageIdRef,
-    addToQueue,
     saveToHistory,
-    scrollToLatest,
-    sendMessage,
     setInputFocused,
     setInputValue,
     setMessages,
   } = params
 
-  const inputMode = useChatStore.getState().inputMode
+  const inputMode = params.preserveInputValue
+    ? 'default'
+    : useChatStore.getState().inputMode
   const setInputMode = useChatStore.getState().setInputMode
-  const pendingAttachments = useChatStore.getState().pendingAttachments
+  const pendingAttachments = params.preserveInputValue
+    ? []
+    : useChatStore.getState().pendingAttachments
   const pendingImages = pendingAttachments.filter((a) => a.kind === 'image')
   const pendingTextAttachments = pendingAttachments.filter(
     (a) => a.kind === 'text',
@@ -305,6 +429,35 @@ export async function routeUserPrompt(
     mentionCount: mentionMatches.length,
   })
 
+  // A running bisection is rewriting the tracked working tree. A user shell
+  // command dispatched now would mutate tracked files mid-probe that the
+  // bisection's final restore silently clobbers (and its own 'shell'
+  // snapshot would chain onto a probed tree mid-run), so bash dispatch
+  // fails closed exactly like agent dispatch. This must sit BEFORE the
+  // bash-mode and '!' dispatch paths below so both are covered.
+  if (
+    (inputMode === 'bash' || trimmed.startsWith('!')) &&
+    turnSnapshots.isTurnBisectionRunning()
+  ) {
+    if (inputMode === 'bash') {
+      saveToHistory('!' + trimmed)
+      setInputMode('default')
+      setInputFocused(true)
+      inputRef.current?.focus()
+    } else {
+      saveToHistory(trimmed)
+    }
+    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
+    setMessages((prev) => [
+      ...prev,
+      getUserMessage(trimmed),
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before running a shell command.',
+      ),
+    ])
+    return
+  }
+
   // Handle bash mode commands
   if (inputMode === 'bash') {
     const commandWithBang = '!' + trimmed
@@ -314,40 +467,48 @@ export async function routeUserPrompt(
     setInputFocused(true)
     inputRef.current?.focus()
 
-    runBashCommand(trimmed)
+    void runBashCommand(trimmed)
     return
   }
 
   // Handle interview mode input
   if (inputMode === 'interview') {
     if (!trimmed) return
+    const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
+    if (attachmentBlock) {
+      showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+      return { status: 'not-started', reason: attachmentBlock }
+    }
+    if (turnSnapshots.isTurnBisectionRunning()) {
+      return { status: 'not-started', reason: 'bisection-active' }
+    }
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setInputMode('default')
     setInputFocused(true)
     inputRef.current?.focus()
 
-    sendMessage({ content: buildInterviewPrompt(trimmed), agentMode })
-    setTimeout(() => {
-      scrollToLatest()
-    }, 0)
-    return
+    return sendPromptCommand(params, buildInterviewPrompt(trimmed))
   }
 
   // Handle review mode input
   if (inputMode === 'review') {
     if (!trimmed) return
+    const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
+    if (attachmentBlock) {
+      showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+      return { status: 'not-started', reason: attachmentBlock }
+    }
+    if (turnSnapshots.isTurnBisectionRunning()) {
+      return { status: 'not-started', reason: 'bisection-active' }
+    }
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setInputMode('default')
     setInputFocused(true)
     inputRef.current?.focus()
 
-    sendMessage({ content: buildReviewPrompt('custom', trimmed), agentMode })
-    setTimeout(() => {
-      scrollToLatest()
-    }, 0)
-    return
+    return sendPromptCommand(params, buildReviewPrompt('custom', trimmed))
   }
 
   // Handle bash commands from queue (starts with '!')
@@ -355,7 +516,7 @@ export async function routeUserPrompt(
     const command = trimmed.slice(1)
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-    runBashCommand(command)
+    void runBashCommand(command)
     return
   }
 
@@ -391,62 +552,20 @@ export async function routeUserPrompt(
     const code = trimmed
     if (code) {
       const result = await handleChatGptAuthCode(code)
+      // Authorization input and upstream errors may carry credentials.
+      // Persist only the connection outcome in this legacy dispatch path.
       setMessages((prev) => [
         ...prev,
-        getUserMessage(trimmed),
-        getSystemMessage(result.message),
+        getSystemMessage(
+          result.success
+            ? 'ChatGPT connection completed. Open Providers & models to review routing.'
+            : 'ChatGPT connection failed. Start the connection again from Providers & models.',
+        ),
       ])
     }
 
-    saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setInputMode('default')
-    return
-  }
-
-  if (inputMode === 'openbuff:provider') {
-    let result: { done: boolean; message: string }
-    try {
-      result = handleOpenbuffProviderWizardInput(trimmed)
-    } catch (error) {
-      result = {
-        done: true,
-        message: error instanceof Error ? error.message : String(error),
-      }
-    }
-    setMessages((prev) => [
-      ...prev,
-      getUserMessage(trimmed),
-      getSystemMessage(result.message),
-    ])
-    saveToHistory(trimmed)
-    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-    if (result.done) {
-      setInputMode('default')
-    }
-    return
-  }
-
-  if (inputMode === 'openbuff:models') {
-    let result: { done: boolean; message: string }
-    try {
-      result = handleOpenbuffModelsWizardInput(trimmed)
-    } catch (error) {
-      result = {
-        done: true,
-        message: error instanceof Error ? error.message : String(error),
-      }
-    }
-    setMessages((prev) => [
-      ...prev,
-      getUserMessage(trimmed),
-      getSystemMessage(result.message),
-    ])
-    saveToHistory(trimmed)
-    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-    if (result.done) {
-      setInputMode('default')
-    }
     return
   }
 
@@ -455,6 +574,16 @@ export async function routeUserPrompt(
   if (parsedCommand) {
     const commandDef = findCommand(parsedCommand.command)
     if (commandDef) {
+      if (commandDef.producesPrompt(parsedCommand.args)) {
+        const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
+        if (attachmentBlock) {
+          showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+          return { status: 'not-started', reason: attachmentBlock }
+        }
+        if (turnSnapshots.isTurnBisectionRunning()) {
+          return { status: 'not-started', reason: 'bisection-active' }
+        }
+      }
       const argsLength = parsedCommand.args.length
       const analyticsPayload = {
         command: commandDef.name,
@@ -472,34 +601,7 @@ export async function routeUserPrompt(
     }
   }
 
-  // Regular message or unknown slash command - send to agent
-
-  // Block sending if attachments are still processing
-  if (hasProcessingImages() || hasProcessingFiles()) {
-    showClipboardMessage('processing attachments...', {
-      durationMs: 2000,
-    })
-    return
-  }
-
-  saveToHistory(trimmed)
-  setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-
-  if (
-    isStreaming ||
-    streamMessageIdRef.current ||
-    isChainInProgressRef.current
-  ) {
-    const pendingAttachmentsForQueue = capturePendingAttachments()
-    // Pass a copy of pending attachments to the queue
-    addToQueue(trimmed, pendingAttachmentsForQueue)
-
-    setInputFocused(true)
-    inputRef.current?.focus()
-    return
-  }
-
-  // Unknown slash command - show error
+  // Unknown commands are input errors, even while an agent is running.
   if (isSlashCommand(trimmed)) {
     // Track invalid/unknown command (only log command name, not full input for privacy)
     const attemptedCmd = trimmed.slice(1).split(/\s+/)[0]?.toLowerCase() || ''
@@ -513,6 +615,8 @@ export async function routeUserPrompt(
     const suggestionText =
       suggestions.length > 0 ? ` Did you mean: ${suggestions.join(', ')}?` : ''
 
+    saveToHistory(trimmed)
+    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setMessages((prev) => [
       ...prev,
       getUserMessage(trimmed),
@@ -523,11 +627,18 @@ export async function routeUserPrompt(
     return
   }
 
-  sendMessage({ content: trimmed, agentMode })
+  const attachmentBlock = getPromptAttachmentBlockReason(pendingAttachments)
+  if (attachmentBlock) {
+    showClipboardMessage(attachmentBlock, { durationMs: 3000 })
+    return { status: 'not-started', reason: attachmentBlock }
+  }
 
-  setTimeout(() => {
-    scrollToLatest()
-  }, 0)
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    return { status: 'not-started', reason: 'bisection-active' }
+  }
 
-  return
+  const prompt = params.preservePromptWhitespace ? inputValue : trimmed
+  saveToHistory(prompt)
+  setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
+  return sendPromptCommand(params, prompt)
 }

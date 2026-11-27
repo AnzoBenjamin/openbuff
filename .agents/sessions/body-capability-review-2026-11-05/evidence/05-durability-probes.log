@@ -1,0 +1,25 @@
+bun test v1.3.14 (0d9b296a)
+
+../../../../../tmp/openbuff-body-review-2026-11-05/evidence/05-durability-probes.test.ts:
+Using environment: test
+{"case":"main-checkpoint-run-id","originalRunId":"audit05-before-crash","resumedRunId":"audit05-after-resume","lookupRunIds":["audit05-after-resume"],"originalCompletedResultStillPresent":true}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > checkpoint main continuation mints a new run id before completed-result lookup [79.17ms]
+{"case":"model-tool-journal-coverage","historyContainsReadResult":true,"journalEventTypes":["llm_request","llm_response","step_boundary"]}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > model-driven tools execute and enter history without tool journal boundaries [11.94ms]
+{"case":"acp-session-continuity","secondPromptCarriesPreviousRun":false,"secondPromptCarriesRunJournal":false,"missingSessionLoadResult":{},"advertisedJournalAvailable":true}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > ACP drops prior core run state and accepts a missing journal session [5.63ms]
+{"case":"socket-stale-lock","restartRejected":true,"lockContainsOwnerIdentity":false,"message":"Error: refusing to serve: lock file already exists (another server may own it): /tmp/openbuff-body-review-2026-11-05/evidence/05-socket-lock-di-ZklC0t/service.sock.lock"}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > socket startup refuses an anonymous lock left after a killed holder [0.65ms]
+{"case":"acp-reattach-running-owner","originalRunRemainsUncancelled":true,"secondPromptAdmittedBeforeOriginalSettled":true}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > ACP reconnect loses control of the running turn and admits another prompt [1.61ms]
+{"case":"replay-response-field","runtimePayloadHasFullResponse":true,"emittedText":"","successfulExitCode":0}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > JSON replay discards the runtime fullResponse payload field [1.80ms]
+{"case":"lease-expiry-live-owner","overlappingOwnerAdmitted":true,"originalRecordStatus":"active"}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > an expired lease admits an overlapping owner while original durable state stays active [25.09ms]
+{"case":"snapshot-concurrent-publish","bothReportedCreated":true,"commitsHaveSameParent":true,"updateRefIncludesExpectedOldSha":false,"reachablePublishedTip":"dddddddddddddddddddddddddddddddddddddddd"}
+(pass) isolated durability audit DI probes; no providers or real workspace effects > concurrent snapshot producers both succeed while publishing sibling commits to one ref [4.45ms]
+
+ 8 pass
+ 0 fail
+ 24 expect() calls
+Ran 8 tests across 1 file. [1138.00ms]

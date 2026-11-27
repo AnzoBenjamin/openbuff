@@ -1,0 +1,25 @@
+bun test v1.4.4 (38afee6c8)
+
+common/src/util/__tests__/run-output-schema.test.ts:
+(pass) nonexecutable run-output schema capture > nonenumerable toJSON cannot replace the inspected schema or execute [0.49ms]
+(pass) nonexecutable run-output schema capture > accessors are rejected without evaluating their returned schema [0.05ms]
+(pass) nonexecutable run-output schema capture > symbol and sparse-array data refuse instead of disappearing during capture [0.06ms]
+61 |           'Run output schema arrays must contain only indexed JSON values.',
+62 |         )
+63 |       if (key === '$ref')
+64 |         throw new Error(
+65 |           'Run output schema references are unsupported; inline the object schema.',
+66 |         )
+             ^
+error: Run output schema references are unsupported; inline the object schema.
+      at copy (/home/ben/Code/CLI/openbuff/common/src/util/run-output-schema.ts:66:9)
+      at copy (/home/ben/Code/CLI/openbuff/common/src/util/run-output-schema.ts:69:21)
+      at captureRunOutputSchema (/home/ben/Code/CLI/openbuff/common/src/util/run-output-schema.ts:78:20)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/common/src/util/__tests__/run-output-schema.test.ts:48:22)
+(fail) nonexecutable run-output schema capture > literal $ref output property names and literal annotation data are not schema references [0.15ms]
+(pass) nonexecutable run-output schema capture > plain parsed JSON retains its exact prototype-like property names and validation constraints [19.13ms]
+
+ 4 pass
+ 1 fail
+ 10 expect() calls
+Ran 5 tests across 1 file. [52.00ms]

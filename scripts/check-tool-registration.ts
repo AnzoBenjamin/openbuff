@@ -20,6 +20,7 @@ import { toolMetadata } from '@codebuff/common/tools/metadata'
  */
 
 const repoRoot = join(import.meta.dir, '..')
+const runtimeInternalTools = new Set(['tool_load', 'tool_search'])
 
 interface Check {
   label: string
@@ -83,6 +84,7 @@ export function sourceRegistersHandlerKey(
 export function checkTool(tool: string): Check[] {
   const quoted = `'${tool}'`
   const handlerImport = `./tool/${tool.replace(/_/g, '-')}`
+  const isRuntimeInternal = runtimeInternalTools.has(tool)
 
   return [
     {
@@ -95,8 +97,12 @@ export function checkTool(tool: string): Check[] {
       ok: Object.prototype.hasOwnProperty.call(toolParams, tool),
     },
     {
-      label: 'tool is included in the published SDK tool surface',
-      ok: (publishedTools as readonly string[]).includes(tool),
+      label: isRuntimeInternal
+        ? 'runtime-internal control is excluded from the published SDK surface'
+        : 'tool is included in the published SDK tool surface',
+      ok: isRuntimeInternal
+        ? !(publishedTools as readonly string[]).includes(tool)
+        : (publishedTools as readonly string[]).includes(tool),
     },
     {
       label: 'runtime handler registered in agent-runtime handlers/list.ts',
@@ -107,29 +113,49 @@ export function checkTool(tool: string): Check[] {
       detail: handlerImport,
     },
     {
-      label: 'SDK dispatch handles the tool in sdk/src/run.ts',
+      label: isRuntimeInternal
+        ? 'tool is dispatched within the agent-runtime loop'
+        : 'SDK dispatch handles the tool in sdk/src/run.ts',
       ok:
+        isRuntimeInternal ||
         fileMentions('sdk/src/run.ts', `toolName === '${tool}'`) ||
         fileMentions('sdk/src/run.ts', `toolName === "${tool}"`),
     },
     {
-      label: 'generated agent tool type present (agents/types/tools.ts)',
-      ok: fileMentions('agents/types/tools.ts', quoted),
+      label: isRuntimeInternal
+        ? 'internal control is excluded from generated public agent tool types'
+        : 'generated agent tool type present (agents/types/tools.ts)',
+      ok: isRuntimeInternal
+        ? !fileMentions('agents/types/tools.ts', quoted)
+        : fileMentions('agents/types/tools.ts', quoted),
     },
     {
-      label:
-        'initial .agents template tool type present (common/src/templates/initial-agents-dir/types/tools.ts)',
-      ok: fileMentions(
-        'common/src/templates/initial-agents-dir/types/tools.ts',
-        quoted,
-      ),
+      label: isRuntimeInternal
+        ? 'internal control is excluded from the initial public agent template'
+        : 'initial .agents template tool type present (common/src/templates/initial-agents-dir/types/tools.ts)',
+      ok: isRuntimeInternal
+        ? !fileMentions(
+            'common/src/templates/initial-agents-dir/types/tools.ts',
+            quoted,
+          )
+        : fileMentions(
+            'common/src/templates/initial-agents-dir/types/tools.ts',
+            quoted,
+          ),
     },
     {
-      label: 'CLI generated initial-agent type source contains the tool',
-      ok: fileMentions(
-        'cli/src/data/initial-agent-type-sources.generated.ts',
-        quoted,
-      ),
+      label: isRuntimeInternal
+        ? 'internal control is excluded from generated CLI starter types'
+        : 'CLI generated initial-agent type source contains the tool',
+      ok: isRuntimeInternal
+        ? !fileMentions(
+            'cli/src/data/initial-agent-type-sources.generated.ts',
+            quoted,
+          )
+        : fileMentions(
+            'cli/src/data/initial-agent-type-sources.generated.ts',
+            quoted,
+          ),
     },
     {
       label: 'CLI renderer metadata classifies the tool',

@@ -1,0 +1,155 @@
+"""Compare recovered numbered source lines, independently of missing byte hashes."""
+from collections import defaultdict
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import re
+import subprocess
+
+MODULE = Path(__file__).with_name('recover-recorded-data.py')
+SPEC = importlib.util.spec_from_file_location('recorded_review_data', MODULE)
+DATA = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(DATA)
+ROOT, BASE, EVIDENCE = DATA.ROOT, DATA.BASE, DATA.EVIDENCE
+EXCLUDED_KNOWLEDGE = {'cli/knowledge.md', 'common/knowledge.md', 'sdk/knowledge.md'}
+SOURCE_DIRS = {'.agents', '.github', 'agents', 'cli', 'common', 'docs', 'evals', 'openbuff.d.example', 'packages', 'rust', 'scripts', 'sdk', 'test'}
+ROOT_FILES = {'README.md', 'AGENTS.md', 'DESIGN.md', 'package.json', 'bunfig.toml', 'bun.lock', 'tsconfig.json', 'tsconfig.base.json', 'openbuff.config.json', 'docker-compose.yml', 'LICENSE', '.gitignore'}
+
+
+def allowed_path(name):
+    file = Path(name)
+    if file.is_absolute():
+        try:
+            file = file.relative_to(ROOT)
+        except ValueError:
+            return None
+    relative = file.as_posix()
+    if '..' in file.parts or relative in EXCLUDED_KNOWLEDGE:
+        return None
+    if any(part.startswith('.env') for part in file.parts):
+        return None
+    if file.parts[0] == 'node_modules':
+        if not relative.startswith('node_modules/@modelcontextprotocol/sdk/'):
+            return None
+    elif file.parts[0] not in SOURCE_DIRS and relative not in ROOT_FILES:
+        return None
+    return relative if (ROOT / relative).is_file() else None
+
+
+def numbered_lines(text):
+    for line in text.splitlines():
+        if any(marker in line for marker in ('tokens truncated', 'Warning: truncated output', 'original token count')):
+            continue
+        match = re.match(r'^[ \t]*(\d+)(?:\t|: | )(.*)$', line)
+        if match:
+            yield int(match.group(1)), match.group(2)
+
+
+def digest_lines(lines):
+    return hashlib.sha256(('\n'.join(lines) + '\n').encode()).hexdigest()
+
+
+def main():
+    observations = defaultdict(lambda: defaultdict(dict))
+    excluded = set()
+
+    def record(name, text, meta, minimum=None, maximum=None):
+        relative = allowed_path(name)
+        if relative is None:
+            excluded.add(name)
+            return
+        for number, content in numbered_lines(text):
+            if (minimum is not None and number < minimum) or (maximum is not None and number > maximum):
+                continue
+            observations[relative][number].setdefault(content, []).append(meta)
+
+    for entry, capture in DATA.CAPTURES:
+        for location, value in DATA.walk(capture):
+            if isinstance(value, dict):
+                selection = next((value[key] for key in ('selection', 'read', 'entry') if isinstance(value.get(key), dict) and isinstance(value[key].get('path'), str)), None)
+                if selection:
+                    for child_location, child in DATA.walk(value):
+                        if isinstance(child, dict) and isinstance(child.get('output'), str):
+                            record(selection['path'], child['output'], DATA.provenance(entry, location + child_location[1:]), selection.get('from'), selection.get('to'))
+            if not isinstance(value, str):
+                continue
+            # The FILE form is the explicit path/range header used by pair09.
+            for match in re.finditer(r'^FILE (.+) L(\d+)-L(\d+)\n(.*?)(?=^FILE |\Z)', value, re.M | re.S):
+                record(match.group(1), match.group(4), DATA.provenance(entry, location), int(match.group(2)), int(match.group(3)))
+            # The other slice helpers print an unnumbered relative path followed
+            # by numbered source lines. Exclude prose and tool metadata here.
+            for match in re.finditer(r'^([A-Za-z_.][^\n ]*(?:/[^\n ]*)?)\n((?:[ \t]*\d+(?:\t|: | ).*(?:\n|\Z))+)', value, re.M):
+                rows = list(numbered_lines(match.group(2)))
+                # File listings followed by wc totals or rg match numbers have
+                # a similar surface. A slice is a contiguous sequence, and an
+                # unlabelled single row cannot establish which reader produced it.
+                if len(rows) < 2 or any(right[0] != left[0] + 1 for left, right in zip(rows, rows[1:])):
+                    continue
+                record(match.group(1), match.group(2), DATA.provenance(entry, location))
+
+    windows = []
+    conflicts = []
+    changed_lines = []
+    source_files = []
+    line_total = 0
+    for relative, line_map in sorted(observations.items()):
+        current = (ROOT / relative).read_text().splitlines()
+        accepted = {}
+        for number, variants in sorted(line_map.items()):
+            if len(variants) != 1:
+                conflicts.append({'path': relative, 'line': number, 'capturedVariantCount': len(variants)})
+                continue
+            content, receipts = next(iter(variants.items()))
+            accepted[number] = (content, receipts)
+            if number > len(current) or current[number - 1] != content:
+                changed_lines.append({'path': relative, 'line': number, 'capturedLineSha256': hashlib.sha256(content.encode()).hexdigest(), 'currentLineSha256': hashlib.sha256(current[number - 1].encode()).hexdigest() if number <= len(current) else None})
+        numbers = sorted(accepted)
+        if not numbers:
+            continue
+        source_files.append(relative)
+        line_total += len(numbers)
+        groups = []
+        for number in numbers:
+            if not groups or number != groups[-1][-1] + 1:
+                groups.append([])
+            groups[-1].append(number)
+        for group in groups:
+            captured_lines = [accepted[number][0] for number in group]
+            current_lines = current[group[0] - 1:group[-1]]
+            receipts = {}
+            for number in group:
+                for receipt in accepted[number][1]:
+                    receipts[(receipt['capture'], receipt.get('location'))] = receipt
+            captured_hash = digest_lines(captured_lines)
+            current_hash = digest_lines(current_lines)
+            windows.append({'path': relative, 'from': group[0], 'to': group[-1], 'lineCount': len(group), 'capturedNormalizedLinesSha256': captured_hash, 'currentNormalizedLinesSha256': current_hash, 'matches': captured_hash == current_hash and len(current_lines) == len(group), 'provenance': list(receipts.values())})
+
+    binding = {'schemaVersion': 1, 'kind': 'recovered-numbered-source-line-window-comparison', 'createdAt': datetime.now(timezone.utc).isoformat(), 'normalization': 'Original numbered output prefixes are removed. Source lines use Python splitlines and LF joining with one final newline; original whole-file bytes, line endings, final-newline presence, and uninspected tails are not certified.', 'sourceFileCount': len(source_files), 'windowCount': len(windows), 'uniqueCapturedLineCount': line_total, 'matchingWindowCount': sum(window['matches'] for window in windows), 'changedLines': changed_lines, 'conflictingCapturedLines': conflicts, 'excludedKnowledgeFiles': sorted(EXCLUDED_KNOWLEDGE), 'excludedOrUnavailableCapturedPaths': sorted(excluded), 'windows': windows}
+    artifact = DATA.write_json('recovered-source-line-bindings.json', binding)
+    head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    status = subprocess.run(['git', 'status', '--porcelain=v1', '--untracked-files=normal'], cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+    comparisons = DATA.historical_hash_comparisons()
+    stability = {'schemaVersion': 1, 'checkedAt': datetime.now(timezone.utc).isoformat(), 'originalHashMapRecovered': False, 'originalWholeFileHashCountRecorded': 558, 'originalWholeFileHashesRecovered': 0, 'originalWholeFileHashComparisonPossible': False, 'currentHEAD': head, 'recordedReviewHEAD': 'e65c06c0ae783130998bd9ab18c8d35320e40ea8', 'currentHEADMatchesRecorded': head == 'e65c06c0ae783130998bd9ab18c8d35320e40ea8', 'currentGitStatus': status, 'recordedSnapshotId': 'ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0', 'historicalHashComparisons': comparisons, 'historicalComparisonQualification': 'Four captured prior validator results reported 558 source hashes and changedSource=[]. Their original whole-byte map was not retained; those past comparisons do not permit a new byte comparison.', 'currentBindingMode': 'present HEAD plus exact recovered numbered line windows; future CURRENT-FILE-HASHES is a fresh independent baseline', 'capturedLineComparison': {key: binding[key] for key in ('sourceFileCount', 'windowCount', 'uniqueCapturedLineCount', 'matchingWindowCount', 'changedLines', 'conflictingCapturedLines', 'normalization', 'excludedKnowledgeFiles')}, 'capturedLineBindingArtifact': artifact, 'currentWholeFileHashes': {'path': 'CURRENT-FILE-HASHES.json', 'ownership': 'root validator', 'status': 'to be generated after report freeze', 'originalBaseline': False}, 'limits': ['Same HEAD does not prove uncommitted working bytes match the original review.', 'Line-window agreement does not bind bytes outside recovered windows, EOL encoding, or original whole-file hashes.', 'User-modified cli/common/sdk knowledge files are deliberately excluded from recovered byte or line stability claims.', 'No original source hashes were inferred from present files or the native prefix snapshot.']}
+    (BASE / 'SOURCE-STABILITY.json').write_text(json.dumps(stability, indent=2) + '\n')
+    prose = f'''# Source assurance after recovery
+
+The original 558-file whole-byte hash map is unavailable. Four recovered prior validator results reported `baselineSourceHashes=558` and `changedSource=[]`, at 2026-11-06 00:12:38, 00:14:36, 00:31:28 and 00:40:01 UTC. Their complete recorded result objects and capture provenance are retained in [SOURCE-STABILITY.json](SOURCE-STABILITY.json). These are historical comparisons; a new comparison to that missing map cannot be performed.
+
+The present Git HEAD is `{head}`, {'matching' if stability['currentHEADMatchesRecorded'] else 'different from'} the recorded review HEAD. Recovered numbered source output supplies {len(windows):,} contiguous windows across {len(source_files):,} files, with {line_total:,} unique captured lines. {sum(window['matches'] for window in windows):,} windows match present source after the explicitly recorded line normalization. There are {len(changed_lines):,} differing lines and {len(conflicts):,} conflicting historical line observations. [The detailed binding](evidence/recovered-source-line-bindings.json) carries normalized hashes and capture provenance for every window.
+
+Line agreement does not certify original whole-file bytes, original line endings, or uninspected tails. The user's modified `cli/knowledge.md`, `common/knowledge.md` and `sdk/knowledge.md` are excluded from stability comparisons. Present status is recorded in the JSON without reading private environment/provider values or historical product logs.
+
+The root validator will create `CURRENT-FILE-HASHES.json` only after reports are frozen. It will be a fresh present-file baseline, separately named and dated. It must not be relabeled as the original 558-file audit baseline. Structural inspection coverage, historical diagnostic observations, source stability and product readiness remain separate assurance claims.
+'''
+    (BASE / 'SOURCE-STABILITY.md').write_text(prose)
+    manifest = json.loads((BASE / 'EVIDENCE-RECOVERY-MANIFEST.json').read_text())
+    manifest['sourceStability'] = {'path': 'SOURCE-STABILITY.json', 'originalHashMapRecovered': False, 'historicalComparisonsRecovered': len(comparisons), **{key: binding[key] for key in ('sourceFileCount', 'windowCount', 'uniqueCapturedLineCount', 'matchingWindowCount')}}
+    manifest['artifacts'] = [entry for entry in manifest['artifacts'] if entry['path'] != artifact['path']] + [artifact]
+    (BASE / 'EVIDENCE-RECOVERY-MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    print(json.dumps({'originalHashMapRecovered': False, 'historicalComparisonsRecovered': len(comparisons), 'currentHEADMatchesRecorded': stability['currentHEADMatchesRecorded'], 'sourceFiles': len(source_files), 'capturedWindows': len(windows), 'capturedUniqueLines': line_total, 'matchingWindows': sum(window['matches'] for window in windows), 'changedLines': len(changed_lines), 'conflictingLines': len(conflicts)}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

@@ -3,7 +3,7 @@ import { withSystemTags } from '@codebuff/agent-runtime/util/messages'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { getStubProjectFileContext } from '@codebuff/common/util/file'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { RetryError } from 'ai'
 import { ProjectIdSchema, type MemoryAppendOutcome } from '@codebuff/common/types/memory-v2'
 import type { MemoryRepositoryV2 } from '../services/memory-v2/types'
@@ -18,10 +18,14 @@ interface ToolCallContentBlock {
 
 import { OpenbuffClient } from '../client'
 import * as databaseModule from '../impl/database'
+import { beginSdkCallback, createSdkCallbackFixture } from './sdk-callback-fixture'
 
 describe('Run Cancellation Handling', () => {
+  let fixture: ReturnType<typeof createSdkCallbackFixture>
+  beforeEach(() => { fixture = createSdkCallbackFixture('cancellation') })
   afterEach(() => {
     mock.restore()
+    fixture.close()
   })
 
   it('does not duplicate user message when server responds with session state', async () => {
@@ -49,13 +53,15 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         await sendAction({
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -64,7 +70,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -74,7 +80,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -121,6 +127,8 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         // Stream some content
@@ -136,7 +144,7 @@ describe('Run Cancellation Handling', () => {
         abortController.abort()
 
         // Simulate agent runtime adding interruption message on abort
-        serverSessionState.mainAgentState.messageHistory.push(
+        callback.sessionState.mainAgentState.messageHistory.push(
           userMessage(
             withSystemTags(
               "User interrupted the response. The assistant's previous work has been preserved.",
@@ -149,7 +157,7 @@ describe('Run Cancellation Handling', () => {
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -158,7 +166,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -168,7 +176,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -228,7 +236,7 @@ describe('Run Cancellation Handling', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockRejectedValue(apiError)
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -290,7 +298,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -338,7 +346,7 @@ describe('Run Cancellation Handling', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockRejectedValue(apiError)
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -383,7 +391,7 @@ describe('Run Cancellation Handling', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockRejectedValue(apiError)
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -422,7 +430,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -483,13 +491,15 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         // Abort immediately WITHOUT any streaming chunks
         abortController.abort()
 
         // Simulate agent runtime adding interruption message on abort
-        serverSessionState.mainAgentState.messageHistory.push(
+        callback.sessionState.mainAgentState.messageHistory.push(
           userMessage(
             withSystemTags(
               "User interrupted the response. The assistant's previous work has been preserved.",
@@ -501,7 +511,7 @@ describe('Run Cancellation Handling', () => {
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -510,7 +520,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -520,7 +530,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -581,7 +591,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -669,6 +679,8 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         // Simulate some streaming chunks before abort
@@ -682,9 +694,11 @@ describe('Run Cancellation Handling', () => {
 
         // Abort the signal to simulate user cancellation
         abortController.abort()
+        // Let cancellation unwind before the runtime publishes its final history.
+        await new Promise<void>(resolve => setImmediate(resolve))
 
         // Simulate agent runtime adding interruption message on abort
-        serverSessionState.mainAgentState.messageHistory.push(
+        callback.sessionState.mainAgentState.messageHistory.push(
           userMessage(
             withSystemTags(
               "User interrupted the response. The assistant's previous work has been preserved.",
@@ -697,7 +711,7 @@ describe('Run Cancellation Handling', () => {
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -706,7 +720,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -716,7 +730,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -777,13 +791,15 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         // Abort before sending response
         abortController.abort()
 
         // Simulate agent runtime adding interruption message on abort
-        serverSessionState.mainAgentState.messageHistory.push(
+        callback.sessionState.mainAgentState.messageHistory.push(
           userMessage(
             withSystemTags(
               "User interrupted the response. The assistant's previous work has been preserved.",
@@ -795,7 +811,7 @@ describe('Run Cancellation Handling', () => {
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -804,7 +820,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -814,7 +830,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -862,7 +878,7 @@ describe('Run Cancellation Handling', () => {
     abortController.abort()
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -901,13 +917,15 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         await sendAction({
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -916,7 +934,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -926,7 +944,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     // Run without aborting
@@ -971,6 +989,8 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...firstRunServerState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         // Stream some content
@@ -986,7 +1006,7 @@ describe('Run Cancellation Handling', () => {
         abortController.abort()
 
         // Agent runtime adds interruption message on abort
-        firstRunServerState.mainAgentState.messageHistory.push(
+        callback.sessionState.mainAgentState.messageHistory.push(
           userMessage(
             withSystemTags(
               "User interrupted the response. The assistant's previous work has been preserved.",
@@ -999,7 +1019,7 @@ describe('Run Cancellation Handling', () => {
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: firstRunServerState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -1008,7 +1028,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: firstRunServerState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -1018,7 +1038,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     // Run 1: cancelled mid-stream
@@ -1069,13 +1089,15 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...secondRunServerState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         await sendAction({
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: secondRunServerState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -1084,7 +1106,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: secondRunServerState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -1215,6 +1237,8 @@ describe('Run Cancellation Handling', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        callback.sessionState.mainAgentState.messageHistory = [...serverSessionState.mainAgentState.messageHistory]
         const { sendAction, promptId } = params
 
         // Stream some chunks
@@ -1232,7 +1256,7 @@ describe('Run Cancellation Handling', () => {
         abortController.abort()
 
         // Simulate agent runtime adding interruption message on abort
-        serverSessionState.mainAgentState.messageHistory.push(
+        callback.sessionState.mainAgentState.messageHistory.push(
           userMessage(
             withSystemTags(
               "User interrupted the response. The assistant's previous work has been preserved.",
@@ -1245,7 +1269,7 @@ describe('Run Cancellation Handling', () => {
           action: {
             type: 'prompt-response',
             promptId,
-            sessionState: serverSessionState,
+            sessionState: callback.sessionState,
             output: {
               type: 'lastMessage',
               value: [],
@@ -1254,7 +1278,7 @@ describe('Run Cancellation Handling', () => {
         })
 
         return {
-          sessionState: serverSessionState,
+          sessionState: callback.sessionState,
           output: {
             type: 'lastMessage' as const,
             value: [],
@@ -1264,7 +1288,7 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -1323,11 +1347,15 @@ describe('Run Cancellation Handling', () => {
     const signalObserved = new Promise<void>((resolve) => {
       signalReady = resolve
     })
+    let blockedReady!: () => void
+    const blocked = new Promise<void>(resolve => { blockedReady = resolve })
     let blockedToolCall = false
     const lateChunks: string[] = []
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const callback = await beginSdkCallback(params)
+        const pendingTool = await callback.prepare({ toolName: 'end_turn', input: {} })
         observedSignal = params.signal
         signalReady()
         await new Promise<void>((resolve) => {
@@ -1337,14 +1365,11 @@ describe('Run Cancellation Handling', () => {
           })
         })
         try {
-          await params.requestToolCall({
-            userInputId: params.promptId,
-            toolName: 'end_turn',
-            input: {},
-          })
+          await params.requestToolCall(pendingTool)
         } catch {
           blockedToolCall = true
         }
+        blockedReady()
         await cleanupGate
         await params.sendAction({
           action: {
@@ -1353,7 +1378,7 @@ describe('Run Cancellation Handling', () => {
             chunk: 'late chunk',
           },
         })
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const sessionState = params.action.sessionState
         return {
           sessionState,
           output: { type: 'lastMessage' as const, value: [] },
@@ -1362,8 +1387,8 @@ describe('Run Cancellation Handling', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
-      runTimeoutMs: 5,
+      ...fixture.options,
+      runTimeoutMs: 1_000,
     })
     let publiclySettled = false
     const runPromise = client
@@ -1379,17 +1404,21 @@ describe('Run Cancellation Handling', () => {
         return result
       })
 
-    await signalObserved
-    await new Promise((resolve) => setTimeout(resolve, 15))
-    expect(observedSignal?.aborted).toBe(true)
-    expect(blockedToolCall).toBe(true)
-    expect(publiclySettled).toBe(false)
-
-    releaseCleanup()
+    try {
+      await signalObserved
+      await blocked
+      // Keep cleanup pending for a full event-loop turn before observing settlement.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(observedSignal?.aborted).toBe(true)
+      expect(blockedToolCall).toBe(true)
+      expect(publiclySettled).toBe(false)
+    } finally {
+      releaseCleanup()
+    }
     const result = await runPromise
     expect(result.output).toMatchObject({
       type: 'error',
-      message: 'Run timed out after 5ms',
+      message: 'Run timed out after 1000ms',
     })
     expect(lateChunks).toEqual([])
   })
@@ -1436,8 +1465,8 @@ describe('Run Cancellation Handling', () => {
       })
       const abortController = new AbortController()
       const client = new OpenbuffClient({
-        apiKey: 'test-key',
-        runTimeoutMs: kind === 'timeout' ? 5 : undefined,
+        ...fixture.options,
+        runTimeoutMs: kind === 'timeout' ? 1_000 : undefined,
         memoryV2: {
           repository,
           projectId: ProjectIdSchema.parse('project:cancellation'),

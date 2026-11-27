@@ -1,0 +1,124 @@
+{
+  "runtime": "v24.3.0",
+  "classified": [
+    {
+      "command": "printf safe\npython3 -c \"print('secondary')\"",
+      "action": null,
+      "balancedDecision": null
+    },
+    {
+      "command": "npm install harmless-fixture && rm -rf harmless-fixture",
+      "action": {
+        "action": "dependency-install",
+        "target": "npm install harmless-fixture",
+        "commandHash": "ebc6f310eaabd510253da0586a1afe9dc170324cc95fa410c15f3542e0a1eab5"
+      },
+      "balancedDecision": {
+        "allowed": true,
+        "approvalRequired": false
+      }
+    },
+    {
+      "command": "git push origin feature && terraform apply",
+      "action": {
+        "action": "push",
+        "target": "origin/feature",
+        "branch": "feature",
+        "commandHash": "38e0df8c7545225fe19b3ffa78895ec707a8eb2c900c0ed597d67a9066029495"
+      },
+      "balancedDecision": {
+        "allowed": true,
+        "approvalRequired": false
+      }
+    },
+    {
+      "command": "git push --force origin feature",
+      "action": {
+        "action": "push",
+        "target": "git push --force origin feature",
+        "branch": "feature",
+        "commandHash": "7cf7abba379abe493f1e4eae5f615e5a8b295a0e9791c431a4be2f9b42cb40ed"
+      },
+      "balancedDecision": {
+        "allowed": true,
+        "approvalRequired": false
+      }
+    },
+    {
+      "command": "git push --delete origin feature",
+      "action": {
+        "action": "push",
+        "target": "git push --delete origin feature",
+        "branch": "feature",
+        "commandHash": "a3506de02d98b5cd5b63d9fa2002e7cf10815117db8642feabefa7af2942be08"
+      },
+      "balancedDecision": {
+        "allowed": true,
+        "approvalRequired": false
+      }
+    },
+    {
+      "command": "node -e \"process.stdout.write('a  b')\"",
+      "action": {
+        "action": "arbitrary-code",
+        "target": "node -e \"process.stdout.write('a b')\"",
+        "commandHash": "e23520aef345f9c2f2c04db16763e5b0ebad695199ec625b7aadb6b1ed9cc35d"
+      },
+      "balancedDecision": {
+        "allowed": false,
+        "approvalRequired": true,
+        "reason": "Action 'arbitrary-code' requires a snapshot-scoped user approval for 'node -e \"process.stdout.write('a b')\"'."
+      }
+    },
+    {
+      "command": "node -e \"process.stdout.write('a b')\"",
+      "action": {
+        "action": "arbitrary-code",
+        "target": "node -e \"process.stdout.write('a b')\"",
+        "commandHash": "e23520aef345f9c2f2c04db16763e5b0ebad695199ec625b7aadb6b1ed9cc35d"
+      },
+      "balancedDecision": {
+        "allowed": false,
+        "approvalRequired": true,
+        "reason": "Action 'arbitrary-code' requires a snapshot-scoped user approval for 'node -e \"process.stdout.write('a b')\"'."
+      }
+    }
+  ],
+  "quotedHashCollision": true,
+  "newlineRun": {
+    "approvalCalls": 0,
+    "result": [
+      {
+        "type": "json",
+        "value": {
+          "command": "printf safe\npython3 -c \"print('secondary')\"",
+          "startingCwd": "/tmp/openbuff-body-review-2026-11-05/evidence/09-work",
+          "stdout": "safesecondary\n",
+          "exitCode": 0
+        }
+      }
+    ]
+  },
+  "terminalEnv": [
+    {
+      "type": "json",
+      "value": {
+        "command": "python3 '/tmp/openbuff-body-review-2026-11-05/evidence/09-work/09-env-child.py'",
+        "startingCwd": "/tmp/openbuff-body-review-2026-11-05/evidence/09-work",
+        "stdout": "{\"sentinelPresent\": false, \"overridePresent\": false}\n",
+        "exitCode": 0
+      }
+    }
+  ],
+  "diagnosticInherited": {
+    "exitCode": 0,
+    "stdout": "{\"sentinelPresent\": true, \"overridePresent\": false}\n",
+    "stderr": ""
+  },
+  "diagnosticOverride": {
+    "exitCode": 0,
+    "stdout": "{\"sentinelPresent\": false, \"overridePresent\": true}\n",
+    "stderr": ""
+  },
+  "constraints": "No external requests; all executed commands only print synthetic text. All created files are in evidence/09-work."
+}

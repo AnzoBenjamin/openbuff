@@ -1,0 +1,482 @@
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
+import basher from './basher'
+import base2Plan from './base2/base2-plan'
+import contextPruner from './context-pruner'
+import debuggerAgent from './debugger/debugger'
+import generalAgent from './general-agent/general-agent'
+import { createBase2 } from './base2/base2'
+import browserUse from './browser-use/browser-use'
+import dependencyManager from './dependency-manager/dependency-manager'
+import docWriter from './doc-writer/doc-writer'
+import { createCodeEditor } from './editor/editor'
+import directoryLister from './file-explorer/directory-lister'
+import filePicker from './file-explorer/file-picker'
+import globMatcher from './file-explorer/glob-matcher'
+import { createGeneralAgent } from './general-agent/general-agent'
+import librarian from './librarian/librarian'
+import knowledgeRetriever from './memory/knowledge-retriever'
+import knowledgeReviewer from './memory/knowledge-reviewer'
+import memoryManager from './memory/memory-manager'
+import researcherDocs from './researcher/researcher-docs'
+import researcherWeb from './researcher/researcher-web'
+import codeReviewer from './reviewer/code-reviewer'
+import securityReviewer from './security-reviewer/security-reviewer'
+import accessibilityReviewer from './specialists/accessibility-reviewer'
+import architect from './specialists/architect'
+import compatibilityReviewer from './specialists/compatibility-reviewer'
+import dependencyReviewer from './specialists/dependency-reviewer'
+import docsArchitect from './specialists/docs-architect'
+import evaluator from './specialists/evaluator'
+import incidentCoordinator from './specialists/incident-coordinator'
+import integrationAgent from './specialists/integration-agent'
+import migrationReviewer from './specialists/migration-reviewer'
+import performanceSpecialist from './specialists/performance-specialist'
+import productReviewer from './specialists/product-reviewer'
+import releaseManager from './specialists/release-manager'
+import reliabilityReviewer from './specialists/reliability-reviewer'
+import uxVisualReviewer from './specialists/ux-visual-reviewer'
+import synthesizer from './synthesizer/synthesizer'
+import testWriter from './test-writer/test-writer'
+import thinker from './thinker/thinker'
+import tmuxCli from './tmux-cli'
+import {
+  quarantinedToolNames,
+  toolNames,
+} from '@codebuff/common/tools/constants'
+import {
+  getToolMetadata,
+  removedToolNames,
+  toolMetadata,
+} from '@codebuff/common/tools/metadata'
+import {
+  PLAN_MODE_ALLOWED_ARTIFACT_TOOL_NAMES,
+  PLAN_MODE_REFUSED_TOOL_NAMES,
+} from '@codebuff/common/tools/plan-mode-policy'
+import { deriveSpawnTemplateCapabilities } from '@codebuff/agent-runtime/tools/handlers/tool/spawn-agent-utils'
+import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
+
+import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+
+/**
+ * Guards against the "registered but unusable" failure mode: a tool can be in
+ * the runtime registry + generated types yet absent from every agent's
+ * `toolNames`, so no agent can ever call it. (This is exactly what happened to
+ * read_outline / read_slices / rewrite_symbol on first add.)
+ *
+ * read_slices, apply_smart_patch, and apply_patch were fully removed
+ * (schemas, handlers, and registrations); they are no longer registered or
+ * prompt-visible.
+ *
+ * Every orchestrator mode must expose structural reads. Every non-plan
+ * orchestrator exposes one canonical transaction surface; compatibility edit
+ * tools stay registered at runtime without bloating model-visible tool lists.
+ * The obsolete proposal indirection is absent from every bundled mode.
+ */
+const STRUCTURAL_READ_TOOLS = ['read_outline'] as const
+const LEGACY_DIRECT_EDIT_TOOLS = [
+  'str_replace',
+  'write_file',
+  'replace_range',
+  'rewrite_symbol',
+] as const
+const PROPOSAL_TOOLS = [
+  'read_proposal_workspace',
+  'read_proposals',
+  'propose_str_replace',
+  'propose_write_file',
+  'propose_edit_transaction',
+  'accept_proposal',
+  'reject_proposal',
+  'apply_proposal',
+] as const
+const HARNESS_STATE_TOOLS = ['git_status'] as const
+
+describe('agent tool reachability', () => {
+  for (const mode of ['default', 'fast'] as const) {
+    test(`base2 (${mode}) exposes its intended read/mutation surface`, () => {
+      // Default base2 is core-only; the mode-resolved full surface remains as
+      // a private ceiling for tool_load.
+      const definition = createBase2(mode)
+      const tools = getEffectiveAgentToolNames(definition, {
+        unlockedToolTiers: [],
+      })
+      const programmaticTools = definition.programmaticToolNames ?? []
+      for (const tool of STRUCTURAL_READ_TOOLS) {
+        expect(tools).toContain(tool)
+      }
+      expect(tools).toContain('read_files')
+      expect(tools).toContain('tool_search')
+      expect(tools).toContain('tool_load')
+      expect(tools).not.toContain('edit_transaction')
+      expect(definition.programmaticConfig?.fullToolSurface).toContain(
+        'edit_transaction',
+      )
+      for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
+        expect(tools).not.toContain(tool)
+      for (const tool of PROPOSAL_TOOLS) {
+        expect(tools).not.toContain(tool)
+      }
+      for (const tool of HARNESS_STATE_TOOLS) {
+        expect(programmaticTools).toContain(tool)
+      }
+    })
+  }
+
+  test('execute-plan exposes direct execution without proposal indirection', () => {
+    const tools = getEffectiveAgentToolNames(
+      createBase2('default', { executePlan: true }),
+      { unlockedToolTiers: [] },
+    )
+    expect(tools).toContain('tool_load')
+    expect(tools).not.toContain('edit_transaction')
+    for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
+      expect(tools).not.toContain(tool)
+    const fullSurface =
+      createBase2('default', {
+        executePlan: true,
+        progressiveToolDisclosure: false,
+      }).toolNames ?? []
+    expect(fullSurface).toContain('edit_transaction')
+    expect(fullSurface).toContain('run_terminal_command')
+    expect(fullSurface).toContain('run_targeted_validation')
+    expect(fullSurface).toContain('get_change_review_bundle')
+    for (const tool of PROPOSAL_TOOLS) expect(tools).not.toContain(tool)
+  })
+
+  test('plan-only excludes project execution and proposal actions', () => {
+    // Plan artifacts remain static; implementation mutations are filtered.
+    const tools = createBase2('default', { planOnly: true }).toolNames ?? []
+    expect(tools).not.toContain('edit_transaction')
+    expect(tools).toContain('create_plan')
+    expect(tools).toContain('update_plan_status')
+    for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
+      expect(tools).not.toContain(tool)
+    expect(tools).not.toContain('run_terminal_command')
+    expect(tools).not.toContain('run_targeted_validation')
+    expect(tools).toContain('check_background_agent')
+    for (const tool of PROPOSAL_TOOLS) expect(tools).not.toContain(tool)
+  })
+
+  // N03: plan mode is read-only. No plan-refused tool (and no kill_job) is
+  // model-visible on the plan root, no shipped plan-mode spawnable declares
+  // one, and the runtime derivation strips them from every plan-lineage child.
+  const PLAN_UNREACHABLE = [...PLAN_MODE_REFUSED_TOOL_NAMES, 'kill_job']
+  const asTemplate = (definition: unknown): AgentTemplate => {
+    const template = definition as AgentTemplate
+    return { ...template, toolNames: template.toolNames ?? [] }
+  }
+  const SPAWNABLE_DEFINITIONS: Record<string, unknown> = {
+    'context-pruner': contextPruner,
+    'file-picker': filePicker,
+    'general-agent': generalAgent,
+    'researcher-web': researcherWeb,
+    'researcher-docs': researcherDocs,
+    basher,
+    thinker,
+    'browser-use': browserUse,
+    'code-reviewer': codeReviewer,
+    'security-reviewer': securityReviewer,
+    debugger: debuggerAgent,
+    librarian,
+    'knowledge-retriever': knowledgeRetriever,
+    'knowledge-reviewer': knowledgeReviewer,
+    'memory-manager': memoryManager,
+    synthesizer,
+    architect,
+    'product-reviewer': productReviewer,
+    'integration-agent': integrationAgent,
+    'performance-specialist': performanceSpecialist,
+    'reliability-reviewer': reliabilityReviewer,
+    'migration-reviewer': migrationReviewer,
+    'accessibility-reviewer': accessibilityReviewer,
+    'ux-visual-reviewer': uxVisualReviewer,
+    'compatibility-reviewer': compatibilityReviewer,
+    'dependency-reviewer': dependencyReviewer,
+    'incident-coordinator': incidentCoordinator,
+    'release-manager': releaseManager,
+    'docs-architect': docsArchitect,
+    evaluator,
+  }
+
+  test('base2-plan exposes no mutating tool except plan artifacts', () => {
+    for (const definition of [base2Plan, createBase2('fast', { planOnly: true })]) {
+      const tools = getEffectiveAgentToolNames(asTemplate(definition))
+      for (const tool of PLAN_UNREACHABLE) {
+        expect(tools, `${definition.displayName} exposes ${tool}`).not.toContain(tool)
+      }
+      expect(definition.programmaticConfig?.planOnly).toBe(true)
+    }
+    const tools = base2Plan.toolNames ?? []
+    expect(tools).toContain('create_plan')
+    expect(tools).toContain('update_plan_status')
+  })
+
+  test('no mutating tool is reachable from any base2-plan child', () => {
+    const plan = asTemplate(base2Plan)
+    expect(plan.spawnableAgents).not.toContain('synthesizer')
+    for (const id of plan.spawnableAgents) {
+      const definition = SPAWNABLE_DEFINITIONS[id]
+      expect(definition, `unmapped plan spawnable ${id}`).toBeDefined()
+      const declared = asTemplate(definition).toolNames
+      for (const tool of PLAN_MODE_REFUSED_TOOL_NAMES) {
+        expect(declared, `plan spawnable ${id} declares ${tool}`).not.toContain(tool)
+      }
+      const derived = deriveSpawnTemplateCapabilities({
+        agentTemplate: asTemplate(definition),
+        parentAgentTemplate: plan,
+        handoff: undefined,
+        projectRoot: '/tmp/plan-reachability',
+      })
+      expect(derived.programmaticConfig?.planOnly, id).toBe(true)
+      const reachable = getEffectiveAgentToolNames(derived)
+      for (const tool of PLAN_MODE_REFUSED_TOOL_NAMES) {
+        expect(reachable, `plan child ${id} reaches ${tool}`).not.toContain(tool)
+      }
+      if (reachable.includes('run_terminal_command')) {
+        expect(derived.terminalPermissionProfile, id).toBe('read-only')
+      }
+    }
+  })
+
+  test('plan artifact allowlist stays closed', () => {
+    expect([...PLAN_MODE_ALLOWED_ARTIFACT_TOOL_NAMES].sort()).toEqual([
+      'create_plan',
+      'update_plan_status',
+      'write_audit_findings',
+    ])
+    // Every metadata mutation tool is either a plan artifact or refused.
+    for (const toolName of toolNames) {
+      if (getToolMetadata(toolName).kind !== 'mutation') continue
+      expect(
+        [
+          ...PLAN_MODE_ALLOWED_ARTIFACT_TOOL_NAMES,
+          ...PLAN_MODE_REFUSED_TOOL_NAMES,
+        ] as string[],
+        toolName,
+      ).toContain(toolName)
+    }
+  })
+
+  test('code editor exposes structural edit + read tools', () => {
+    const tools = createCodeEditor({ model: 'opus' }).toolNames ?? []
+    for (const tool of [
+      ...STRUCTURAL_READ_TOOLS,
+      'edit_transaction',
+    ] as const) {
+      expect(tools).toContain(tool)
+    }
+    for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
+      expect(tools).not.toContain(tool)
+  })
+
+  test('test-writer and doc-writer expose edit_transaction without legacy direct edits', () => {
+    for (const definition of [testWriter, docWriter]) {
+      const tools = definition.toolNames ?? []
+      expect(tools).toContain('edit_transaction')
+      for (const tool of LEGACY_DIRECT_EDIT_TOOLS) {
+        expect(
+          tools,
+          `${definition.id} must not expose legacy direct edit tool ${tool}`,
+        ).not.toContain(tool)
+      }
+    }
+  })
+
+  test('audit shards receive only derived findings-artifact write authority', () => {
+    const definition = createGeneralAgent({ model: 'opus' })
+
+    expect(definition.toolNames).toContain('write_audit_findings')
+    expect(definition.toolNames).not.toContain('write_file')
+    expect(definition.toolNames).not.toContain('edit_transaction')
+    expect(definition.filesystemScope?.write).toEqual([
+      '.agents/sessions/*/findings/*.md',
+    ])
+  })
+
+  test('shipped primary agents do not expose quarantined compatibility tools', () => {
+    const definitions = [
+      createBase2('default'),
+      createBase2('fast'),
+      createCodeEditor({ model: 'opus' }),
+    ]
+
+    for (const definition of definitions) {
+      for (const toolName of quarantinedToolNames) {
+        expect(
+          definition.toolNames ?? [],
+          `${definition.displayName} must not expose quarantined tool ${toolName}`,
+        ).not.toContain(toolName)
+      }
+    }
+  })
+})
+
+describe('tool metadata reachability contract', () => {
+  test('registered metadata is never shadowed by removed-tool metadata', () => {
+    for (const toolName of toolNames) {
+      expect(getToolMetadata(toolName)).toEqual(toolMetadata[toolName])
+    }
+    for (const removed of removedToolNames) {
+      expect(
+        toolNames,
+        `${removed} must not be both registered and removed`,
+      ).not.toContain(removed)
+      expect(getToolMetadata(removed).reachability).toBe('removed')
+      expect(getToolMetadata(removed).deprecated).toBe(true)
+    }
+  })
+
+  test('live custom/MCP tool names are not reported as removed or deprecated', () => {
+    for (const toolName of ['my_custom_tool', 'mcp_server__do_thing']) {
+      const metadata = getToolMetadata(toolName)
+      expect(metadata.reachability).toBe('unknown')
+      expect(metadata.deprecated).toBe(false)
+      expect(metadata.includeInMutationSummary).toBe(false)
+    }
+  })
+})
+
+describe('agent prompt/tool availability alignment', () => {
+  test('prompts and docs align restored compatibility tools', () => {
+    const repoRoot = path.resolve(import.meta.dir, '..')
+    const runtimePrompts = readFileSync(
+      path.join(repoRoot, 'packages/agent-runtime/src/tools/prompts.ts'),
+      'utf8',
+    )
+    const toolsDoc = readFileSync(
+      path.join(repoRoot, 'docs/agents-and-tools.md'),
+      'utf8',
+    )
+
+    expect(runtimePrompts).not.toContain('Prefer \\`read_slices\\`')
+    expect(runtimePrompts).not.toContain('Prefer \\`apply_smart_patch\\`')
+    expect(toolsDoc).not.toContain(
+      '`read_slices` (deprecated compatibility alias)',
+    )
+    expect(toolsDoc).not.toContain('### `apply_smart_patch`')
+  })
+
+  test('structured-output agents without set_output do not prompt the model to call it', () => {
+    const defs = [
+      thinker,
+      createCodeEditor({ model: 'opus' }),
+      codeReviewer,
+      securityReviewer,
+      testWriter,
+      docWriter,
+      synthesizer,
+      dependencyManager,
+      researcherWeb,
+      researcherDocs,
+      basher,
+      librarian,
+      globMatcher,
+      directoryLister,
+      filePicker,
+      browserUse,
+      tmuxCli,
+      architect,
+      productReviewer,
+      integrationAgent,
+      performanceSpecialist,
+      reliabilityReviewer,
+      migrationReviewer,
+      accessibilityReviewer,
+      uxVisualReviewer,
+      compatibilityReviewer,
+      dependencyReviewer,
+      incidentCoordinator,
+      releaseManager,
+      docsArchitect,
+      evaluator,
+    ]
+
+    for (const def of defs) {
+      const tools = def.toolNames ?? []
+      const modelVisiblePrompt = [
+        def.spawnerPrompt,
+        def.systemPrompt,
+        def.instructionsPrompt,
+        def.stepPrompt,
+      ]
+        .filter(Boolean)
+        .join('\n')
+
+      const hasSetOutput = tools.includes('set_output')
+      const programmaticOnlySetOutput =
+        (def.programmaticToolNames ?? []).includes('set_output') &&
+        !hasSetOutput
+      const agentLabel =
+        ('id' in def ? def.id : undefined) ?? def.displayName ?? 'unknown agent'
+      if (!hasSetOutput && !programmaticOnlySetOutput) {
+        expect(
+          modelVisiblePrompt,
+          `${agentLabel} must not mention set_output unless it exposes the tool`,
+        ).not.toContain('set_output')
+      }
+      if (programmaticOnlySetOutput) {
+        expect(
+          modelVisiblePrompt,
+          `${agentLabel} must not require a model set_output call when the tool is programmatic-only`,
+        ).not.toMatch(
+          /You must call[`\s]*set_output|Finish with set_output|call set_output/i,
+        )
+      }
+    }
+  })
+})
+
+/**
+ * Guard against re-introducing references to removed agent IDs. The
+ * `base-max`, `multi-prompt`, and `best-of-n` agent definitions were
+ * deleted; no active orchestrator should still try to spawn them or list
+ * them as spawnable, and the editor/reviewer agent IDs they pointed at
+ * should not reappear in active definitions.
+ *
+ * This is intentionally narrow: it only checks the two main orchestrators
+ * (base2 + base-deep) and the editor, not every file in the repo, so it
+ * stays robust as the codebase evolves.
+ */
+const REMOVED_AGENT_IDS = [
+  'base-max',
+  'base_max',
+  'multi-prompt',
+  'multi_prompt',
+  'best-of-n',
+  'best_of_n',
+] as const
+
+describe('agent registry/reference cleanup', () => {
+  test('base2 (default+fast) does not reference removed agent ids', () => {
+    for (const mode of ['default', 'fast'] as const) {
+      const def = createBase2(mode)
+      const spawnable = def.spawnableAgents ?? []
+      for (const removed of REMOVED_AGENT_IDS) {
+        expect(
+          spawnable,
+          `base2 (${mode}) spawnableAgents must not include removed id ${removed}`,
+        ).not.toContain(removed)
+      }
+      // System/instructions prompts should not bake in removed agent names
+      // as authoritative recommendations.
+      const promptText = `${def.systemPrompt ?? ''}\n${def.instructionsPrompt ?? ''}\n${def.stepPrompt ?? ''}`
+      for (const removed of REMOVED_AGENT_IDS) {
+        expect(
+          promptText.includes(`@${removed}`),
+          `base2 (${mode}) prompt must not @-mention removed agent ${removed}`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  test('code editor does not list removed agent ids as spawnable', () => {
+    const editor = createCodeEditor({ model: 'opus' })
+    const spawnable = editor.spawnableAgents ?? []
+    for (const removed of REMOVED_AGENT_IDS) {
+      expect(spawnable).not.toContain(removed)
+    }
+  })
+})

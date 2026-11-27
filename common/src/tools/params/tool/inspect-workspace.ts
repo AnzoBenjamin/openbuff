@@ -1,6 +1,7 @@
 import z from 'zod/v4'
 
 import { jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
 
 import type { $ToolParams } from '../../constants'
 
@@ -35,7 +36,7 @@ export const inspectWorkspaceParams = {
         dirty: z.boolean(),
         status: z.string(),
       }),
-      z.object({ errorMessage: z.string() }),
+      z.object({ errorMessage: z.string(), executionRefusal: executionRefusalSchema.optional() }),
     ]),
   ),
 } satisfies $ToolParams

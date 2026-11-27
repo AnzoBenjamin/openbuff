@@ -63,6 +63,19 @@ function isToolCallPart(part: unknown): part is ToolCallPart {
 }
 
 describe('extractPinnedContextBlocks', () => {
+  it('stops visiting older history once both newest pinned blocks are found', () => {
+    const older = userMessage('irrelevant large transcript')
+    Object.defineProperty(older, 'content', { get() { throw new Error('old history visited') } })
+    expect(extractPinnedContextBlocks([
+      older,
+      userMessage('<knowledge_memory>current</knowledge_memory>'),
+      userMessage('<pinned_active_work_state>current task</pinned_active_work_state>'),
+    ])).toEqual([
+      '<pinned_active_work_state>current task</pinned_active_work_state>',
+      '<knowledge_memory>current</knowledge_memory>',
+    ])
+  })
+
   it('returns only the newest authoritative block of each kind', () => {
     const messages: Message[] = [
       userMessage(
@@ -1047,6 +1060,34 @@ describe('trimMessagesToFitTokenLimit', () => {
   })
 
   describe('keepDuringTruncation functionality', () => {
+    it('allows stale user prompts to yield to the newest request', () => {
+      const oldPrompt = 'old-user-prompt-must-not-pin-forever '.repeat(1_000)
+      const messages: Message[] = [
+        userMessage({
+          content: oldPrompt,
+          tags: ['USER_PROMPT'],
+          keepDuringTruncation: true,
+        }),
+        userMessage({
+          content: 'current user request must survive',
+          tags: ['USER_PROMPT'],
+          keepDuringTruncation: true,
+        }),
+      ]
+
+      const report = trimMessagesToFitTokenLimitWithReport({
+        messages,
+        systemTokens: 0,
+        maxTotalTokens: 2_000,
+        logger,
+      })
+      const rendered = JSON.stringify(report.messages)
+
+      expect(rendered).not.toContain('old-user-prompt-must-not-pin-forever')
+      expect(rendered).toContain('current user request must survive')
+      expect(report.fitsBudget).toBe(true)
+    })
+
     it('retains compact pinned knowledge memory during emergency trimming', () => {
       const fingerprint = 'd'.repeat(64)
       const semanticSummary = userMessage({

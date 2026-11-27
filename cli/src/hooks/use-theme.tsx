@@ -15,6 +15,7 @@ import {
   detectPlatformTheme,
   detectTerminalOverrides,
   getOscDetectedTheme,
+  getLastDetectedTheme,
   initializeThemeWatcher,
   setThemeResolver,
   setLastDetectedTheme,
@@ -131,8 +132,32 @@ export function initializeThemeStore() {
     useThemeStore.getState().setThemeName(name)
   })
 
-  // Note: OSC detection is done earlier in index.tsx before OpenTUI starts,
-  // so the result is already available via getOscDetectedTheme()
+  // Note: OSC detection is started concurrently with startup in index.tsx and
+  // resolved before OpenTUI starts; when it resolves after this store is first
+  // built, index.tsx applies it via applyOscDetectedThemeToStore() below.
+}
+
+/**
+ * Apply the OSC-detected theme to an already-initialized store.
+ *
+ * The OSC probe runs concurrently with startup (P1-T9) and can resolve after
+ * initializeThemeStore() built the initial theme from env/IDE detectors. When
+ * those higher-priority detectors did NOT resolve a theme, the store built the
+ * platform fallback; this re-runs detection now that the OSC result is cached
+ * and applies it. No-op when the store is uninitialized, when the user pinned
+ * a theme via env, or when the resolved theme already matches — so the only
+ * observable change is the theme flipping from the platform fallback to the
+ * OSC-detected value, exactly as if the probe had been awaited before init.
+ */
+export function applyOscDetectedThemeToStore(): void {
+  if (!themeStoreInitialized) {
+    return
+  }
+  const resolvedName = detectSystemTheme()
+  if (resolvedName !== getLastDetectedTheme()) {
+    setLastDetectedTheme(resolvedName)
+  }
+  useThemeStore.getState().setThemeName(resolvedName)
 }
 
 export const useTheme = (): ChatTheme => {

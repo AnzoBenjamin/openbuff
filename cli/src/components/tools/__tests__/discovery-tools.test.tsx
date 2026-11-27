@@ -39,9 +39,7 @@ describe('discovery tool renderers', () => {
 
     const rendered = GlobComponent.render(block, {} as ChatTheme, options)
     const markup = renderToStaticMarkup(<>{rendered.content}</>)
-    expect(markup).toContain(
-      'Glob &quot;*.ts&quot; in src — 2 files in 1 dir',
-    )
+    expect(markup).toContain('Glob &quot;*.ts&quot; in src — 2 files in 1 dir')
     expect(markup).toContain('✓')
     expect(markup).toContain('src (2)')
     expect(markup).toContain('a.ts')
@@ -58,12 +56,7 @@ describe('discovery tool renderers', () => {
   })
 
   test('glob shows a more-affordance for large directory groups', () => {
-    const files = [
-      'src/a.ts',
-      'src/b.ts',
-      'src/c.ts',
-      'src/d.ts',
-    ]
+    const files = ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts']
     const block: ToolBlock & { toolName: 'glob' } = {
       type: 'tool',
       toolName: 'glob',
@@ -83,7 +76,7 @@ describe('discovery tool renderers', () => {
     expect(markup).toContain('src (4)')
     expect(markup).toContain('a.ts')
     expect(markup).toContain('c.ts')
-    expect(markup).toContain('… 1 more')
+    expect(markup).toContain('Show more · 1 result hidden')
   })
 
   test('list_directory renders a collapsible group with dir/file badge', () => {

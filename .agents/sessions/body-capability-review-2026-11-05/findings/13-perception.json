@@ -1,0 +1,1787 @@
+{
+  "shardId": "13-perception",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "13-perception",
+    "subsystemIds": [
+      ".",
+      "agents",
+      "common",
+      "packages",
+      "sdk",
+      "cli",
+      "docs",
+      "rust"
+    ],
+    "files": [
+      "AGENTS.md",
+      "agents/base2/tool-tiers.ts",
+      "agents/browser-use/browser-use.ts",
+      "agents/patterns/audit-codebase.md",
+      "bunfig.toml",
+      "cli/bunfig.toml",
+      "cli/package.json",
+      "cli/src/chat.tsx",
+      "cli/src/commands/router.ts",
+      "cli/src/components/blocks/__tests__/image-block.test.tsx",
+      "cli/src/components/blocks/image-block.tsx",
+      "cli/src/components/tools/__tests__/render-ui.test.tsx",
+      "cli/src/components/tools/registry.ts",
+      "cli/src/components/tools/render-ui.tsx",
+      "cli/src/data/slash-commands.ts",
+      "cli/src/hooks/helpers/send-message.ts",
+      "cli/src/hooks/use-message-queue.ts",
+      "cli/src/hooks/use-send-message.ts",
+      "cli/src/utils/__tests__/attachment-retry.test.ts",
+      "cli/src/utils/__tests__/image-processor.test.ts",
+      "cli/src/utils/__tests__/pending-attachments.test.ts",
+      "cli/src/utils/image-handler.ts",
+      "cli/src/utils/image-processor.ts",
+      "cli/src/utils/open-url.ts",
+      "cli/src/utils/pending-attachments.ts",
+      "common/src/browser-actions.ts",
+      "common/src/constants/images.ts",
+      "common/src/mcp/client.ts",
+      "common/src/project-file-tree.ts",
+      "common/src/tools/browser-policy.ts",
+      "common/src/tools/constants.ts",
+      "common/src/tools/params/tool/3d-assets.ts",
+      "common/src/tools/params/tool/browser-logs.ts",
+      "common/src/tools/params/tool/read-image.ts",
+      "common/src/tools/params/tool/render-ui.ts",
+      "common/src/util/engine-profiles.ts",
+      "common/src/util/file.ts",
+      "common/src/util/game-dev-presets.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts",
+      "packages/agent-runtime/src/templates/strings.ts",
+      "packages/agent-runtime/src/tools/__tests__/browser-policy.test.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/3d-assets.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+      "packages/agent-runtime/src/tools/tool-executor.ts",
+      "packages/agent-runtime/src/util/base2-tool-tiers.ts",
+      "packages/indexer/src/metadata-indexer.ts",
+      "rust/README.md",
+      "rust/crates/openbuff-native/Cargo.toml",
+      "rust/crates/openbuff-native/src/lib.rs",
+      "rust/crates/openbuff-native/src/main.rs",
+      "sdk/bunfig.toml",
+      "sdk/package.json",
+      "sdk/src/__tests__/3d-assets.test.ts",
+      "sdk/src/__tests__/browser-logs.test.ts",
+      "sdk/src/__tests__/cdp-pipe-transport.test.ts",
+      "sdk/src/__tests__/read-image.test.ts",
+      "sdk/src/__tests__/run-session-job-ownership.test.ts",
+      "sdk/src/run.ts",
+      "sdk/src/services/acp/acp-agent.ts",
+      "sdk/src/tools/3d-artifact-retention.ts",
+      "sdk/src/tools/3d-assets.ts",
+      "sdk/src/tools/browser-logs.ts",
+      "sdk/src/tools/cdp-pipe-transport.ts",
+      "sdk/src/tools/read-image.ts",
+      "sdk/test/setup-env.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "AGENTS.md",
+      "from": 1,
+      "to": 46
+    },
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 296
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 110,
+      "to": 180
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1,
+      "to": 175
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 2038,
+      "to": 2081
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 170
+    },
+    {
+      "path": "agents/browser-use/browser-use.ts",
+      "from": 1,
+      "to": 282
+    },
+    {
+      "path": "agents/base2/tool-tiers.ts",
+      "from": 1,
+      "to": 75
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+      "from": 1,
+      "to": 104
+    },
+    {
+      "path": "common/src/tools/browser-policy.ts",
+      "from": 1,
+      "to": 69
+    },
+    {
+      "path": "common/src/tools/params/tool/browser-logs.ts",
+      "from": 1,
+      "to": 107
+    },
+    {
+      "path": "common/src/browser-actions.ts",
+      "from": 1,
+      "to": 245
+    },
+    {
+      "path": "common/src/browser-actions.ts",
+      "from": 430,
+      "to": 610
+    },
+    {
+      "path": "common/src/browser-actions.ts",
+      "from": 630,
+      "to": 790
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 2750,
+      "to": 2820
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts",
+      "from": 1,
+      "to": 107
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/__tests__/browser-policy.test.ts",
+      "from": 1,
+      "to": 79
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1070,
+      "to": 1135
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1440,
+      "to": 1510
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1800,
+      "to": 1878
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2170,
+      "to": 2270
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2776,
+      "to": 2873
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1,
+      "to": 620
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 622,
+      "to": 690
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 798,
+      "to": 889
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 946,
+      "to": 989
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1120,
+      "to": 1285
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1462,
+      "to": 1672
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1759,
+      "to": 2041
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 2325,
+      "to": 2489
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 2490,
+      "to": 2550
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 2580,
+      "to": 2744
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 3100,
+      "to": 3423
+    },
+    {
+      "path": "sdk/src/tools/cdp-pipe-transport.ts",
+      "from": 1,
+      "to": 376
+    },
+    {
+      "path": "sdk/src/__tests__/browser-logs.test.ts",
+      "from": 972,
+      "to": 1400
+    },
+    {
+      "path": "sdk/src/__tests__/cdp-pipe-transport.test.ts",
+      "from": 1,
+      "to": 70
+    },
+    {
+      "path": "sdk/src/__tests__/run-session-job-ownership.test.ts",
+      "from": 1,
+      "to": 90
+    },
+    {
+      "path": "sdk/src/__tests__/run-session-job-ownership.test.ts",
+      "from": 180,
+      "to": 246
+    },
+    {
+      "path": "sdk/src/tools/read-image.ts",
+      "from": 1,
+      "to": 282
+    },
+    {
+      "path": "common/src/tools/params/tool/read-image.ts",
+      "from": 1,
+      "to": 75
+    },
+    {
+      "path": "common/src/constants/images.ts",
+      "from": 1,
+      "to": 108
+    },
+    {
+      "path": "sdk/src/__tests__/read-image.test.ts",
+      "from": 1,
+      "to": 150
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 1,
+      "to": 242
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 575,
+      "to": 657
+    },
+    {
+      "path": "cli/src/utils/image-processor.ts",
+      "from": 1,
+      "to": 133
+    },
+    {
+      "path": "cli/src/utils/image-handler.ts",
+      "from": 185,
+      "to": 302
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "from": 225,
+      "to": 370
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 430,
+      "to": 510
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 760,
+      "to": 828
+    },
+    {
+      "path": "cli/src/components/blocks/image-block.tsx",
+      "from": 1,
+      "to": 148
+    },
+    {
+      "path": "cli/src/utils/__tests__/image-processor.test.ts",
+      "from": 1,
+      "to": 245
+    },
+    {
+      "path": "cli/src/utils/__tests__/pending-attachments.test.ts",
+      "from": 1,
+      "to": 160
+    },
+    {
+      "path": "cli/src/utils/__tests__/attachment-retry.test.ts",
+      "from": 1,
+      "to": 100
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 1130,
+      "to": 1175
+    },
+    {
+      "path": "cli/src/commands/router.ts",
+      "from": 502,
+      "to": 530
+    },
+    {
+      "path": "cli/src/hooks/use-message-queue.ts",
+      "from": 245,
+      "to": 286
+    },
+    {
+      "path": "cli/src/components/tools/render-ui.tsx",
+      "from": 1,
+      "to": 200
+    },
+    {
+      "path": "cli/src/components/tools/registry.ts",
+      "from": 120,
+      "to": 146
+    },
+    {
+      "path": "common/src/tools/params/tool/render-ui.ts",
+      "from": 1,
+      "to": 97
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+      "from": 1,
+      "to": 15
+    },
+    {
+      "path": "cli/src/components/tools/__tests__/render-ui.test.tsx",
+      "from": 1,
+      "to": 209
+    },
+    {
+      "path": "cli/src/components/blocks/__tests__/image-block.test.tsx",
+      "from": 1,
+      "to": 138
+    },
+    {
+      "path": "cli/src/utils/open-url.ts",
+      "from": 1,
+      "to": 37
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 1,
+      "to": 1402
+    },
+    {
+      "path": "sdk/src/tools/3d-artifact-retention.ts",
+      "from": 1,
+      "to": 143
+    },
+    {
+      "path": "common/src/tools/params/tool/3d-assets.ts",
+      "from": 1,
+      "to": 105
+    },
+    {
+      "path": "common/src/util/file.ts",
+      "from": 1,
+      "to": 150
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/3d-assets.ts",
+      "from": 1,
+      "to": 72
+    },
+    {
+      "path": "sdk/src/__tests__/3d-assets.test.ts",
+      "from": 1,
+      "to": 429
+    },
+    {
+      "path": "sdk/src/__tests__/3d-assets.test.ts",
+      "from": 796,
+      "to": 930
+    },
+    {
+      "path": "common/src/util/game-dev-presets.ts",
+      "from": 1,
+      "to": 371
+    },
+    {
+      "path": "common/src/util/engine-profiles.ts",
+      "from": 1,
+      "to": 295
+    },
+    {
+      "path": "cli/src/data/slash-commands.ts",
+      "from": 280,
+      "to": 314
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/strings.ts",
+      "from": 174,
+      "to": 198
+    },
+    {
+      "path": "packages/agent-runtime/src/util/base2-tool-tiers.ts",
+      "from": 70,
+      "to": 110
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 924,
+      "to": 979
+    },
+    {
+      "path": "common/src/project-file-tree.ts",
+      "from": 222,
+      "to": 269
+    },
+    {
+      "path": "common/src/tools/constants.ts",
+      "from": 1,
+      "to": 164
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 846,
+      "to": 892
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 515,
+      "to": 555
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 806,
+      "to": 842
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 1020,
+      "to": 1055
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "from": 1,
+      "to": 166
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/main.rs",
+      "from": 1,
+      "to": 36
+    },
+    {
+      "path": "rust/crates/openbuff-native/Cargo.toml",
+      "from": 1,
+      "to": 26
+    },
+    {
+      "path": "rust/README.md",
+      "from": 1,
+      "to": 46
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "cli/package.json",
+      "from": 1,
+      "to": 64
+    },
+    {
+      "path": "bunfig.toml",
+      "from": 1,
+      "to": 14
+    },
+    {
+      "path": "sdk/bunfig.toml",
+      "from": 1,
+      "to": 13
+    },
+    {
+      "path": "cli/bunfig.toml",
+      "from": 1,
+      "to": 12
+    },
+    {
+      "path": "sdk/test/setup-env.ts",
+      "from": 1,
+      "to": 47
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "browser-actions-and-policy",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "agents/browser-use/browser-use.ts:29; common/src/tools/params/tool/browser-logs.ts:89",
+      "implementation": "runtime handler -> sdk/src/run.ts:2838 -> sdk/src/tools/browser-logs.ts:164",
+      "consumer": "Bundled browser-use agent and SDK client-tool dispatch; final structured output formatted by cli/src/utils/message-block-helpers.ts:705",
+      "tests": [
+        "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts",
+        "packages/agent-runtime/src/tools/__tests__/browser-policy.test.ts"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:46"
+      ],
+      "states": {
+        "loading": "Chrome discovery, bounded transport probe, target attach",
+        "failure": "CDP/Chrome errors returned as success:false JSON",
+        "empty": "Missing Chrome produces actionable CHROME_PATH error",
+        "cancellation": "No AbortSignal passed into browserLogs; run-end teardown is the integration backstop",
+        "retry": "Single-flight spawn/probe/reconnect resets on failure; schema retryOptions is not consumed",
+        "permission": "Explicit bundled read-only/plan-only interactions denied; defaults and allowlists disagree",
+        "ownership": "Handler's child owner is replaced with the main run owner in SDK dispatch"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+          "line": 65,
+          "detail": "Specialized gate and trusted child owner stamp"
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2849,
+          "detail": "SDK dispatch replaces stamp with main-run trustedJobOwner"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 1546,
+          "detail": "Real Chrome CDP spawn path"
+        }
+      ],
+      "gaps": [
+        "Default policy mismatch and inspection allowlist drift",
+        "Per-child browser isolation is lost at SDK boundary",
+        "waitUntil networkidle0 means a 750ms delay; load wait failures are caught",
+        "Accepted retryOptions/logFilter/visualVerify/type delay controls are unused"
+      ],
+      "strengths": [
+        "Actual mouse/key/text/upload/tab/emulation actions rather than prompt-only recipes",
+        "Private pipe transport normally; bounded probe and reconnect single-flight",
+        "Model input cannot spoof the SDK owner"
+      ]
+    },
+    {
+      "id": "browser-observations-and-media",
+      "maturity": "partial",
+      "assurance": "unit test",
+      "entrypoint": "browser_logs snapshot/screenshot/design_tokens/pixel_diff/recording/pdf/diagnose",
+      "implementation": "sdk/src/tools/browser-logs.ts:220-587; cdp-pipe-transport.ts:126-376",
+      "consumer": "Model-facing ToolResultOutput media; CLI ImageBlock; browser-use final summary",
+      "tests": [
+        "sdk/src/__tests__/browser-logs.test.ts",
+        "sdk/src/__tests__/cdp-pipe-transport.test.ts",
+        "evidence/13-offline-probes.test.ts"
+      ],
+      "docs": [
+        "common/src/tools/params/tool/browser-logs.ts:49; agents/browser-use/browser-use.ts:181"
+      ],
+      "states": {
+        "loading": "CDP domains enabled; page/frame resolution",
+        "failure": "Per-action success:false; buildResponse catches page-info failure",
+        "empty": "Empty screenshot/recording/PDF reports attachment false; action success can remain true",
+        "cancellation": "CDP requests time out or reject when transport closes; no direct AbortSignal",
+        "retry": "Caller can re-snapshot and retry; recording-start state rolls back",
+        "permission": "Read-only gate applies before dispatch for bundled specialist",
+        "ownership": "Session holds logs/network/media in process; raw media is returned without an immutable artifact reference"
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 2487,
+          "detail": "Log/network windows captured and trim-corrected"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 564,
+          "detail": "diagnose keeps only JSON"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 3338,
+          "detail": "pixel diff measures only intersecting dimensions"
+        }
+      ],
+      "gaps": [
+        "diagnose drops step media and only copies declared success conditions",
+        "pixel_diff exposes dimensions but can report zero mismatch for different-size images",
+        "Snapshot takes first 200 matching DOM elements/12000 text characters without completeness marker; it does not filter visibility",
+        "PDF returns length metadata and discards the PDF bytes; APNG has no persisted artifact route and CLI excludes its MIME type"
+      ],
+      "strengths": [
+        "Real screenshot image media and finite recording frame/log/request buffers",
+        "Iframe execution-context and frame-local coordinate support",
+        "Explicit empty-capture flags and JSON-only PDF compatibility",
+        "Fake-CDP probe verified data loss and dimension semantics without Chrome"
+      ]
+    },
+    {
+      "id": "read-image-media",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "entrypoint": "common/src/tools/params/tool/read-image.ts -> SDK read_image dispatch",
+      "implementation": "sdk/src/tools/read-image.ts:31",
+      "consumer": "sdk/src/run.ts:2776 emits original image bytes as model media",
+      "tests": [
+        "sdk/src/__tests__/read-image.test.ts"
+      ],
+      "docs": [
+        "common/src/tools/params/tool/read-image.ts:37"
+      ],
+      "states": {
+        "loading": "Concurrent path/stat/read I/O",
+        "failure": "Per-path error metadata plus successful sibling images",
+        "empty": "Empty path batch yields images:[]",
+        "cancellation": "Checked at processOne entry only; later cancellation can still attach bytes",
+        "retry": "Retryable by another tool call; no internal I/O retry",
+        "permission": "Resolver scope, sensitive-path policy and host fileFilter checked",
+        "ownership": "Original bytes retained in result, path/MIME/size metadata aligned in input order"
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/read-image.ts",
+          "line": 93,
+          "detail": "Read-specific scoped containment"
+        },
+        {
+          "path": "sdk/src/tools/read-image.ts",
+          "line": 248,
+          "detail": "Concurrent reads then ordered total-budget projection"
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2777,
+          "detail": "Actual SDK native read consumer"
+        }
+      ],
+      "gaps": [
+        "25MiB attachment cap is applied after all reads; no path-count or I/O concurrency bound",
+        "10MiB per-file bound uses pre-read stat; actual read size is not rechecked",
+        "No post-I/O cancellation fence, content hash, or decoded format validation; provider acceptance owned by pair02"
+      ],
+      "strengths": [
+        "Preserves original screenshot bytes instead of CLI compression",
+        "Scoped external/owned-temp reads use mandatory sensitivity and filter aliases",
+        "Sibling failures do not lose valid media"
+      ]
+    },
+    {
+      "id": "cli-image-attachments",
+      "maturity": "partial",
+      "assurance": "unit test",
+      "entrypoint": "Pending file/base64/clipboard attachment helpers and send preparation",
+      "implementation": "pending-attachments.ts -> image-handler.ts -> image-processor.ts",
+      "consumer": "prepareUserMessage:300 -> use-send-message:779/807 -> SDK content; CLI ImageBlock",
+      "tests": [
+        "cli/src/utils/__tests__/pending-attachments.test.ts",
+        "cli/src/utils/__tests__/image-processor.test.ts",
+        "cli/src/utils/__tests__/attachment-retry.test.ts",
+        "cli/src/components/blocks/__tests__/image-block.test.tsx",
+        "evidence/13-offline-probes.test.ts"
+      ],
+      "docs": [
+        "docs/request-flow.md:38"
+      ],
+      "states": {
+        "loading": "processing/ready/error states and attachment identity fence",
+        "failure": "Visible errors retained until removal/retry; retry preserves last capture",
+        "empty": "Clipboard source loss explicit; blank/redacted image fallback",
+        "cancellation": "Conversation identity asserted before and after image preparation; retry checks AbortSignal",
+        "retry": "Fresh source capture on explicit retry with original sourceRoot",
+        "permission": "Normal submit waits for processing; failed image state is not a send-time gate",
+        "ownership": "Send uses preprocessed capture rather than rereading file; failed retry's old bytes are still sent"
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/pending-attachments.ts",
+          "line": 89,
+          "detail": "Completion only updates still-owned attachment ID"
+        },
+        {
+          "path": "cli/src/utils/image-processor.ts",
+          "line": 51,
+          "detail": "Cached bytes accepted regardless of status"
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 807,
+          "detail": "Real client.run content consumer"
+        }
+      ],
+      "gaps": [
+        "Failed/processing retained images are projected regardless of status",
+        "Image display attachment list includes every pending image even when media was skipped",
+        "Preparation errors happen after queue drain and have no restoration in the inspected helper; broader queue behavior owned by pair01"
+      ],
+      "strengths": [
+        "Atomic send drain; source provenance and stale completion protection",
+        "Jimp compression metadata retained; processed bytes consistently sent",
+        "Inline-terminal unsupported/empty/decode/redaction states preserve an inspectable source"
+      ]
+    },
+    {
+      "id": "render-ui-link-widget",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "entrypoint": "common/src/tools/params/tool/render-ui.ts:50",
+      "implementation": "runtime handleRenderUI + cli/src/components/tools/render-ui.tsx",
+      "consumer": "CLI tools registry:136 and user-triggered open/copy dependencies",
+      "tests": [
+        "cli/src/components/tools/__tests__/render-ui.test.tsx"
+      ],
+      "docs": [
+        "common/src/tools/params/tool/render-ui.ts:62"
+      ],
+      "states": {
+        "loading": "opening state and duplicate activation guard",
+        "failure": "Failed launch/copy leaves address/manual route",
+        "empty": "Unsupported/malformed widget returns no content",
+        "cancellation": "Generation guards suppress stale completions/unmount updates",
+        "retry": "Click can retry after failed launch; copy remains available",
+        "permission": "http(s) schema and user activation before browser open",
+        "ownership": "CLI-local UI; runtime acknowledges without host render receipt"
+      },
+      "evidence": [
+        {
+          "path": "cli/src/components/tools/registry.ts",
+          "line": 136,
+          "detail": "Registered actual consumer"
+        },
+        {
+          "path": "cli/src/components/tools/render-ui.tsx",
+          "line": 100,
+          "detail": "Bounded activation and generation-aware result state"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+          "line": 14,
+          "detail": "Unconditional UI rendered acknowledgement"
+        }
+      ],
+      "gaps": [
+        "Only a link button, not general render/UI construction",
+        "SDK/headless hosts can receive UI rendered without rendering; no canonical host capability/ack",
+        "Native launch interaction tests were inspected, not executed here"
+      ],
+      "strengths": [
+        "Honest browser launch requested wording and exact address copy",
+        "Controlled theme foreground contrast",
+        "SDK schema rejects non-http(s) links"
+      ]
+    },
+    {
+      "id": "native-3d-inspection",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "entrypoint": "inspect_3d_asset schema and runtime forwarding",
+      "implementation": "sdk/src/tools/3d-assets.ts:439-669",
+      "consumer": "SDK dispatch plus live project tree and hash-keyed metadata index concepts",
+      "tests": [
+        "sdk/src/__tests__/3d-assets.test.ts:49-120",
+        "common/src/__tests__/project-file-tree-3d-assets.test.ts",
+        "packages/indexer/src/3d-asset-indexing.test.ts"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:133; docs/architecture.md:168"
+      ],
+      "states": {
+        "loading": "Read/filter/size checks then native parser",
+        "failure": "JSON parse/path/missing errors returned as JSON error",
+        "empty": "Scene counts and bounded arrays represent sparse asset",
+        "cancellation": "Initial abort check only on parser/dependency path",
+        "retry": "New inspection; cache persistence best effort",
+        "permission": "Project containment and host filter",
+        "ownership": "Hash is from bytes parsed; metadata cache sourceHash is verified by indexer"
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 638,
+          "detail": "Native glTF/GLB/OBJ branches"
+        },
+        {
+          "path": "common/src/project-file-tree.ts",
+          "line": 234,
+          "detail": "Binary asset discoverability without text decode"
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 943,
+          "detail": "Hash verification before derived concepts indexed"
+        }
+      ],
+      "gaps": [
+        "Observation is counts/names/transforms rather than full mesh/rig/material semantics",
+        "GLB/text validation and reference/dependency checking is limited; capped arrays have no truncation receipt",
+        "Identical source bytes share one metadata key even with different relative dependency context"
+      ],
+      "strengths": [
+        "No Blender needed for glTF/GLB/OBJ scene summaries",
+        "3D assets retained through tree/index instead of discarded as binary",
+        "Declared source hash supports edit preconditions"
+      ]
+    },
+    {
+      "id": "blender-3d-inspection-preview",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "inspect_3d_asset/render_3d_preview schemas",
+      "implementation": "Fixed Blender import/inspect/preview scripts and native orchestration",
+      "consumer": "sdk/src/run.ts:2784-2816 -> attached PNGs/receipts -> model and CLI image renderer",
+      "tests": [
+        "sdk/src/__tests__/3d-assets.test.ts:796-928 (conditional real Blender path, not run)"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:140; docs/architecture.md:173"
+      ],
+      "states": {
+        "loading": "Local Blender with bounded stdout/time; separate script/artifact directory",
+        "failure": "Missing CLI/nonzero/Python/missing artifact produces JSON error",
+        "empty": "Empty scene has fallback camera framing; decoded render output not validated",
+        "cancellation": "runBlender listens to AbortSignal; final readImages omits signal",
+        "retry": "New unique preview directory; failed preview artifacts not reclaimed here",
+        "permission": "No arbitrary model Python; SDK rejects declared non-host filesystem view",
+        "ownership": "Receipt hashes initial asset and later artifact read, but live source and media are reopened independently"
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 154,
+          "detail": "Importer excludes glTF/GLB/OBJ/3ds"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 825,
+          "detail": "Live original path passed to Blender after hashing"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 865,
+          "detail": "Receipt reuses prior source hash and requested dimensions"
+        }
+      ],
+      "gaps": [
+        "Several discoverable/native-inspectable formats cannot preview",
+        "Exact source receipt is not guaranteed across a concurrent edit; artifact dimensions are requested, not decoded",
+        "Generated-image attach errors are discarded by filtering out read_image JSON",
+        "No Blender version/operator capability handshake or guaranteed replay bundle for external dependencies"
+      ],
+      "strengths": [
+        "Fixed CPU Cycles/material/clay/wireframe/camera script",
+        "8MiB child output bound and structured nonzero/Python failure",
+        "Per-preview unique artifacts with source/artifact hashes"
+      ]
+    },
+    {
+      "id": "3d-declarative-edit",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "edit_3d_asset schema -> runtime handler -> sdk/src/run.ts:2817",
+      "implementation": "sdk/src/tools/3d-assets.ts:896-1402; 3d-artifact-retention.ts",
+      "consumer": "File mutation receipt plus assetMutation and preview media; shared mutation authority owned by pair06",
+      "tests": [
+        "sdk/src/__tests__/3d-assets.test.ts:122-429; real Blender integration:796-928 inspected only"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:143"
+      ],
+      "states": {
+        "loading": "Attempt-scoped .blend/script/payload files",
+        "failure": "Not-applied rejection distinct from thrown conditional commit outcome unknown",
+        "empty": "Four operation types, 1-20 operations; no new geometry/rigging/shader/scene editing API",
+        "cancellation": "Before work and before commit; post-commit cancellation preserves applied outcome",
+        "retry": "Stale hash rejected; sibling attempt artifacts retained on failed retry",
+        "permission": "conditionalCommit required, fixed declarative script, exact source hash",
+        "ownership": "Working copy copied from hashed bytes; exclusive attempt files; bounded pruning protects recent applied receipts"
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1092,
+          "detail": "Authority and exact-source guard before effects"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1238,
+          "detail": "Conditional commit with expected SHA"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1245,
+          "detail": "Unknown commit preserves working copy"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1384,
+          "detail": "JSON existence misused as preview success"
+        }
+      ],
+      "gaps": [
+        "previewRendered true for preview error JSON",
+        "Reopen validation checks marker presence, not parsed scene or requested operation postconditions",
+        "Retention is in-memory recent receipt protection plus 24h/count pruning; no returned expiry/reconciliation lease",
+        "Operation vocabulary is rename/transform/resolution/frame range, not general asset authoring"
+      ],
+      "strengths": [
+        "Working copy and reopened validation before guarded commit",
+        "Applied/not_applied/commit_outcome_unknown represented separately",
+        "Cancellation after commit cannot erase applied receipt",
+        "100000-character file payload and attempt-scoped cleanup"
+      ]
+    },
+    {
+      "id": "game-engine-workflow-helpers",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "Engine profile detection -> slash palette presets",
+      "implementation": "common/src/util/engine-profiles.ts; game-dev-presets.ts",
+      "consumer": "cli/src/data/slash-commands.ts:302 inserts prompts; runtime template strings:188 adds guidance",
+      "tests": [
+        "common/src/util/__tests__/engine-profiles.test.ts (discovered)",
+        "common/src/util/__tests__/game-dev-presets.test.ts (discovered)"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:2038-2070"
+      ],
+      "states": {
+        "loading": "File tree drives detection; no engine installation required",
+        "failure": "Actual command errors delegated to generic terminal/job tools",
+        "empty": "No engine -> no presets",
+        "cancellation": "Prompt recipes rely on generic job lifecycle (pair09)",
+        "retry": "Recipes advise polling/logs/stop, not native engine state transitions",
+        "permission": "Preset selection inserts reviewable text; no immediate engine launch",
+        "ownership": "No native engine session, asset graph or deployment receipt"
+      },
+      "evidence": [
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 302,
+          "detail": "Actual preset consumer"
+        },
+        {
+          "path": "packages/agent-runtime/src/templates/strings.ts",
+          "line": 188,
+          "detail": "Actual prompt consumer"
+        },
+        {
+          "path": "common/src/util/game-dev-presets.ts",
+          "line": 350,
+          "detail": "Structured job guidance export has no production callers in scoped repository search"
+        }
+      ],
+      "gaps": [
+        "Structured getGameDevJobGuidance is documented as runtime-consumed but only referenced by tests/docs",
+        "Weak directory heuristics label generic Config/addons/assets repositories; confidence not returned",
+        "No engine-specific callable build/run/test/editor/asset operation bundle; target-language depth owned by pair07/08"
+      ],
+      "strengths": [
+        "Reviewable prompts choose project commands rather than hardcoded execution",
+        "Unity/Godot/Unreal/Bevy/Blender conventions and asset precautions wired",
+        "Existing jobs and native 3D tools can support narrow workflows"
+      ]
+    },
+    {
+      "id": "native-computer-screen-frontier",
+      "maturity": "absent",
+      "assurance": "static trace",
+      "entrypoint": "Native tool catalog; Rust openbuff-native a11y role",
+      "implementation": "Rust role dispatch returns NotImplemented",
+      "consumer": "No current OS screen capture/accessibility/input consumer found in searched native SDK/CLI/runtime roots",
+      "tests": [
+        "rust/crates/openbuff-native/src/lib.rs:145 stub outcome assertion inspected"
+      ],
+      "docs": [
+        "rust/README.md:19 (explicit scaffold)"
+      ],
+      "states": {
+        "loading": "No implemented OS adapter",
+        "failure": "a11y role structured not_implemented, exit2",
+        "empty": "No screen observation",
+        "cancellation": "No desktop operation to cancel",
+        "retry": "No functional adapter",
+        "permission": "No per-app/OS permission flow",
+        "ownership": "No desktop target/coordinate/evidence ownership"
+      },
+      "evidence": [
+        {
+          "path": "common/src/tools/constants.ts",
+          "line": 22,
+          "detail": "Native catalog includes browser/image/3D, no desktop tool"
+        },
+        {
+          "path": "rust/crates/openbuff-native/src/lib.rs",
+          "line": 78,
+          "detail": "a11y is an explicit unimplemented role"
+        }
+      ],
+      "gaps": [
+        "Desktop windows/screen/accessibility trees/actions, coordinate transforms and per-app consent remain missing",
+        "Browser page input and terminal image rendering must not be credited as OS computer control",
+        "External custom/MCP tools can extend capability; arbitrary installed tools were not inventoried"
+      ],
+      "strengths": [
+        "Frontier stub fails loudly instead of pretending success"
+      ]
+    },
+    {
+      "id": "audio-voice-frontier",
+      "maturity": "absent",
+      "assurance": "static trace",
+      "entrypoint": "Native catalog versus MCP audio media and ACP prompt boundary",
+      "implementation": "common/src/mcp/client.ts:873 maps audio media; ACP:1035 text-only",
+      "consumer": "No native recording/transcription/TTS/VAD/playback/voice CLI loop in searched roots",
+      "tests": [],
+      "docs": [
+        "ACP source capability advertisement; historical roadmap excluded from receipt"
+      ],
+      "states": {
+        "loading": "No native microphone/playback setup",
+        "failure": "ACP audio capability false; unsupported input blocks are omitted by text-only path",
+        "empty": "No native audio observation",
+        "cancellation": "No local voice lifecycle; external adapter cancellation owned by pair10",
+        "retry": "No speech action",
+        "permission": "No microphone or speaker permission consumer",
+        "ownership": "External media projection is not a speech session or retained audio artifact"
+      },
+      "evidence": [
+        {
+          "path": "common/src/mcp/client.ts",
+          "line": 873,
+          "detail": "MCP audio output preserved as media"
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 827,
+          "detail": "ACP advertises audio:false"
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 1035,
+          "detail": "Only text prompt blocks reach handler"
+        }
+      ],
+      "gaps": [
+        "Native record/transcribe/speech/VAD/playback and timed audio observations absent",
+        "MCP media compatibility depends on pair02 provider conversion and pair10 connector semantics",
+        "No current whisper/Silero/piper implementation found; language migration alone adds none"
+      ],
+      "strengths": [
+        "ACP honestly advertises absent image/audio/embedded-context support"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "13-F1",
+      "title": "Browser policy defaults and inspection allowlists disagree across production layers",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "agents/browser-use/browser-use.ts",
+          "line": 46,
+          "detail": "Schema defaults to allow-interactions"
+        },
+        {
+          "path": "common/src/tools/browser-policy.ts",
+          "line": 46,
+          "detail": "Shared policy restricts only explicit read-only; permits scroll/design_tokens/tab"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+          "line": 2782,
+          "detail": "Shared helper used on outgoing calls"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+          "line": 39,
+          "detail": "Second narrower list excludes those documented inspection actions"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+          "line": 68,
+          "detail": "Missing policy is restricted by this handler"
+        },
+        {
+          "path": "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts",
+          "line": 11,
+          "detail": "Handler test expects default read-only while shared tests expect absent policy allowed"
+        }
+      ],
+      "trigger": "Spawn bundled browser-use with no interactionPolicy, or explicit read-only/plan-only and request scroll/design_tokens/tab list.",
+      "consequence": "Omitted policy may be denied despite the schema/prompt default. Read-only inspection actions advertised as supported are denied by the second gate, causing needless respawn/authorization requests and preventing page inspection.",
+      "suggestedFix": "Choose the intentional default once and share one structural action-policy evaluator across schemas, prompt, executor and handler. Inspect tab operation and recursive diagnose rather than just top-level type.",
+      "acceptanceProbe": "Drive schema-valid calls through executor plus handler for omitted/read-only/allow-interactions and plan lineage. Omitted matches chosen default; listed inspection actions work; tab create/close and nested mutation remain denied under read-only.",
+      "evidenceVsInference": "Default application at spawn was not exercised end to end; handler allowlist rejection is unconditional for explicit read-only and is directly evident. Tests encode incompatible contracts."
+    },
+    {
+      "id": "13-F2",
+      "title": "SDK browser dispatch collapses child ownership into the main run session",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+          "line": 95,
+          "detail": "Child parentRunId/parentAgentId owner is attached"
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1097,
+          "detail": "Trusted owner captures only mainAgentState"
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2847,
+          "detail": "Child/model stamp is discarded"
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2851,
+          "detail": "Every browser call uses that same main owner"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 122,
+          "detail": "Session key otherwise includes child ownership"
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1853,
+          "detail": "Run cleanup selects only clientSessionId"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 2002,
+          "detail": "Cleanup also selects every ownerless session"
+        }
+      ],
+      "trigger": "Two browser-use children in one SDK run issue actions concurrently; separately, one of two SDK runs sharing a client session completes.",
+      "consequence": "Children resolve to one browser/tab/log state instead of their intended isolated sessions. Main-run cleanup also targets sibling root runs under the same client session and all ownerless sessions, so another task can lose its browser state.",
+      "suggestedFix": "Carry authenticated per-call child identity as trusted transport context outside model-controlled input while preserving spoof resistance. Scope run cleanup to the exact root run and track explicit ownership for in-flight sessions.",
+      "acceptanceProbe": "Two browser children in a fake SDK dispatch must receive distinct session keys. Two root runs under one client ID must survive the other's completion; spoofed owner input must still be rejected.",
+      "evidenceVsInference": "Identity replacement/key derivation/cleanup predicates are static evidence. Cross-task navigation or teardown interference is a consequence inferred for concurrent callers; no live browser race was executed.",
+      "crossReferences": [
+        "pair09 owns shared job/run/process lifecycle; this finding concerns browser target/observation ownership"
+      ]
+    },
+    {
+      "id": "13-F3",
+      "title": "Diagnose discards step media and returns no verdict for declared success conditions",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/browser-actions.ts",
+          "line": 546,
+          "detail": "Schema advertises success conditions to verify"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 570,
+          "detail": "Step output is reduced to the first JSON part"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 575,
+          "detail": "Expected logs/error/custom conditions are copied only"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 583,
+          "detail": "Outer response uses ordinary success:true builder"
+        }
+      ],
+      "trigger": "Run diagnose with a screenshot/recording/diff step, a failed action, or expectedLogs/noJsErrors/customCondition expectations.",
+      "consequence": "A step can say screenshotAttached:true while no image reaches the model, and callers receive requested conditions without an evaluated verdict. Nested failures remain inspectable in JSON, but outer success is only sequence dispatch completion.",
+      "suggestedFix": "Preserve/reference step media with step IDs, return evaluated condition results and an explicit aggregate outcome, and distinguish action execution from validation. Reject unsupported condition types.",
+      "acceptanceProbe": "Offline fake-CDP screenshot plus failed evaluate reproduces current outer success:true, screenshotAttached:true and zero media. Corrected path must deliver/reference the screenshot and expose failed/unsupported condition verdicts.",
+      "verificationArtifact": "evidence/13-offline-results.json",
+      "evidenceVsInference": "Fake-CDP probe directly confirms media loss and outer/nested statuses. Non-evaluation of condition fields is static evidence."
+    },
+    {
+      "id": "13-F4",
+      "title": "Pixel diff silently excludes non-overlapping image area from mismatch ratio",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 3338,
+          "detail": "Comparison uses min width/height"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 3342,
+          "detail": "Both PNGs cropped to that intersection"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 3350,
+          "detail": "Mismatch ratio denominator covers intersection only"
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 3357,
+          "detail": "Original dimensions exposed, but no partial/dimension-mismatch verdict"
+        }
+      ],
+      "trigger": "Compare images with identical shared pixels but different viewport/page extents.",
+      "consequence": "MismatchRatio can be 0 despite missing/extra page area. Original dimensions are returned, so a caller could detect it independently; the primary diff statistic is incomplete without an explicit crop/dimension result.",
+      "suggestedFix": "Default unequal dimensions to an explicit dimension mismatch, or compare a padded union; make overlap-only comparison opt-in and mark it partial.",
+      "acceptanceProbe": "The offline 2x1 versus 1x1 fixture currently gives 0 mismatch across one pixel despite a differing second pixel. Corrected default must expose nonzero/dimension mismatch; an explicit overlap mode must disclose ignored extent.",
+      "verificationArtifact": "evidence/13-offline-results.json",
+      "evidenceVsInference": "Direct fixture execution of the production pixel_diff dispatcher; no website or private image involved."
+    },
+    {
+      "id": "13-F5",
+      "title": "Native-inspectable glTF, GLB and OBJ assets cannot use the advertised preview importer",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "dependency-hygiene",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/util/file.ts",
+          "line": 24,
+          "detail": "Discovery includes blend/glb/gltf/fbx/obj/dae/3ds/etc"
+        },
+        {
+          "path": "common/src/tools/params/tool/3d-assets.ts",
+          "line": 31,
+          "detail": "Preview advertises supported 3D assets imported through fixed operators"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 154,
+          "detail": "Fixed importer contains only fbx/dae/stl/ply/USD branches"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 183,
+          "detail": "All other formats raise importer unavailable"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 816,
+          "detail": "All non-blend previews use that importer"
+        }
+      ],
+      "trigger": "Call render_3d_preview on a successfully native-inspected .gltf/.glb/.obj, or inspect/preview a discovered .3ds.",
+      "consequence": "The fixed Python script necessarily rejects these formats even with Blender installed; discovery/read support does not constitute preview support.",
+      "suggestedFix": "Add tested glTF/GLB and OBJ operators for supported Blender versions. Return an explicit per-format/per-operation capability packet; mark 3ds unavailable unless a supported importer exists.",
+      "acceptanceProbe": "Fixture suite must inspect and preview one glTF, GLB and OBJ on the declared Blender version and negotiate unavailable formats before creating artifacts. Missing Blender/operator must return truthful unsupported/error states.",
+      "evidenceVsInference": "Missing branches and unconditional ValueError are static evidence. Actual installed Blender was not launched, and no importer/version compatibility was measured."
+    },
+    {
+      "id": "13-F6",
+      "title": "Preview receipts do not guarantee the exact source bytes or dimensions claimed",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 617,
+          "detail": "Source bytes/hash captured in an initial filesystem read"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 825,
+          "detail": "Blender later reopens the original live path"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 837,
+          "detail": "Imported formats also receive the live source path"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 865,
+          "detail": "Receipt sourceHash is reused from initial read"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 868,
+          "detail": "Dimensions copied from requested parameters, not decoded PNG"
+        },
+        {
+          "path": "docs/architecture.md",
+          "line": 173,
+          "detail": "Docs promise exact source hash used for rendering"
+        }
+      ],
+      "trigger": "Editor replaces a source asset between initial hash/read and Blender opening it; Blender produces an image whose dimensions differ from the request.",
+      "consequence": "The receipt can bind the produced preview to an earlier asset revision or requested dimensions that were never observed. Metadata caching for Blender inspection has the same hash-before-reopen gap.",
+      "suggestedFix": "Render/inspect a verified immutable source snapshot, preserve/remap relative dependencies or label their limits, and decode output PNG dimensions. Bind model media to the same artifact bytes/hash and report stale/limited evidence when exact binding is unavailable.",
+      "acceptanceProbe": "An injected source replacement between read and process open must render the initial snapshot or return stale evidence. Decode and hash the exact returned PNG; wrong dimensions or changed artifact bytes must never retain an exact receipt claim.",
+      "evidenceVsInference": "Hashing, later path reopen and receipt construction are static evidence. The wrong-revision outcome is an inference conditional on that explicit concurrent replacement; no actual Blender race or malformed-render output was executed."
+    },
+    {
+      "id": "13-F7",
+      "title": "Applied 3D edits report previewRendered true for preview error JSON",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 888,
+          "detail": "Preview failure returns a JSON {error} part"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1307,
+          "detail": "Applied edit calls post-commit preview with the same signal"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1318,
+          "detail": "Any JSON part selected, including error"
+        },
+        {
+          "path": "sdk/src/tools/3d-assets.ts",
+          "line": 1384,
+          "detail": "previewRendered is only JSON-part existence"
+        },
+        {
+          "path": "sdk/src/__tests__/3d-assets.test.ts",
+          "line": 913,
+          "detail": "Conditional Blender test asserts only successful preview case"
+        }
+      ],
+      "trigger": "Guarded edit commits, then preview is cancelled, Blender fails, or no image is available.",
+      "consequence": "Applied mutation truth is preserved, and preview.error is exposed, but previewRendered contradicts it by remaining true. Clients using this boolean can wrongly credit visual verification.",
+      "suggestedFix": "Set previewRendered from validated successful image receipts/media, not JSON existence; distinguish rendered-but-not-attached, failed and cancelled states without changing the applied edit outcome.",
+      "acceptanceProbe": "Fake subprocess/DI fixture commits then returns a preview error or abort. Require outcome:applied, retained artifactPath, explicit preview error and previewRendered:false. Cover rendered-but-filtered media separately.",
+      "evidenceVsInference": "Error-return shape and boolean test are static evidence; the combined commit-then-preview-failure path was not executed in this audit."
+    },
+    {
+      "id": "13-F8",
+      "title": "Failed image retries still send the retained old capture as current message media",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/utils/pending-attachments.ts",
+          "line": 651,
+          "detail": "Failed retry keeps previous capture while setting error"
+        },
+        {
+          "path": "cli/src/utils/image-processor.ts",
+          "line": 51,
+          "detail": "Processed bytes projected regardless of attachment status"
+        },
+        {
+          "path": "cli/src/utils/image-processor.ts",
+          "line": 89,
+          "detail": "Comment/contract says processing/error images should not be sent"
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 300,
+          "detail": "Production message preparation uses this helper"
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 783,
+          "detail": "Returned media passed as SDK content"
+        }
+      ],
+      "trigger": "A ready image loses its source, retry fails, and the user submits the draft/queued prompt.",
+      "consequence": "UI/error state describes a failed capture, while the model receives retained previous bytes without a retained/stale indicator. The output can be based on an observation the user intended to refresh.",
+      "suggestedFix": "Gate media projection on ready status. Preserve old bytes for inspection, and support an explicit reuse-retained-capture action that marks provenance/time rather than silently sending it.",
+      "acceptanceProbe": "Actual retryPendingAttachment plus processImagesForMessage in the offline fixture currently yields status:error and one image part. Corrected preparation must reject/omit that capture with a visible message or require explicit retained reuse.",
+      "verificationArtifact": "evidence/13-offline-results.json",
+      "evidenceVsInference": "Direct production-helper fixture verifies the failed retry and emitted image part; full mounted CLI submit was not exercised."
+    },
+    {
+      "id": "13-F9",
+      "title": "render_ui claims rendering without a host capability or acknowledgement",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+          "line": 14,
+          "detail": "Returns UI rendered without consulting host or tool input"
+        },
+        {
+          "path": "common/src/tools/params/tool/render-ui.ts",
+          "line": 54,
+          "detail": "Tool contract describes CLI rendering"
+        },
+        {
+          "path": "cli/src/components/tools/registry.ts",
+          "line": 136,
+          "detail": "The concrete renderer is CLI-specific"
+        },
+        {
+          "path": "cli/src/components/tools/render-ui.tsx",
+          "line": 194,
+          "detail": "Unsupported widget can yield no rendered content"
+        }
+      ],
+      "trigger": "An SDK/headless host exposes render_ui without the Openbuff CLI consumer, or a UI render fails after the runtime acknowledges.",
+      "consequence": "Model receives UI rendered even when no widget was rendered. The working CLI button does not establish a render contract on other hosts.",
+      "suggestedFix": "Report widget submission with host delivery state, expose/render only where host capability is negotiated, and acknowledge rendering separately if a client needs that guarantee.",
+      "acceptanceProbe": "Headless SDK host with no UI handler must report unsupported/not-rendered or submitted without a render guarantee. Mounted CLI path should acknowledge the actual supported button while preserving open/copy failure behavior.",
+      "evidenceVsInference": "Unconditional handler response and concrete CLI registry are static evidence; full headless model task and rendering failure were not executed."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Inspected source/path/filter admission, model-owner spoof rejection, fixed Blender operation language, private CDP pipe and http(s) widget schema. These are meaningful strengths. Browser policy consistency is assessed without prescribing new restrictions against intentional full-access policy. Generic sandbox/process policy is pair09; MCP trust/result policy is pair10. No network/CVE audit or exploit claim.",
+    "correctness": "Nine concrete findings cover policy drift, lost browser ownership, diagnostic media/condition semantics, cropped diff extent, missing preview importers, source/hash/dimension binding, preview status, failed capture send, and hostless render acknowledgement. Native parsers/discovery and many actions are production-wired, but not full scene or desktop semantics.",
+    "state-mutation": "Reviewed per-session tab/log/recording state, spawn/reconnect/stop single-flight guards, attachment-ID and generation fences, .blend working copies, CAS outcomes and retained artifacts. Static browser owner collapse and source reopen races remain. Shared job/run and filesystem authority are cross-referenced rather than re-audited.",
+    "error-handling": "Read per-path image errors, CDP timeouts/close rejection, missing Chrome/Blender, malformed/empty captures, artifact loss, Python exit failures, not-applied and unknown commit outcomes. Some errors are retained accurately; wait/load failures and accepted no-op controls weaken browser contracts, and previewRendered contradicts error JSON.",
+    "performance": "Static bounds were inspected: CDP framing/backpressure, logs/network/request/event caps, 600 recording frames, bounded snapshot arrays, image file/attachment caps, Blender 8MiB output and bounded artifact pruning. No runtime memory/latency metric is claimed. read_image eagerly reads all unbounded paths before its total-media cap, and observation/persistence limits need explicit completeness/admission semantics.",
+    "dependency-hygiene": "SDK declares pixelmatch/pngjs/ws; CLI declares Jimp/open and pins OpenTUI 0.5.12 and Bun 1.3.5. Rust a11y has no implementation dependency/consumer. Blender is an external executable with no negotiated version/operator capability; 3D advertised formats exceed implemented import branches. No dependency upgrade or external advisory lookup was performed.",
+    "test-coverage": "All primary selected test ranges inspected. Two discriminating offline probes passed under pinned Bun (8 assertions), directly reproducing current bug behavior. Existing tests cover pure schemas, parser metadata, pipe/teardown/routing windows and successful conditional Blender scenes, but production child ownership, failed preview booleans, format matrix, source replacement, unsupported-host UI and image status-with-retained-data need contract probes. No real Blender or mounted CLI integration was run.",
+    "api-contract": "Reviewed schemas, runtime handlers, SDK conversion/host-view checks, CLI registry/results, native tool catalogs, Rust stub exit contract, ACP and MCP media boundaries. Drift exists in default policy, inspection allowlist, ignored browser options, media/results and .blend preview flags. Engine job guidance export is unwired despite docs. ACP advertises image/audio false accurately; custom plugins do not establish native computer/voice support."
+  },
+  "coverageLimits": [
+    "Read-only current-source review. No source changes, credentials/private images/logs, external messages, model/network calls, or real browser/GUI/audio/Blender launches.",
+    "All 18 picker-selected primary ranges across 14 current files inspected; adjacent ranges are explicit samples. Partial source reads do not establish whole-file correctness. Historical roadmap checkboxes are not inspection or maturity evidence.",
+    "Native query_index/read_files/read_subtree/audit helpers were not exposed in this Codex session; source/rg and pinned inventory were used, not claimed native tool calls. Root validates the structuralReceipt with the native exported function.",
+    "Two fake-CDP/fixture production-helper probes provide unit assurance only. Conditional real Blender tests and mounted native UI tests were read but not run; no platform or provider success rate was measured.",
+    "Browser stamp replacement and cleanup predicate are static facts; concurrent browser interference is inferred for explicit overlapping callers. Source/hash-before-reopen is static evidence; wrong-revision output is inferred only under source replacement, not claimed as an observed Blender race.",
+    "Native read_image/3D parsers are useful narrow capabilities despite admission/semantic-depth gaps. External custom tools/MCP services may supply desktop/audio actions outside this inspected native surface.",
+    "Pair09 owns generic process/env/kill/sandbox/approval; pair10 owns connector/MCP trust/error semantics; pair02 owns provider/model media routing; pair06 owns common mutation broker; pair07/08 own generic language/index intelligence; pair01 owns full CLI queue/session behavior."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "13-W1",
+      "trigger": "13-F1/13-F2: declared policy and actual browser owner differ across runtime/SDK",
+      "sourceAnchors": [
+        "agents/browser-use/browser-use.ts:43",
+        "common/src/tools/browser-policy.ts:42",
+        "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts:65",
+        "sdk/src/run.ts:1097",
+        "sdk/src/run.ts:2849"
+      ],
+      "intendedBehavior": "One structural action policy and trusted per-call child ownership, with exact-root cleanup and spoof resistance.",
+      "smallestScope": "Shared evaluator/schema/prompt tests; runtime-to-SDK trusted call context; browser key/cleanup integration.",
+      "prerequisites": [
+        "Canonical trusted call-context decision with pair09; preserve intentional product permission defaults"
+      ],
+      "languageDecision": "Repair TypeScript boundaries first; CDP transport already supplies the required action capability.",
+      "behavioralAcceptanceProbes": [
+        "Omitted/explicit/plan-lineage matrix through both gates",
+        "Nested diagnose and tab operation policy",
+        "Two children/two roots retain distinct browser state and cleanup",
+        "Spoofed model input cannot claim a sibling"
+      ],
+      "regressionChecks": [
+        "Existing browser policy and pipe/teardown tests",
+        "Run ownership spoof test"
+      ],
+      "observableCompletionEvidence": "Fake SDK/CDP integration receipt plus declared default docs; one authorized browser workload later exercises actual multi-child ownership.",
+      "stopDeferRule": "Do not add broader browser actions or further agent permission surfaces until this matrix agrees; no new OS control is needed."
+    },
+    {
+      "id": "13-W2",
+      "trigger": "13-F3/F4/F7/F9 and accepted browser no-op options weaken observation/result truth",
+      "sourceAnchors": [
+        "sdk/src/tools/browser-logs.ts:564",
+        "sdk/src/tools/browser-logs.ts:3338",
+        "sdk/src/tools/3d-assets.ts:1384",
+        "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts:14"
+      ],
+      "intendedBehavior": "Every success/attachment/verification state describes executed work and accessible evidence; unsupported controls return explicit status.",
+      "smallestScope": "Browser result schema and diagnose media/condition aggregation; dimension mismatch mode; preview flags; host UI submit/render acknowledgement.",
+      "prerequisites": [
+        "13-W1 for policy/owner-sensitive diagnose integration",
+        "Pair02 media conversion and pair01 host capabilities consulted"
+      ],
+      "languageDecision": "Keep TS as the canonical result authority; use existing PNG/CDP libraries.",
+      "behavioralAcceptanceProbes": [
+        "Replay 13 offline fake-CDP fixture with accessible step media and mismatch extent",
+        "Commit followed by preview error stays applied but previewRendered false",
+        "Headless renderer absence yields unsupported/submitted, not rendered",
+        "Loading/networkidle/retry requests either honored or rejected"
+      ],
+      "regressionChecks": [
+        "Recording rollback/APNG tests",
+        "Browser response/media conversion contracts",
+        "CLI button open/copy failure fixture"
+      ],
+      "observableCompletionEvidence": "Versioned result fixtures and actual consumer assertions; no returned attachment flag without returned or retained media reference.",
+      "stopDeferRule": "Remove or explicitly reject unimplemented options instead of shipping accepted no-ops; defer general UI construction."
+    },
+    {
+      "id": "13-W3",
+      "trigger": "13-F8 plus image fan-out and late cancellation admission gaps",
+      "sourceAnchors": [
+        "cli/src/utils/pending-attachments.ts:651",
+        "cli/src/utils/image-processor.ts:51",
+        "sdk/src/tools/read-image.ts:215",
+        "sdk/src/tools/read-image.ts:248"
+      ],
+      "intendedBehavior": "Fresh ready images are sent; retained failed captures require explicit labeled reuse. Read work and post-I/O admission follow declared size/cancellation budgets.",
+      "smallestScope": "CLI projection/status UI; read_image concurrency/path-count admission and actual-size/cancellation fences.",
+      "prerequisites": [
+        "Pair02 provider byte/format limits",
+        "Pair01 queued attachment recovery consumer"
+      ],
+      "languageDecision": "TS is sufficient; no imaging sidecar justified by this correctness fix.",
+      "behavioralAcceptanceProbes": [
+        "Existing failed-retry probe ceases silently sending stale bytes",
+        "Cancellation during asynchronous reads cannot attach late media",
+        "Bounded batch admits input-order images without reading unlimited rejected siblings"
+      ],
+      "regressionChecks": [
+        "Scoped path/filter/external-read image tests",
+        "Attachment identity/removal/retry and conversation-owner checks"
+      ],
+      "observableCompletionEvidence": "Production helper and mounted submission cases; bounded-work fixture metrics declared for a chosen batch workload.",
+      "stopDeferRule": "Keep original read_image bytes and explicit last-capture recovery; do not expand voice input before capture ownership is settled."
+    },
+    {
+      "id": "13-W4",
+      "trigger": "13-F5/F6: preview format coverage and exact evidence overstate actual behavior",
+      "sourceAnchors": [
+        "sdk/src/tools/3d-assets.ts:154",
+        "sdk/src/tools/3d-assets.ts:617",
+        "sdk/src/tools/3d-assets.ts:825",
+        "sdk/src/tools/3d-assets.ts:865",
+        "docs/architecture.md:173"
+      ],
+      "intendedBehavior": "Per-format operation availability is explicit; inspected/rendered source snapshot, PNG dimensions and model media match receipt evidence.",
+      "smallestScope": "Blender version/operator probe; glTF/GLB/OBJ importers; verified snapshot/material dependency limits; decoded artifact validation.",
+      "prerequisites": [
+        "13-W2 result truth",
+        "Pair06 existing cooperative mutation/snapshot authority",
+        "Declared minimal Blender version and fixture assets"
+      ],
+      "languageDecision": "Use Blender's Python API as bounded external capability and TS orchestration; no new Rust renderer or duplicate source authority.",
+      "behavioralAcceptanceProbes": [
+        "Inspect/preview format matrix on declared Blender version",
+        "Injected source replacement renders exact snapshot or returns stale/limited evidence",
+        "Hash/dimensions bind decoded PNG and attached bytes",
+        "Absent dependency/operator/file returns explicit failure; post-commit cancellation preserves applied edit"
+      ],
+      "regressionChecks": [
+        "Native glTF/GLB/OBJ metadata tests",
+        "Existing .blend guarded commit/retention tests",
+        "Host-process-view adapter rejection"
+      ],
+      "observableCompletionEvidence": "Fixture hashes/artifact receipts plus one real headless Blender edit-preview workload when authorized; advertised support limited to passed formats.",
+      "stopDeferRule": "Mark 3ds or unavailable operators unsupported until demonstrated; defer general geometry/rig/shader editing until a concrete task requires it."
+    },
+    {
+      "id": "13-W5",
+      "trigger": "Engine job guidance is documented as consumed but has no production caller; prompt heuristics lack confidence",
+      "sourceAnchors": [
+        "common/src/util/game-dev-presets.ts:350",
+        "common/src/util/engine-profiles.ts:253",
+        "cli/src/data/slash-commands.ts:302",
+        "docs/agents-and-tools.md:2069"
+      ],
+      "intendedBehavior": "Existing presets remain reviewable prompts; structured guidance is integrated with one real job consumer or its consumption claim is retired. Detected engines expose evidence/confidence.",
+      "smallestScope": "One game-dev preset through command selection, existing job/readiness/log/stop consumer and documentation; bounded discovery metadata.",
+      "prerequisites": [
+        "Pair09 job lifecycle",
+        "Pair07/08 project validation targets",
+        "Chosen engine workflow and locally available version"
+      ],
+      "languageDecision": "Do not port engine build orchestration; reuse existing language tools/jobs and native 3D body.",
+      "behavioralAcceptanceProbes": [
+        "One chosen engine build/run/watch workflow surfaces real readiness/failure/stop evidence",
+        "Generic Config/addons/Cargo/assets fixture cannot advertise confirmed engine without evidence"
+      ],
+      "regressionChecks": [
+        "Slash-palette insertText tests",
+        "Engine profiles/presets tests",
+        "Existing job receipt contract"
+      ],
+      "observableCompletionEvidence": "Actual consumer search plus end-to-end workflow receipt; remove unsupported runtime-consumption prose if integration is deferred.",
+      "stopDeferRule": "Defer rich editor/asset/game operation bundles and unsupported engines until concrete workloads justify them."
+    },
+    {
+      "id": "13-W6",
+      "trigger": "Desktop a11y stub and native voice loop are absent despite broad body ambition",
+      "sourceAnchors": [
+        "common/src/tools/constants.ts:22",
+        "rust/crates/openbuff-native/src/lib.rs:78",
+        "sdk/src/services/acp/acp-agent.ts:827",
+        "sdk/src/services/acp/acp-agent.ts:1035"
+      ],
+      "intendedBehavior": "Advertise only negotiated desktop/speech actions whose observations, permission, cancellation and ownership are implemented.",
+      "smallestScope": "Choose one OS desktop observation/action task or one local record/transcribe/playback task; versioned sidecar manifest with typed effect/evidence receipt and TS SDK/CLI consumer.",
+      "prerequisites": [
+        "13-W1/W2 canonical owner/result contracts",
+        "Explicit workload and supported platform(s)",
+        "User-authorized device/network behavior for actual validation"
+      ],
+      "languageDecision": "Rust is justified only for concrete OS API capability; speech component language follows library/platform requirements. TS retains run/effect authority.",
+      "behavioralAcceptanceProbes": [
+        "Capability negotiation refuses unavailable permissions/adapters",
+        "Coordinates/frames or timed audio have provenance and bounded limits",
+        "Cancel/failure closes resources; a successful action produces inspectable evidence",
+        "Actual CLI/SDK workflow works on the declared platform"
+      ],
+      "regressionChecks": [
+        "Stub must continue fail-loud until replaced",
+        "Protocol/version/byte-position/error/cancellation fixtures",
+        "No duplicated JS/native authority"
+      ],
+      "observableCompletionEvidence": "Live platform/task receipt and held-out workload metrics, not passing role-name/stub tests or dependencies alone.",
+      "stopDeferRule": "Defer when browser/image capabilities satisfy the selected workload; never mark generic computer or voice completed by historical plan checkboxes."
+    }
+  ],
+  "verification": {
+    "command": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun test /tmp/openbuff-body-review-2026-11-05/evidence/13-offline-probes.test.ts",
+    "runtime": "bun 1.3.5 (1e86cebd)",
+    "exitCode": 0,
+    "passed": 2,
+    "failed": 0,
+    "assertions": 8,
+    "kind": "offline unit probes of current behavior",
+    "artifacts": [
+      "evidence/13-offline-probes.test.ts",
+      "evidence/13-offline-results.json",
+      "evidence/13-verification.json"
+    ],
+    "interpretation": "Tests assert current undesirable behavior to distinguish hypotheses; they are reproduction evidence, not regression tests proving fixes."
+  },
+  "searchCoverage": {
+    "inventoryPinned": true,
+    "primarySections": 18,
+    "primaryUniqueFiles": 14,
+    "roots": [
+      "agents",
+      "common/src",
+      "packages/agent-runtime/src",
+      "packages/indexer/src",
+      "sdk/src",
+      "cli/src",
+      "docs",
+      "rust",
+      "sdk/package.json",
+      "cli/package.json"
+    ],
+    "queries": [
+      "browser_logs/CDP/BrowserAction/interactionPolicy/owner/stopBrowserSessionsByOwner",
+      "read_image/processedImage/retryPendingAttachment/prepareUserMessage",
+      "render_ui/registry/safeOpen/copy",
+      "inspect_3d_asset/render_3d_preview/edit_3d_asset/sourceHash/Blender/import",
+      "getGameDevJobGuidance/detectEngineProfiles/slash presets",
+      "computer_use/screen_capture/accessibility/a11y/audio/voice/speech/microphone/transcription/whisper/Silero/piper"
+    ],
+    "negativeLimit": "No implemented native desktop/audio tool or consumer found within these searched roots; Rust a11y positive match is an explicit stub. Absence does not cover arbitrary user-installed external tools.",
+    "receiptMeaning": "Exact inventory paths and read ranges record inspection, not a full-line audit guarantee."
+  }
+}
+

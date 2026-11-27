@@ -7,7 +7,7 @@ const MAX_OUTPUT_DELTA_CHARS = 2000
 
 function truncateOutputDelta(value: string): string {
   if (value.length <= MAX_OUTPUT_DELTA_CHARS) return value
-  return value.slice(0, MAX_OUTPUT_DELTA_CHARS)
+  return value.slice(-MAX_OUTPUT_DELTA_CHARS)
 }
 
 function toolNameFrom(value: unknown): string | null {

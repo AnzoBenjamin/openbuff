@@ -1,0 +1,170 @@
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { getLanguageFamily } from '/home/ben/Code/CLI/openbuff/common/src/util/language-profiles.ts'
+import { buildTokenCallers } from '/home/ben/Code/CLI/openbuff/packages/code-map/src/parse.ts'
+import { buildMetadataIndex } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/metadata-indexer.ts'
+import { resolveImportToFile } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/import-resolution.ts'
+import { parseScipJson, scipPreciseEdges } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/scip-ingest.ts'
+import { createLspMultiplexer, defaultRootResolver, clearRootResolutionCache } from '/home/ben/Code/CLI/openbuff/sdk/src/services/lsp-multiplexer.ts'
+import { createLanguageIntelligence } from '/home/ben/Code/CLI/openbuff/sdk/src/services/language-intelligence.ts'
+import { captureDiagnostics, preflightDiagnosticDelta } from '/home/ben/Code/CLI/openbuff/sdk/src/services/diagnostic-delta.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixture = mkdtempSync(path.join(evidenceDir, '07-fixture-'))
+const results: Record<string, unknown> = { runtime: Bun.version, fixture }
+const inputs = ['.ts', 'a.ts', '.py', 'a.py', '.rs', 'a.rs', '.go', 'a.go', '.java', 'a.java', '.rb', 'a.rb']
+results.families = Object.fromEntries(inputs.map(input => [input, getLanguageFamily(input)]))
+results.pythonTokenCallers = buildTokenCallers({ 'util.py': { target: 1 } }, new Map([['caller.py', ['target']]]))
+results.typescriptTokenCallers = buildTokenCallers({ 'util.ts': { target: 1 } }, new Map([['caller.ts', ['target']]]))
+
+const graphFixture = path.join(fixture, 'graph')
+mkdirSync(graphFixture)
+writeFileSync(path.join(graphFixture, 'worker.rs'), 'pub fn shared_name() -> i32 { 1 }\n')
+writeFileSync(path.join(graphFixture, 'caller.py'), 'def caller():\n    return shared_name()\n')
+const index = await buildMetadataIndex(graphFixture)
+results.crossLanguageCalls = index.graph.edges.filter(edge => edge.type === 'calls' && edge.label === 'shared_name')
+results.importResolution = {
+  rustCrateImport: resolveImportToFile('src/nested/main.rs', '.rs', 'crate::config', {
+    'src/config.rs': { path: 'src/config.rs', ext: '.rs' },
+    'src/nested/config.rs': { path: 'src/nested/config.rs', ext: '.rs' },
+  }),
+  goImportToForeignFile: resolveImportToFile('main.go', '.go', 'example.com/project/pkg/config', {
+    'go.mod': { path: 'go.mod', ext: '.mod', contentSample: 'module example.com/project\n' },
+    'pkg/config/main.ts': { path: 'pkg/config/main.ts', ext: '.ts' },
+  }),
+}
+
+const symbolPrefix = 'scip npm demo 1.0.0 ' + 'Namespace/'.repeat(20)
+const symbolA = symbolPrefix + 'A#method().'
+const symbolB = symbolPrefix + 'B#method().'
+const scip = parseScipJson({ documents: [
+  { relative_path: 'a.ts', occurrences: [{ range: [0, 0, 1], symbol: symbolA, symbol_roles: 1 }] },
+  { relative_path: 'b.ts', occurrences: [{ range: [0, 0, 1], symbol: symbolB, symbol_roles: 1 }] },
+  { relative_path: 'caller.ts', occurrences: [{ range: [0, 0, 1], symbol: symbolA }] },
+] })
+results.scipIdentityCollision = {
+  inputDistinct: symbolA !== symbolB,
+  inputLength: symbolA.length,
+  parsedIdentitiesDistinct: scip.documents[0].occurrences[0].symbol !== scip.documents[1].occurrences[0].symbol,
+  edges: scipPreciseEdges(scip),
+}
+
+function fakePeer(options: { callbackBeforeInitialize?: boolean } = {}) {
+  const stdoutListeners: Array<(data: Buffer) => void> = []
+  const exitListeners: Array<(code: number | null, signal: string | null) => void> = []
+  const received: any[] = []
+  const docs = new Map<string, { version: number; text: string }>()
+  let kills = 0
+  let rejectedChanges = 0
+  let waitingInitialize: any
+  const emitRaw = (data: Buffer) => { for (const listener of stdoutListeners) listener(data) }
+  const emit = (message: unknown) => {
+    const body = JSON.stringify(message)
+    emitRaw(Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`))
+  }
+  const child = {
+    stdin: {
+      write(chunk: string) {
+        const message = JSON.parse(chunk.slice(chunk.indexOf('\r\n\r\n') + 4))
+        received.push(message)
+        if (options.callbackBeforeInitialize && message.method === 'initialize') {
+          waitingInitialize = message
+          emit({ jsonrpc: '2.0', id: 'server-config-1', method: 'workspace/configuration', params: { items: [] } })
+          return
+        }
+        if (message.id === 'server-config-1' && waitingInitialize) {
+          emit({ jsonrpc: '2.0', id: waitingInitialize.id, result: { capabilities: {} } })
+          waitingInitialize = undefined
+          return
+        }
+        if (message.method === 'initialize') emit({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })
+        if (message.method === 'textDocument/didOpen') {
+          const doc = message.params.textDocument
+          docs.set(doc.uri, { version: doc.version, text: doc.text })
+        }
+        if (message.method === 'textDocument/didChange') {
+          const doc = message.params.textDocument
+          const known = docs.get(doc.uri)
+          if (known && doc.version <= known.version) rejectedChanges++
+          else docs.set(doc.uri, { version: doc.version, text: message.params.contentChanges[0].text })
+        }
+        if (message.method === 'textDocument/didClose') docs.delete(message.params.textDocument.uri)
+        if (message.method === 'textDocument/hover') emit({ jsonrpc: '2.0', id: message.id, result: { contents: docs.get(message.params.textDocument.uri)?.text ?? '(unopened)' } })
+        if (message.method === 'textDocument/definition') emit({ jsonrpc: '2.0', id: message.id, result: null })
+      },
+      end() {},
+    },
+    stdout: { on(_event: string, listener: (data: Buffer) => void) { stdoutListeners.push(listener) } },
+    on(event: string, listener: any) { if (event === 'exit') exitListeners.push(listener) },
+    kill() { kills++; for (const listener of exitListeners) listener(0, 'SIGTERM') },
+  }
+  return { child, received, docs, emitRaw, kills: () => kills, rejectedChanges: () => rejectedChanges }
+}
+
+const serviceFixture = path.join(fixture, 'service')
+mkdirSync(serviceFixture)
+writeFileSync(path.join(serviceFixture, 'doc.ts'), 'export const value = "before"\n')
+const strictPeer = fakePeer()
+const service = createLanguageIntelligence({ cwd: serviceFixture, spawn: (() => strictPeer.child) as any })
+const beforeHover = await service.hoverType({ path: 'doc.ts', line: 1, character: 0 })
+writeFileSync(path.join(serviceFixture, 'doc.ts'), 'export const value = "after"\n')
+await service.syncMutatedFiles(['doc.ts'])
+const afterHover = await service.hoverType({ path: 'doc.ts', line: 1, character: 0 })
+results.queryThenMutation = {
+  beforeHover, afterHover, diskText: readFileSync(path.join(serviceFixture, 'doc.ts'), 'utf8'),
+  rejectedChanges: strictPeer.rejectedChanges(),
+  syncNotifications: strictPeer.received.filter(message => /textDocument\/did(Open|Change)/.test(message.method ?? '')).map(message => ({ method: message.method, document: message.params.textDocument })),
+}
+await service.dispose()
+
+const rootsFixture = path.join(fixture, 'roots')
+const nestedRoot = path.join(rootsFixture, 'pkg')
+mkdirSync(nestedRoot, { recursive: true })
+writeFileSync(path.join(nestedRoot, 'tsconfig.json'), '{}')
+writeFileSync(path.join(rootsFixture, 'package.json'), '{}')
+clearRootResolutionCache()
+results.rootMarkerOverride = {
+  expectedFirstMarkerRoot: nestedRoot,
+  actual: defaultRootResolver({ filePath: path.join(nestedRoot, 'doc.ts'), rootMarkers: ['tsconfig.json', 'jsconfig.json', 'package.json'] }),
+}
+
+const lifecyclePeers: ReturnType<typeof fakePeer>[] = []
+const lifecycleEvents: any[] = []
+const lifecycleMux = createLspMultiplexer({
+  rootResolver: () => fixture,
+  spawner: () => { const peer = fakePeer(); lifecyclePeers.push(peer); return peer.child },
+  onEvent: event => lifecycleEvents.push(event),
+})
+await lifecycleMux.definition({ filePath: path.join(fixture, 'bad.ts'), position: { line: 0, character: 0 } })
+lifecyclePeers[0].emitRaw(Buffer.from('Bad-Header: true\r\n\r\n'))
+await lifecycleMux.dispose()
+await new Promise(resolve => setTimeout(resolve, 300))
+results.protocolFailureThenDispose = { spawnCount: lifecyclePeers.length, killCounts: lifecyclePeers.map(peer => peer.kills()), warmServerCount: lifecycleMux.warmServerCount(), events: lifecycleEvents }
+
+const identifierPeer = fakePeer()
+const identifierMux = createLspMultiplexer({ rootResolver: () => fixture, spawner: () => identifierPeer.child, openFile: async () => 'sample' })
+for (const name of ['doc.js', 'doc.jsx', 'doc.tsx', 'doc.c']) await identifierMux.definition({ filePath: path.join(fixture, name), position: { line: 0, character: 0 } })
+results.lspDocumentLanguageIds = identifierPeer.received.filter(message => message.method === 'textDocument/didOpen').map(message => ({ uri: message.params.textDocument.uri, languageId: message.params.textDocument.languageId }))
+await identifierMux.dispose()
+
+const callbackPeer = fakePeer({ callbackBeforeInitialize: true })
+const callbackMux = createLspMultiplexer({ rootResolver: () => fixture, spawner: () => callbackPeer.child, startupTimeoutMs: 40 })
+// Retain a timer because the production request timeout is intentionally unref'd.
+const callbackKeepAlive = setTimeout(() => {}, 80)
+try { await callbackMux.definition({ filePath: path.join(fixture, 'callback.ts'), position: { line: 0, character: 0 } }); results.serverCallback = { unexpectedSuccess: true } }
+catch (error: any) { results.serverCallback = { reason: error.reason, message: error.message, callbackReplies: callbackPeer.received.filter(message => message.id === 'server-config-1').length } }
+clearTimeout(callbackKeepAlive)
+await callbackMux.dispose()
+
+const commands: any[] = []
+const failingRunner = async (params: any) => { commands.push({ command: params.command, cwd: params.cwd }); return { exitCode: 127, timedOut: true, errorMessage: 'bounded fake infrastructure failure', stdout: '', stderr: '' } }
+const failedCapture = await captureDiagnostics({ files: ['native/src/lib.rs'], cwd: fixture, runCommand: failingRunner })
+results.failedDiagnosticCapture = { diagnostics: failedCapture, result: await preflightDiagnosticDelta({ files: ['native/src/lib.rs'], cwd: fixture, runCommand: failingRunner, applyEdit: () => {}, baseline: [] }), commands }
+const javaCommands: string[] = []
+results.javaDiagnosticCapture = { diagnostics: await captureDiagnostics({ files: ['Main.java'], cwd: fixture, runCommand: async params => { javaCommands.push(params.command); return { exitCode: 0 } } }), commands: javaCommands }
+const polyglotCommands: string[] = []
+await captureDiagnostics({ files: ['web.ts', 'service.py', 'native.rs', 'worker.go'], cwd: fixture, runCommand: async params => { polyglotCommands.push(params.command); return { exitCode: 0 } } })
+results.polyglotDiagnosticCommands = polyglotCommands
+
+writeFileSync(path.join(evidenceDir, '07-probes.json'), JSON.stringify(results, null, 2) + '\n')
+console.log(JSON.stringify(results, null, 2))

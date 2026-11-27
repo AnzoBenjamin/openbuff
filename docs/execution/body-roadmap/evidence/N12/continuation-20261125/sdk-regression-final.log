@@ -1,0 +1,276 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-agent.test.ts:
+(pass) acp agent skeleton > initialize reports the SDK protocol version and honest capabilities [0.39ms]
+(pass) acp agent skeleton > newSession mints a fresh unique id per call [0.28ms]
+(pass) acp agent skeleton > prompt forwards text blocks and streams chunks through sessionUpdate [0.72ms]
+(pass) acp agent skeleton > prompt forwards image and embedded resource blocks to the handler [0.25ms]
+(pass) acp agent skeleton > prompt rejects with a JSON-RPC invalid-params error for an unknown session id [0.16ms]
+(pass) acp agent skeleton > cancel aborts the in-flight prompt turn and resolves cancelled [0.25ms]
+(pass) acp agent skeleton > serves a real ClientSideConnection over paired in-memory streams [7.70ms]
+(pass) acp agent skeleton > loadSession fails closed with method-not-found when no loadHandler is injected [0.29ms]
+(pass) acp agent skeleton > loadSession registers the session so prompt/cancel work and replies with the declared shape [0.23ms]
+(pass) acp agent skeleton > extMethod validates params against the Zod contract and dispatches the injected handler [1.01ms]
+(pass) acp agent skeleton > extMethod fails with method-not-found when no extension handler is injected [0.42ms]
+(pass) acp agent skeleton > ext methods serve only session ids created or loaded by THIS connection [1.40ms]
+(pass) acp agent skeleton > prompt threads the optional reverseRequests seam into the handler input [0.32ms]
+(pass) acp agent skeleton > §5 production wiring: the connection client-method surface is derived into the per-turn reverseRequests seam [0.23ms]
+(pass) acp agent skeleton > §5 fail-closed: a bare session-update sink derives NO reverseRequests seam [0.11ms]
+(pass) acp agent skeleton > §4.2: initialize captures the client elicitation.form capability and prompt forwards it [0.20ms]
+(pass) acp agent skeleton > §4.2 fail-closed: no negotiated elicitation capability forwards no clientCapabilities [0.11ms]
+(pass) acp agent skeleton > a concurrent prompt on the same session is rejected with invalid-params instead of silently replacing the in-flight turn [50.48ms]
+(pass) acp agent skeleton > §12.6 LRU: the 17th session insert evicts the least-recently-used session [0.48ms]
+(pass) acp agent skeleton > §12.6 LRU: an active session is never evicted; all-active fails closed with limit_exceeded [1.18ms]
+(pass) resolveAcpServeOptions > returns the input unchanged when no sessionData is injected [0.12ms]
+(pass) resolveAcpServeOptions > returns the input unchanged when a caller loadHandler is already set [0.04ms]
+(pass) resolveAcpServeOptions > derives a loadHandler that replays the journal when only sessionData is set [0.18ms]
+(pass) resolveAcpServeOptions load→restore integration > loadSession replays the durable journal so getReceipts/gateState recover [14.28ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-agent-p1t2.test.ts:
+(pass) P1-T2 extVersion negotiation (§3.2/§3.3, GV-01/02/03) > GV-02: an Openbuff-aware client gets the ext _meta intersection and §3.3 capabilities [0.73ms]
+(pass) P1-T2 extVersion negotiation (§3.2/§3.3, GV-01/02/03) > the intersection drops extensions the client did not request and extVersion is min(client, agent) [0.34ms]
+(pass) P1-T2 extVersion negotiation (§3.2/§3.3, GV-01/02/03) > GV-03: a plain ACP client (no _meta) gets pure ACP with NO ext echo [0.17ms]
+(pass) P1-T2 extVersion negotiation (§3.2/§3.3, GV-01/02/03) > the chatgpt-oauth auth method is advertised ONLY when clientCapabilities.auth.terminal is true [0.16ms]
+(pass) P1-T2 extVersion negotiation (§3.2/§3.3, GV-01/02/03) > an unknown _openbuff.dev/* extension method is ignored as method-not-found [0.33ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > accepts a cwd equal to or strictly inside the project root [4.47ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > rejects a cwd that escapes the root and a sibling-prefix cwd [1.65ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > rejects a symlink cwd that escapes the root (symlink escape) [0.80ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > rejects a percent-encoded traversal cwd [0.21ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > rejects a file:// URI whose authority is not empty or localhost [0.26ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > rejects additionalDirectories not in the allowed list (additionalDirectories:[/]) [0.21ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > accepts an additionalDirectory that appears in the allowed list [0.25ms]
+(pass) P1-T2 SEC-7 path containment (§12.5) > session/load rejects a cwd that differs from the recorded project root [0.51ms]
+(pass) P1-T2 limits (§12.6) > the 17th live session is rejected with limit_exceeded [1.07ms]
+(pass) P1-T2 limits (§12.6) > a prompt over the 8 MiB total limit is rejected with limit_exceeded [5.75ms]
+(pass) P1-T2 limits (§12.6) > a decoded image over the 5 MiB per-image limit is rejected with limit_exceeded [6.69ms]
+(pass) P1-T2 limits (§12.6) > an inbound NDJSON frame over 16 MiB errors the connection readable (frame closes) [346.90ms]
+(pass) P1-T2 session/load chat-history replay (§4.1, GV-26) > replays user/agent/tool history as sanitized chunks and final-status tool calls [0.88ms]
+(pass) P1-T2 session/load chat-history replay (§4.1, GV-26) > GV-26: a history containing a cap.v3 token emits NO frame containing cap.v3. [0.16ms]
+(pass) P1-T2 session/load chat-history replay (§4.1, GV-26) > replay drops reasoning and emits no receipts/capabilities [0.13ms]
+(pass) P1-T2 session/load chat-history replay (§4.1, GV-26) > replay runs through the same store-restore seam the bridge uses (resolveAcpServeOptions) [0.19ms]
+(pass) GV-18/GV-20 client-MCP gates at newSession (§12.3, §12.7) > GV-18: a gated agent refuses client mcpServers with the fixture error shape and spawns nothing [0.17ms]
+(pass) GV-18/GV-20 client-MCP gates at newSession (§12.3, §12.7) > GV-18 default: WITHOUT the gate (stdio posture) client mcpServers are still accepted [0.06ms]
+(pass) GV-18/GV-20 client-MCP gates at newSession (§12.3, §12.7) > GV-20: a private/loopback http/sse URL host is refused with the fixture error shape before any connection [0.52ms]
+(pass) GV-18/GV-20 client-MCP gates at newSession (§12.3, §12.7) > GV-20 pass-through: non-literal hostnames and public literal IPs are NOT gated at ingest [0.18ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-client.test.ts:
+Using environment: dev
+(pass) AcpRemoteBackend (in-memory ACP roundtrip) > maps session/update notifications to PrintModeEvents and finishes [26.66ms]
+(pass) OpenbuffClient backend seam > dispatches to an injected backend (not the in-process run) [0.39ms]
+(pass) OpenbuffClient backend seam > exposes the backend via the `backend` getter [0.03ms]
+(pass) acpSessionUpdateToPrintModeEvents (pure mapper) > maps a text chunk [0.04ms]
+(pass) acpSessionUpdateToPrintModeEvents (pure mapper) > maps a thought chunk to reasoning_delta [0.03ms]
+(pass) acpSessionUpdateToPrintModeEvents (pure mapper) > maps tool_call then failed tool_call_update to an error tool_result [0.17ms]
+(pass) acpSessionUpdateToPrintModeEvents (pure mapper) > ignores unknown update kinds [0.02ms]
+(pass) AcpRemoteBackend over a real SEC-4 socket > runs a prompt against serveAcpOverSocket and streams text back [31.07ms]
+(pass) AcpRemoteBackend over a real SEC-4 socket > rejects a run after close() [0.32ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-extensions.test.ts:
+(pass) acp extension contracts > declares exactly the three namespaced Openbuff methods in order [0.03ms]
+(pass) acp extension contracts > getReceipts params and result validate against the receipt shape [1.59ms]
+(pass) acp extension contracts > askUser params and result validate [0.57ms]
+(pass) acp extension contracts > gateState params and result validate, currentTask nullable [0.62ms]
+(pass) acp extension contracts > compileAcpExtensionJsonSchemas emits params/result JSON schemas in method order, deterministically [1.54ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-outcomes.test.ts:
+Using environment: dev
+(pass) actual ACP hard stops cannot be overridden by completed metadata [12.03ms]
+(pass) actual ACP request errors keep completed execution and rejected task separate [2.05ms]
+(pass) actual ACP failed status survives JSON and conflicting action metadata [6.56ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-session-data.test.ts:
+(pass) acp session data store > toWireReceipt emits the §6.2 envelope with a schema-valid redacted mutation [5.83ms]
+(pass) acp session data store > toWireReceipt omits toolCallId when none is given [0.18ms]
+(pass) acp session data store > parseGateStateBlock projects a real-shaped passed block to final_response_allowed [0.44ms]
+(pass) acp session data store > parseGateStateBlock drops out-of-bounds reviewers/skipReason whole and keeps them at the cap [0.31ms]
+(pass) acp session data store > parseGateStateBlock sanitizes reviewers and skipReason before the bounds checks [0.09ms]
+(pass) acp session data store > getGateStateV1 sanitizes and caps the details fallback skipReason at 120 chars [1.32ms]
+(pass) acp session data store > parseGateStateBlock projects a non-terminal validation status to validating and failures to blocked [0.11ms]
+(pass) acp session data store > parseGateStateBlock returns null for malformed payloads (fail closed) [0.07ms]
+(pass) acp session data store > updateGateStateFromBlock keeps the previous snapshot on a malformed block [0.26ms]
+(pass) acp session data store > updateGateStateFromBlock keeps the previous snapshot when the new fields are malformed [0.10ms]
+(pass) acp session data store > getReceipts is bounded, newest-first, and flattens paths/actionIds with dedupe [0.42ms]
+(pass) acp session data store > recordReceipt keeps only the newest 256 receipts per session [2.92ms]
+(pass) acp session data store > getGateState reports idle with a null currentTask before any snapshot [0.09ms]
+(pass) acp agent live session-data extension handlers > extMethod serves live recorded data when only sessionData is injected [0.82ms]
+(pass) acp agent live session-data extension handlers > an explicitly injected extensionHandler still wins over sessionData [0.28ms]
+(pass) acp agent live session-data extension handlers > invalid extension params still fail closed as invalid-params with sessionData [0.18ms]
+(pass) acp session data journal > recording receipts and gate state writes a replayable JSONL journal [11.51ms]
+(pass) acp session data journal > persisted journal bytes stay redacted [10.73ms]
+(pass) acp session data journal > restoreFromJournal skips malformed lines without throwing [11.23ms]
+(pass) acp session data journal > a tampered gate_state snapshot is treated as ABSENT (no gate state) with a warn diagnostic [21.46ms]
+(pass) acp session data journal > a gate_state snapshot with malformed reviewers or skipReason is treated as ABSENT (no gate state) [2.19ms]
+(pass) acp session data journal > cap overflow rewrites the journal to the newest 256 receipts plus the snapshot [54.40ms]
+(pass) acp session data journal > without journalDir restore returns false and nothing is written [0.21ms]
+(pass) acp session data journal > traversal session ids never escape the journal directory on writes [10.63ms]
+(pass) acp session data journal > restoreFromJournal refuses traversal session ids without reading outside the journal dir [11.09ms]
+(pass) acp session data journal > restoreFromJournal keeps a receipt recorded while the journal is being read [0.88ms]
+(pass) acp session data journal > restoreFromJournal merges replayed receipts into the live bucket instead of replacing it [10.85ms]
+(pass) acp session data journal > restoring a session whose live receipts are already journaled never duplicates them [10.92ms]
+(pass) acp session data journal > restoreFromJournal keeps a gate-state block published while the journal is being read [0.60ms]
+(pass) acp session data journal > restoreFromJournal keeps a capability map set while the journal is being read [12.22ms]
+(pass) acp session data journal > restore merge re-caps at 256, keeping the live receipt and dropping the oldest replayed one [5.34ms]
+(pass) acp session data journal > restoreFromJournal never rewinds a live gate snapshot whose journal line has not been written [10.80ms]
+(pass) acp session data journal > restoreFromJournal never rewinds a live capability map whose journal line has not been written [11.04ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/services/acp/__tests__/ext-methods.test.ts:
+(pass) ext-v1 dispatcher serves the live store (RF-10) > capabilities/get returns the stored map, which re-parses against the published schema [1.71ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > capabilities/get fails closed with -32602 for a session this connection does not own [0.44ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > params are schema-validated: missing sessionId and extra keys are both -32602 [0.38ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > receipts/get returns a redacted envelope that re-parses against the published schema [2.69ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > receipts/get: an unknown receipt id is -32002 with the openbuff.dev data key [0.19ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > receipts/get: a tool-less envelope has no wire representation and is not fetchable [0.18ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > lanes/list serves the single main lane; lanes/create and lanes/land are capability_disabled (GV-10) [0.58ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > gate_state/get returns a state that re-parses against the published schema; idle before any block [0.33ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > an unknown _openbuff.dev/* method fails closed with -32601 [0.12ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > receipts/get serves a receipt recorded via the public recordReceipt path [2.49ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > receipts/get serves an envelope whose internal mutation carried a field outside the strict wire allowlist [0.52ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > gate_state/get reports a skipped gate as skipped with its reason, not as failed [0.55ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > gate_state/get projects the additive reviewers and machine skipReason onto the wire result [0.30ms]
+(pass) ext-v1 dispatcher serves the live store (RF-10) > without the live store, every ext-v1 method fails closed with -32601 [0.12ms]
+(pass) §6.1 baseline capability map is available before the first prompt > newSession seeds the baseline so capabilities/get works between session/new and the first prompt [0.31ms]
+(pass) §6.1 baseline capability map is available before the first prompt > loadSession seeds the baseline for a restored session whose journal carried no capabilities line [0.55ms]
+(pass) compileExtV1JsonSchemas emits params AND result per method (RF-3) > every ext-v1 method artifact carries both params and result [3.78ms]
+(pass) compileExtV1JsonSchemas emits params AND result per method (RF-3) > the receipts/get result artifact names the receipt property [1.46ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a valid capabilities line restores the stored map [0.66ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a tampered capabilities line (unknown key) is skipped fail-closed [0.61ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a journal with only tampered capability lines leaves no stored map [0.65ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a schema-valid but OVERSTATED replayed map is re-derived, never served verbatim [0.85ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a receipt_envelope line carrying content-bearing fields is skipped fail-closed (GV-07) [1.14ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a receipt_envelope line carrying freshCapabilities is skipped fail-closed (GV-07) [0.36ms]
+(pass) journal capabilities replay is schema-validated (RF-13) > a redaction-clean receipt_envelope line replays and serves schema-valid (RF-12) [0.82ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/serve-bridge.test.ts:
+Using environment: dev
+(pass) createServeBridge > resolved empty errors and rejected task verdicts remain unsuccessful [6.35ms]
+(pass) createServeBridge > an authoritative accepted recovery retains its verdict after an earlier error event [7.65ms]
+(pass) createServeBridge > forwards a plain assistant text chunk (sanitized) to update [0.70ms]
+(pass) createServeBridge > a chunk containing a cap.v3 token reaches update already redacted [0.20ms]
+(pass) createServeBridge > tool_call and tool_result events are NOT forwarded (structural drop) [0.44ms]
+(pass) createServeBridge > an onFilesystemMutation event is recorded as a projected receipt row [0.66ms]
+(pass) createServeBridge > a forwarded chunk containing a <gate-state> block updates the store gate phase [0.30ms]
+(pass) createServeBridge > returns end_turn normally and cancelled when the signal aborts before run resolves [0.30ms]
+(pass) createServeBridge > runs the client with a custom agentId when provided [0.12ms]
+(pass) createServeBridge > defaults the client agentId to base when unset [0.11ms]
+(pass) createServeBridge > marks client-advertised MCP servers client-origin at ingest and skips acp [0.55ms]
+(pass) createServeBridge > does not call markClientMcpServers for empty or absent mcpServers [0.17ms]
+(pass) createServeBridge > never marks when markClientMcpServers is absent but the run still proceeds [0.12ms]
+(pass) createServeBridge > attaches marked client MCP servers to client.run at client origin (same identity) [0.22ms]
+(pass) createServeBridge > passes no mcpServers to client.run when none are advertised, and still runs [0.19ms]
+(pass) createServeBridge > non-text payloads reach onSessionUpdate while text still streams via update [0.51ms]
+(pass) createServeBridge > without onSessionUpdate, non-text payloads are dropped (Wave-1 behavior) [1.63ms]
+(pass) createServeBridge > eventsMode full forwards telemetry variants as _openbuff.dev/event payloads [0.32ms]
+(pass) createServeBridge > eventsMode full forwards subagent text through the sanitized update seam [0.22ms]
+(pass) createServeBridge > NEW-3: host-injected credentialValues are held back and redacted across chunk boundaries [0.18ms]
+(pass) createServeBridge > §6.1: the baseline capability map derives journal flags from the store (an in-memory store advertises no resume/replay) [0.14ms]
+(pass) createServeBridge > §6.1: a journal-backed store honestly advertises resume/replay [0.46ms]
+(pass) createServeBridge > §12.8: a rejecting update during the idle flush is contained (warn, no unhandled rejection) [400.78ms]
+(pass) createServeBridge > §12.8: a turn-end flush rejection never masks the run error [0.54ms]
+(pass) createServeBridge > §12.8: a cancelled turn drains held windows without flushing them to the sink [0.31ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/serve-approval-bridge.test.ts:
+Using environment: dev
+(pass) serve approval bridge > [B18] forwards the captured command and every compound effect for approval [5.41ms]
+(pass) serve approval bridge > [B18] discloses capped command display while retaining exact identity and later effects [3.82ms]
+(pass) serve approval bridge > GV-21: sanitizes control/bidi/zero-width chars and caps title [0.70ms]
+(pass) serve approval bridge > GV-22: allow_always / proceed_always / reject_once / cancelled all resolve false [0.65ms]
+(pass) serve approval bridge > GV-22 positive: selected allow_once resolves true [0.45ms]
+(pass) serve approval bridge > GV-23: disconnect/cancel mid-approval resolves false AND aborts the run [0.41ms]
+(pass) serve approval bridge > GV-24: a duplicate/late response after resolution is ignored [0.28ms]
+(pass) serve approval bridge > terminal error event answers the prompt with -32603 openbuff.dev message [0.76ms]
+(pass) serve approval bridge > an auto-recovering error event does NOT surface a terminal error [0.42ms]
+(pass) serve approval bridge > §5 production path: a per-turn reverseRequests seam drives session/request_permission [0.42ms]
+(pass) serve approval bridge > §5 stays fail-closed when neither a per-turn nor a static seam exists [0.22ms]
+(pass) serve approval bridge > §4.2 ask_user: per-turn elicitation/form capability drives elicitation/create [1.04ms]
+(pass) serve approval bridge > §4.2 ask_user: no per-turn seam yields the skipped result (fail closed) [0.30ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-output-schema.test.ts:
+Using environment: dev
+(pass) captured root run output contract > publishes validated structured output without mutating the caller agent or persisted template [136.53ms]
+(pass) captured root run output contract > a previous turn output cannot satisfy a new run contract without a fresh publication [52.43ms]
+(pass) captured root run output contract > wrong-output is a failed run before its terminal journal publication [64.08ms]
+(pass) captured root run output contract > missing-output is a failed run before its terminal journal publication [46.54ms]
+(pass) captured root run output contract > the root contract does not constrain a child output or alter spawn permissions [80.11ms]
+(pass) captured root run output contract > remote ACP refuses an unnegotiated output schema before its transport starts [17.21ms]
+(pass) captured root run output contract > unsupported or oversized run schemas refuse before starting the agent [0.42ms]
+(pass) captured root run output contract > unsupported or oversized run schemas refuse before starting the agent [0.22ms]
+(pass) captured root run output contract > unsupported or oversized run schemas refuse before starting the agent [2.94ms]
+(pass) captured root run output contract > unsupported or oversized run schemas refuse before starting the agent [0.17ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-output-schema-wire.test.ts:
+Using environment: dev
+(pass) actual schema output provider and source CLI controls > a prompt-only root exposes only reporting plus its prior tools and receives the actual schema [117.25ms]
+(pass) actual schema output provider and source CLI controls > missing provider usage remains unknown instead of a zero count [58.03ms]
+(pass) actual schema output provider and source CLI controls > a throwing usage observer does not retry or fail a completed provider response [38.04ms]
+(pass) actual schema output provider and source CLI controls > run-scoped schema is captured before asynchronous host dependencies can change it [42.48ms]
+(pass) actual schema output provider and source CLI controls > actual source CLI prints a schema-valid final result (event mode false) [2602.77ms]
+(pass) actual schema output provider and source CLI controls > actual source CLI prints a schema-valid final result (event mode true) [2558.24ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-model-override.test.ts:
+Using environment: dev
+(pass) captured per-run model wire routing > explicit run model wins over configured agent routing; a later run returns to config [113.23ms]
+(pass) captured per-run model wire routing > parallel run overrides stay isolated within one client [47.32ms]
+(pass) captured per-run model wire routing > the explicit run choice reaches spawned actors without rewriting their template route [68.97ms]
+(pass) captured per-run model wire routing > invalid or unroutable override "" never falls back to configured primary [9.95ms]
+(pass) captured per-run model wire routing > invalid or unroutable override "   " never falls back to configured primary [4.50ms]
+(pass) captured per-run model wire routing > invalid or unroutable override "fake/selected-a\n" never falls back to configured primary [4.12ms]
+(pass) captured per-run model wire routing > invalid or unroutable override "unconfigured/missing" never falls back to configured primary [3.62ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 401
+      cause: undefined,
+        url: "http://127.0.0.1:35799/v1/chat/completions",
+ requestBodyValues: {
+  model: "selected-a",
+  user: undefined,
+  max_tokens: undefined,
+  temperature: undefined,
+  top_p: undefined,
+  frequency_penalty: undefined,
+  presence_penalty: undefined,
+  response_format: undefined,
+  stop: [Array ...],
+  seed: undefined,
+  reasoning_effort: "low",
+  verbosity: undefined,
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+  stream_options: undefined,
+},
+ statusCode: 401,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 12:25:49 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 401\"}}",
+ isRetryable: false,
+       data: {
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) captured per-run model wire routing > configured failover still uses the explicit backup rather than reselecting the run primary [32.19ms]
+(pass) captured per-run model wire routing > JSON configuration cannot set the host-only run model marker [33.53ms]
+(pass) captured per-run model wire routing > actual source CLI forwards --model and preserves NDJSON framing [2276.36ms]
+(pass) captured per-run model wire routing > continuing a run does not silently retain the previous turn model override [42.23ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-run-model.test.ts:
+Using environment: dev
+(pass) remote ACP refuses an unnegotiated per-run model before opening its transport [0.40ms]
+
+ 190 pass
+ 0 fail
+ 733 expect() calls
+Ran 190 tests across 13 files. [12.54s]

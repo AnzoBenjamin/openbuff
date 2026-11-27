@@ -1,7 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useKeyboard } from '@opentui/react'
 
 import { loadProviderConfigSync } from '@openbuff/sdk'
+
+import { MultilineInput } from './multiline-input'
+import { createTextPasteHandler } from '../utils/strings'
+import { safeOpen } from '../utils/open-url'
 
 import { Button } from './button'
 import { useTheme } from '../hooks/use-theme'
@@ -27,9 +31,33 @@ type FlowState =
 
 type AutoConfigState = 'idle' | 'prompt' | 'done'
 
-export const ChatGptConnectBanner = () => {
+export const ChatGptConnectBanner = ({
+  dependencies = {
+    connect: connectChatGptOAuth,
+    exchange: exchangeChatGptCodeForTokens,
+    status: getChatGptOAuthStatus,
+    stop: stopChatGptOAuthServer,
+    open: safeOpen,
+  },
+}: {
+  dependencies?: {
+    connect: typeof connectChatGptOAuth
+    exchange: typeof exchangeChatGptCodeForTokens
+    status: typeof getChatGptOAuthStatus
+    stop: typeof stopChatGptOAuthServer
+    open: typeof safeOpen
+    hasCodexProvider?: () => boolean
+  }
+} = {}) => {
   const theme = useTheme()
   const setInputMode = useChatStore((state) => state.setInputMode)
+  const flowRevision = useRef(0)
+  const mounted = useRef(true)
+  const [callback, setCallback] = useState('')
+  const [callbackCursor, setCallbackCursor] = useState(0)
+  const [exchanging, setExchanging] = useState(false)
+  const exchangeOwner = useRef<symbol | null>(null)
+  const [browserOpened, setBrowserOpened] = useState<boolean | null>(null)
   const [flowState, setFlowState] = useState<FlowState>('checking')
   const [error, setError] = useState<string | null>(null)
   const [authUrl, setAuthUrl] = useState<string | null>(null)
@@ -44,8 +72,9 @@ export const ChatGptConnectBanner = () => {
 
   function maybePromptAutoConfig(): void {
     try {
-      const loadedConfig = loadProviderConfigSync()
-      const hasCodexProvider = loadedConfig.config.providers?.codex != null
+      const hasCodexProvider = dependencies.hasCodexProvider
+        ? dependencies.hasCodexProvider()
+        : loadProviderConfigSync().config.providers?.codex != null
       if (!hasCodexProvider) {
         setAutoConfigState('prompt')
       }
@@ -54,50 +83,87 @@ export const ChatGptConnectBanner = () => {
     }
   }
 
-  useEffect(() => {
-    const status = getChatGptOAuthStatus()
-    if (!status.connected) {
-      setFlowState('waiting-for-code')
-      const result = connectChatGptOAuth()
-      setAuthUrl(result.authUrl)
-      result.credentials
-        .then(() => {
-          setFlowState('connected')
-          maybePromptAutoConfig()
-        })
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : 'Failed to connect')
-          setFlowState('error')
-        })
-    } else {
-      setFlowState('connected')
-      maybePromptAutoConfig()
-    }
-
-    return () => {
-      stopChatGptOAuthServer()
-    }
-  }, [])
-
   const handleConnect = () => {
+    const revision = ++flowRevision.current
+    exchangeOwner.current = null
+    setExchanging(false)
     setFlowState('waiting-for-code')
     setError(null)
+    setCallback('')
+    setCallbackCursor(0)
     setAutoConfigState('idle')
     setAutoConfigError(null)
-    const result = connectChatGptOAuth()
+    setBrowserOpened(null)
+    const result = dependencies.connect()
     setAuthUrl(result.authUrl)
-    result.credentials
+    void result.browserOpened.then((opened) => {
+      if (mounted.current && revision === flowRevision.current)
+        setBrowserOpened(opened)
+    })
+    void result.credentials
       .then(() => {
+        if (!mounted.current || revision !== flowRevision.current) return
         setFlowState('connected')
         maybePromptAutoConfig()
       })
       .catch((err) => {
+        if (!mounted.current || revision !== flowRevision.current) return
         setError(err instanceof Error ? err.message : 'Failed to connect')
         setFlowState('error')
       })
   }
 
+  useEffect(() => {
+    mounted.current = true
+    if (!dependencies.status().connected) handleConnect()
+    else {
+      setFlowState('connected')
+      maybePromptAutoConfig()
+    }
+    return () => {
+      mounted.current = false
+      flowRevision.current++
+      dependencies.stop()
+    }
+  }, [])
+
+  const handleCallback = async (submittedValue = callback) => {
+    if (!submittedValue.trim() || exchangeOwner.current) return
+    const owner = Symbol('callback-exchange')
+    exchangeOwner.current = owner
+    const revision = flowRevision.current
+    setExchanging(true)
+    setError(null)
+    const value = submittedValue
+    setCallback('')
+    setCallbackCursor(0)
+    try {
+      await dependencies.exchange(value, undefined, {
+        isAbandoned: () =>
+          !mounted.current || revision !== flowRevision.current,
+      })
+      if (!mounted.current || revision !== flowRevision.current) return
+      // Ignore the loopback promise rejection caused by disposing its server.
+      flowRevision.current++
+      dependencies.stop()
+      setFlowState('connected')
+      maybePromptAutoConfig()
+    } catch (err) {
+      if (mounted.current && revision === flowRevision.current)
+        setError(
+          err instanceof Error ? err.message : 'Callback exchange failed',
+        )
+    } finally {
+      if (exchangeOwner.current === owner) {
+        exchangeOwner.current = null
+        if (mounted.current) setExchanging(false)
+      }
+    }
+  }
+
   const handleDisconnect = () => {
+    exchangeOwner.current = null
+    setExchanging(false)
     disconnectChatGptOAuth()
     setFlowState('not-connected')
     setAutoConfigState('idle')
@@ -157,6 +223,8 @@ export const ChatGptConnectBanner = () => {
   }
 
   const handleClose = () => {
+    flowRevision.current++
+    dependencies.stop()
     setInputMode('default')
   }
 
@@ -279,9 +347,60 @@ export const ChatGptConnectBanner = () => {
           {closeButton}
         </box>
         <text style={{ fg: theme.muted }}>
-          Sign in via your browser to connect.
+          {browserOpened === false
+            ? 'Browser could not open. Open the URL below on your browser.'
+            : 'Sign in via your browser. Remote terminal: paste the callback URL below.'}
         </text>
         {authUrl ? <text style={{ fg: theme.muted }}>{authUrl}</text> : null}
+        {error && <text fg={theme.error}>{error}</text>}
+        <MultilineInput
+          value={callback}
+          onChange={({ text, cursorPosition }) => {
+            setCallback(text)
+            setCallbackCursor(cursorPosition)
+          }}
+          onSubmit={(input) => void handleCallback(input?.text)}
+          onPaste={createTextPasteHandler(
+            callback,
+            callbackCursor,
+            ({ text, cursorPosition }) => {
+              setCallback(text)
+              setCallbackCursor(cursorPosition)
+            },
+          )}
+          placeholder={
+            exchanging
+              ? 'Exchanging callback…'
+              : 'Paste callback URL or authorization code'
+          }
+          focused={!exchanging}
+          cursorPosition={callbackCursor}
+          minHeight={1}
+          maxHeight={2}
+          onKeyIntercept={(key) => {
+            if (key.name === 'escape') {
+              handleClose()
+              return true
+            }
+            return false
+          }}
+        />
+        <box style={{ flexDirection: 'row' }}>
+          <Button onClick={() => void handleCallback()}>
+            <text fg={theme.primary}>Submit callback</text>
+          </Button>
+          <Button
+            onClick={() => {
+              if (authUrl)
+                void dependencies.open(authUrl).then(setBrowserOpened)
+            }}
+          >
+            <text fg={theme.primary}>Open browser again</text>
+          </Button>
+          <Button onClick={handleClose}>
+            <text fg={theme.muted}>Cancel (Esc)</text>
+          </Button>
+        </box>
       </box>
     )
   }

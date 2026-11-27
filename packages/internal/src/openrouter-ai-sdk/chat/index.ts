@@ -4,7 +4,6 @@ import {
   createEventSourceResponseHandler,
   createJsonResponseHandler,
   generateId,
-  isParsableJson,
   postJsonToApi,
 } from '@ai-sdk/provider-utils'
 
@@ -18,6 +17,7 @@ import {
 import { openrouterFailedResponseHandler } from '../schemas/error-response'
 import { ReasoningDetailType } from '../schemas/reasoning-details'
 import { mapOpenRouterFinishReason } from '../utils/map-finish-reason'
+import { StreamingJsonCompletion } from '../../utils/streaming-json-completion'
 
 import type { OpenRouterUsageAccounting } from '../types/index'
 import type {
@@ -164,24 +164,23 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
     }
 
     if (tools && tools.length > 0) {
-      const mappedTools = tools
-        .map((tool) => {
-          if (tool.type === 'provider-defined') {
-            return {
-              type: 'provider-defined' as const,
-              id: tool.id,
-              name: tool.name,
-            }
-          }
+      const mappedTools = tools.map((tool) => {
+        if (tool.type === 'provider-defined') {
           return {
-            type: 'function' as const,
-            function: {
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.inputSchema,
-            },
+            type: 'provider-defined' as const,
+            id: tool.id,
+            name: tool.name,
           }
-        })
+        }
+        return {
+          type: 'function' as const,
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema,
+          },
+        }
+      })
 
       return {
         ...baseArgs,
@@ -449,6 +448,7 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
       }
       inputStarted: boolean
       sent: boolean
+      jsonCompletion: StreamingJsonCompletion
     }> = []
 
     let finishReason: FinishReason = 'other'
@@ -677,7 +677,16 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
 
             if (delta.tool_calls != null) {
               for (const toolCallDelta of delta.tool_calls) {
-                const index = toolCallDelta.index ?? toolCalls.length - 1
+                const existingIndex = toolCallDelta.id
+                  ? toolCalls.findIndex((call) => call?.id === toolCallDelta.id)
+                  : -1
+                const index =
+                  toolCallDelta.index ??
+                  (existingIndex >= 0
+                    ? existingIndex
+                    : toolCallDelta.id
+                      ? toolCalls.length
+                      : Math.max(0, toolCalls.length - 1))
 
                 // Tool call start. OpenRouter returns all information except the arguments in the first chunk.
                 if (toolCalls[index] == null) {
@@ -711,6 +720,7 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
                     },
                     inputStarted: false,
                     sent: false,
+                    jsonCompletion: new StreamingJsonCompletion(),
                   }
 
                   const toolCall = toolCalls[index]
@@ -719,27 +729,32 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
                     throw new Error('Tool call is missing')
                   }
 
-                  // check if tool call is complete (some providers send the full tool call in one chunk)
-                  if (
-                    toolCall.function?.name != null &&
-                    toolCall.function?.arguments != null &&
-                    isParsableJson(toolCall.function.arguments)
-                  ) {
+                  // Some providers send the first argument bytes with the
+                  // call header. Forward them immediately even when incomplete,
+                  // so the input stream contains the same bytes as tool-call.
+                  if (toolCall.function.arguments.length > 0) {
                     toolCall.inputStarted = true
-
                     controller.enqueue({
                       type: 'tool-input-start',
                       id: toolCall.id,
                       toolName: toolCall.function.name,
                     })
-
-                    // send delta
                     controller.enqueue({
                       type: 'tool-input-delta',
                       id: toolCall.id,
                       delta: toolCall.function.arguments,
                     })
+                  }
 
+                  // check if tool call is complete (some providers send the full tool call in one chunk)
+                  if (
+                    toolCall.function?.name != null &&
+                    toolCall.function?.arguments != null &&
+                    toolCall.jsonCompletion.isParsable(
+                      toolCall.function.arguments,
+                      toolCall.function.arguments,
+                    )
+                  ) {
                     controller.enqueue({
                       type: 'tool-input-end',
                       id: toolCall.id,
@@ -765,6 +780,9 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
                 if (toolCall == null) {
                   throw new Error('Tool call is missing')
                 }
+                // Once emitted, a repeated or metadata-only chunk cannot
+                // re-execute the same tool call.
+                if (toolCall.sent) continue
 
                 if (!toolCall.inputStarted) {
                   toolCall.inputStarted = true
@@ -775,24 +793,29 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
                   })
                 }
 
-                if (toolCallDelta.function?.arguments != null) {
-                  toolCall.function.arguments +=
-                    toolCallDelta.function?.arguments ?? ''
-                }
+                const argDelta = toolCallDelta.function?.arguments ?? ''
+                toolCall.function.arguments += argDelta
 
                 // send delta
                 controller.enqueue({
                   type: 'tool-input-delta',
                   id: toolCall.id,
-                  delta: toolCallDelta.function.arguments ?? '',
+                  delta: argDelta,
                 })
 
                 // check if tool call is complete
                 if (
                   toolCall.function?.name != null &&
                   toolCall.function?.arguments != null &&
-                  isParsableJson(toolCall.function.arguments)
+                  toolCall.jsonCompletion.isParsable(
+                    toolCall.function.arguments,
+                    argDelta,
+                  )
                 ) {
+                  controller.enqueue({
+                    type: 'tool-input-end',
+                    id: toolCall.id,
+                  })
                   controller.enqueue({
                     type: 'tool-call',
                     toolCallId: toolCall.id ?? generateId(),
@@ -807,10 +830,23 @@ export class OpenRouterChatLanguageModel implements LanguageModelV2 {
           },
 
           flush(controller) {
-            // Forward any unsent tool calls if finish reason is 'tool-calls'
-            if (finishReason === 'tool-calls') {
+            // Preserve unfinished calls on a provider-reported token cut so
+            // the SDK can mark them truncated and return actionable feedback.
+            if (finishReason === 'tool-calls' || finishReason === 'length') {
               for (const toolCall of toolCalls) {
                 if (toolCall && !toolCall.sent) {
+                  if (!toolCall.inputStarted) {
+                    controller.enqueue({
+                      type: 'tool-input-start',
+                      id: toolCall.id,
+                      toolName: toolCall.function.name,
+                    })
+                    toolCall.inputStarted = true
+                  }
+                  controller.enqueue({
+                    type: 'tool-input-end',
+                    id: toolCall.id,
+                  })
                   controller.enqueue({
                     type: 'tool-call',
                     toolCallId: toolCall.id ?? generateId(),

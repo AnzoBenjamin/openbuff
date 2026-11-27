@@ -2,6 +2,7 @@ import { TextAttributes } from '@opentui/core'
 import React, { useEffect, useMemo, useState } from 'react'
 
 import { useTheme } from '../hooks/use-theme'
+import { getCliEnv } from '../utils/env'
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value))
@@ -140,17 +141,21 @@ export const ShimmerText = ({
   primaryColor?: string
 }) => {
   const theme = useTheme()
+  const reducedMotion =
+    getCliEnv().OPENBUFF_REDUCED_MOTION === 'true' ||
+    getCliEnv().OPENBUFF_REDUCED_MOTION === '1'
   const [pulse, setPulse] = useState<number>(0)
   const chars = text.split('')
   const numChars = chars.length
 
   useEffect(() => {
+    if (reducedMotion || numChars === 0) return
     const pulseInterval = setInterval(() => {
       setPulse((prev) => (prev + 1) % numChars)
     }, interval)
 
     return () => clearInterval(pulseInterval)
-  }, [interval, numChars])
+  }, [interval, numChars, reducedMotion])
 
   const generateColors = (length: number, colorPalette: string[]): string[] => {
     if (length === 0) return []

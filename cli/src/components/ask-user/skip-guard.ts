@@ -17,8 +17,7 @@ export const countInProgressDraftAnswers = (
 ): number => {
   let count = 0
   for (const answer of answers.values()) {
-    const hasCustomText =
-      answer.isCustom && !!answer.customText && answer.customText.trim() !== ''
+    const hasCustomText = !!answer.customText && answer.customText.trim() !== ''
     const hasSingle = answer.selectedIndex !== undefined
     const hasMulti = (answer.selectedIndices?.size ?? 0) > 0
     if (hasCustomText || hasSingle || hasMulti) count++

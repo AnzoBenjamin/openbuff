@@ -50,17 +50,41 @@ export type IndexEdgeType =
   | 'mentions'
   | 'references'
 
+/**
+ * Provenance of a graph edge: tree-sitter extraction is conservative
+ * ('heuristic'); SCIP ingestion (LI-03) merges 'precise' cross-references.
+ * Absent means 'heuristic' so older persisted indexes round-trip unchanged.
+ * Confidence is consumer metadata, never a ranking input.
+ */
+export type EdgeConfidence = 'heuristic' | 'precise'
+
 export interface IndexEdge {
   from: string
   to: string
   type: IndexEdgeType
   weight: number
+  /** Human-facing label, never a substitute for an opaque edge identity. */
   label?: string
+  /** Stable digest of the full producer descriptor, when one is available. */
+  identityDigest?: string
+  confidence?: EdgeConfidence
+  /** Producer-specific validity; retained independently of structural refresh. */
+  producer?: {
+    name: string
+    version: string
+    configFingerprint?: string
+    sourceHashes: Record<string, string>
+  }
 }
 
 export interface IndexGraph {
   nodes: Record<string, IndexNode>
   edges: IndexEdge[]
+}
+
+export interface IndexGraphDependencies {
+  definitions: Record<string, string[]>
+  callers: Record<string, string[]>
 }
 
 /**
@@ -93,6 +117,31 @@ export interface MetadataIndex {
   queryData?: IndexQueryData
   /** Durable per-file tree-sitter summaries used by incremental rebuilds. */
   parseData?: Record<string, import('@codebuff/code-map').ParsedFileTokens>
+  /** Grammar, query, and extraction identity for each cached parse. */
+  parseFingerprints?: Record<string, string>
+  /** Structural graph facts grouped by their source file for delta maintenance. */
+  graphData?: Record<string, IndexGraph>
+  graphConfigFingerprint?: string
+  sourceConfigFingerprint?: string
+  graphDependencies?: IndexGraphDependencies
+  /** Discovery validity never grants mutation authority. */
+  freshness?: 'verified' | 'unverified' | 'dirty'
+  unverifiedPaths?: string[]
+  generationId?: string
+  repositoryId?: string
+  worktreeId?: string
+  indexedJournalCursor?: number
+  /** Observable work, kept separate from query ranking and authority. */
+  updateStats?: {
+    hashedFiles: number
+    parsedFiles: number
+    graphFilesUpdated: number
+    graphEdgesUpdated?: number
+    postingsUpdated?: number
+    changedFiles: string[]
+    deletedFiles: string[]
+    persistenceWrites?: number
+  }
   parseDiagnostics?: ParseDiagnostic[]
   /**
    * P8.1: set by updateMetadataIndex when the tree-sitter parse degraded for
@@ -112,6 +161,11 @@ export interface IndexSnapshotIdentity {
   indexVersion: MetadataIndex['version']
   builtAt: number
   workspaceRevision?: string | number
+  freshness?: MetadataIndex['freshness']
+  generationId?: string
+  repositoryId?: string
+  worktreeId?: string
+  indexedJournalCursor?: number
 }
 
 export interface IndexCoverage {
@@ -145,6 +199,8 @@ export interface IndexStatus {
   ready: boolean
   stale: boolean
   refreshing: boolean
+  freshness?: MetadataIndex['freshness']
+  unverifiedPaths?: string[]
   semantic: 'disabled' | 'building' | 'ready' | 'unavailable' | 'failed'
   totalIndexed: number
   indexAge: number
@@ -171,6 +227,9 @@ export interface IndexMutationDelta {
   deletedPaths?: string[]
   complete?: boolean
   revision?: string | number
+  /** Force source attestation after process downtime or a watcher coverage gap. */
+  verifyContent?: boolean
+  coverageGap?: boolean
 }
 
 export type QueryIndexMode =
@@ -251,6 +310,20 @@ export interface RelatedFile {
   score: number
   reason: string
   via?: string
+}
+
+/**
+ * Tuning knobs for personalized PageRank over the code graph (P3-T9). All
+ * optional with deterministic defaults; surfaced as an additive, bounded
+ * ranking signal so existing query_index behavior is unchanged by default.
+ */
+export interface PageRankOptions {
+  /** Damping factor (probability of following a link). Default: 0.85. */
+  damping?: number
+  /** Power-iteration cap. Default: 50. */
+  maxIterations?: number
+  /** L1 convergence epsilon. Default: 1e-6. */
+  epsilon?: number
 }
 
 /** Stable chunk identity entry stored in the derived chunks.json sidecar. */

@@ -7,6 +7,13 @@ import { getCliEnv } from './env'
 
 import type { CliEnv } from '../types/env'
 
+/**
+ * P1-T7 wiring note: the DA1 image-capability parser lives in this module so
+ * it can be merged into detectTerminalImageSupport in a later pass (see the
+ * TODO above parseDa1ImageCapability); until then the env-based detection is
+ * the only production path, and the parser is exercised by its unit tests.
+ */
+
 export type TerminalImageProtocol = 'iterm2' | 'kitty' | 'sixel' | 'none'
 
 let cachedProtocol: TerminalImageProtocol | null = null
@@ -202,6 +209,57 @@ export function renderInlineImage(
     default:
       return null
   }
+}
+
+/**
+ * P1-T7: parse a DA1 (Primary Device Attributes) response for image-capable
+ * terminals. DA1 answers look like `\x1b[?1;2;6;...c` where the numeric params
+ * list the terminal's attributes. This is a PURE parser: no IO, no timing —
+ * the (opt-in, time-bounded) query that produces the response string lives in
+ * the wiring layer, not here.
+ *
+ * The mapping is heuristic and conservative: kitty (xtgettcap/kitty graphics)
+ * and iTerm2 are recognized; sixel is reported when its attribute (4) or an
+ * explicit sixel marker appears; anything else (including an empty/unparseable
+ * response) is 'none'. Never throws.
+ *
+ * TODO(P1-T7-wiring): this parser has no production call site yet —
+ * detectTerminalImageSupport() above decides purely from env vars. The
+ * intended integration is the preferred option from the finding: when the CLI
+ * starts up and runs capability detection, query DA1 (write `\x1b[c` to the
+ * raw tty, read the response with a bounded timeout, restore the tty mode)
+ * and merge the parser's result with the env-based detection —
+ * `parseDa1ImageCapability(response) !== 'none'` beats an env-derived 'none',
+ * while a parser 'none' or a query timeout/absent tty leaves the env-based
+ * verdict untouched (env-only fallback). Wiring it now would force
+ * detectTerminalImageSupport to become async and ripple through
+ * cli/src/index.tsx, image-block.tsx, and image-card.tsx, which is out of
+ * scope for this pass; the parser is exported and unit-tested so the wiring
+ * lands as a one-site change later.
+ */
+export function parseDa1ImageCapability(
+  response: string,
+): TerminalImageProtocol {
+  if (!response || typeof response !== 'string') return 'none'
+
+  // Strip the CSI introducer and trailing 'c', then split the `?`-params.
+  // Accepts `\x1b[?1;2c`, `\x9b?1;2c`, and a bare `?1;2c` fragment.
+  const match = /\?([0-9;]*)c/.exec(response)
+  if (!match) return 'none'
+  const params = match[1]
+    .split(';')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+
+  // Sixel: DA1 attribute 4 (device supports sixel graphics).
+  if (params.includes('4')) return 'sixel'
+
+  // kitty advertises image support via XTGETTCAP rather than DA1 params; when
+  // a combined probe response carries the kitty marker, prefer it.
+  if (/kitty/i.test(response)) return 'kitty'
+  if (/iTerm/i.test(response)) return 'iterm2'
+
+  return 'none'
 }
 
 /**

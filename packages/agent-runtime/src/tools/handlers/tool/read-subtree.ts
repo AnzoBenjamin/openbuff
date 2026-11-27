@@ -1,4 +1,6 @@
 import * as nodePath from 'path'
+import { hasFilesystemSandbox, isSandboxSensitivePath } from '@codebuff/common/util/filesystem-sandbox'
+import { resolveProjectPathForFileSystemRead } from '@codebuff/common/util/project-path-containment'
 
 import {
   getAllFilePaths,
@@ -7,7 +9,6 @@ import {
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import {
   isAgentSessionArtifactPath,
-  isMandatorySensitiveReadPath,
 } from '@codebuff/common/util/sensitive-paths'
 
 import { truncateFileTreeBasedOnTokenBudget } from '../../../system-prompt/truncate-file-tree'
@@ -208,20 +209,21 @@ export const handleReadSubtree = (async (params: {
   }
 
   const resolveProjectPath = (p: string) => {
-    const projectRoot = fileContext.projectRoot
-      ? nodePath.resolve(fileContext.projectRoot)
-      : ''
+    // One optional-chained read: an absent fileContext yields '' and every
+    // downstream ternary below then fails closed to isInsideProject === false.
+    const rawProjectRoot = fileContext?.projectRoot
+    const projectRoot = rawProjectRoot ? nodePath.resolve(rawProjectRoot) : ''
     const resolvedPath = projectRoot ? nodePath.resolve(projectRoot, p) : ''
     const relativeToRoot = projectRoot
       ? nodePath.relative(projectRoot, resolvedPath)
       : '..'
     const isInsideProject =
-      Boolean(projectRoot) &&
+      Boolean(projectRoot) && (hasFilesystemSandbox(fs?.hostReadPolicy) || (
       !nodePath.isAbsolute(p) &&
       (relativeToRoot === '' ||
         (relativeToRoot !== '..' &&
           !relativeToRoot.startsWith(`..${nodePath.sep}`) &&
-          !nodePath.isAbsolute(relativeToRoot)))
+          !nodePath.isAbsolute(relativeToRoot)))))
 
     return { projectRoot, resolvedPath, isInsideProject }
   }
@@ -256,7 +258,7 @@ export const handleReadSubtree = (async (params: {
       throwIfAborted(signal)
       if (
         normalizedRelativePath &&
-        (isMandatorySensitiveReadPath(normalizedRelativePath.toLowerCase()) ||
+        (isSandboxSensitivePath(normalizedRelativePath.toLowerCase(), liveFs.hostReadPolicy) ||
           params.fileFilter?.(normalizedRelativePath).status === 'blocked')
       ) {
         return {
@@ -271,6 +273,7 @@ export const handleReadSubtree = (async (params: {
       }
       if (
         normalizedRelativePath &&
+        !normalizedRelativePath.startsWith('../') &&
         !isAgentSessionArtifactPath(normalizedRelativePath) &&
         (await isFileIgnored({
           filePath: normalizedRelativePath,
@@ -289,14 +292,21 @@ export const handleReadSubtree = (async (params: {
         }
       }
 
-      const canonicalPath = await liveFs.realpath(resolvedPath)
+      const sandboxed = hasFilesystemSandbox(liveFs.hostReadPolicy)
+      const authorized = sandboxed
+        ? await resolveProjectPathForFileSystemRead(projectRoot, resolvedPath, liveFs) : undefined
+      if (sandboxed && !authorized) {
+        return { ok: false, path: normalizedRelativePath, error: subtreeError('outside_project',
+          `Path not found in the authorized filesystem view: ${normalizedRelativePath || '.'}.`, false) }
+      }
+      const canonicalPath = authorized?.realFullPath ?? await liveFs.realpath(resolvedPath)
       throwIfAborted(signal)
       const relativeCanonical = nodePath.relative(projectRoot, canonicalPath)
-      if (
+      if (!sandboxed && (
         relativeCanonical === '..' ||
         relativeCanonical.startsWith(`..${nodePath.sep}`) ||
         nodePath.isAbsolute(relativeCanonical)
-      ) {
+      )) {
         return {
           ok: false,
           path: normalizedRelativePath,
@@ -307,6 +317,11 @@ export const handleReadSubtree = (async (params: {
           ),
         }
       }
+      if (isSandboxSensitivePath(canonicalPath, liveFs.hostReadPolicy) || params.fileFilter?.(relativeCanonical).status === 'blocked') {
+        return { ok: false, path: normalizedRelativePath, error: subtreeError('blocked',
+          `Path is blocked by the authorized filesystem policy: ${normalizedRelativePath}.`, false) }
+      }
+      if (sandboxed) resolvedPath = canonicalPath
       const stat = await liveFs.stat(resolvedPath)
       throwIfAborted(signal)
 

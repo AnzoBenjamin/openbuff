@@ -1,0 +1,26 @@
+bun test v1.4.4 (38afee6c8)
+
+common/src/util/__tests__/playbook-applicability.test.ts:
+(pass) isPlaybookApplicable > uses the acting role rather than a child target and preserves global procedures [6.79ms]
+(pass) isPlaybookApplicable > requires known repository and role matches, including aliases and qualification [0.38ms]
+(pass) isPlaybookApplicable > matches recursive and segment globs and retains unknown path scope [0.35ms]
+ 96 |     expect(isPlaybookApplicable(procedure, { affectedPaths: [] })).toBe(true)
+ 97 |   })
+ 98 | 
+ 99 |   test('bounded brace and character-class language scopes do not silently become global rules', () => {
+100 |     const procedure = rule({ repos: [], glob: ['src/**/*.{ts,tsx}', 'lib/file[0-9].ts'] })
+101 |     expect(isPlaybookApplicable(procedure, { affectedPaths: ['src/a.py'] })).toBe(false)
+                                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/common/src/util/__tests__/playbook-applicability.test.ts:101:78)
+(fail) isPlaybookApplicable > bounded brace and character-class language scopes do not silently become global rules [0.88ms]
+(pass) isPlaybookApplicable > active and verified stay effective while retired, candidate and expired do not [0.32ms]
+
+ 4 pass
+ 1 fail
+ 17 expect() calls
+Ran 5 tests across 1 file. [64.00ms]

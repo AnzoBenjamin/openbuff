@@ -1,5 +1,7 @@
 import type fs from 'fs'
 import type { Dirent } from 'fs'
+import type { RawReadBasisV1 } from '../util/raw-read-basis'
+import type { HostReadPolicy } from '../util/project-path-containment'
 
 export type CodebuffFileContent = string | NodeJS.ArrayBufferView
 
@@ -20,11 +22,59 @@ export type CodebuffTextRangeReadResult = {
   totalLines: number
   /** False when maxBytes prevented returning the full requested line span. */
   complete: boolean
+  /** True only when EOF/total/hash metadata was actually observed. */
+  metadataComplete?: boolean
+  /** Exact observed bytes; missing basis is a meaningful unavailable authority tier. */
+  rawBasis?: RawReadBasisV1
+}
+
+export type CodebuffTextReadOptions = { signal?: AbortSignal }
+
+export type CodebuffTextRangeRead = ((
+  path: fs.PathLike,
+  startLine: number,
+  endLine: number,
+  maxBytes: number,
+  options?: CodebuffTextReadOptions,
+) => Promise<CodebuffTextRangeReadResult>) & {
+  /** Required for verified bounded authority; absent on legacy display-only readers. */
+  readFileView?: (typeof fs.promises)['readFile']
+}
+
+export type CodebuffTextFileRead = ((
+  path: fs.PathLike,
+  maxBytes: number,
+  options?: CodebuffTextReadOptions,
+) => Promise<CodebuffTextRangeReadResult>) & {
+  /** Ignore an inherited reader when a decorating adapter changes its readFile view. */
+  readFileView?: (typeof fs.promises)['readFile']
+}
+
+/** Physical directory against which a durable transaction path was admitted. */
+export type CodebuffTransactionParentIdentity = {
+  canonicalPath: string
+  dev: string
+  ino: string
+}
+
+export type CodebuffTransactionRestoreGuard = {
+  parent: CodebuffTransactionParentIdentity
+  /** If known, the postimage permissions must also still match under the guard. */
+  expectedMode?: number
+  /** Apply pre-image mode on an owned replacement, before it becomes visible. */
+  mode?: number
 }
 
 export type CodebuffConditionalCommitOptions = {
   /** `null` requires the destination to still be absent. */
   expectedHash: string | null
+  /** Recovery additionally fences the parent identity under mutation authority. */
+  recovery?: CodebuffTransactionRestoreGuard
+}
+
+export type CodebuffConditionalDeleteOptions = {
+  expectedHash: string
+  recovery?: Omit<CodebuffTransactionRestoreGuard, 'mode'>
 }
 
 export type CodebuffConditionalCommitResult =
@@ -86,6 +136,10 @@ export type CodebuffStreamDirectory = ((
  * callers must not emulate the guarantee with a check-then-write sequence.
  */
 export type CodebuffFileSystemCapabilities = {
+  /** Optional no-follow metadata for checking durable recovery targets. */
+  lstat?: (typeof fs.promises)['lstat']
+  /** Authenticated per-run read boundary supplied by the host composition. */
+  hostReadPolicy?: HostReadPolicy
   /** Whether process-backed tools observe the same workspace as this adapter. */
   hostProcessView?: boolean
   /**
@@ -103,12 +157,9 @@ export type CodebuffFileSystemCapabilities = {
    * Bounded line-oriented text read. Implementations must never return more
    * than maxBytes and must derive all metadata from one coherent snapshot.
    */
-  readTextRange?: (
-    path: fs.PathLike,
-    startLine: number,
-    endLine: number,
-    maxBytes: number,
-  ) => Promise<CodebuffTextRangeReadResult>
+  readTextRange?: CodebuffTextRangeRead
+  /** Bounded whole read, paired with the actual adapter readFile view. */
+  readTextFile?: CodebuffTextFileRead
   /**
    * Streaming (lazy) directory iteration; see {@link CodebuffStreamDirectory}
    * for the handle-release and `readdirView` pairing obligations.
@@ -132,7 +183,7 @@ export type CodebuffFileSystemCapabilities = {
   ) => Promise<CodebuffConditionalCommitResult>
   conditionalDelete?: (
     path: fs.PathLike,
-    options: { expectedHash: string },
+    options: CodebuffConditionalDeleteOptions,
   ) => Promise<CodebuffConditionalDeleteResult>
   /**
    * Move a source under the adapter's declared mutation authority only when

@@ -26,6 +26,70 @@ const LARGE_FILE_CHAR_THRESHOLD = 100_000
 // block it to guarantee write_file never silently loses data on large files.
 const LARGE_FILE_OVERWRITE_MIN_RATIO = 0.3
 
+type LineEnding = '\n' | '\r\n' | '\r'
+
+function dominantLineEnding(content: string): LineEnding | undefined {
+  const counts: Record<LineEnding, number> = { '\n': 0, '\r\n': 0, '\r': 0 }
+  for (const match of content.matchAll(/\r\n|\r|\n/g)) {
+    const ending = match[0] as LineEnding
+    counts[ending]++
+  }
+  const max = Math.max(...Object.values(counts))
+  if (max === 0) return undefined
+  if (counts['\r\n'] === max) return '\r\n'
+  if (counts['\n'] === max) return '\n'
+  return '\r'
+}
+
+function requestedLineEnding(instructions: string): LineEnding | undefined {
+  const match =
+    instructions.match(
+      /\b(CRLF|LF|CR)\b[\s\S]{0,40}\b(?:line[ -]?endings?|eol)\b/i,
+    ) ??
+    instructions.match(
+      /\b(?:line[ -]?endings?|eol)\b[\s\S]{0,40}\b(CRLF|LF|CR)\b/i,
+    )
+  const requested = match?.[1] ?? match?.[2]
+  if (!requested) return undefined
+  if (requested.toUpperCase() === 'CRLF') return '\r\n'
+  if (requested.toUpperCase() === 'CR') return '\r'
+  return '\n'
+}
+
+function preserveExistingTextStyle(params: {
+  initialContent: string
+  newContent: string
+  instructions: string
+}): string {
+  const { initialContent, instructions } = params
+  let content = params.newContent
+
+  const requestsBomRemoval =
+    /\b(?:remove|strip|drop)\s+(?:the\s+)?(?:UTF-?8\s+)?BOM\b/i.test(
+      instructions,
+    ) &&
+    !/\b(?:do not|don't|never)\s+(?:remove|strip|drop)\b/i.test(instructions)
+  if (requestsBomRemoval && content.startsWith('\uFEFF')) {
+    content = content.slice(1)
+  } else if (
+    initialContent.startsWith('\uFEFF') &&
+    !content.startsWith('\uFEFF') &&
+    !requestsBomRemoval
+  ) {
+    content = `\uFEFF${content}`
+  }
+
+  const explicitEnding = requestedLineEnding(instructions)
+  const existingEnding = dominantLineEnding(initialContent)
+  if (explicitEnding) {
+    content = content.replace(/\r\n|\r|\n/g, explicitEnding)
+  } else if (existingEnding && !content.includes('\r')) {
+    content = content.replace(/\r\n|\r|\n/g, existingEnding)
+  }
+
+  return content
+}
+
 function isLargeFileContent(content: string): boolean {
   return (
     content.length > LARGE_FILE_CHAR_THRESHOLD ||
@@ -78,9 +142,16 @@ export async function processFileBlock(params: {
   path: string
   initialContentPromise: Promise<string | null>
   newContent: string
+  instructions?: string
   logger: Logger
 }): Promise<PromptResult<WriteFileResult>> {
-  const { path, initialContentPromise, newContent, logger } = params
+  const {
+    path,
+    initialContentPromise,
+    newContent,
+    instructions = '',
+    logger,
+  } = params
   const initialContent = await initialContentPromise
 
   if (initialContent === null) {
@@ -97,9 +168,17 @@ export async function processFileBlock(params: {
     })
   }
 
-  if (newContent === initialContent) {
+  // Model output commonly normalizes EOLs to LF and omits a leading BOM.
+  // Keep the existing file style unless the instructions explicitly change it.
+  const content = preserveExistingTextStyle({
+    initialContent,
+    newContent,
+    instructions,
+  })
+
+  if (content === initialContent) {
     logger.info(
-      { newContent },
+      { newContent: content },
       `processFileBlock: New was same as old, skipping ${path}`,
     )
     return promptSuccess({
@@ -112,7 +191,7 @@ export async function processFileBlock(params: {
   const unsafeOverwrite = describeUnsafeLargeFileOverwrite({
     path,
     initialContent,
-    newContent,
+    newContent: content,
   })
   if (unsafeOverwrite) {
     logger.warn(
@@ -129,7 +208,7 @@ export async function processFileBlock(params: {
   logger.debug(
     {
       path,
-      newContent,
+      newContent: content,
     },
     `processFileBlock: Updated file ${path}`,
   )
@@ -137,7 +216,7 @@ export async function processFileBlock(params: {
   return promptSuccess({
     tool: 'write_file' as const,
     path,
-    content: newContent,
+    content,
     // Whole-file writes are sent as full content so caller-supplied bytes stay
     // authoritative; generating/applying a text patch could normalize them.
     patch: undefined,

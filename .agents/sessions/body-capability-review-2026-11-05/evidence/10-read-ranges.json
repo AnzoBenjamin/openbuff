@@ -1,0 +1,712 @@
+[
+  {
+    "path": "common/src/mcp/client.ts",
+    "from": 130,
+    "to": 356
+  },
+  {
+    "path": "common/src/mcp/client.ts",
+    "from": 812,
+    "to": 903
+  },
+  {
+    "path": "packages/agent-runtime/src/mcp.ts",
+    "from": 1,
+    "to": 98
+  },
+  {
+    "path": "common/src/types/mcp.ts",
+    "from": 1,
+    "to": 38
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 2293,
+    "to": 2465
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 134,
+    "to": 183
+  },
+  {
+    "path": "sdk/src/custom-tool.ts",
+    "from": 1,
+    "to": 76
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/prompts.ts",
+    "from": 425,
+    "to": 500
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1535,
+    "to": 1618
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 4001,
+    "to": 4200
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 4201,
+    "to": 4368
+  },
+  {
+    "path": "sdk/src/agents/load-agents.ts",
+    "from": 1,
+    "to": 330
+  },
+  {
+    "path": "common/src/templates/agent-validation.ts",
+    "from": 308,
+    "to": 503
+  },
+  {
+    "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+    "from": 194,
+    "to": 427
+  },
+  {
+    "path": "cli/scripts/prebuild-agents.ts",
+    "from": 1,
+    "to": 141
+  },
+  {
+    "path": "common/src/templates/agent-validation.ts",
+    "from": 500,
+    "to": 735
+  },
+  {
+    "path": "common/src/tools/compile-tool-definitions.ts",
+    "from": 1,
+    "to": 304
+  },
+  {
+    "path": "scripts/generate-tool-definitions.ts",
+    "from": 1,
+    "to": 78
+  },
+  {
+    "path": "common/src/util/zod-schema.ts",
+    "from": 1,
+    "to": 25
+  },
+  {
+    "path": "sdk/src/agents/load-mcp-config.ts",
+    "from": 1,
+    "to": 222
+  },
+  {
+    "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+    "from": 135,
+    "to": 218
+  },
+  {
+    "path": "sdk/src/impl/database.ts",
+    "from": 258,
+    "to": 341
+  },
+  {
+    "path": "cli/src/utils/local-agent-registry.ts",
+    "from": 131,
+    "to": 247
+  },
+  {
+    "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+    "from": 428,
+    "to": 706
+  },
+  {
+    "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+    "from": 870,
+    "to": 1055
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/prompts.ts",
+    "from": 1,
+    "to": 49
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/prompts.ts",
+    "from": 510,
+    "to": 610
+  },
+  {
+    "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+    "from": 707,
+    "to": 869
+  },
+  {
+    "path": "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+    "from": 1,
+    "to": 196
+  },
+  {
+    "path": "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts",
+    "from": 218,
+    "to": 343
+  },
+  {
+    "path": "docs/agents-and-tools.md",
+    "from": 1,
+    "to": 14
+  },
+  {
+    "path": "docs/agents-and-tools.md",
+    "from": 53,
+    "to": 81
+  },
+  {
+    "path": "docs/agents-and-tools.md",
+    "from": 103,
+    "to": 114
+  },
+  {
+    "path": "docs/architecture.md",
+    "from": 143,
+    "to": 158
+  },
+  {
+    "path": "docs/request-flow.md",
+    "from": 118,
+    "to": 157
+  },
+  {
+    "path": "sdk/README.md",
+    "from": 302,
+    "to": 319
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 289,
+    "to": 412
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 585,
+    "to": 638
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1006,
+    "to": 1082
+  },
+  {
+    "path": "sdk/package.json",
+    "from": 1,
+    "to": 93
+  },
+  {
+    "path": "common/package.json",
+    "from": 1,
+    "to": 56
+  },
+  {
+    "path": ".agents/package.json",
+    "from": 1,
+    "to": 10
+  },
+  {
+    "path": "rust/crates/openbuff-native/src/lib.rs",
+    "from": 1,
+    "to": 115
+  },
+  {
+    "path": "sdk/src/mcp/server.ts",
+    "from": 345,
+    "to": 543
+  },
+  {
+    "path": "sdk/src/mcp/server.ts",
+    "from": 1480,
+    "to": 1635
+  },
+  {
+    "path": "cli/src/commands/mcp-command.ts",
+    "from": 1,
+    "to": 176
+  },
+  {
+    "path": "sdk/src/serve/bridge.ts",
+    "from": 526,
+    "to": 545
+  },
+  {
+    "path": "sdk/src/serve/bridge.ts",
+    "from": 749,
+    "to": 773
+  },
+  {
+    "path": "sdk/src/serve/bridge.ts",
+    "from": 861,
+    "to": 927
+  },
+  {
+    "path": "sdk/src/services/acp/acp-agent.ts",
+    "from": 935,
+    "to": 984
+  },
+  {
+    "path": "common/src/protocol/acp-ext-v1.ts",
+    "from": 1,
+    "to": 96
+  },
+  {
+    "path": "common/src/protocol/acp-ext-v1.ts",
+    "from": 286,
+    "to": 304
+  },
+  {
+    "path": "sdk/src/services/acp/ext-methods.ts",
+    "from": 1,
+    "to": 157
+  },
+  {
+    "path": ".agents/codex-cli.ts",
+    "from": 1,
+    "to": 216
+  },
+  {
+    "path": ".agents/lib/create-cli-agent.ts",
+    "from": 1,
+    "to": 85
+  },
+  {
+    "path": ".agents/lib/cli-agent-types.ts",
+    "from": 1,
+    "to": 57
+  },
+  {
+    "path": ".agents/lib/cli-agent-schemas.ts",
+    "from": 1,
+    "to": 149
+  },
+  {
+    "path": ".agents/__tests__/placeholder.test.ts",
+    "from": 1,
+    "to": 5
+  },
+  {
+    "path": ".agents/lib/cli-agent-prompts.ts",
+    "from": 1,
+    "to": 197
+  },
+  {
+    "path": ".agents/lib/cli-agent-prompts.ts",
+    "from": 198,
+    "to": 378
+  },
+  {
+    "path": "scripts/tmux/tmux-cli.sh",
+    "from": 1,
+    "to": 158
+  },
+  {
+    "path": "sdk/src/__tests__/custom-tool-dispatch.test.ts",
+    "from": 1,
+    "to": 128
+  },
+  {
+    "path": "sdk/src/__tests__/run-mcp-tool-filter.test.ts",
+    "from": 1,
+    "to": 124
+  },
+  {
+    "path": "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts",
+    "from": 1,
+    "to": 38
+  },
+  {
+    "path": "common/src/__tests__/agent-validation.test.ts",
+    "from": 849,
+    "to": 981
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 386,
+    "to": 412
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 585,
+    "to": 638
+  },
+  {
+    "path": "common/src/templates/agent-validation.ts",
+    "from": 1,
+    "to": 98
+  },
+  {
+    "path": "sdk/src/__tests__/load-agents.test.ts",
+    "from": 199,
+    "to": 383
+  },
+  {
+    "path": "sdk/src/__tests__/load-agents.test.ts",
+    "from": 964,
+    "to": 1095
+  },
+  {
+    "path": "common/src/mcp/__tests__/client.test.ts",
+    "from": 138,
+    "to": 427
+  },
+  {
+    "path": ".agents/claude-code-cli.ts",
+    "from": 1,
+    "to": 136
+  },
+  {
+    "path": ".agents/gemini-cli.ts",
+    "from": 1,
+    "to": 142
+  },
+  {
+    "path": ".agents/codebuff-local-cli.ts",
+    "from": 1,
+    "to": 147
+  },
+  {
+    "path": ".agents/notion-agent.ts",
+    "from": 1,
+    "to": 45
+  },
+  {
+    "path": ".agents/notion-researcher.ts",
+    "from": 1,
+    "to": 50
+  },
+  {
+    "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+    "from": 142,
+    "to": 242
+  },
+  {
+    "path": ".agents/types/agent-definition.ts",
+    "from": 263,
+    "to": 400
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1395,
+    "to": 1534
+  },
+  {
+    "path": "sdk/src/__tests__/mcp-server.test.ts",
+    "from": 149,
+    "to": 189
+  },
+  {
+    "path": "sdk/src/__tests__/mcp-server.test.ts",
+    "from": 322,
+    "to": 453
+  },
+  {
+    "path": "sdk/src/__tests__/mcp-server.test.ts",
+    "from": 478,
+    "to": 552
+  },
+  {
+    "path": "common/src/types/dynamic-agent-template.ts",
+    "from": 1,
+    "to": 113
+  },
+  {
+    "path": "common/src/types/dynamic-agent-template.ts",
+    "from": 180,
+    "to": 199
+  },
+  {
+    "path": "common/src/templates/agent-validation.ts",
+    "from": 142,
+    "to": 291
+  },
+  {
+    "path": "sdk/src/validate-agents.ts",
+    "from": 1,
+    "to": 125
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+    "from": 1,
+    "to": 62
+  },
+  {
+    "path": ".agents/codebuff-local-cli.ts",
+    "from": 1,
+    "to": 43
+  },
+  {
+    "path": ".agents/gemini-cli.ts",
+    "from": 105,
+    "to": 142
+  },
+  {
+    "path": "docs/architecture.md",
+    "from": 129,
+    "to": 144
+  },
+  {
+    "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+    "from": 243,
+    "to": 418
+  },
+  {
+    "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+    "from": 209,
+    "to": 254
+  },
+  {
+    "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+    "from": 204,
+    "to": 214
+  },
+  {
+    "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+    "from": 150,
+    "to": 150
+  },
+  {
+    "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+    "from": 179,
+    "to": 179
+  },
+  {
+    "path": "sdk/src/agents/load-mcp-config.ts",
+    "from": 1,
+    "to": 46
+  },
+  {
+    "path": "common/src/mcp/client.ts",
+    "from": 574,
+    "to": 601
+  },
+  {
+    "path": "sdk/src/tools/file-change-hooks.ts",
+    "from": 1,
+    "to": 92
+  },
+  {
+    "path": "sdk/src/tools/file-change-hooks.ts",
+    "from": 770,
+    "to": 820
+  },
+  {
+    "path": "sdk/src/provider-config.ts",
+    "from": 780,
+    "to": 865
+  },
+  {
+    "path": "common/src/tools/__tests__/compile-tool-definitions.test.ts",
+    "from": 1,
+    "to": 54
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 1,
+    "to": 133
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 1000,
+    "to": 1121
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 690,
+    "to": 790
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 1007,
+    "to": 1155
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 2364,
+    "to": 2470
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 690,
+    "to": 790
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 1007,
+    "to": 1155
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 2364,
+    "to": 2470
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 50,
+    "to": 68
+  },
+  {
+    "path": "packages/agent-runtime/src/util/filesystem-scope.ts",
+    "from": 1,
+    "to": 81
+  },
+  {
+    "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+    "from": 1,
+    "to": 134
+  },
+  {
+    "path": "sdk/src/tools/file-change-hooks.ts",
+    "from": 1517,
+    "to": 1650
+  },
+  {
+    "path": "sdk/src/provider-config.ts",
+    "from": 493,
+    "to": 520
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+    "from": 600,
+    "to": 735
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+    "from": 428,
+    "to": 465
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+    "from": 3880,
+    "to": 3945
+  },
+  {
+    "path": "sdk/src/impl/database.ts",
+    "from": 222,
+    "to": 257
+  },
+  {
+    "path": "sdk/src/impl/database.ts",
+    "from": 342,
+    "to": 365
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+    "from": 415,
+    "to": 441
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+    "from": 465,
+    "to": 516
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+    "from": 822,
+    "to": 858
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+    "from": 1383,
+    "to": 1410
+  },
+  {
+    "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+    "from": 813,
+    "to": 828
+  },
+  {
+    "path": "common/src/types/agent-template.ts",
+    "from": 102,
+    "to": 117
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1690,
+    "to": 1717
+  },
+  {
+    "path": "sdk/src/run-state.ts",
+    "from": 808,
+    "to": 861
+  },
+  {
+    "path": "sdk/src/tools/file-change-hooks.ts",
+    "from": 1650,
+    "to": 1686
+  },
+  {
+    "path": "docs/testing.md",
+    "from": 1,
+    "to": 74
+  },
+  {
+    "path": "docs/development.md",
+    "from": 1,
+    "to": 37
+  },
+  {
+    "path": "docs/environment-variables.md",
+    "from": 1,
+    "to": 57
+  },
+  {
+    "path": "docs/local-mode.md",
+    "from": 1,
+    "to": 62
+  },
+  {
+    "path": "packages/agent-runtime/src/util/agent-tool-names.ts",
+    "from": 1,
+    "to": 82
+  },
+  {
+    "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+    "from": 1054,
+    "to": 1125
+  },
+  {
+    "path": "sdk/src/client.ts",
+    "from": 1,
+    "to": 73
+  },
+  {
+    "path": "agents/general-agent/general-agent.ts",
+    "from": 1,
+    "to": 95
+  },
+  {
+    "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+    "from": 1,
+    "to": 183
+  },
+  {
+    "path": "agents/general-agent/general-agent.ts",
+    "from": 1,
+    "to": 22
+  },
+  {
+    "path": "sdk/src/client.ts",
+    "from": 66,
+    "to": 73
+  },
+  {
+    "path": "packages/agent-runtime/src/main-prompt.ts",
+    "from": 190,
+    "to": 213
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1594,
+    "to": 1611
+  },
+  {
+    "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+    "from": 156,
+    "to": 183
+  }
+]

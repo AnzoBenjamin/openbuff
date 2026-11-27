@@ -1,7 +1,15 @@
 import type { JudgingResult, ScoringStatus } from './judge'
 import type { IdiomTraceabilityEvaluation } from './idiom-traceability-signals'
-import type { ApplyProposalsResult, Proposal } from './proposals'
+import type {
+  ApplyProposalsResult,
+  Proposal,
+  ProposalPromotionDecision,
+} from './proposals'
 import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
+import type {
+  CleanupResult,
+  ScopeOutput,
+} from '@codebuff/common/types/contracts/process-scope'
 
 export interface FileState {
   path: string
@@ -156,6 +164,10 @@ export interface FinalCheckOutput {
   durationMs?: number
   stdout: string
   stderr: string
+  /** Command exit and physical cleanup are independent observations. */
+  commandExitCode?: number | null
+  processCleanup?: CleanupResult
+  outputCapture?: ScopeOutput
 }
 
 export interface ProposalDryRunReport {
@@ -164,9 +176,33 @@ export interface ProposalDryRunReport {
   skippedCount: number
   summary: string[]
   perProposal: ApplyProposalsResult['perProposal']
+  /**
+   * Audit MEDIUM (promotion gate never invoked in the live pipeline): the
+   * decideProposalPromotion verdict for this dry run, recorded by runTask.
+   * Additive-optional so trace/analysis consumers predating the field are
+   * unaffected. Recorded only — never auto-applied (actual promotion belongs
+   * to the P8-T5 candidate channel).
+   */
+  promotionDecision?: ProposalPromotionDecision
 }
 
-export interface EvalRun {
+export interface EvalAttemptEvidence {
+  runId?: string
+  experimentId?: string
+  attemptId?: string
+  taskId?: string
+  repeat?: number
+  languages?: string[]
+  providerRoute?: string
+  executionScope?: 'trusted_task' | 'key_free_environment'
+  workloadHash?: string
+  measurementConfigHash?: string
+  evaluatorVersion?: string
+  runOutcome?: import('@codebuff/common/types/run-outcome').RunOutcome
+  costEvidence?: { status: 'reported' | 'unknown'; source?: string }
+}
+
+export interface EvalRun extends EvalAttemptEvidence {
   commitSha: string
   prompt: string
   diff: string
@@ -184,6 +220,8 @@ export interface EvalRun {
   finalCheckOutputs?: FinalCheckOutput[]
   cacheRecallEval?: CacheRecallEvalResult
   retrievalFlow?: import('./retrieval-flow-metrics').RetrievalFlowMetrics
+  /** N10: tool/edit/LSP counts from the agent trace. */
+  qualityMetrics?: import('./quality-metrics').RunQualityMetrics
   idiomTraceability?: IdiomTraceabilityEvaluation
   thinkerHarvest?: ThinkerHarvestEvaluation
   proposalDryRun?: ProposalDryRunReport
@@ -196,5 +234,19 @@ export interface AgentEvalResults {
   averageScoreExcludingFailures: number
   averageIdiomScore?: number
   averageCost: number
+  totalCost?: number
+  costComplete?: boolean
+  attemptCount?: number
   averageDuration: number
+  /** Standard error of the measured-run overall scores. Optional for back-compat. */
+  scoreStandardError?: number
+  /** averageScore / averageCost, using the same cost unit as averageCost. Optional. */
+  scorePerDollar?: number
+  /** Number of measured (non-synthetic) runs contributing to averageScore. Optional. */
+  measuredRunCount?: number
+  /**
+   * N10: pooled edit-commit, tool error and LSP call rates plus the agent's
+   * static prompt tokens. Optional for back-compat with older results.
+   */
+  qualityMetrics?: import('./quality-metrics').AgentQualityMetrics
 }

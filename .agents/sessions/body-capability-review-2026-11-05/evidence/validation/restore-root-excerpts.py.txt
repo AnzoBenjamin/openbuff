@@ -1,0 +1,51 @@
+"""Rebuild two quoted historical excerpts from their inspected recorded recipes."""
+
+import hashlib
+import json
+import re
+from pathlib import Path
+
+
+review = Path(__file__).resolve().parent
+repo = review.parents[2]
+recovery = review.parent / 'body-review-recovery'
+needed = {31, 32, 36, 37, 39, 42, 43, 44, 45, 46, 47, 56}
+rows = []
+for number, line in enumerate((repo / '.agents/sessions/polyglot-roadmap-v2/SPEC.md').read_text().splitlines(), 1):
+    match = re.match(r'\| D([0-9]+) \|', line)
+    if match and int(match[1]) in needed:
+        rows.append(str(number) + ': ' + line)
+decision = '# Current historical decision excerpts\n\nSource .agents/sessions/polyglot-roadmap-v2/SPEC.md. Amendments later in the same file supersede earlier wording.\n\n' + '\n\n'.join(rows) + '\n'
+
+lines = (repo / '.agents/sessions/polyglot-roadmap-v2/PLAN.md').read_text().splitlines()
+wanted = {'P0-T7', 'P6-T6', 'P8-T4'}
+out = []
+for index, line in enumerate(lines):
+    match = re.match(r'- \[[ xX]\] ([A-Za-z0-9-]+)(?: |$)', line)
+    if match and match[1] in wanted:
+        out.append('## ' + match[1] + ' (old PLAN line' + str(index + 1) + ')')
+        next_index = index + 1
+        while next_index < len(lines) and not re.match(r'^(?:- \[[ xX]\]|## )', lines[next_index]):
+            if lines[next_index].strip():
+                out.append(str(next_index + 1) + ': ' + lines[next_index])
+            next_index += 1
+nested = '# Nested old-task declarations\n\nSource .agents/sessions/polyglot-roadmap-v2/PLAN.md; parent declarations remain in OLD-TASK-INVENTORY.json.\n\n' + '\n\n'.join(out) + '\n'
+
+expected = {
+    'DECISION-EXCERPT.md': ('bdda846c29f6d4f70fc51615dd320e159a61f1e5f5438183891a5d13073ab6ae', decision),
+    'NESTED-TASK-EXCERPT.md': ('e3be08c0c1c2ec4da1b220febe8c2402bf54f7f5999f1d2513c7ce4c7181a0c0', nested),
+}
+records = []
+for name, (digest, text) in expected.items():
+    raw = text.encode()
+    actual = hashlib.sha256(raw).hexdigest()
+    capture = recovery / 'captures' / (digest + '.md')
+    if actual != digest or capture.read_bytes() != raw:
+        raise SystemExit('Historical excerpt differs from exact recorded capture: ' + name)
+    target = review / name
+    if target.exists() and target.read_bytes() != raw:
+        raise SystemExit('Refusing to replace a different recovered excerpt: ' + name)
+    target.write_bytes(raw)
+    records.append({'file': name, 'bytes': len(raw), 'sha256': actual, 'basis': 'Recorded pure source-excerpt recipe; result matches exact recorded capture and current quoted historical source bytes.'})
+(review / 'ROOT-RECOVERY-MANIFEST.json').write_text(json.dumps({'sourceExcerpts': records, 'qualification': 'Source quotation recovery only; no original inspected-file hash map is regenerated.'}, indent=2) + '\n')
+print(json.dumps(records, indent=2))

@@ -1,0 +1,18 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { inspectCodebaseStructure, inspectFeatureCompleteness } from '/home/ben/Code/CLI/openbuff/sdk/src/services/audit-intelligence.ts'
+import { loadIndex } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/index-store.ts'
+import { queryIndex } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/query.ts'
+
+const root = '/home/ben/Code/CLI/openbuff'
+const out = '/tmp/openbuff-body-review-2026-11-05'
+const inventory = inspectCodebaseStructure(root)
+fs.writeFileSync(path.join(out, 'INVENTORY.json'), JSON.stringify(inventory, null, 2) + '\n')
+const index = await loadIndex(root)
+const queries = ['agent orchestration supervision completion', 'session journal resume cancellation', 'language capabilities validation diagnostics', 'command sandbox policy', 'context archive memory learning', 'serve sidecar supervisor capabilities', 'commands build test typecheck smoke release']
+const retrieval = index ? queries.map(query => ({ query, results: queryIndex(index, query, { limit: 8, mode: query.startsWith('commands') ? 'commands' : 'search' }) })) : []
+fs.writeFileSync(path.join(out, 'RETRIEVAL.json'), JSON.stringify({ available: Boolean(index), builtAt: index?.builtAt, fileCount: index?.fileCount, retrieval }, null, 2) + '\n')
+const features = ['provider routing', 'agent orchestration', 'session journal', 'context archive', 'memory learning', 'edit transaction', 'terminal jobs', 'sandbox enforcement', 'language validation', 'lsp diagnostics', 'scip references', 'sidecar supervision', 'acp serve', 'mcp server', 'headless run', 'workspace lanes', 'audit completeness', 'plugin hooks', 'targeted validation', 'undo snapshots', 'eval promotion', 'capability registry']
+const records = features.map(feature => inspectFeatureCompleteness(root, feature, inventory))
+fs.writeFileSync(path.join(out, 'FEATURE-CANDIDATES.json'), JSON.stringify(records, null, 2) + '\n')
+console.log(JSON.stringify({ snapshotId: inventory.snapshotId, files: inventory.files.length, retrieval: retrieval.map(x => ({ query: x.query, paths: x.results.map(y => y.path) })), featureCandidates: records.map(x => ({ feature: x.feature, heuristicStatus: x.status, counts: Object.fromEntries(Object.entries(x.evidence).map(([k,v]) => [k,v.length])) })) }, null, 2))

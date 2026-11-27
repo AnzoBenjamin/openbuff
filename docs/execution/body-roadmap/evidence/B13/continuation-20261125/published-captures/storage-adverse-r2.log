@@ -1,0 +1,15 @@
+bun test v1.4.4 (38afee6c8)
+
+src/services/memory-v2/__tests__/b13-archive-originals.test.ts:
+(pass) B13 normalized original archive policy > persists 30 distinct originals, reopens, and pages the exact hash and tail [2011.01ms]
+(pass) B13 normalized original archive policy > discloses quota cutoff and an old envelope cannot resurrect a removed original [43.90ms]
+(pass) B13 normalized original archive policy > expiry includes the current run and protected overflow refuses atomically [44.36ms]
+(pass) B13 normalized original archive policy > source-run ambiguity, Unicode cursors, conflicting originals and corruption fail closed [34.79ms]
+(pass) B13 normalized original archive policy > new pointer timestamps cannot renew an original TTL, while an explicit pin protects its closure [38.28ms]
+(pass) B13 normalized original archive policy > constructor policy is captured, 4MiB quota is logical bytes, and shared originals are charged once [189.22ms]
+(pass) B13 normalized original archive policy > keep-until-delete is explicitly unbounded aggregate storage, and malformed policy never opens a store [20.85ms]
+
+ 7 pass
+ 0 fail
+ 773 expect() calls
+Ran 7 tests across 1 file. [2.99s]

@@ -53,6 +53,12 @@ export type HarnessStoreDiagnostic = {
   quarantinedPath?: string
 }
 
+const diagnosticSchema = z.object({
+  filePath: z.string(),
+  message: z.string(),
+  quarantinedPath: z.string().optional(),
+})
+
 function assertSafeSegment(value: string, label: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value)) {
     throw new Error(`Invalid harness ${label} '${value}'.`)
@@ -159,7 +165,9 @@ export class LocalHarnessStore {
     // The owner record is re-verified on the displaced private copy, so the
     // verdict cannot race a re-acquiring waiter writing a fresh owner record
     // at the shared lock path.
-    if (this.isFilesystemLockOwnerDead(path.join(displacedPath, 'owner.json'))) {
+    if (
+      this.isFilesystemLockOwnerDead(path.join(displacedPath, 'owner.json'))
+    ) {
       fs.rmSync(displacedPath, { recursive: true, force: true })
       return true
     }
@@ -301,16 +309,107 @@ export class LocalHarnessStore {
     id: string,
   ): LocalHarnessRecord | undefined {
     const filePath = this.recordPath(repositoryId, kind, id)
-    if (!fs.existsSync(filePath)) return undefined
-    const parsed = recordSchema
-      .passthrough()
-      .safeParse(JSON.parse(fs.readFileSync(filePath, 'utf8')))
-    if (!parsed.success) {
-      throw new Error(
-        `Invalid harness record at ${filePath}: ${parsed.error.message}`,
+    if (!fs.existsSync(filePath)) {
+      const diagnostic = this.persistedDiagnostics(path.dirname(filePath)).find(
+        (entry) => entry.filePath === filePath,
       )
+      if (diagnostic) {
+        throw new Error(
+          `Quarantined harness record at ${filePath}: ${diagnostic.message}`,
+        )
+      }
+      return undefined
     }
-    return parsed.data
+    try {
+      const parsed = recordSchema
+        .passthrough()
+        .safeParse(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+      if (!parsed.success) {
+        throw new Error(
+          `Invalid harness record at ${filePath}: ${parsed.error.message}`,
+        )
+      }
+      return parsed.data
+    } catch (error) {
+      this.quarantine(filePath, error)
+      throw error
+    }
+  }
+
+  private quarantine(filePath: string, error: unknown): void {
+    const quarantineDir = path.join(path.dirname(filePath), '.corrupt')
+    const quarantinedPath = path.join(
+      quarantineDir,
+      `${path.basename(filePath)}.${Date.now()}.${randomUUID()}`,
+    )
+    const diagnostic: HarnessStoreDiagnostic = {
+      filePath,
+      message: error instanceof Error ? error.message : String(error),
+    }
+    try {
+      fs.mkdirSync(quarantineDir, { recursive: true, mode: 0o700 })
+      fs.renameSync(filePath, quarantinedPath)
+      diagnostic.quarantinedPath = quarantinedPath
+    } catch (quarantineError) {
+      diagnostic.message += `; quarantine failed: ${quarantineError instanceof Error ? quarantineError.message : String(quarantineError)}`
+    }
+    // Raw quarantine entries remain independently discoverable if a crash or
+    // failed sidecar write interrupts this step after the rename.
+    try {
+      writeJsonAtomic(`${quarantinedPath}.diagnostic.json`, diagnostic)
+    } catch {
+      // The original corrupt file or its quarantined bytes still fail reads.
+    }
+  }
+
+  private persistedDiagnostics(dir: string): HarnessStoreDiagnostic[] {
+    const quarantineDir = path.join(dir, '.corrupt')
+    if (!fs.existsSync(quarantineDir)) return []
+    const names = fs.readdirSync(quarantineDir).sort()
+    const diagnostics: HarnessStoreDiagnostic[] = []
+    for (const name of names) {
+      const diagnosticPath = path.join(quarantineDir, name)
+      if (name.endsWith('.diagnostic.json')) {
+        try {
+          diagnostics.push(
+            diagnosticSchema.parse(
+              JSON.parse(fs.readFileSync(diagnosticPath, 'utf8')),
+            ),
+          )
+        } catch {
+          const rawName = name.slice(0, -'.diagnostic.json'.length)
+          const originalName = /^(.*\.json)\.\d+\./.exec(rawName)?.[1]
+          diagnostics.push({
+            filePath: originalName
+              ? path.join(dir, originalName)
+              : diagnosticPath,
+            quarantinedPath: path.join(quarantineDir, rawName),
+            message:
+              'Corrupt persisted harness diagnostic; evidence unavailable.',
+          })
+        }
+      } else if (
+        !/\.diagnostic\.json\.tmp\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+          name,
+        )
+      ) {
+        // Only an unfinished atomic sidecar write is temporary. Record ids
+        // may contain '.tmp.' and still have independently discoverable bytes.
+        // Also covers legacy quarantines and a missing/corrupt sidecar.
+        if (!names.includes(`${name}.diagnostic.json`)) {
+          const originalName = /^(.*\.json)\.\d+\./.exec(name)?.[1]
+          diagnostics.push({
+            filePath: originalName
+              ? path.join(dir, originalName)
+              : diagnosticPath,
+            quarantinedPath: diagnosticPath,
+            message:
+              'Quarantined harness record; original diagnostic unavailable.',
+          })
+        }
+      }
+    }
+    return diagnostics
   }
 
   list(repositoryId: string, kind: HarnessRecordKind): LocalHarnessRecord[] {
@@ -324,7 +423,7 @@ export class LocalHarnessStore {
     const dir = this.kindDirectory(repositoryId, kind)
     if (!fs.existsSync(dir)) return { records: [], diagnostics: [] }
     const records: LocalHarnessRecord[] = []
-    const diagnostics: HarnessStoreDiagnostic[] = []
+    const readFailures: HarnessStoreDiagnostic[] = []
     for (const name of fs
       .readdirSync(dir)
       .filter((entry) => entry.endsWith('.json'))
@@ -334,27 +433,19 @@ export class LocalHarnessStore {
         const record = this.read(repositoryId, kind, name.slice(0, -5))
         if (record) records.push(record)
       } catch (error) {
-        const quarantineDir = path.join(dir, '.corrupt')
-        const quarantinedPath = path.join(
-          quarantineDir,
-          `${name}.${Date.now()}.${randomUUID()}`,
-        )
-        try {
-          fs.mkdirSync(quarantineDir, { recursive: true, mode: 0o700 })
-          fs.renameSync(filePath, quarantinedPath)
-          diagnostics.push({
-            filePath,
-            quarantinedPath,
-            message: error instanceof Error ? error.message : String(error),
-          })
-        } catch (quarantineError) {
-          diagnostics.push({
-            filePath,
-            message: `${error instanceof Error ? error.message : String(error)}; quarantine failed: ${quarantineError instanceof Error ? quarantineError.message : String(quarantineError)}`,
-          })
-        }
+        readFailures.push({
+          filePath,
+          message: error instanceof Error ? error.message : String(error),
+        })
       }
     }
+    const diagnostics = this.persistedDiagnostics(dir)
+    diagnostics.push(
+      ...readFailures.filter(
+        (failure) =>
+          !diagnostics.some((entry) => entry.filePath === failure.filePath),
+      ),
+    )
     return { records, diagnostics }
   }
 

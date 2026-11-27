@@ -1,0 +1,446 @@
+{
+  "schemaVersion": 1,
+  "card": "B14",
+  "status": "locally-verified-not-formally-accepted",
+  "basisHead": "492049274d4dc52736de6fb5f4026e0f2b70f1d9",
+  "sourcePins": [
+    {
+      "path": "common/src/types/memory-v2.ts",
+      "sha256": "16b4b4c042f475881f7c14b3682cb77f9ab5d7f8ce43694cfaddbcd8d27f50b5",
+      "bytes": 61157
+    },
+    {
+      "path": "common/src/types/session-state.ts",
+      "sha256": "08c0fe38f888340215a34857b0f40a4ea0c12a8ce94da1ee36451e787c8de2f8",
+      "bytes": 29810
+    },
+    {
+      "path": "common/src/util/playbook-applicability.ts",
+      "sha256": "7a3fc571b1e54f158d5f637bacacf3e08c0fe4755537eb700c2c2b6e79761494",
+      "bytes": 3665
+    },
+    {
+      "path": "common/src/util/playbook-scope-glob.ts",
+      "sha256": "e16b641153e2628674913ae266209b8f15b08a8a5ddbf1794f1059776136193f",
+      "bytes": 5064
+    },
+    {
+      "path": "common/src/util/__tests__/playbook-applicability.test.ts",
+      "sha256": "c9a1cd99f689a032f77885f9b37030a0797f6bd2225fda8d08499618786255d8",
+      "bytes": 4649
+    },
+    {
+      "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+      "sha256": "4c37054d12c4877d25f675e8cbf4c2a06114d6caec2b9547324df28d3a3415d1",
+      "bytes": 14919
+    },
+    {
+      "path": "packages/agent-runtime/src/util/memory-read-observation.ts",
+      "sha256": "6831b4ac63f7ce91e74649b09b3fdf4c1594ae3d09f305eb23e183df14c4dc3c",
+      "bytes": 3145
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+      "sha256": "0d2832e702f93f9a2f3f1b97dd2cf0b5ad73eed09ac2b4c3fcd877c590d53f4f",
+      "bytes": 22495
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/memory-read-observation.test.ts",
+      "sha256": "2cbe3df151cefedd9ea56682727aa630e531a0c6d05a1cec9a5a2635764b0570",
+      "bytes": 2597
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+      "sha256": "b0d406e91c2f02f251d5dc76f2139621bbb41e0080bc0bed84cb8f0f7fbcc5a8",
+      "bytes": 27727
+    },
+    {
+      "path": "packages/agent-runtime/src/orchestration/discovery-coordinator.ts",
+      "sha256": "0c48dbb7f3e32aeac0d81c324efa9d8667fe6b99f2dfe831d1888e86a47b6e70",
+      "bytes": 34411
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "sha256": "8c732d1ad411abbcc7f83749dbb8ad1f165ab648462c8ba542870441460b4132",
+      "bytes": 193749
+    },
+    {
+      "path": "sdk/src/services/memory-v2/usage-observer.ts",
+      "sha256": "a551fc596ce620d2352d821f985002998096c50ad0765d44b1b98297fe302f33",
+      "bytes": 3456
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "sha256": "b85b04f287547999bb90125ee5c3765887f012ffa62877a7e76b8ab5e38b2ba4",
+      "bytes": 86376
+    },
+    {
+      "path": "sdk/src/services/repository-intelligence.ts",
+      "sha256": "c176fbc0c602d148375a5fba79eb018899e19e3b410a3967b014936e96012bad",
+      "bytes": 17861
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/b14-usage.test.ts",
+      "sha256": "9bb7c6cbfee51f395bb608f035581ec4f8b8a37d5e65aff73041777744ed4502",
+      "bytes": 4166
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/usage-observer.test.ts",
+      "sha256": "6f16120b44010d225094e9ec7bbee60d9e6d52f0b89efcbee6dc8a5c488ffd63",
+      "bytes": 7131
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+      "sha256": "42e99e085b103edc47933f4755649c937cba8a26090229e78b27c56beda8102b",
+      "bytes": 93436
+    },
+    {
+      "path": "sdk/src/__tests__/b14-memory-usage.test.ts",
+      "sha256": "e2d138ed51ac9e7ad260a013320172811826b65fda9d47a004633de7e07dab04",
+      "bytes": 9118
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/b14-procedure-lifecycle.test.ts",
+      "sha256": "03216ad65ebe188d464db35363ebb6c047b653b89083ec1fb9c05c27af40532c",
+      "bytes": 21820
+    },
+    {
+      "path": "docs/repository-intelligence.md",
+      "sha256": "7d175caf3cbb406a841cfc7fc3229abbe1ebc6cc62a0a28ba37af1bcc888de9a",
+      "bytes": 15654
+    }
+  ],
+  "captures": [
+    {
+      "path": ".tmp/b14-continuation/actual-captures/changed-after-emission.json",
+      "sha256": "e6038c0748d812b18671e30b6b9953e8a357ec932d3f024288e418ee4826078e",
+      "bytes": 71451
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-captures/required-refresh.json",
+      "sha256": "4d5fae56fd3c1730ebc3a2f77385f700148436c80f697775f1d031f9a84cacf7",
+      "bytes": 61146
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-captures/unchanged-a.json",
+      "sha256": "2d851cfaba49d8cd408da7fd464240aff2ea70bc41097a0b93acbcf1cd330669",
+      "bytes": 72784
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-captures/unrelated-c.json",
+      "sha256": "591a7f2252ea5b3a5274578c7022e598e27106460f2932c97757dafbaff37c04",
+      "bytes": 71440
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-debug.log",
+      "sha256": "445e3841a9659d8a32bf3a4587781f5a215f1725366c877400acf142d754577d",
+      "bytes": 6545
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-r1.log",
+      "sha256": "7fadbb7cde390d4751c28cd939556bee04bad640b20b9a9bcd2886763cdb6af2",
+      "bytes": 2328
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-r2.log",
+      "sha256": "e45012b32fbfe40ce00edbcc07739927155aa41d931a85cf7a9b966f09157df8",
+      "bytes": 2370
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-r3.log",
+      "sha256": "713b21a18d625b8df4570dc9c205c3756b75f1baf4943f766d3d09bdf7f19330",
+      "bytes": 1490
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-r4.log",
+      "sha256": "3bdc476cf4393be7aa78d4341f9bc17bc7518cd7c0fd17919c769d8bed093d87",
+      "bytes": 13641
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-r5.log",
+      "sha256": "36e2919a0edc625d3ecaf5ee8e406b25d441ee2919ed70624c86133da1097495",
+      "bytes": 410
+    },
+    {
+      "path": ".tmp/b14-continuation/actual-usage-r6.log",
+      "sha256": "8de91eee469b39e4bdf86b430ffe7f4fea0a92296a1915c807f0332e59b6a3b1",
+      "bytes": 1352
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-bounded.log",
+      "sha256": "0d86c4d52ac47839dbe990013c090a8156140e13825d43c6bf0cc356c67651e3",
+      "bytes": 588194
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-build-final-r1.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-census-driver-r1.log",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "bytes": 1
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-census-driver-r2.log",
+      "sha256": "aa9b14969e8d04d125db1547b287ac9cb0aceed6425360012e3a85f95fb511c2",
+      "bytes": 94
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-regression-final-r1.log",
+      "sha256": "f89657eb0e41f29af4734b37eb9862cce4471f8d89d8372a88d0af20f3e1791c",
+      "bytes": 16184
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-result.json",
+      "sha256": "6438708c720c28063607d2bd14483a7d2fa8d886880797e76a2477fae6d79921",
+      "bytes": 18115
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-schedule.json",
+      "sha256": "924f9b078fad4f9b56d5d8b9991363cf4cf8bd638583f0095b66712dd666906b",
+      "bytes": 18038
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-timeout-r1.json",
+      "sha256": "685c8874b61436732dcc88175efc6f9f91b888be6fa5f2d863cdfb96cb0e6338",
+      "bytes": 18122
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-timeout-r1.log",
+      "sha256": "1df19eee84a7636e7aa013b9e75d35c5b05cfd670164280d44a097057b8d7d8d",
+      "bytes": 550267
+    },
+    {
+      "path": ".tmp/b14-continuation/cli-timeout-schedule-r1.json",
+      "sha256": "924f9b078fad4f9b56d5d8b9991363cf4cf8bd638583f0095b66712dd666906b",
+      "bytes": 18038
+    },
+    {
+      "path": ".tmp/b14-continuation/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "path": ".tmp/b14-continuation/format-final.log",
+      "sha256": "1a3a1a472f5e838ee103b0756d7676dd42c413540716f2c1782acc1381b1256d",
+      "bytes": 1105
+    },
+    {
+      "path": ".tmp/b14-continuation/ledger-validator.json",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77",
+      "bytes": 2352
+    },
+    {
+      "path": ".tmp/b14-continuation/memory-regression-r1.log",
+      "sha256": "5667ebfa8c65f9e2e255ba3ae27d947ec2db79ecf934530e005e5da63a059b48",
+      "bytes": 1701
+    },
+    {
+      "path": ".tmp/b14-continuation/read-authority-regression.log",
+      "sha256": "f629065e46cb76fbbe698aa72a30d4b8d4f1d487f54c7967425efe977100aa33",
+      "bytes": 21583
+    },
+    {
+      "path": ".tmp/b14-continuation/read-producer-r1.log",
+      "sha256": "8955442bad3579debbf9bbf33c8f4e7d7c3193701ea2b06c33e0d278db96ebfd",
+      "bytes": 289
+    },
+    {
+      "path": ".tmp/b14-continuation/runtime-regression-final-r1.log",
+      "sha256": "16906712656547ffa2475a419af07a482aaca1ab63ae799aa0093f435acf0b2c",
+      "bytes": 25916
+    },
+    {
+      "path": ".tmp/b14-continuation/runtime-regression-final-r2.log",
+      "sha256": "9dfdcb25cd70dd649d335a7d6636acb21a3f7ac13bebdc9c56cb0fffb4f6feb6",
+      "bytes": 24907
+    },
+    {
+      "path": ".tmp/b14-continuation/scope-red.log",
+      "sha256": "8dcbb4cdbeea401f395273c17f4d161d031a7ebec30fe38d27a648595f177a19",
+      "bytes": 1423
+    },
+    {
+      "path": ".tmp/b14-continuation/scope-regression-r1.log",
+      "sha256": "157d455cecde8e914085921c63ac900044bfaeb4d9431091553ef56e1619c8c6",
+      "bytes": 4558
+    },
+    {
+      "path": ".tmp/b14-continuation/scope-regression-r2.log",
+      "sha256": "5ee376aa46743de498c2ae20b665354556fb8a9ef42c82a06a4bbf28a262abfa",
+      "bytes": 3740
+    },
+    {
+      "path": ".tmp/b14-continuation/sdk-build-final-r1.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "path": ".tmp/b14-continuation/sdk-regression-final-r1.log",
+      "sha256": "028b3ebbd7897616070a7e61698fe28271056e5389dc25e39b3877d5ecfd45bb",
+      "bytes": 19229
+    },
+    {
+      "path": ".tmp/b14-continuation/typecheck-final-r1.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": ".tmp/b14-continuation/typecheck-r1.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": ".tmp/b14-continuation/typecheck-r2.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": ".tmp/b14-continuation/typecheck-r3.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": ".tmp/b14-continuation/usage-compiler-r1.log",
+      "sha256": "8c678a03196bf6395440fcb7039a384b2e43232179356b33e49c45784b46c180",
+      "bytes": 2583
+    },
+    {
+      "path": ".tmp/b14-continuation/usage-red.log",
+      "sha256": "6769f6dcb2ef7ea2f5b336e065033fa2ba6482ced36b3de0c6f186a41ec0644f",
+      "bytes": 5462
+    },
+    {
+      "path": ".tmp/b14-continuation/usage-regression-r1.log",
+      "sha256": "3be56663ef07572d02d3f936fe7cb3e44c63275a0b82883a53627f5e8cf7e2ca",
+      "bytes": 13548
+    },
+    {
+      "path": ".tmp/b14-continuation/usage-regression-r2.log",
+      "sha256": "7dacebeba91119cdb373d3edd6f89d07f5e2e4e175157831097ccad215a85aee",
+      "bytes": 8386
+    }
+  ],
+  "validation": {
+    "workspaceTypechecks": 11,
+    "runtime": {
+      "pass": 229,
+      "assertions": 823
+    },
+    "sdk": {
+      "pass": 149,
+      "assertions": 1342
+    },
+    "cli": {
+      "pass": 148,
+      "assertions": 1364
+    },
+    "readAuthority": {
+      "pass": 132,
+      "assertions": 876
+    },
+    "boundedCli": {
+      "pass": 4916,
+      "skipped": 200,
+      "failed": 0,
+      "assertions": 24948,
+      "selected": 319,
+      "discovered": 320,
+      "excluded": [
+        "src/__tests__/utils/env.test.ts"
+      ],
+      "exactCiSchedule": false
+    }
+  },
+  "behavior": {
+    "operatorLifecycleCases": 7,
+    "actualGateAttemptsPerFixture": 13,
+    "measuredPersistedOutcomesPerFixture": {
+      "blocked": 3,
+      "compliedAfterBlock": 3,
+      "warned": 4
+    },
+    "seededSuccessCounters": false,
+    "actualUsageCases": [
+      "unchanged-a",
+      "unrelated-c",
+      "required-refresh",
+      "changed-after-emission"
+    ],
+    "scopeForms": [
+      "segment-star",
+      "question",
+      "recursive-star",
+      "bounded-comma-braces",
+      "character-class"
+    ],
+    "usageMeaning": "source-specific efficiency signal only, not factual invalidity"
+  },
+  "acceptance": {
+    "acceptedNodes": 13,
+    "totalNodes": 39,
+    "ledger": {
+      "path": "docs/execution/body-roadmap/ledger.json",
+      "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb",
+      "bytes": 145983
+    },
+    "registry": {
+      "path": "docs/execution/body-roadmap/execution-plan.json",
+      "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095",
+      "bytes": 10989
+    },
+    "validatorErrors": [
+      "B01 acceptance receipt: missing docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-acceptance.json",
+      "B02 acceptance receipt: missing docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-acceptance.json",
+      "B03 acceptance receipt: missing docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-acceptance.json",
+      "B04 acceptance receipt: missing docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-acceptance.json",
+      "B05 acceptance receipt: missing docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-acceptance.json",
+      "B08 acceptance receipt: missing docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-acceptance.json",
+      "B18 acceptance receipt: missing docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-acceptance.json",
+      "B19 acceptance receipt: missing docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-acceptance.json",
+      "B20 acceptance receipt: missing docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-acceptance.json",
+      "B28 acceptance receipt: missing docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-acceptance.json",
+      "B30 acceptance receipt: missing docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-acceptance.json",
+      "B36 acceptance receipt: missing docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-acceptance.json"
+    ],
+    "independentReview": "unavailable: two provider peak-capacity failures; no approval"
+  },
+  "limits": [
+    "Selected current-source hashes and local logs are not a complete immutable source-closure acceptance receipt.",
+    "The captured host path-focus matrix does not prove dynamic action-specific focus or arbitrary shell path inference.",
+    "Injected-only rules never obtain manufactured gate firings or automatic promotion evidence.",
+    "Existing unknown focus retains potentially applicable supported scoped rules; unsupported syntax is excluded with host degradation.",
+    "Initial180s census interruption retained; successor300s-bound same canonical discovery/preload/isolation completed120.69s.",
+    "Loopback provider proves delivery/attribution, not live model quality or cross-platform installed parity.",
+    "Formal B12 prerequisite and historical missing receipts are not reconstructed, waived or renewed.",
+    "No commit/push/public publish/user configuration/user installation change."
+  ],
+  "historicalBuildArtifacts": [
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "9fb97fe9a5c8667041e56535d712acbe993dc6eae4adf452213c9ebdbd138e4b",
+      "bytes": 7392564
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "8a303758f1337711c35ffd028c4cb11b0c8a900cc8bf76c604c788c21d5da14e",
+      "bytes": 7277969
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "fdc2b64f17b267d0d86f421d84f0b75beec13bd229003d2042e425640c380340",
+      "bytes": 2084021
+    },
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "0dc629a037a34c8f91b26c099216e1f1c4167656ab24054e75358d127b1d0875",
+      "bytes": 149715120
+    }
+  ],
+  "artifactSupersession": {
+    "reason": "Ignored dist/bin paths were rebuilt cumulatively by the subsequent B09 accounting slice. Historical B14 artifact hashes are preserved above, not asserted equal to these mutable paths now.",
+    "currentCumulativeBuildVerification": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/verification.json",
+    "claim": "Current cumulative SDK/CLI builds passed during B09; B14 tests/census retain their original scope and sequence."
+  }
+}

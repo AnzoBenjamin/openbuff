@@ -1,0 +1,224 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { strict as assert } from 'node:assert'
+import { join } from 'node:path'
+import { BunSQLiteMemoryRepository } from '/home/ben/Code/CLI/openbuff/cli/src/services/memory-v2/bun-sqlite-memory-repository'
+import { MemoryV2Coordinator } from '/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/coordinator'
+import { getInitialAgentState } from '/home/ben/Code/CLI/openbuff/common/src/types/session-state'
+import { MemoryRetrievalRequestSchema, MemoryTurnContextV2Schema, ProjectIdSchema } from '/home/ben/Code/CLI/openbuff/common/src/types/memory-v2'
+import { compileMemoryV2Context } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/memory-v2-context'
+import { handleRecordDecision } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/tools/handlers/tool/record-decision'
+import { evictStaleToolResults } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/tool-result-eviction'
+import { archiveEvictedToolResults, archivePreCompaction, recallFromArchiveByToolCallId } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/context-archive'
+import { evaluatePlaybookLifecycle } from '/home/ben/Code/CLI/openbuff/cli/src/services/memory-v2/playbook-lifecycle'
+import { compileActivePlaybooksContext } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/memory/playbook-context'
+import { evaluatePlaybookGate } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/memory/playbook-gate'
+import { correlateUsage } from '/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/usage-observer'
+
+// Disposable fixture only: no provider config, credentials, private memory,
+// logging configuration, model calls, or workspace effects are accessed.
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+mkdirSync(evidenceDir, { recursive: true })
+const fixtureRoot = mkdtempSync(join(evidenceDir, '04-fixture-project-'))
+const projectId = ProjectIdSchema.parse('project:04-public-fixture')
+const sentinelPath = 'src/retention-sentinel.ts'
+let fixtureWallMs = Date.parse('2026-11-06T12:00:00.000Z')
+const now = () => new Date(fixtureWallMs++).toISOString()
+const warnings: Array<{ message: string; detail: unknown }> = []
+const logger = { warn: (detail: unknown, message: string) => warnings.push({ message, detail }) }
+const rejectedBatches: any[] = []
+const open = async () => {
+  const outcome = await BunSQLiteMemoryRepository.open({ repositoryRoot: fixtureRoot })
+  if (outcome.status !== 'ok') throw new Error(JSON.stringify(outcome))
+  const append = outcome.repository.append.bind(outcome.repository)
+  outcome.repository.append = async request => {
+    const response = await append(request)
+    if (response.outcome !== 'appended') rejectedBatches.push({ eventTypes: request.events.map(event => event.eventType), events: request.events.map(event => ({ eventId: event.eventId, eventType: event.eventType, occurredAt: event.occurredAt, payload: event.payload })), response })
+    return response
+  }
+  return outcome.repository
+}
+const configuration = (repository: BunSQLiteMemoryRepository) => ({
+  projectId, repository, authority: 'sqlite-v2-opt-in' as const,
+  mode: 'inject' as const, capture: 'safe' as const,
+})
+
+const first = await open()
+const firstState = getInitialAgentState()
+const firstCoordinator = new MemoryV2Coordinator(configuration(first), logger, now)
+await firstCoordinator.prepareTurn({ agentState: firstState, trustedUserInputId: 'input:04-first', query: sentinelPath, workspaceState: firstState.workspaceState })
+await firstCoordinator.recordToolObservation({
+  toolName: 'list_directory', callId: 'call:04-list', userInputId: 'input:04-first',
+  input: { path: sentinelPath },
+  output: [{ type: 'json', value: { path: sentinelPath, entries: ['fixture.ts'] } }],
+  native: true, workspaceState: firstState.workspaceState,
+})
+await firstCoordinator.finishTurn({ agentState: firstState, output: { type: 'structuredOutput', value: { done: true } } })
+const firstEvents = await first.listEvents()
+if (firstEvents.status !== 'ok') throw new Error('fixture export failed')
+const firstObservation = firstEvents.events.find(event => event.eventType === 'observation.recorded')
+if (!firstObservation || firstObservation.eventType !== 'observation.recorded') throw new Error('fixture capture absent')
+const priorTaskId = firstObservation.payload.observation.taskId
+const startedTransition = firstEvents.events.find(event => event.eventType === 'task.transitioned')
+await first.close()
+
+const second = await open()
+const secondState = getInitialAgentState()
+const secondCoordinator = new MemoryV2Coordinator(configuration(second), logger, now)
+await secondCoordinator.prepareTurn({ agentState: secondState, trustedUserInputId: 'input:04-second', query: sentinelPath, workspaceState: secondState.workspaceState })
+const unscoped = await second.query(MemoryRetrievalRequestSchema.parse({
+  schemaVersion: 2, projectId, sessionId: secondState.memoryV2!.sessionId,
+  queryId: 'query:04-unscoped', query: sentinelPath,
+  selectors: [], artifactKinds: [], includeHistorical: true, maxResultsPerCategory: 100,
+  workspaceRevision: secondState.workspaceState?.revision,
+  workspaceSnapshotId: secondState.workspaceState?.snapshotId,
+}))
+if (unscoped.outcome !== 'result') throw new Error('fixture query failed')
+
+const decisionText = 'DECISION_SENTINEL: use Postgres because the durable queue must survive a restart.'
+const decision = await handleRecordDecision({
+  previousToolCallFinished: Promise.resolve(), agentState: secondState,
+  toolCall: { toolName: 'record_decision', toolCallId: 'call:04-decision', input: { text: decisionText, kind: 'decision', evidenceSelectors: ['docs/fixture.md'], excerpt: 'PUBLIC_EXCERPT_SENTINEL' } } as any,
+  clock: { now: () => 1_799_000_000_000 } as any,
+})
+await secondCoordinator.recordToolObservation({
+  toolName: 'record_decision', callId: 'call:04-decision', userInputId: 'input:04-second',
+  input: { text: decisionText, kind: 'decision', evidenceSelectors: ['docs/fixture.md'], excerpt: 'PUBLIC_EXCERPT_SENTINEL' },
+  output: decision.output, native: true, workspaceState: secondState.workspaceState,
+})
+const secondEvents = await second.listEvents()
+if (secondEvents.status !== 'ok') throw new Error('fixture export failed')
+const decisionEvent = secondEvents.events.find(event => event.eventType === 'observation.recorded' && event.payload.observation.kind === 'decision')
+if (!decisionEvent || decisionEvent.eventType !== 'observation.recorded') throw new Error('fixture decision absent')
+
+const makeDiscovery = (id: string, summary: string, detail: string, score: number) => ({
+  observation: { ...firstObservation.payload.observation, observationId: id, summary, detail },
+  reuseGuidance: 'Verify the public fixture before use.', score,
+  reasons: [{ code: 'lexical-match' as const, contribution: score, detail: 'public fixture rank' }],
+})
+const orderedContext = MemoryTurnContextV2Schema.parse({
+  schemaVersion: 2, userInputId: 'input:04-order', queryId: 'query:04-order',
+  result: { ...unscoped.result, queryId: 'query:04-order', matchedTasks: [], verifiedKnowledge: [], rereadRequired: [], historicalContext: [], rankingReasons: [],
+    reusableDiscovery: [
+      makeDiscovery('observation:z-high', 'HIGH_RELEVANCE_SENTINEL', 'The highest-ranked public fixture.', 1),
+      ...Array.from({ length: 8 }, (_, index) => makeDiscovery(`observation:a-low-${index}`, `LOW_RELEVANCE_${index}`, 'x'.repeat(1900), 0.01)),
+    ],
+  },
+})
+const compiled = compileMemoryV2Context(orderedContext)
+const expandedBudget = compileMemoryV2Context(orderedContext, { maxChars: 30_000 })
+const restoredState = structuredClone(firstState)
+const restoredCoordinator = new MemoryV2Coordinator(configuration(second), logger, now)
+await restoredCoordinator.prepareTurn({ agentState: restoredState, trustedUserInputId: 'input:04-after-restore', query: sentinelPath, workspaceState: restoredState.workspaceState })
+const endingTransition = rejectedBatches[0]?.events.find((event: any) => event.eventType === 'task.transitioned')
+
+// Actual evictor -> eviction archive -> later compaction archive -> recall.
+const archiveState = getInitialAgentState()
+const originalBody = 'ORIGINAL_ARCHIVE_SENTINEL ' + 'x'.repeat(40_000)
+const eviction = evictStaleToolResults([
+  { role: 'assistant', content: [{ type: 'text', text: 'public fixture step' }] },
+  { role: 'tool', toolCallId: 'call:04-archive', toolName: 'read_files', content: [{ type: 'json', value: { output: originalBody } }] },
+  ...Array.from({ length: 6 }, (_, index) => ({ role: 'assistant' as const, content: [{ type: 'text' as const, text: `public subsequent step ${index}` }] })),
+])
+if (!eviction.evicted) throw new Error('fixture eviction absent')
+archiveEvictedToolResults(archiveState, eviction.evicted)
+const recallBeforeCompaction = recallFromArchiveByToolCallId(archiveState.compactionArchive, 'call:04-archive')
+for (let cycle = 0; cycle < 3; cycle++) archivePreCompaction(archiveState, [...eviction.messages], 'semantic_compaction', 6)
+const recallAfterCompaction = recallFromArchiveByToolCallId(archiveState.compactionArchive, 'call:04-archive')
+await second.persistContextArchiveSnapshots({ runId: 'run:04-archive', snapshots: archiveState.compactionArchive! })
+
+// Operator lifecycle -> real SQLite status change -> next load/compiler.
+const playbookRows = await second.listPlaybooks(projectId)
+const playbook = playbookRows[0]
+for (const outcome of ['blocked', 'blocked', 'blocked', 'compliedAfterBlock', 'compliedAfterBlock', 'compliedAfterBlock', 'warned', 'warned', 'warned', 'warned'] as const) {
+  await second.recordPlaybookGateOutcome(playbook.playbookId, outcome)
+}
+const beforeVerification = (await second.listAllPlaybooks(projectId)).find(row => row.playbookId === playbook.playbookId)!
+const lifecycleAction = evaluatePlaybookLifecycle([beforeVerification], { nowMs: Date.now() })[0]
+if (lifecycleAction?.to !== 'verified') throw new Error('fixture did not qualify for verification')
+await second.setPlaybookStatus(playbook.playbookId, lifecycleAction.to)
+const verifiedRow = (await second.listAllPlaybooks(projectId)).find(row => row.playbookId === playbook.playbookId)!
+const afterVerification = await second.listPlaybooks(projectId)
+const scopedWrongProject = { ...beforeVerification, scope: { repos: ['project:another-fixture'], glob: ['**/*.rs'], agentTypes: ['rust-specialist'] } }
+const wrongScopeGate = evaluatePlaybookGate({
+  toolName: scopedWrongProject.trigger.tool,
+  input: scopedWrongProject.trigger.tool === 'spawn_agents' ? { agents: [{ agent_type: scopedWrongProject.trigger.spawnAgentType }] } : scopedWrongProject.trigger.tool === 'spawn_agent_inline' ? { agent_type: scopedWrongProject.trigger.spawnAgentType } : { command: 'git commit -m public-fixture' },
+  playbooks: [scopedWrongProject], evidenceLog: { entries: [] } as any, nowMs: Date.now(), env: {},
+})
+
+// One unrelated full read is enough to label every unmatched served chunk ignored.
+const usageObservation = structuredClone(firstObservation.payload.observation)
+usageObservation.evidence = [{ ...usageObservation.evidence[0], selector: { kind: 'chunk', path: sentinelPath, chunkId: 'chunk:04-known', qualifiedName: 'known', startLine: 1, endLine: 10 } } as any]
+const usageContext = { ...orderedContext, result: { ...orderedContext.result, reusableDiscovery: [{ ...makeDiscovery('observation:04-usage', 'public fixture known chunk', 'public fixture', 1), observation: usageObservation }] } }
+const negativeUsage = correlateUsage({ context: usageContext as any, receipt: { schemaVersion: 1, turnId: 'input:04-order', skip: 0, narrow: 0, full: 1, recordsServed: 0, gapsRemaining: 1, recordedDecisions: 0, conceptExpanded: 0, byTool: [{ tool: 'read_files', decision: 'full', served: 0, gaps: 1 }] } })
+await second.close()
+const third = await open()
+const coldArchive = (await third.loadContextArchiveSnapshots({ runId: 'run:04-archive' })).snapshots.reverse()
+const recallAfterReopen = recallFromArchiveByToolCallId(coldArchive, 'call:04-archive')
+const result = {
+  runtime: Bun.version,
+  scope: 'coordinator + real SQLite close/reopen + runtime decision handler + prompt compiler; no LLM',
+  taskIsolation: {
+    priorTaskId, nextTaskId: secondState.memoryV2!.activeTask.taskId,
+    differentTaskIds: priorTaskId !== secondState.memoryV2!.activeTask.taskId,
+    priorObservationStored: firstObservation.payload.observation.observationId,
+    coordinatorInjectedObservationCount: (secondState.memoryV2Context?.result.verifiedKnowledge.length ?? 0) + (secondState.memoryV2Context?.result.reusableDiscovery.length ?? 0),
+    unscopedDiscoveryCount: unscoped.result.reusableDiscovery.length,
+    unscopedContainsPriorObservation: unscoped.result.reusableDiscovery.some(item => item.observation.observationId === firstObservation.payload.observation.observationId),
+    coordinatorDegradation: secondState.memoryV2Context?.result.degradation,
+  },
+  terminalIdentity: {
+    stateAfterFinish: firstState.memoryV2?.turn.status,
+    startedTransition: startedTransition && { eventId: startedTransition.eventId, occurredAt: startedTransition.occurredAt, toStatus: startedTransition.payload.toStatus },
+    endingTransition: endingTransition && { eventId: endingTransition.eventId, occurredAt: endingTransition.occurredAt, toStatus: endingTransition.payload.toStatus },
+    sameIdDifferentPayload: startedTransition?.eventId === endingTransition?.eventId && startedTransition?.payload.toStatus !== endingTransition?.payload.toStatus,
+    restoredPreparationStatus: restoredState.memoryV2?.turn.status,
+    restoredPreparationReason: restoredState.memoryAuthority?.reason,
+    restoredContextPresent: restoredState.memoryV2Context !== undefined,
+  },
+  decisionBody: {
+    handlerSuccess: decision.output.some(part => part.type === 'json' && typeof part.value === 'object' && part.value !== null && 'text' in part.value),
+    v1RetainsDecisionText: secondState.taskMemory?.decisions.some(item => item.includes('DECISION_SENTINEL')),
+    v2RecordedText: JSON.stringify(decisionEvent).includes('DECISION_SENTINEL'),
+    v2RecordedExcerpt: JSON.stringify(decisionEvent).includes('PUBLIC_EXCERPT_SENTINEL'),
+    v2Summary: decisionEvent.payload.observation.summary,
+    v2Detail: decisionEvent.payload.observation.detail,
+  },
+  compilerRank: {
+    sourceHighestFirst: orderedContext.result.reusableDiscovery[0].observation.summary,
+    compiledLength: compiled.length, sourceEntries: orderedContext.result.reusableDiscovery.length,
+    compiledHasHighest: compiled.includes('HIGH_RELEVANCE_SENTINEL'),
+    compiledHasLowest: compiled.includes('LOW_RELEVANCE_0'),
+    expandedBudgetHasHighest: expandedBudget.includes('HIGH_RELEVANCE_SENTINEL'),
+  },
+  archiveSelection: {
+    archiveKinds: archiveState.compactionArchive?.map(snapshot => snapshot.action),
+    beforeCompactionHasOriginal: recallBeforeCompaction.matches[0]?.snippet.includes('ORIGINAL_ARCHIVE_SENTINEL'),
+    afterCompactionHasOriginal: recallAfterCompaction.matches[0]?.snippet.includes('ORIGINAL_ARCHIVE_SENTINEL'),
+    afterCompactionReturnsTombstone: recallAfterCompaction.matches[0]?.snippet.startsWith('[tool result evicted'),
+    originalStillStored: JSON.stringify(archiveState.compactionArchive).includes('ORIGINAL_ARCHIVE_SENTINEL'),
+    afterReopenReturnsTombstone: recallAfterReopen.matches[0]?.snippet.startsWith('[tool result evicted'),
+  },
+  playbookVerification: {
+    action: lifecycleAction.kind, afterStatus: verifiedRow.status,
+    availableBefore: playbookRows.length, availableAfter: afterVerification.length,
+    verifiedRowInGateLoad: afterVerification.some(row => row.playbookId === verifiedRow.playbookId),
+    compiledVerifiedRowChars: compileActivePlaybooksContext([verifiedRow]).length,
+    mismatchedScopeGateVerdictCount: wrongScopeGate.length,
+  },
+  negativeUsage,
+  warnings, rejectedBatches,
+}
+assert.equal(result.taskIsolation.unscopedContainsPriorObservation, true)
+assert.equal(result.taskIsolation.coordinatorInjectedObservationCount, 0)
+assert.equal(result.terminalIdentity.sameIdDifferentPayload, true)
+assert.equal(result.terminalIdentity.restoredPreparationStatus, 'finishing')
+assert.equal(result.decisionBody.v2RecordedText, false)
+assert.equal(result.compilerRank.compiledHasHighest, false)
+assert.equal(result.archiveSelection.afterReopenReturnsTombstone, true)
+assert.equal(result.playbookVerification.verifiedRowInGateLoad, false)
+assert.equal(result.playbookVerification.mismatchedScopeGateVerdictCount, 1)
+assert.equal(result.negativeUsage.length, 1)
+writeFileSync(join(evidenceDir, '04-memory-fixture-result.json'), JSON.stringify(result, null, 2) + '\n')
+const { warnings: _warnings, rejectedBatches: _rejected, ...observedFailures } = result
+console.log(JSON.stringify(observedFailures, null, 2))
+await third.close()

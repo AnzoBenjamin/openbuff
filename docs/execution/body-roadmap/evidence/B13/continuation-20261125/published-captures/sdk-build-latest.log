@@ -1,0 +1,36 @@
+$ bun run scripts/build.ts
+🧹 Cleaning dist directory...
+📦 Building ESM format...
+📦 Building CJS format...
+📝 Generating and bundling TypeScript declarations...
+  ✓ Fixed duplicate imports in bundled types
+  ✓ Verified public consumer and SDK declaration
+  ✓ Created bundled type definitions
+📂 Copying WASM files for tree-sitter...
+  ✓ Copied tree-sitter.wasm
+  ✓ Copied tree-sitter-c.wasm
+  ✓ Copied tree-sitter-c-sharp.wasm
+  ✓ Copied tree-sitter-cpp.wasm
+  ✓ Copied tree-sitter-go.wasm
+  ✓ Copied tree-sitter-java.wasm
+  ✓ Copied tree-sitter-javascript.wasm
+  ✓ Copied tree-sitter-python.wasm
+  ✓ Copied tree-sitter-ruby.wasm
+  ✓ Copied tree-sitter-rust.wasm
+  ✓ Copied tree-sitter-tsx.wasm
+  ✓ Copied tree-sitter-typescript.wasm
+  ✓ Copied tree-sitter-kotlin.wasm
+  ✓ Copied tree-sitter-php.wasm
+  ✓ Copied tree-sitter-swift.wasm
+  ✓ Copied tree-sitter-gdscript.wasm
+📂 Copying tree-sitter tag queries...
+  ✓ Copied 14 tree-sitter tag queries
+📂 Copying vendored ripgrep binaries...
+  ✓ Copied vendored ripgrep binaries
+  ✓ ToolHelpers reconstruction: injected aggregation object
+  ✓ CJS import vars fixup: replaced 0 broken export getters
+  ✓ ESM export renames fixup: replaced 0 dedup renames
+✅ Build complete!
+  📄 dist/index.mjs (ESM)
+  📄 dist/index.cjs (CJS)
+  📄 dist/index.d.ts (Types)

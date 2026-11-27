@@ -322,4 +322,105 @@ describe('Error preserves in-progress message history', () => {
     )
     expect(finalReadCall).toBeDefined()
   })
+
+  it('resets cache counters for new turns without using refused checkpoint counters', async () => {
+    setupDatabaseMocks()
+
+    const countersAtRuntime: Array<{
+      input: number | undefined
+      total: number | undefined
+      complete: boolean | undefined
+    }> = []
+    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
+      async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const mainAgentState = params.action.sessionState.mainAgentState
+        countersAtRuntime.push({
+          input: mainAgentState.cacheInputTokens,
+          total: mainAgentState.cacheTotalInputTokens,
+          complete: mainAgentState.cacheUsageComplete,
+        })
+        mainAgentState.cacheInputTokens = 11
+        mainAgentState.cacheTotalInputTokens = 20
+        return {
+          sessionState: params.action.sessionState,
+          output: { type: 'lastMessage' as const, value: [] },
+        }
+      },
+    )
+
+    const client = new OpenbuffClient({ apiKey: 'test-key' })
+    const firstRun = await client.run({ agent: 'base2', prompt: 'First turn' })
+    expect(firstRun.sessionState?.mainAgentState.cacheInputTokens).toBe(11)
+    expect(firstRun.sessionState?.mainAgentState.cacheTotalInputTokens).toBe(20)
+    firstRun.sessionState!.mainAgentState.cacheUsageComplete = false
+
+    const continuedRun = await client.run({
+      agent: 'base2',
+      prompt: 'Second turn',
+      previousRun: firstRun,
+    })
+    expect(countersAtRuntime[1]).toEqual({ input: 0, total: 0, complete: true })
+    expect(firstRun.sessionState?.mainAgentState.cacheInputTokens).toBe(11)
+    expect(firstRun.sessionState?.mainAgentState.cacheTotalInputTokens).toBe(20)
+
+    const checkpointState = continuedRun.sessionState!
+    checkpointState.mainAgentState.cacheInputTokens = 7
+    checkpointState.mainAgentState.cacheTotalInputTokens = 12
+    checkpointState.mainAgentState.cacheUsageComplete = true
+    const preserved = await client.run({
+      agent: 'base2',
+      prompt: 'Resume checkpoint',
+      previousRun: continuedRun,
+      resumeInterruptedTurn: true,
+    })
+    expect(preserved.runOutcome?.cause?.code).toBe('replay_unavailable')
+    expect(preserved.sessionState?.mainAgentState).toMatchObject({
+      cacheInputTokens: 7,
+      cacheTotalInputTokens: 12,
+      cacheUsageComplete: true,
+    })
+    expect(countersAtRuntime).toHaveLength(2)
+
+    const legacyMainAgentState = {
+      ...continuedRun.sessionState!.mainAgentState,
+    }
+    Reflect.deleteProperty(legacyMainAgentState, 'cacheInputTokens')
+    Reflect.deleteProperty(legacyMainAgentState, 'cacheTotalInputTokens')
+    Reflect.deleteProperty(legacyMainAgentState, 'cacheUsageComplete')
+    const legacy = await client.run({
+      agent: 'base2',
+      prompt: 'Resume legacy checkpoint',
+      previousRun: {
+        ...continuedRun,
+        sessionState: {
+          ...continuedRun.sessionState!,
+          mainAgentState: legacyMainAgentState,
+        },
+      },
+      resumeInterruptedTurn: true,
+    })
+    expect(legacy.runOutcome?.cause?.code).toBe('replay_unavailable')
+    expect(countersAtRuntime).toHaveLength(2)
+
+    const malformedMainAgentState = {
+      ...continuedRun.sessionState!.mainAgentState,
+      cacheInputTokens: 1.5,
+      cacheTotalInputTokens: 10,
+      cacheUsageComplete: true,
+    }
+    const malformed = await client.run({
+      agent: 'base2',
+      prompt: 'Resume malformed checkpoint',
+      previousRun: {
+        ...continuedRun,
+        sessionState: {
+          ...continuedRun.sessionState!,
+          mainAgentState: malformedMainAgentState,
+        },
+      },
+      resumeInterruptedTurn: true,
+    })
+    expect(malformed.runOutcome?.cause?.code).toBe('replay_unavailable')
+    expect(countersAtRuntime).toHaveLength(2)
+  })
 })

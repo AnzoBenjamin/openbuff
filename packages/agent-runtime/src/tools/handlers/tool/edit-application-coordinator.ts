@@ -5,12 +5,21 @@ import {
 import {
   decodeReadCapabilityToken,
   encodeReadCapabilityToken,
-  getContentHash,
+  getObservationContentHash,
   getExactContentHash,
   hasAuthoritativeReadCapabilityScope,
-  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+  reanchorRawReadCapability,
+} from '@codebuff/common/util/byte-text'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
+import {
+  grantWholeFileReadAuthorization,
+  revokeWholeFileReadAuthorization,
+} from './write-file'
 
 import {
   clearEditRereadRequirement,
@@ -130,7 +139,10 @@ function getPositiveApplicationEvidence(
   projectId: string,
   runId: string,
   wholeFileContentByPath?: ReadonlyMap<string, string>,
-): ReadonlyMap<string, ConfirmedPostEditAnchor> | null {
+): {
+  anchors: ReadonlyMap<string, ConfirmedPostEditAnchor>
+  contents: ReadonlyMap<string, string>
+} | null {
   const envelopes: FileMutationResultV1[] = []
   collectEnvelopes(value, envelopes)
   if (envelopes.length === 0) return null
@@ -138,6 +150,23 @@ function getPositiveApplicationEvidence(
   const confirmedPaths = new Set<string>()
   const confirmedActions: ConfirmedAppliedActionV1[] = []
   const mergedAnchors = new Map<string, ConfirmedPostEditAnchor>()
+  const mergedContents = new Map<string, string>()
+  const mergeAnchor = (
+    path: string,
+    candidate: ConfirmedPostEditAnchor,
+  ): boolean => {
+    const existing = mergedAnchors.get(path)
+    if (
+      existing &&
+      (existing.startLine !== candidate.startLine ||
+        existing.endLine !== candidate.endLine ||
+        existing.contentHash !== candidate.contentHash ||
+        existing.readCapability !== candidate.readCapability)
+    )
+      return false
+    mergedAnchors.set(path, candidate)
+    return true
+  }
   for (const envelope of envelopes) {
     for (const action of getConfirmedAppliedActionsV1(envelope)) {
       confirmedActions.push(action)
@@ -146,12 +175,43 @@ function getPositiveApplicationEvidence(
         confirmedPaths.add(action.destinationPath)
       }
       const targetPath = action.destinationPath ?? action.path
+      if (!paths.has(targetPath)) continue
+      const content =
+        wholeFileContentByPath?.get(targetPath) ?? action.afterContent
+      if (typeof content === 'string') {
+        try {
+          for (const claimedContent of [content, action.afterContent]) {
+            if (
+              typeof claimedContent === 'string' &&
+              (claimedContent !== content ||
+                captureTextDocument(claimedContent).rawHash !==
+                  action.afterHash)
+            )
+              return null
+          }
+        } catch {
+          return null
+        }
+        const previousContent = mergedContents.get(targetPath)
+        if (previousContent !== undefined && previousContent !== content)
+          return null
+        mergedContents.set(targetPath, content)
+      }
       const actionRecord = action as unknown as Record<string, unknown>
       const anchor = actionRecord.editAnchor
-      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor))
+      if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) {
+        if (typeof content === 'string') {
+          const synthesized = synthesizePostEditAnchor({
+            projectId,
+            runId,
+            path: targetPath,
+            content,
+          })
+          if (synthesized && !mergeAnchor(targetPath, synthesized)) return null
+        }
         continue
+      }
       const record = anchor as Record<string, unknown>
-      const content = wholeFileContentByPath?.get(targetPath)
       const readCapability = record.readCapability
       const decoded =
         typeof readCapability === 'string'
@@ -161,8 +221,8 @@ function getPositiveApplicationEvidence(
         typeof content === 'string' &&
         typeof readCapability === 'string' &&
         record.startLine === 1 &&
-        record.endLine === normalizeLineEndings(content).split('\n').length &&
-        record.contentHash === getContentHash(content) &&
+        record.endLine === captureTextDocument(content).maxCapabilityLine &&
+        record.contentHash === getObservationContentHash(content) &&
         decoded !== null &&
         typeof decoded !== 'string' &&
         readCapabilityMatchesScope(decoded, {
@@ -172,40 +232,40 @@ function getPositiveApplicationEvidence(
         }) &&
         decoded.startLine === record.startLine &&
         decoded.endLine === record.endLine &&
-        decoded.hash === record.contentHash
+        decoded.hash === record.contentHash &&
+        decoded.tokenVersion === 'v4' &&
+        decoded.rawBasis?.scope === 'whole' &&
+        rawReadBasesMatch(record.rawBasis, decoded.rawBasis) &&
+        reanchorRawReadCapability({ content, capability: decoded }).ok
       ) {
         const candidate: ConfirmedPostEditAnchor = {
           startLine: 1,
           endLine: record.endLine,
           contentHash: record.contentHash,
           readCapability,
+          rawBasis: decoded.rawBasis,
           projectId,
           runId,
         }
-        const existing = mergedAnchors.get(targetPath)
-        if (!existing) {
-          mergedAnchors.set(targetPath, candidate)
-        } else if (
-          // Fail closed on conflicting anchors for the same target across
-          // envelopes: never pick a winner.
-          existing.startLine !== candidate.startLine ||
-          existing.endLine !== candidate.endLine ||
-          existing.contentHash !== candidate.contentHash ||
-          existing.readCapability !== candidate.readCapability
-        ) {
-          return null
-        }
+        if (!mergeAnchor(targetPath, candidate)) return null
+      } else if (typeof content === 'string') {
+        // A confirmed exact after-content receipt is authority for a new local
+        // token, including when a supervised host used a different HMAC key.
+        const synthesized = synthesizePostEditAnchor({
+          projectId,
+          runId,
+          path: targetPath,
+          content,
+        })
+        if (synthesized && !mergeAnchor(targetPath, synthesized)) return null
       }
     }
   }
   for (const path of paths) {
     if (!confirmedPaths.has(path)) return null
   }
-  for (const [path, content] of wholeFileContentByPath ?? []) {
-    // Snapshots outside confirmationPaths are excluded no-ops: they may be
-    // present for sticky/anchor minting but must not demand a covering
-    // applied action. Requiring one would return null and undo confirmed
-    // paths that already have evidence.
+  for (const [path, content] of mergedContents) {
+    // Only receipt-covered after-content can grant new whole-file authority.
     if (!paths.has(path)) continue
     const expected = getExactContentHash(content)
     const covering = confirmedActions.filter(
@@ -218,7 +278,7 @@ function getPositiveApplicationEvidence(
       if (action.afterHash !== expected) return null
     }
   }
-  return mergedAnchors
+  return { anchors: mergedAnchors, contents: mergedContents }
 }
 
 function unconfirmedApplicationOutput<T extends ToolName>(
@@ -366,8 +426,15 @@ function synthesizePostEditAnchor(params: {
   if (!projectId || !runId) return null
   const scope = { projectId, path, runId }
   if (!hasAuthoritativeReadCapabilityScope(scope)) return null
-  const contentHash = getContentHash(content)
-  const endLine = normalizeLineEndings(content).split('\n').length
+  let document
+  try {
+    document = captureTextDocument(content)
+  } catch {
+    return null
+  }
+  const contentHash = document.observationHash
+  const endLine = document.maxCapabilityLine
+  const rawBasis = getRawReadBasis(document, 1, endLine, 'whole')
   return {
     startLine: 1,
     endLine,
@@ -377,7 +444,9 @@ function synthesizePostEditAnchor(params: {
       endLine,
       hash: contentHash,
       scope,
+      rawBasis,
     }),
+    rawBasis,
     projectId,
     runId,
   }
@@ -410,10 +479,13 @@ export function commitAppliedEditPaths(params: {
     runId,
     preserveRereadRequirementsForPaths,
   } = params
+  const appliedPaths = new Set(paths)
   const grantedAnchorsByPath = new Map<string, ConfirmedPostEditAnchor>(
-    confirmedAnchorsByPath ?? [],
+    [...(confirmedAnchorsByPath ?? [])].filter(([path]) =>
+      appliedPaths.has(path),
+    ),
   )
-  for (const path of new Set(paths)) {
+  for (const path of appliedPaths) {
     if (!path) continue
     // context_compacted stays authoritative across a confirmed apply: the
     // exact read content left the active model context, so a commit must
@@ -427,15 +499,15 @@ export function commitAppliedEditPaths(params: {
       clearEditRereadRequirement(fileProcessingState, path)
     }
     const wholeFileContent = wholeFileContentByPath?.get(path)
+    if (wholeFileContent === undefined)
+      revokeWholeFileReadAuthorization(fileProcessingState, path)
     if (
       typeof wholeFileContent === 'string' &&
       fileProcessingState.strictReadBeforeEdit
     ) {
-      // Sticky-from-confirmed-apply is granted iff a whole-file post-edit
-      // anchor can be minted (client-verified 7-point anchor or
-      // synthesizePostEditAnchor). Empty/non-authoritative scope does not
-      // grant or overwrite sticky maps and does not store an anchor.
-      const contentHash = getContentHash(wholeFileContent)
+      // Confirmed exact after-content grants whole authority only with an
+      // authenticated whole raw anchor or a local anchor minted from those
+      // bytes. Empty/non-authoritative issuer scope cannot mint an anchor.
       const anchor =
         confirmedAnchorsByPath?.get(path) ??
         synthesizePostEditAnchor({
@@ -444,11 +516,15 @@ export function commitAppliedEditPaths(params: {
           path,
           content: wholeFileContent,
         })
-      if (anchor) {
-        fileProcessingState.readAuthorizationsByPath ??= {}
-        fileProcessingState.readAuthorizationHashesByPath ??= {}
-        fileProcessingState.readAuthorizationsByPath[path] = true
-        fileProcessingState.readAuthorizationHashesByPath[path] = contentHash
+      if (
+        anchor &&
+        grantWholeFileReadAuthorization(
+          fileProcessingState,
+          path,
+          wholeFileContent,
+          anchor.rawBasis,
+        )
+      ) {
         fileProcessingState.confirmedPostEditAnchorsByPath ??= {}
         fileProcessingState.confirmedPostEditAnchorsByPath[path] = anchor
         grantedAnchorsByPath.set(path, anchor)
@@ -548,14 +624,14 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
     return { status: 'rejected', output }
   }
 
-  const confirmedAnchorsByPath = getPositiveApplicationEvidence(
+  const evidence = getPositiveApplicationEvidence(
     output,
     confirmationPaths,
     params.projectId,
     params.runId,
     params.wholeFileContentByPath,
   )
-  if (!confirmedAnchorsByPath) {
+  if (!evidence) {
     invalidatePreparedEditPaths({
       fileProcessingState: params.fileProcessingState,
       paths,
@@ -568,11 +644,16 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
     }
   }
 
+  // A confirmed operation supersedes prepared snapshots from earlier edits.
+  // Keep allPromises as history; follow-up edits must use confirmed current bytes.
+  for (const path of confirmationPaths) {
+    delete params.fileProcessingState.promisesByPath[path]
+  }
   const grantedAnchorsByPath = commitAppliedEditPaths({
     fileProcessingState: params.fileProcessingState,
-    paths,
-    wholeFileContentByPath: params.wholeFileContentByPath,
-    confirmedAnchorsByPath,
+    paths: confirmationPaths,
+    wholeFileContentByPath: evidence.contents,
+    confirmedAnchorsByPath: evidence.anchors,
     projectId: params.projectId,
     runId: params.runId,
     preserveRereadRequirementsForPaths:
@@ -580,7 +661,7 @@ export async function coordinateEditApplication<T extends ToolName>(params: {
   })
   params.onApplied?.()
   // Surface the granted post-edit capabilities to the model: this output array
-  // reaches message history but not the user-facing CLI rows, so the cap.v3
+  // reaches message history but not the user-facing CLI rows, so the cap.v4
   // token is model-visible only (matching how read_files surfaces
   // readCapability). Purely additive — existing parts are never mutated.
   const appliedOutput =

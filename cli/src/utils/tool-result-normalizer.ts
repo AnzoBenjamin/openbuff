@@ -1,6 +1,14 @@
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+  mutationResultExceedsCheapBoundsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import { isMcpToolResultEnvelope } from '@codebuff/common/mcp/result'
+
 import type { ToolContentBlock } from '../types/chat'
 
 export type ToolResultRecord = Record<string, unknown>
+export const TOOL_RESULT_METADATA_LIMIT = 4096
 
 export const TERMINAL_TOOL_LIFECYCLES = new Set([
   'succeeded',
@@ -9,21 +17,49 @@ export const TERMINAL_TOOL_LIFECYCLES = new Set([
 ] as const)
 
 export function getToolOutputValues(outputRaw: unknown): unknown[] {
+  if (Array.isArray(outputRaw) && outputRaw.length > TOOL_RESULT_METADATA_LIMIT)
+    return [outputRaw]
+  // Bare array payloads are already retained; do not clone a large collection
+  // merely to inspect its envelope. Actual transport tuples are tiny.
+  if (
+    Array.isArray(outputRaw) &&
+    !outputRaw
+      .slice(0, 32)
+      .some(
+        (part) =>
+          part &&
+          typeof part === 'object' &&
+          part.type === 'json' &&
+          'value' in part,
+      )
+  )
+    return outputRaw
   const parts = Array.isArray(outputRaw) ? outputRaw : [outputRaw]
   return parts
     .filter((part) => part !== undefined)
     .map((part) =>
-      part && typeof part === 'object' && 'value' in part
+      part &&
+      typeof part === 'object' &&
+      (part as { type?: unknown }).type === 'json' &&
+      'value' in part
         ? (part as { value: unknown }).value
         : part,
     )
 }
 
 export function getToolOutputRecords(outputRaw: unknown): ToolResultRecord[] {
-  return getToolOutputValues(outputRaw).filter(
-    (value): value is ToolResultRecord =>
-      value !== null && typeof value === 'object' && !Array.isArray(value),
-  )
+  const values = getToolOutputValues(outputRaw)
+  const records: ToolResultRecord[] = []
+  for (
+    let index = 0;
+    index < Math.min(values.length, TOOL_RESULT_METADATA_LIMIT);
+    index++
+  ) {
+    const value = values[index]
+    if (value !== null && typeof value === 'object' && !Array.isArray(value))
+      records.push(value as ToolResultRecord)
+  }
+  return records
 }
 
 export function findToolResultByKind(
@@ -51,12 +87,41 @@ export function getStructuredErrorMessages(outputRaw: unknown): string[] {
     if (value === null || value === undefined) return
     if (typeof value === 'string') return
     if (Array.isArray(value)) {
-      value.forEach((entry) => visit(entry))
+      // Only one producer array level is an envelope collection. Arbitrary
+      // nested/circular arrays remain payload data.
+      for (
+        let index = 0;
+        index < Math.min(value.length, TOOL_RESULT_METADATA_LIMIT);
+        index++
+      ) {
+        const entry = value[index]
+        if (entry && typeof entry === 'object' && !Array.isArray(entry))
+          visit(entry)
+      }
       return
     }
     if (typeof value !== 'object') return
 
     const record = value as ToolResultRecord
+    if (isMcpToolResultEnvelope(record)) {
+      if (record.isError === true) {
+        const text = record.content.flatMap((part) =>
+          part &&
+          typeof part === 'object' &&
+          !Array.isArray(part) &&
+          part.type === 'text' &&
+          typeof part.text === 'string' &&
+          part.text.trim()
+            ? [part.text.trim()]
+            : [],
+        )
+        messages.push(
+          ...(text.length ? text : ['The MCP tool reported an error result.']),
+        )
+      }
+      // structuredContent and content metadata are payload data, not status.
+      return
+    }
     const error = record.error
     if (typeof error === 'string') messages.push(error.trim())
     else if (
@@ -69,7 +134,13 @@ export function getStructuredErrorMessages(outputRaw: unknown): string[] {
     const direct = asMessage(record.errorMessage)
     if (direct) messages.push(direct)
   }
-  getToolOutputValues(outputRaw).forEach((value) => visit(value))
+  const values = getToolOutputValues(outputRaw)
+  for (
+    let index = 0;
+    index < Math.min(values.length, TOOL_RESULT_METADATA_LIMIT);
+    index++
+  )
+    visit(values[index])
   return [...new Set(messages.filter(Boolean))]
 }
 
@@ -112,12 +183,30 @@ export function isTerminalToolBlock(block: ToolContentBlock): boolean {
 export function getConfirmedMutationActions(
   block: ToolContentBlock,
 ): ToolResultRecord[] {
-  const result = getCanonicalMutationResult(block.outputRaw)
-  if (!result || !Array.isArray(result.actions)) return []
-  return result.actions.filter(
-    (action): action is ToolResultRecord =>
-      Boolean(action) &&
-      typeof action === 'object' &&
-      (action as ToolResultRecord).outcome === 'applied',
-  )
+  return getConfirmedMutationActionsFromOutput(block.outputRaw)
+}
+
+export function getConfirmedMutationActionsFromOutput(
+  outputRaw: unknown,
+): ToolResultRecord[] {
+  const result = getCanonicalMutationResult(outputRaw)
+  if (!result || mutationResultExceedsCheapBoundsV1(result)) return []
+  const parsed = fileMutationResultV1Schema.safeParse(result)
+  return parsed.success ? getConfirmedAppliedActionsV1(parsed.data) : []
+}
+
+/** Reported application without correlated authority remains unconfirmed. */
+export function getMutationOutcome(outputRaw: unknown): string | undefined {
+  const result = getCanonicalMutationResult(outputRaw)
+  if (!result) return undefined
+  if (mutationResultExceedsCheapBoundsV1(result)) return 'unconfirmed'
+  const parsed = fileMutationResultV1Schema.safeParse(result)
+  if (!parsed.success) return 'unconfirmed'
+  if (parsed.data.outcome !== 'applied') return parsed.data.outcome
+  const confirmed = getConfirmedAppliedActionsV1(parsed.data)
+  return confirmed.length === parsed.data.actions.length && confirmed.length > 0
+    ? 'applied'
+    : confirmed.length > 0
+      ? 'partial'
+      : 'unconfirmed'
 }

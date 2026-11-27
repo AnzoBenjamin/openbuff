@@ -1,0 +1,874 @@
+{
+  "shardId": "10-extensions",
+  "question": "Where are MCP client/server descriptors and trust, SDK custom tools/hooks, executable/string handleSteps bundling and isolation, declarative agents/plugins, local .agents CLI wrappers, capability discovery and third-party integration actually wired?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    ".agents",
+    "sdk",
+    "packages",
+    "common",
+    "cli",
+    "agents",
+    "scripts",
+    "rust",
+    "docs"
+  ],
+  "selectedFiles": [
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 130,
+      "to": 356,
+      "reason": "Out-of-band MCP origin registry, no-upgrade and propagation rules, unknown-origin resolution and migration diagnostics. Trace local/user versus client provenance across parse/clone boundaries; process env/egress mechanics belong to pair09."
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 812,
+      "to": 903,
+      "reason": "Actual tools/list cache and tools/call result projection: argument-specific discovery identity, rejection retry, text/image/audio/resource/resource-link fallback. Inspect pagination/change notifications and preservation of isError, structuredContent and content semantics at real consumers."
+    },
+    {
+      "path": "packages/agent-runtime/src/mcp.ts",
+      "from": 1,
+      "to": 98,
+      "reason": "Production MCP discovery producer: declared server/tool selectors, provider-compatible names, concurrent per-server loading, client-origin descriptor labeling and intact server JSON schemas. Trace granted-tool semantics and partial loading, rather than treating configured membership as a grant."
+    },
+    {
+      "path": "sdk/src/mcp/server.ts",
+      "from": 345,
+      "to": 543,
+      "reason": "Real Openbuff MCP server registry, annotations, optional mutation tool, host/index/memory seams, public structural handle and listed result shape. Compare advertised abilities with the dispatch below and actual CLI bindings."
+    },
+    {
+      "path": "sdk/src/mcp/server.ts",
+      "from": 1480,
+      "to": 1635,
+      "reason": "Server-side MCP request schema and actual tools/list/tools/call dispatch, unknown-tool refusal, handler error translation, lazy mutation authority and stdio close/abort bridge. This proves external-host wiring; broker internals and process teardown are adjacent pairs."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2293,
+      "to": 2465,
+      "reason": "Actual MCP/custom-tool consumer: client-origin per-run approval bookkeeping and no-approver behavior, MCP output/error conversion, original Zod async/default/transform validation and custom execute cancellation, then native override selection. Inspect callback contracts and first-party versus protocol-peer trust without duplicating generic terminal policy."
+    },
+    {
+      "path": "sdk/src/run-state.ts",
+      "from": 134,
+      "to": 183,
+      "reason": "SDK agent/function serialization and custom-tool Zod-to-input-JSON-Schema projection into SessionState. Compare declared schema, provider schema and the original execution schema; track loss of closures, transforms/refinements and provenance."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 194,
+      "to": 706,
+      "reason": "Programmatic execution entry: iteration bound, string materialization provenance allowlist including the legacy undefined case, host-realm new Function, actual generator context/config injection, STEP/STEP_ALL state and yielded-value validation. Compare first-party host modules with the promised untrusted isolate/bundle path."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 870,
+      "to": 1055,
+      "reason": "Programmatic callback/state projection, context-management allowlist, declared visible/hidden tool grant check and real single-tool dispatch/history/replay boundary. Focus on extension ABI and permissions; durable replay correctness belongs to pair05."
+    },
+    {
+      "path": "sdk/src/agents/load-agents.ts",
+      "from": 1,
+      "to": 330,
+      "reason": "Complete executable local loader: explicit project/parent trust opt-in, supported extensions, recursive walk exclusions, import-before-definition-validation, precedence, source links, provenance and MCP origin stamps, diagnostics and lexical import containment. Explicitly inspect .agents/sessions, probes, __tests__, lib/types, node_modules and test filename variants against the actual walker."
+    },
+    {
+      "path": "common/src/templates/agent-validation.ts",
+      "from": 308,
+      "to": 735,
+      "reason": "Current agent input-schema conversion, live/degraded Zod detection, representability/fallback policy, runtime schema coercion and JSON-safe schema/function transport. Trace validation strictness and fallback reporting across bundled/local/database/supervised definitions."
+    },
+    {
+      "path": "common/src/tools/compile-tool-definitions.ts",
+      "from": 1,
+      "to": 304,
+      "reason": "Canonical published JSON-Schema and generated TypeScript tool contracts: shared provider-schema resolution, supported composite/tuple/record shapes and fail-loud unsupported shapes. Use generator consumers and tests below to assess interoperability, not just existence of generated files."
+    },
+    {
+      "path": ".agents/codex-cli.ts",
+      "from": 1,
+      "to": 216,
+      "reason": "Real repository-local external CLI template: factory settings, two-phase serialized generator, tmux startup/result parsing, failure receipt, STEP_ALL and teardown, custom review flow. Inspect operation/output contracts and reliance on repository helper scripts; generic child sandbox/kill policy is pair09."
+    },
+    {
+      "path": ".agents/lib/cli-agent-prompts.ts",
+      "from": 1,
+      "to": 378,
+      "reason": "Shared external CLI wrapper prompts and workflows consumed by Codex/Claude/Gemini/local wrappers: session/capture evidence, task-file recipe, review/work modes and output/permission claims. Compare these claims with actual templates, helper scripts and intentional current profile policy."
+    },
+    {
+      "path": ".agents/lib/create-cli-agent.ts",
+      "from": 1,
+      "to": 85,
+      "reason": "Shared local-wrapper factory: input/config vocabulary, declared tool grants, structured output, static template/profile fields and prompt assembly. Compare the returned definition with each wrapper's independent serialized handleSteps."
+    },
+    {
+      "path": "sdk/src/__tests__/custom-tool-dispatch.test.ts",
+      "from": 1,
+      "to": 128,
+      "reason": "Existing execution-boundary tests for defaults/transforms, asynchronous rejection, cancellation during validation and legacy direct JSON-Schema dispatch. Read only; distinguish helper coverage from full client/provider/serialization integration."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+      "from": 1,
+      "to": 196,
+      "reason": "Existing host-realm programmatic tests, generator error output and explicit host-global visibility probe. Compare documented sandbox guarantees with this tested behavior and the separate provenance-guard tests; do not run probes."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1,
+      "to": 14,
+      "reason": "Current user-facing agent-extension, secure-sandbox, declared-tool, local-loading/precedence and supported-module-format claims. Treat documentation as a contract to compare with production loading and host-realm execution, not assurance."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "sdk/src/custom-tool.ts",
+      "from": 1,
+      "to": 76,
+      "reason": "Public custom-tool helper: Zod4 Args/Input types, sync/async adapter, endsAgentStep/examples and optional AbortSignal execute context; native-name collision is a type-level helper contract."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 289,
+      "to": 412,
+      "reason": "Public override v0/v1 ABI, event/stream callbacks, customTools, MCP attachment, file mutation callbacks and host attestation options. Separate these present callbacks from any-language pre/post-tool lifecycle hooks."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 585,
+      "to": 638,
+      "reason": "Actual override version/context selection and abort-race boundary; read with the public descriptor type."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1006,
+      "to": 1082,
+      "reason": "Actual client-supplied agent/template construction and reference-preserving host MCP attachment into the target agent."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1395,
+      "to": 1618,
+      "reason": "Real runtime requestToolCall producer threads custom handlers, original definitions, overrides, cancellation and observation callbacks; requestMcpToolData is the actual discovered-tool filter consumer."
+    },
+    {
+      "path": "sdk/src/agents/load-mcp-config.ts",
+      "from": 1,
+      "to": 222,
+      "reason": "Complete local mcp.json loader and trust opt-in, precedence, schema/error handling and exact-object origin stamping. Read source only, never actual private mcp.json values."
+    },
+    {
+      "path": "common/src/types/mcp.ts",
+      "from": 1,
+      "to": 38,
+      "reason": "Canonical supported transport/config union and origin type; compare with ACP transport conversion and generated agent type mirrors."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/prompts.ts",
+      "from": 425,
+      "to": 500,
+      "reason": "Provider-facing custom/MCP tool schema construction and visible grant selection; complements intact protocol schema production and local validation."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 4001,
+      "to": 4368,
+      "reason": "Custom/MCP parser membership/own-key checks, parameter validation, discovery refresh, runtime grant enforcement and dispatch/event/error semantics. Trace names through server separators and compare protocol errors with native outcomes."
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 135,
+      "to": 218,
+      "reason": "Real validated-template consumer and provenance-based MCP origin restoration after parsing/cloning; unknown versus local/bundled/database provenance and no-upgrade propagation."
+    },
+    {
+      "path": "sdk/src/impl/database.ts",
+      "from": 258,
+      "to": 341,
+      "reason": "Remote compatibility agent fetch validation, executable-handleSteps refusal, database executionSource and untrusted MCP stamps. Confirm actual reachable consumers before classifying this as a hosted registry capability."
+    },
+    {
+      "path": "cli/src/utils/local-agent-registry.ts",
+      "from": 131,
+      "to": 247,
+      "reason": "Actual CLI local loader trust switch, cache ownership, validation diagnostics and mcp.json loading. Compare SDK defaults with the consuming UI registry."
+    },
+    {
+      "path": "cli/src/commands/mcp-command.ts",
+      "from": 1,
+      "to": 176,
+      "reason": "Real CLI entrypoint binds index/memory/filesystem/policy to runMcp and mutation opt-in; distinguishes exported factory support from installed external-host behavior."
+    },
+    {
+      "path": "cli/scripts/prebuild-agents.ts",
+      "from": 1,
+      "to": 141,
+      "reason": "Shipped agents/ versus user .agents/ bundling boundary, build walker exclusions, dynamic import, toString and JSON embedding. Compare with the latest Bun.build-handleSteps promise; do not run build scripts."
+    },
+    {
+      "path": "scripts/generate-tool-definitions.ts",
+      "from": 1,
+      "to": 78,
+      "reason": "Actual canonical generation consumer writes starter, agents and .agents type mirrors plus embedded CLI sources; inspect read-only mirror behavior without regenerating."
+    },
+    {
+      "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+      "from": 142,
+      "to": 418,
+      "reason": "Public starter-agent grants, input/output/config and generator context/yield/result types; compare canonical template ABI with local type mirror and runtime implementation."
+    },
+    {
+      "path": ".agents/types/agent-definition.ts",
+      "from": 263,
+      "to": 400,
+      "reason": "Repository-local generator and state/result type mirror used by wrapper source; compare with current starter-agent contract and serialized runtime behavior."
+    },
+    {
+      "path": ".agents/claude-code-cli.ts",
+      "from": 1,
+      "to": 136,
+      "reason": "Actual Claude CLI wrapper template and independent generator: command, startup/failure shape and session cleanup. Source-only comparison with Codex and shared factory."
+    },
+    {
+      "path": ".agents/gemini-cli.ts",
+      "from": 1,
+      "to": 142,
+      "reason": "Actual Gemini CLI wrapper template/generator and command/output/cleanup contracts."
+    },
+    {
+      "path": ".agents/codebuff-local-cli.ts",
+      "from": 1,
+      "to": 147,
+      "reason": "Actual local Openbuff CLI wrapper source, command/profile/output identity and generator cleanup; compare legacy filename with current exposed agent id."
+    },
+    {
+      "path": ".agents/lib/cli-agent-schemas.ts",
+      "from": 1,
+      "to": 149,
+      "reason": "External-CLI structured result schemas, capture/review/script issue states and required evidence fields."
+    },
+    {
+      "path": ".agents/lib/cli-agent-types.ts",
+      "from": 1,
+      "to": 57,
+      "reason": "Shared CLI wrapper configuration vocabulary and mode contract consumed by factory/prompts."
+    },
+    {
+      "path": ".agents/notion-agent.ts",
+      "from": 1,
+      "to": 45,
+      "reason": "Real third-party MCP agent consumer: exact Notion server package selector and declared tool names; inspect discovery compatibility only, no account/API access."
+    },
+    {
+      "path": ".agents/notion-researcher.ts",
+      "from": 1,
+      "to": 50,
+      "reason": "Actual third-party research/delegation template and agent/tool wiring; source only."
+    },
+    {
+      "path": ".agents/__tests__/placeholder.test.ts",
+      "from": 1,
+      "to": 5,
+      "reason": "Current .agents package test entrypoint; use it to calibrate wrapper assurance and identify what is actually exercised."
+    },
+    {
+      "path": "scripts/tmux/tmux-cli.sh",
+      "from": 1,
+      "to": 158,
+      "reason": "Concrete wrapper helper consumer and stdout/session/capture command dispatch contract. Read only; process/environment/enforcement concerns remain pair09."
+    },
+    {
+      "path": "sdk/src/__tests__/load-agents.test.ts",
+      "from": 199,
+      "to": 383,
+      "reason": "Existing declaration/test/skills exclusions, nested directories, stringification and source-stamp tests; compare explicitly with sessions/probes and other importable filenames."
+    },
+    {
+      "path": "sdk/src/__tests__/load-agents.test.ts",
+      "from": 964,
+      "to": 1095,
+      "reason": "Existing lexical containment and project/home MCP origin tests; synthetic fixture source only."
+    },
+    {
+      "path": "common/src/mcp/__tests__/client.test.ts",
+      "from": 138,
+      "to": 427,
+      "reason": "Existing trusted/client/unknown-origin, no-upgrade, propagation and migration tests. Use synthetic values only; do not inspect live environment."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts",
+      "from": 1,
+      "to": 38,
+      "reason": "Current provider schema preservation test through getToolSet."
+    },
+    {
+      "path": "sdk/src/__tests__/run-mcp-tool-filter.test.ts",
+      "from": 1,
+      "to": 124,
+      "reason": "Actual client.run discovery filter regression test; compare mock-backed assurance with protocol server behavior."
+    },
+    {
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 149,
+      "to": 189,
+      "reason": "In-memory MCP tool listing and read-only annotation assertions."
+    },
+    {
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 322,
+      "to": 453,
+      "reason": "Disabled memory, guarded reads, unknown tool survival and throwing-handler isError behavior over linked MCP transports."
+    },
+    {
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 478,
+      "to": 552,
+      "reason": "Existing default mutation refusal and opt-in mutation listing/write tests. Read only; physical mutation authority is pair06."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts",
+      "from": 218,
+      "to": 343,
+      "reason": "Current provenance guard cases for database/unlisted/local/bundled/undefined sources plus visible/hidden programmatic grant checks."
+    },
+    {
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 1,
+      "to": 96,
+      "reason": "Versioned capability advertisement schema and namespaces; endpoint lifecycle/protocol framing belong to the serving pair."
+    },
+    {
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 286,
+      "to": 304,
+      "reason": "Canonical default capability-map builder used by advertising surfaces; compare baseline values with live service updates."
+    },
+    {
+      "path": "sdk/src/services/acp/ext-methods.ts",
+      "from": 1,
+      "to": 157,
+      "reason": "Supported extension negotiation/method/result schemas and generated JSON contracts, including declared-but-disabled operations and canonical capability builder re-export."
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 526,
+      "to": 545,
+      "reason": "Real protocol-peer MCP ingestion marks configs client before any run or observational callback."
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 749,
+      "to": 773,
+      "reason": "Real marked MCP record attachment in client.run consumer."
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 861,
+      "to": 927,
+      "reason": "Concrete ACP-to-core MCP transport and env/header/name conversion; compare supported transports, duplicate keys and own-key preservation."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 935,
+      "to": 984,
+      "reason": "Real protocol MCP acceptance and URL gate before session creation plus initial capability-map seeding. Generic socket/auth/lifecycle semantics remain the serving pair."
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "from": 1,
+      "to": 115,
+      "reason": "Current plugin-host role dispatch and explicit implemented/not-implemented protocol outcome. Presence of a role name is not proof of a working WASM/WIT host."
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93,
+      "reason": "Declared MCP/ACP/Zod/QuickJS runtime dependencies and public package boundary; compare imported implementation with manifest promises, leaving release/distribution to pair11."
+    },
+    {
+      "path": "common/package.json",
+      "from": 1,
+      "to": 56,
+      "reason": "Common schema/conversion/compiler dependency ownership and validation commands; read only."
+    },
+    {
+      "path": ".agents/package.json",
+      "from": 1,
+      "to": 10,
+      "reason": "Actual local wrapper workspace dependency/test surface."
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 143,
+      "to": 158,
+      "reason": "Current .agents automatic-loading, local templates and third-party integration claims."
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 118,
+      "to": 157,
+      "reason": "Current local agent assembly, programmatic generator and tool-loop request-flow claims."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 53,
+      "to": 81,
+      "reason": "Current intentional relaxed/keep policy; reconcile wrapper permission/output claims without prescribing restrictive defaults contrary to user preference."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 103,
+      "to": 114,
+      "reason": "Current configured file-change hook opt-in and productive wall-clock policy; compare present validation hooks with promised any-language lifecycle hooks."
+    },
+    {
+      "path": "sdk/README.md",
+      "from": 302,
+      "to": 319,
+      "reason": "Public cancellation/result/override helper documentation used to judge host callback and tool output contracts."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "mcp-config-trust-and-discovery",
+      "name": "MCP installation, origins and discovered tool grants",
+      "trace": [
+        "sdk/src/agents/load-mcp-config.ts",
+        "sdk/src/agents/load-agents.ts",
+        "cli/src/utils/local-agent-registry.ts",
+        "common/src/mcp/client.ts",
+        "packages/agent-runtime/src/mcp.ts"
+      ],
+      "inspect": [
+        "trusted versus client/unknown provenance across parse/clone/transport hops",
+        "literal versus substituted config values without reading actual credentials",
+        "wildcard/server membership versus explicit selectors and model/tool dispatch grants",
+        "per-server loading failures, discovery cache freshness/pagination and retry"
+      ],
+      "tests": [
+        "common/src/mcp/__tests__/client.test.ts",
+        "sdk/src/__tests__/load-agents.test.ts",
+        "sdk/src/__tests__/load-mcp-config.test.ts",
+        "sdk/src/__tests__/run-mcp-tool-filter.test.ts"
+      ]
+    },
+    {
+      "id": "mcp-tool-schema-and-result-interoperability",
+      "name": "MCP descriptor, provider schema and tool result interoperability",
+      "trace": [
+        "packages/agent-runtime/src/mcp.ts",
+        "packages/agent-runtime/src/tools/prompts.ts",
+        "packages/agent-runtime/src/tools/tool-executor.ts",
+        "sdk/src/run.ts",
+        "common/src/mcp/client.ts"
+      ],
+      "inspect": [
+        "client-origin description trust and provider-visible tool names/schema constraints",
+        "local custom/MCP validation versus server tool schema",
+        "isError/structuredContent/media/resources and unsupported content kinds across projection",
+        "recoverable argument errors, unavailable tools, cancellation and approval/no-approver states"
+      ],
+      "tests": [
+        "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts",
+        "sdk/src/__tests__/run-mcp-tool-filter.test.ts",
+        "common/src/mcp/__tests__/client.test.ts"
+      ]
+    },
+    {
+      "id": "openbuff-mcp-server",
+      "name": "Openbuff read/inspect MCP server and optional mutations",
+      "trace": [
+        "cli/src/commands/mcp-command.ts",
+        "sdk/src/mcp/server.ts"
+      ],
+      "inspect": [
+        "installed CLI consumer versus exported factory",
+        "listed/handled/annotated tools and actual index/memory bindings",
+        "default read-only and optional mutation result/error authority",
+        "empty/disabled/unknown/throwing handler and close states"
+      ],
+      "tests": [
+        "sdk/src/__tests__/mcp-server.test.ts",
+        "cli/src/commands/__tests__/mcp-command.test.ts"
+      ]
+    },
+    {
+      "id": "sdk-custom-tools-and-host-callbacks",
+      "name": "SDK custom tools, overrides and host callbacks",
+      "trace": [
+        "sdk/src/client.ts",
+        "sdk/src/custom-tool.ts",
+        "sdk/src/run-state.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "public Args/Input and original Zod execution validation versus JSON provider projection",
+        "async refinements/defaults/transforms and endsAgentStep",
+        "custom versus native override v0/v1 ABI and callback/error/output behavior",
+        "AbortSignal delivery versus settlement and actual lifecycle hook vocabulary"
+      ],
+      "tests": [
+        "sdk/src/__tests__/custom-tool-dispatch.test.ts",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts"
+      ]
+    },
+    {
+      "id": "local-agent-loading-and-provenance",
+      "name": "Executable local agent loading, validation and trust",
+      "trace": [
+        "sdk/src/agents/load-agents.ts",
+        "cli/src/utils/local-agent-registry.ts",
+        "common/src/templates/agent-validation.ts",
+        "packages/agent-runtime/src/templates/agent-registry.ts"
+      ],
+      "inspect": [
+        "project/parent/home opt-in and precedence versus documented automatic loading",
+        "import walker exclusions: sessions/probes/types/lib/tests/node_modules/skills",
+        "module side effects before id/agent validation and per-file failure diagnostics",
+        "source identity, live schemas and provenance/origin restoration"
+      ],
+      "tests": [
+        "sdk/src/__tests__/load-agents.test.ts",
+        "cli/src/__tests__/integration/local-agents.test.ts"
+      ]
+    },
+    {
+      "id": "programmatic-agent-extension-abi",
+      "name": "Programmatic agent bundling, host execution and isolate boundary",
+      "trace": [
+        "cli/scripts/prebuild-agents.ts",
+        "sdk/src/run-state.ts",
+        "packages/agent-runtime/src/run-programmatic-step.ts",
+        "sdk/src/impl/database.ts"
+      ],
+      "inspect": [
+        "first-party host module versus remote/string source authorization",
+        "closure/global/state/config and yield/toolResult generator ABI",
+        "visible/hidden grants, STEP modes, errors and cleanup",
+        "current toString/new Function transport versus latest D35/D53 Bun.build/QuickJS promise"
+      ],
+      "tests": [
+        "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+        "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts"
+      ]
+    },
+    {
+      "id": "generated-schema-extension-contracts",
+      "name": "Generated tool/agent contracts and cross-language interoperability",
+      "trace": [
+        "common/src/tools/compile-tool-definitions.ts",
+        "scripts/generate-tool-definitions.ts",
+        "common/src/templates/agent-validation.ts",
+        "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+        ".agents/types/agent-definition.ts",
+        "sdk/src/services/acp/ext-methods.ts"
+      ],
+      "inspect": [
+        "single provider-schema resolution and generated type mirror consumers",
+        "supported/rejected JSON Schema forms versus permissive schema fallbacks",
+        "live Zod/defaults/refinements across serialization and public type mirrors",
+        "plain JSON protocols versus actually generated Python/Go clients and reverse-RPC custom tools"
+      ],
+      "tests": [
+        "common/src/tools/__tests__/compile-tool-definitions.test.ts",
+        "common/src/__tests__/agent-validation.test.ts",
+        "common/src/protocol/__tests__/acp-ext-v1.golden.test.ts"
+      ]
+    },
+    {
+      "id": "local-external-cli-and-third-party-integrations",
+      "name": "Local external CLI wrappers and Notion MCP templates",
+      "trace": [
+        ".agents/lib/create-cli-agent.ts",
+        ".agents/lib/cli-agent-prompts.ts",
+        ".agents/lib/cli-agent-schemas.ts",
+        ".agents/codex-cli.ts",
+        ".agents/claude-code-cli.ts",
+        ".agents/gemini-cli.ts",
+        ".agents/codebuff-local-cli.ts",
+        ".agents/notion-agent.ts",
+        ".agents/notion-researcher.ts",
+        "scripts/tmux/tmux-cli.sh"
+      ],
+      "inspect": [
+        "actual template/tool/result names and configured third-party server selectors",
+        "repository-script reliance and installed CLI availability",
+        "session/capture/report claims, startup/failure/partial/cleanup behavior",
+        "tested assurance and documented permission claims under intentional current policy"
+      ],
+      "tests": [
+        ".agents/__tests__/placeholder.test.ts",
+        "sdk/src/__tests__/load-agents.test.ts"
+      ]
+    },
+    {
+      "id": "extension-capability-discovery",
+      "name": "Extension negotiation and capability advertisements",
+      "trace": [
+        "common/src/protocol/acp-ext-v1.ts",
+        "sdk/src/services/acp/ext-methods.ts",
+        "sdk/src/services/acp/acp-agent.ts",
+        "sdk/src/serve/bridge.ts",
+        "sdk/src/mcp/server.ts"
+      ],
+      "inspect": [
+        "canonical capability map, negotiation, declared disabled methods and real state updates",
+        "actual protocol-peer MCP attachment and supported transport conversion",
+        "descriptive capability catalog versus callable/granted/installed implementation",
+        "versioned generated contracts and meaningful third-party consumer assurance"
+      ],
+      "tests": [
+        "sdk/src/services/acp/__tests__/ext-methods.test.ts",
+        "common/src/protocol/__tests__/acp-ext-v1.golden.test.ts",
+        "sdk/src/__tests__/acp-agent.test.ts"
+      ]
+    },
+    {
+      "id": "declarative-agents-lifecycle-hooks-and-plugin-host",
+      "name": "Declarative agents, any-language lifecycle hooks and untrusted plugins",
+      "trace": [
+        "sdk/src/agents/load-agents.ts",
+        "common/src/types/dynamic-agent-template.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/file-change-hooks.ts",
+        "rust/crates/openbuff-native/src/lib.rs",
+        "sdk/package.json"
+      ],
+      "inspect": [
+        "present config/module/callback surfaces versus agent.yaml loading",
+        "file-change validation hooks versus pre/post-tool/pre-commit/turn-end executable receipt hooks",
+        "untrusted QuickJS, WASM/WIT host, capability grants, signing/lockfile and registry actually wired",
+        "current source and consumer evidence versus role names, dependencies and historical plan promises"
+      ],
+      "tests": [
+        "sdk/src/__tests__/load-agents.test.ts",
+        "sdk/src/__tests__/file-change-hooks.test.ts",
+        "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts"
+      ]
+    }
+  ],
+  "searchCoverage": {
+    "primarySections": 18,
+    "primaryUniqueFiles": 15,
+    "primaryLines": 3773,
+    "inventoryFiles": 3056,
+    "retrieval": "Read supplied INVENTORY.json and cached RETRIEVAL.json, including serve sidecar supervisor capabilities results and adjacent-file links; verified current source consumers with exact sed reads and rg. Native query_index/read_files/read_subtree are repository code and are not exposed in this Codex session. Cached line references were not treated as current line authority.",
+    "rootsSearched": [
+      "sdk/src",
+      "common/src/mcp",
+      "common/src/types",
+      "common/src/templates",
+      "common/src/tools",
+      "common/src/protocol",
+      "packages/agent-runtime/src",
+      "cli/src",
+      "cli/scripts",
+      "agents",
+      ".agents/lib",
+      ".agents/types",
+      ".agents/*.ts",
+      "scripts",
+      "rust/crates",
+      "docs"
+    ],
+    "queries": [
+      "MCPConfigOrigin / markAllMCPConfigOrigins / propagation / loadMCPConfig / mcpServers",
+      "tools/list and tools/call server/client consumers, inputSchema, descriptions, annotations and result content",
+      "customToolDefinitions / overrideTools / requestToolCall / safeParseAsync / execute callbacks",
+      "handleSteps / executionSource / materialization / host globals / Bun.build / serialization",
+      "local loader supported suffixes and recursive skills/test/declaration/session/probe exclusions",
+      "strict word-boundary QuickJS/wasmtime/WASI/WIT/jco/lifecycle hook and agent.yaml/plugin-host searches in current production source",
+      "canonical JSON Schema/TypeScript tool generators, .agents type mirrors and ACP extension compilation",
+      "actual .agents CLI/Notion source templates, factory/lib schemas/prompts and tmux helper consumers",
+      "latest SPEC D35/D44/D49/D53 and PLAN P5-T6/P7-T6/P9-T1/T2/T4/T5 promises"
+    ],
+    "docsRead": [
+      {
+        "path": "docs/architecture.md",
+        "from": 1,
+        "to": 180
+      },
+      {
+        "path": "docs/agents-and-tools.md",
+        "from": 1,
+        "to": 14
+      },
+      {
+        "path": "docs/agents-and-tools.md",
+        "from": 53,
+        "to": 81
+      },
+      {
+        "path": "docs/agents-and-tools.md",
+        "from": 103,
+        "to": 114
+      },
+      {
+        "path": "docs/development.md",
+        "from": 1,
+        "to": 115
+      },
+      {
+        "path": "docs/environment-variables.md",
+        "from": 13,
+        "to": 43
+      },
+      {
+        "path": "sdk/README.md",
+        "from": 302,
+        "to": 319
+      }
+    ],
+    "verifiedConsumerReads": [
+      {
+        "path": "sdk/src/agents/load-agents.ts",
+        "from": 1,
+        "to": 330
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1395,
+        "to": 1619
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2250,
+        "to": 2545
+      },
+      {
+        "path": "packages/agent-runtime/src/mcp.ts",
+        "from": 1,
+        "to": 98
+      },
+      {
+        "path": "common/src/mcp/client.ts",
+        "from": 130,
+        "to": 356
+      },
+      {
+        "path": "common/src/mcp/client.ts",
+        "from": 812,
+        "to": 903
+      },
+      {
+        "path": "sdk/src/mcp/server.ts",
+        "from": 345,
+        "to": 543
+      },
+      {
+        "path": "sdk/src/mcp/server.ts",
+        "from": 1490,
+        "to": 1635
+      },
+      {
+        "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+        "from": 194,
+        "to": 1055
+      },
+      {
+        "path": "cli/src/utils/local-agent-registry.ts",
+        "from": 131,
+        "to": 235
+      },
+      {
+        "path": "sdk/src/serve/bridge.ts",
+        "from": 526,
+        "to": 547
+      },
+      {
+        "path": "sdk/src/serve/bridge.ts",
+        "from": 850,
+        "to": 938
+      },
+      {
+        "path": ".agents/lib/create-cli-agent.ts",
+        "from": 1,
+        "to": 85
+      },
+      {
+        "path": ".agents/lib/cli-agent-prompts.ts",
+        "from": 1,
+        "to": 378
+      },
+      {
+        "path": ".agents/codex-cli.ts",
+        "from": 1,
+        "to": 216
+      },
+      {
+        "path": ".agents/notion-agent.ts",
+        "from": 1,
+        "to": 45
+      }
+    ],
+    "sampling": "18 bounded primary sections across 15 files; secondary ranges are optional hypothesis-driven consumer/schema/test/doc edges and must not be counted as inspected until read. This is a file-picker handoff, not findings or a full-line audit.",
+    "loadingExclusionInspection": "Read the actual getAllAgentFiles walker and existing suffix/skills/nested-directory tests. Reviewer must explicitly determine whether .agents/sessions and non-.test.ts probe variants are importable; .gitignore/code-index exclusions must not be assumed to govern executable loading.",
+    "policyContext": "Parent established intentional first-party full-access execution and current relaxed/keep policy. Trusted host-realm code is not itself a defect; assess untrusted executable boundaries, actual opted-in guarantees and truthful documentation/outputs separately. Do not prescribe restrictions against that preference.",
+    "excluded": [
+      "No source edits, tests/probes/process launches, API calls, credential values, private configuration values or raw session logs.",
+      "Pair09 owns generic subprocess/env/kill/approval/sandbox/egress policy; this pair owns extension trust, descriptors and callback/tool contracts.",
+      "Pair03/05 own generic orchestration and durable replay semantics; selected generator ranges here cover the extension ABI and trusted/untrusted execution boundary.",
+      "Pair06 owns physical mutation broker/receipt authority; MCP optional mutation exposure is a public extension contract edge.",
+      "Pair07/08 own language-target and indexer implementation; capability/schema/extension discovery and truthful advertisements are inspected here.",
+      "Pair11 owns overall release/distribution and dependency provenance; only extension dependency/type-generator adoption is selected.",
+      "General serving/auth/socket protocol lifecycle belongs to its pair; selected ACP slices cover peer MCP ingestion, transport conversion and extension/capability negotiation.",
+      "Browser/3D/perception quality is pair13."
+    ],
+    "remainingQuestions": [
+      "What exact trust/config/descriptor/grant/result contract does each loaded MCP server receive across loader, protocol, provider and SDK execution?",
+      "Are locally installed first-party code, remote prompt/config material and untrusted executable plugins distinct real paths with truthful isolation claims?",
+      "Does an opted-in .agents loader import session artifacts/probes or other non-agent modules before checking for an agent definition?",
+      "Do custom/override callbacks receive the advertised validated Args, cancellation context and event/result semantics through full client/provider round trips?",
+      "Which schemas retain constraints across generation/serialization/transport, and where does fallback produce a weaker contract?",
+      "Are external CLI/Notion templates callable on real installed hosts with the listed tool names, evidence, failure and cleanup contracts?",
+      "Which declarative agent, lifecycle-hook, QuickJS/Bun.build/WASM/WIT/lockfile/signing and generated cross-language SDK promises have real production consumers rather than names/dependencies/plans?"
+    ]
+  },
+  "contextFiles": [
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+      "from": 209,
+      "to": 254,
+      "reason": "Historical normative amendments: D35 trusted host modules versus QuickJS for untrusted agents, D44 existing ACP editor clients, D49 plugin-host role and D53 Bun.build handleSteps bundles. Latest amendments supersede older first-party isolation/heap-snapshot wording.",
+      "inventoryStatus": "historical plan context excluded from structural receipt",
+      "receiptInstruction": "Read as plan context; include only current inventory source in structuralReceipt.files."
+    },
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 204,
+      "to": 214,
+      "reason": "Historical promised declarative agent.yaml, any-language lifecycle receipt hooks, QuickJS and WASM/WIT plugin host/registry; compare with current source and consumers.",
+      "inventoryStatus": "historical plan context excluded from structural receipt",
+      "receiptInstruction": "Do not use unchecked tasks or dependency declarations as implementation evidence."
+    },
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 150,
+      "to": 150,
+      "reason": "Historical MCP lockfile/capability grant/sandbox launch promise; generic sandbox policy is pair09.",
+      "inventoryStatus": "historical plan context excluded from structural receipt"
+    },
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 179,
+      "to": 179,
+      "reason": "Historical generated Python/Go SDK and reverse-RPC custom tool promise; current authored-language choice follows the latest SPEC amendments.",
+      "inventoryStatus": "historical plan context excluded from structural receipt"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/AUDIT-CONTRACT.md",
+      "reason": "Pinned scope, eight domains, capability maturity/assurance and read-only picker/reviewer boundaries."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/INVENTORY.json",
+      "reason": "Pinned current paths and snapshot authority."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/RETRIEVAL.json",
+      "reason": "Cached retrieval seeds and real consumer/test adjacency."
+    }
+  ]
+}

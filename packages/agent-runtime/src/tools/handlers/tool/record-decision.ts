@@ -3,10 +3,16 @@ import { jsonToolResult } from '@codebuff/common/util/messages'
 import { TASK_MEMORY_LIST_CAPS } from '@codebuff/common/types/task-memory'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
-import type { CodebuffToolCall, CodebuffToolOutput } from '@codebuff/common/tools/list'
+import type {
+  CodebuffToolCall,
+  CodebuffToolOutput,
+} from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import { hasDecisionRationale } from '@codebuff/common/util/decision-rationale'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+import { recordMemoryDecision } from '../../../orchestration/discovery-coordinator'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 
 type ToolName = 'record_decision'
 
@@ -22,9 +28,12 @@ export const handleRecordDecision = (async (params: {
   toolCall: CodebuffToolCall<ToolName>
   agentState: AgentState
   logger?: Logger
+  clock?: Clock
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
   const { previousToolCallFinished, toolCall, agentState, logger } = params
   await previousToolCallFinished
+  // P2-T1b: timestamps use the injected clock (realClock default).
+  const evidenceTimestamp = (params.clock ?? realClock).now()
   try {
     const input = toolCall.input as {
       text?: unknown
@@ -41,16 +50,27 @@ export const handleRecordDecision = (async (params: {
       return errorOutput('record_decision: text must be non-empty.')
     }
     if (rawText.length > 1024) {
-      return errorOutput('record_decision: text must be at most 1024 characters.')
+      return errorOutput(
+        'record_decision: text must be at most 1024 characters.',
+      )
     }
-    if ((kind === 'decision' || kind === 'constraint') && !hasDecisionRationale(rawText)) {
-      return errorOutput('record_decision: a decision/constraint must state a rationale (>=24 chars and include one of: because, so that, instead of, to avoid, rather than, chose, rejected, trade, prefer, must, require).')
+    if (
+      (kind === 'decision' || kind === 'constraint') &&
+      !hasDecisionRationale(rawText)
+    ) {
+      return errorOutput(
+        'record_decision: a decision/constraint must state a rationale (>=24 chars and include reasoning such as: because, since, so that, in order to, to avoid, rather than, instead of, chosen over, due to, rejected).',
+      )
     }
     if (rawSelectors.length < 1 || rawSelectors.length > 32) {
-      return errorOutput('record_decision: evidenceSelectors must contain 1..32 entries.')
+      return errorOutput(
+        'record_decision: evidenceSelectors must contain 1..32 entries.',
+      )
     }
     if (excerpt !== undefined && excerpt.length > 1024) {
-      return errorOutput('record_decision: excerpt must be at most 1024 characters.')
+      return errorOutput(
+        'record_decision: excerpt must be at most 1024 characters.',
+      )
     }
     let supersedes: string[] | undefined
     if (input.supersedes !== undefined) {
@@ -78,15 +98,23 @@ export const handleRecordDecision = (async (params: {
     const normalizedPaths: string[] = []
     for (const selector of rawSelectors) {
       if (typeof selector !== 'string') {
-        return errorOutput('record_decision: every evidenceSelector must be a project-relative path string.')
+        return errorOutput(
+          'record_decision: every evidenceSelector must be a project-relative path string.',
+        )
       }
       const trimmed = selector.trim()
       if (trimmed.length === 0 || trimmed.length > 1024) {
-        return errorOutput('record_decision: evidence path must be 1..1024 characters.')
+        return errorOutput(
+          'record_decision: evidence path must be 1..1024 characters.',
+        )
       }
       const decision = classifyMemoryArtifactPath(trimmed)
       if (!decision.allowed || !decision.normalizedPath) {
-        return errorOutput('record_decision: rejected evidence path: ' + (decision.reason ?? 'not allowed') + '.')
+        return errorOutput(
+          'record_decision: rejected evidence path: ' +
+            (decision.reason ?? 'not allowed') +
+            '.',
+        )
       }
       normalizedPaths.push(decision.normalizedPath)
     }
@@ -105,7 +133,7 @@ export const handleRecordDecision = (async (params: {
         historicalSummary: '',
         evidence: [],
         revision: 0,
-        updatedAt: Date.now(),
+        updatedAt: evidenceTimestamp,
         checksum: 'record-decision-init',
       }
     }
@@ -116,13 +144,107 @@ export const handleRecordDecision = (async (params: {
     if (!Array.isArray(memory.evidence)) {
       memory.evidence = []
     }
+    // Tier 1D content-level dedup: a verbatim restatement of an already
+    // recorded decision must not occupy another cap slot. Normalized
+    // (lowercased, whitespace-collapsed) comparison against stored records
+    // of the SAME kind (kinds map to distinct evidence kinds — decision vs
+    // requirement vs note — so a cross-kind restatement is a different
+    // record, not a duplicate); the duplicate is acknowledged idempotently
+    // instead of recording again.
+    const normalizedNewText = rawText.toLowerCase().replace(/\s+/g, ' ').trim()
+    const sameKindPrefix = '[' + kind + '] '
+    const isDuplicate = memory.decisions.some((existing) => {
+      if (!existing.startsWith(sameKindPrefix)) return false
+      const withoutKind = existing.slice(sameKindPrefix.length)
+      return (
+        withoutKind.toLowerCase().replace(/\s+/g, ' ').trim() ===
+        normalizedNewText
+      )
+    })
+    if (isDuplicate) {
+      // The tool contract says supersedes "never blocks capture": a
+      // verbatim-duplicate text must still honor a genuinely new supersedes
+      // list. The decision text is not re-appended (the dedup win), but we
+      // record a slim evidence entry carrying the supersedes ids so
+      // normalizeEvidence can mark the superseded observations stale.
+      if (supersedes !== undefined) {
+        const dedupIdPrefix = 'decision:' + evidenceTimestamp.toString() + ':'
+        let dedupSequence = 0
+        for (const item of memory.evidence) {
+          if (!item.id.startsWith(dedupIdPrefix)) continue
+          const suffix = Number.parseInt(
+            item.id.slice(dedupIdPrefix.length),
+            10,
+          )
+          if (Number.isInteger(suffix) && suffix >= dedupSequence) {
+            dedupSequence = suffix + 1
+          }
+        }
+        const dedupEvidenceId = (dedupIdPrefix + String(dedupSequence)).slice(
+          0,
+          160,
+        )
+        memory.evidence.push({
+          id: dedupEvidenceId,
+          kind: 'decision',
+          summary: (
+            '[' + kind + '] ' + rawText + '\nEvidence: ' + normalizedPaths.join(', ')
+          ).slice(0, 2000),
+          source: normalizedPaths[0],
+          path: normalizedPaths[0],
+          verifiedAt: evidenceTimestamp,
+          supersedes,
+        })
+        while (memory.evidence.length > TASK_MEMORY_LIST_CAPS.evidence) {
+          memory.evidence.shift()
+        }
+      }
+      if (logger) {
+        logger.debug(
+          { kind, supersedesEmitted: supersedes !== undefined },
+          'record_decision skipped a duplicate decision',
+        )
+      }
+      return {
+        output: jsonToolResult({
+          message:
+            supersedes !== undefined
+              ? 'Decision already recorded; duplicate text skipped, but supersedes was still applied to mark the target observations stale.'
+              : 'Decision already recorded; duplicate skipped (no new evidence recorded).',
+          kind,
+          evidenceCount: 0,
+          text: rawText,
+          evidenceSelectors: normalizedPaths,
+          ...(excerpt !== undefined ? { excerpt } : {}),
+          ...(supersedes !== undefined ? { supersedes } : {}),
+        }),
+      }
+    }
     const record = '[' + kind + '] ' + rawText
     memory.decisions.push(record)
     while (memory.decisions.length > TASK_MEMORY_LIST_CAPS.decisions) {
       memory.decisions.shift()
     }
-    const evidenceId = ('decision:' + Date.now().toString() + ':' + String(memory.decisions.length)).slice(0, 160)
-    const lines = ['[' + kind + '] ' + rawText, 'Evidence: ' + normalizedPaths.join(', ')]
+    // Evidence ids must be unique even when several decisions land in the same
+    // millisecond after an eviction: `decisions.length` resets once the list cap
+    // shifts entries out, so two same-millisecond records after a shift would
+    // collide and `normalizeEvidence`'s newest-wins dedupe would silently drop
+    // one. Sequence numbers are instead continued from the highest suffix
+    // already stored for this timestamp, so they only ever increase.
+    const idPrefix = 'decision:' + evidenceTimestamp.toString() + ':'
+    let idSequence = 0
+    for (const item of memory.evidence) {
+      if (!item.id.startsWith(idPrefix)) continue
+      const suffix = Number.parseInt(item.id.slice(idPrefix.length), 10)
+      if (Number.isInteger(suffix) && suffix >= idSequence) {
+        idSequence = suffix + 1
+      }
+    }
+    const evidenceId = (idPrefix + String(idSequence)).slice(0, 160)
+    const lines = [
+      '[' + kind + '] ' + rawText,
+      'Evidence: ' + normalizedPaths.join(', '),
+    ]
     if (excerpt !== undefined) {
       lines.push('Excerpt: ' + excerpt)
     }
@@ -134,12 +256,22 @@ export const handleRecordDecision = (async (params: {
       summary,
       source: normalizedPaths[0],
       path: normalizedPaths[0],
+      // P2-T1b: verifiedAt uses the injected clock (matches realClock default),
+      // keeping this record on the same ordering basis as derived evidence.
+      verifiedAt: evidenceTimestamp,
+      // Persisting `supersedes` lets `normalizeEvidence` mark the superseded
+      // observations stale; echoing it in the output alone was never persisted.
+      ...(supersedes !== undefined ? { supersedes } : {}),
     })
     while (memory.evidence.length > TASK_MEMORY_LIST_CAPS.evidence) {
       memory.evidence.shift()
     }
+    if (kind === 'decision') recordMemoryDecision(agentState)
     if (logger) {
-      logger.debug({ kind, evidenceCount: normalizedPaths.length }, 'Recorded decision')
+      logger.debug(
+        { kind, evidenceCount: normalizedPaths.length },
+        'Recorded decision',
+      )
     }
     return {
       output: jsonToolResult({
@@ -154,7 +286,10 @@ export const handleRecordDecision = (async (params: {
     }
   } catch (error) {
     if (logger) {
-      logger.debug({ error: error instanceof Error ? error.message : String(error) }, 'record_decision failed best-effort')
+      logger.debug(
+        { error: error instanceof Error ? error.message : String(error) },
+        'record_decision failed best-effort',
+      )
     }
     return errorOutput('record_decision: failed to record decision.')
   }

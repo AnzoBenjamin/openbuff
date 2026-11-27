@@ -52,6 +52,7 @@ The public SDK used by the CLI and available to external users via `@openbuff/sd
   - **Executes tool calls locally** on the user's machine (file edits, terminal commands, code search).
   - Creates a worktree-scoped cooperative mutation broker for the default Node filesystem. Participating Openbuff processes serialize exact-byte conditional commits, deletes, creates, and no-clobber moves through a durable receipt journal; external editors remain outside this authority and are detected through workspace revision/watcher invalidation.
   - Manages model provider routing dynamically: reads `openbuff.json` to select and invoke user-configured OpenAI-compatible APIs (OpenAI, OpenRouter, Ollama, GLM, etc.), Anthropic-compatible Claude APIs, or ChatGPT OAuth directly from the client.
+  - Owns optional durable provider-request admission: one root-shared strict/estimated/uncapped authority reserves each retry/failover/descendant attempt before dispatch and retains incomplete reservations across restart; usage telemetry remains separate and no exact remote-billing claim is made.
 - **Depends on:** none (standalone — published as `@openbuff/sdk` with no workspace dependencies)
 
 ### `packages/agent-runtime/` — Agent Execution Engine
@@ -184,11 +185,13 @@ page; the high-level wiring is:
 
 - **Staged read-before-edit.** Edit tools (`str_replace`,
   `edit_transaction`, patch applicators) can require a recent
-  `read_files` authorization (or an authenticated `cap.v3`
-  `basedOnRead` capability bound to the current project, path, and run)
-  before mutating a path under strict-mode flows. Legacy range hashes remain
-  freshness checks but cannot authorize an otherwise unread path. Successful
-  edits invalidate stale anchors. See
+  `read_files` authorization (or an authenticated `cap.v4`
+  `basedOnRead` capability bound to the current project, path, and run
+  with an authenticated original raw basis) before mutating a path under
+  strict-mode flows. Historical v3 parsing grants no fresh raw edit authority.
+  Whole writes require a whole basis; line and structural reads retain scoped
+  authority. Confirmed exact after-content receipts refresh raw authority, and
+  invalidation clears stale anchors. See
   [Deterministic Edit System](./deterministic-edit-system.md).
 - **Reviewer / validation gate.** A turn that opts into the gate tracks
   pending gate files with working-tree content markers
@@ -262,4 +265,12 @@ During the transition from the upstream Codebuff codebase, a small set of compat
 
 ### Internal Workspace Package Names
 
-All internal workspace packages retain their historical `@codebuff/*` names: `@codebuff/common`, `@codebuff/agents`, `@codebuff/internal`, `@codebuff/code-map`, `@codebuff/indexer`, `@codebuff/agent-runtime`, `@codebuff/build-tools`, `@codebuff/evals`, `@codebuff/scripts`, `@codebuff/.agents`, and the workspace `@codebuff/cli` (which is published as `@openbuff/cli`). These are private and never published to npm. Only `@openbuff/cli` (v0.1.0) and `@openbuff/sdk` (v0.11.0) are published. Homepage: openbuff.dev. Repo: github.com/AnzoBenjamin/openbuff.
+All internal workspace packages retain the `@codebuff/*` namespace: `@codebuff/common`, `@codebuff/agents`, `@codebuff/internal`, `@codebuff/code-map`, `@codebuff/indexer`, `@codebuff/agent-runtime`, `@codebuff/build-tools`, `@codebuff/evals`, `@codebuff/scripts`, `@codebuff/local-agents` (the `.agents/` workspace), and the workspace `@codebuff/cli` (which is published as `@openbuff/cli`). These are private and never published to npm. Only `@openbuff/cli` (v0.1.0) and `@openbuff/sdk` (v0.11.0) are published. Homepage: openbuff.dev. Repo: github.com/AnzoBenjamin/openbuff.
+
+## Durable repository intelligence
+
+The CLI and SDK prepare a bounded, actor-specific repository context before execution. The same callback crosses the authenticated supervised bridge for isolated descendants. Source facts, scoped procedures and host-attested validation receipts remain evidence with separate validity rules; existing read/edit and execution authority is checked independently.
+
+Index generations use normalized, content-addressed storage with atomic publication, per-worktree overlays and producer-specific graph layers. The native CLI uses the bundled Rust SQLite service on supported native builds; SDK/virtual and cross-target configurations retain the embedded port. Durable memory queries use maintained projections rather than a bounded event tail, and transcript archives store canonical bodies with immutable snapshot membership.
+
+See [repository-intelligence.md](repository-intelligence.md) for contracts, migration/rollback, configuration, freshness, receipt limitations and reproduction commands. Evidence and implementation status are recorded in `.agents/sessions/index-records-architecture-20261114/`.

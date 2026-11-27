@@ -17,7 +17,7 @@ const inputSchema = z
       .preprocess(coerceToArray, z.array(z.string()))
       .optional()
       .describe(
-        `List of paths to directories or files. Relative to the project root. If omitted, the entire project tree is used.`,
+        `List of paths to directories or files. Absolute or relative to the project root; access follows the configured sandbox policy. If omitted, the entire project tree is used.`,
       ),
     maxTokens: z
       .number()

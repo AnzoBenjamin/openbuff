@@ -1,0 +1,69 @@
+{
+  "_note": "Internal FileMutationResultV1 source for GV-06: the same mutation before redaction, carrying afterContent, an editAnchor whose readCapability is a cap.v3 token, and one whole-file freshCapabilities entry. Hash values are the spec's fixed fixture literals rather than real digests, so this fixture is projected with toWireMutation but deliberately not parsed with the internal fileMutationResultV1Schema (which enforces hash/content consistency).",
+  "mutation": {
+    "kind": "file_mutation_result",
+    "version": 1,
+    "operationId": "op_1",
+    "outcome": "applied",
+    "actions": [
+      {
+        "actionId": "op_1:0",
+        "index": 0,
+        "action": "update",
+        "path": "src/a.ts",
+        "outcome": "applied",
+        "beforeHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "afterHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "afterContent": "export const bar = 1\n",
+        "editAnchor": {
+          "startLine": 1,
+          "endLine": 2,
+          "contentHash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "readCapability": "cap.v3.1.1.AAA.BBB.CCC"
+        }
+      }
+    ],
+    "authorityTier": "conditional_commit",
+    "receiptId": "rcpt_1",
+    "authorityReceipt": {
+      "kind": "commit_receipt",
+      "version": 1,
+      "receiptId": "rcpt_1",
+      "operationId": "op_1",
+      "callId": "call_7",
+      "authorityTier": "conditional_commit",
+      "status": "committed",
+      "actions": [
+        {
+          "actionId": "op_1:0",
+          "index": 0,
+          "action": "update",
+          "path": "src/a.ts",
+          "status": "committed",
+          "beforeHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "afterHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "finalHashes": {
+        "src/a.ts": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    "errors": [],
+    "freshCapabilities": [
+      {
+        "kind": "whole_file",
+        "version": 1,
+        "token": "cap.v3.1.1.AAA.BBB.CCC",
+        "snapshot": {
+          "kind": "file_snapshot",
+          "version": 1,
+          "canonicalPath": "proj-x/src/a.ts",
+          "contentHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "sizeBytes": 21,
+          "encoding": "utf8",
+          "readGeneration": 1
+        }
+      }
+    ]
+  }
+}

@@ -5,9 +5,9 @@ import {
   extractSlices,
   extendRangeToPrecedingComment,
   getFileStructure,
-  mintSliceCapability,
   validateRewriteSymbolReadCapability,
 } from '../../../structural-read'
+import { captureTextDocument } from '@codebuff/common/util/byte-text'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { FileProcessingState } from './write-file'
@@ -75,21 +75,15 @@ export const handleRewriteSymbol = (async (params: {
     )
   }
 
-  const normalized = raw.replace(/\r\n/g, '\n')
+  const normalized = captureTextDocument(raw).observation
   const lines = normalized.split('\n')
-  const structure = await getFileStructure(raw, path)
+  const structure = await getFileStructure(normalized, path)
 
   const astMatches = structure?.filter((s) => s.name === symbol) ?? []
   const matches =
     astMatches.length > 0
       ? astMatches.map((match) => {
           const extended = extendRangeToPrecedingComment(lines, match.startLine)
-          const mintedCapability = mintSliceCapability({
-            content: raw,
-            startLine: extended.startLine,
-            endLine: match.endLine,
-            scope: capabilityScope,
-          }).readCapability
           return {
             kind: match.kind,
             startLine: extended.startLine,
@@ -97,7 +91,6 @@ export const handleRewriteSymbol = (async (params: {
             oldString: lines
               .slice(extended.startLine - 1, match.endLine)
               .join('\n'),
-            readCapability: mintedCapability,
           }
         })
       : (await extractSlices(raw, path, [symbol], occurrence ?? 5)).map(
@@ -106,14 +99,6 @@ export const handleRewriteSymbol = (async (params: {
             startLine: slice.startLine,
             endLine: slice.endLine,
             oldString: slice.content,
-            readCapability:
-              slice.readCapability ??
-              mintSliceCapability({
-                content: raw,
-                startLine: slice.startLine,
-                endLine: slice.endLine,
-                scope: capabilityScope,
-              }).readCapability,
           }),
         )
 
@@ -152,6 +137,7 @@ export const handleRewriteSymbol = (async (params: {
         endLine: match.endLine,
       },
       scope: capabilityScope,
+      rawContent: raw,
     })
     if (capabilityError) {
       markEditRequiresFreshRead({
@@ -160,7 +146,7 @@ export const handleRewriteSymbol = (async (params: {
         reason: 'stale_capability',
         sourceTool: 'rewrite_symbol',
       })
-      return errorResult(path, capabilityError)
+      return errorResult(path, capabilityError.error)
     }
   }
 
@@ -182,11 +168,7 @@ export const handleRewriteSymbol = (async (params: {
             oldString: match.oldString,
             newString: newContent,
             allowMultiple: false,
-            basedOnRead:
-              readCapability ??
-              (params.fileProcessingState?.strictReadBeforeEdit
-                ? undefined
-                : match.readCapability),
+            basedOnRead: readCapability,
           },
         ],
       },

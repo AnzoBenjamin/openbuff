@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { getCurrentChatId } from '../project-files'
 import { flushAnalytics } from '../utils/analytics'
+import { detachOnExit } from '../utils/attach-session'
+import { getAttachTarget } from '../utils/codebuff-client'
 import { withTimeout } from '../utils/terminal-color-detection'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
+import { cleanupRenderer } from '../utils/renderer-cleanup'
 
 import type { InputValue } from '../types/store'
 
@@ -30,9 +33,7 @@ let exiting = false
 // stream are dropped on that path too (reliability finding
 // exit-handler-drops-queued-prompts).
 let queuedPromptDrain: (() => void) | undefined
-export function setQueuedPromptDrain(
-  drain: (() => void) | undefined,
-): void {
+export function setQueuedPromptDrain(drain: (() => void) | undefined): void {
   queuedPromptDrain = drain
 }
 
@@ -85,14 +86,30 @@ function exitCli(): void {
   } catch {
     // Ignore — exit proceeds.
   }
-  withTimeout(
+  // Attach mode: kick off the detach inside the guarded section (so double
+  // Ctrl-C cannot double-detach) — the remote run keeps running. The detach
+  // promise is awaited bounded in the flush chain below, never
+  // fire-and-forget: process.exit must not race it, and a detach rejection
+  // or timeout must never block the exit.
+  const beforeExit = getAttachTarget() ? detachOnExit() : undefined
+  const flush = withTimeout(
     flushAnalytics(),
     EXIT_FLUSH_TIMEOUT_MS,
     undefined,
     getExitStreamSignal?.(),
-  ).finally(() => {
-    process.exit(0)
-  })
+  )
+  const boundedDetach = beforeExit
+    ? withTimeout(beforeExit, EXIT_FLUSH_TIMEOUT_MS, undefined).catch(
+        () => undefined,
+      )
+    : undefined
+  const exitChain = boundedDetach ? Promise.all([flush, boundedDetach]) : flush
+  void exitChain
+    .catch(() => undefined)
+    .then(async () => {
+      await cleanupRenderer()
+      process.exit(0)
+    })
 }
 
 export const useExitHandler = ({

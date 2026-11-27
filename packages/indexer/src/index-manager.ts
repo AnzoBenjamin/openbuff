@@ -4,12 +4,22 @@ import {
   isIndexReady,
   isIndexStale,
   getIndexDir,
-  loadIndex,
+  getIndexPublicationToken,
   loadSemanticVectors,
-  saveIndex,
   saveSemanticVectors,
 } from './index-store'
+import {
+  loadIndexGeneration as loadIndex,
+  saveIndexGeneration as saveIndex,
+  loadIndexMutationJournal,
+  recordIndexMutation,
+} from './durable-index-store'
 import { queryIndex, type QueryOptions } from './query'
+import {
+  mergeScipEdgesIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+} from './scip-ingest'
 import {
   buildFileVectors,
   fileEmbeddingHash,
@@ -46,6 +56,11 @@ export class IndexManager {
 
   private index: MetadataIndex | null = null
   private buildPromise: Promise<void> | null = null
+  private discoveryPromise: Promise<void> | null = null
+  private finishDiscovery?: () => void
+  private journalPromise: Promise<unknown> = Promise.resolve()
+  private persistencePromise: Promise<unknown> = Promise.resolve()
+  private journalFailed = false
   private lastBuildAttempt = 0
   private forceRefresh = false
   private staleRefreshPending = false
@@ -186,7 +201,15 @@ export class IndexManager {
     this.forceRefresh = false
     this.pendingMutationDelta = undefined
     this.staleRefreshPending = staleRefresh
-    this.buildPromise = this._build(mutationDelta).finally(() => {
+    const coldStart = !this.index
+    if (coldStart && !staleRefresh)
+      this.discoveryPromise = new Promise((resolve) => {
+        this.finishDiscovery = resolve
+      })
+    this.buildPromise = this._build(mutationDelta, coldStart).finally(() => {
+      this.finishDiscovery?.()
+      this.finishDiscovery = undefined
+      this.discoveryPromise = null
       this.buildPromise = null
       this.staleRefreshPending = false
     })
@@ -206,12 +229,12 @@ export class IndexManager {
    * Advance this holder's epoch after forwarding a mutation signal to the
    * registered singleton (see {@link markStale}). The pre-forward epoch is
    * read exactly once and the write is derived from that single captured
-   * value, so the read-modify-write on the shared field is one atomic step:
-   * two concurrent forwarded signals (or a forwarded signal racing a local
-   * mutation) can never both read the same pre-forward epoch and collapse
-   * two distinct mutation signals into a single advance of the documented
-   * strictly-monotonic per-instance epoch (reliability finding
-   * detached-epoch-forward-not-atomic).
+   * value in one synchronous expression — this method is single-threaded
+   * synchronous JS (not lock-atomic), but two forwarded signals (or a
+   * forwarded signal racing a local mutation) can never both read the same
+   * pre-forward epoch and collapse two distinct mutation signals into a
+   * single advance of the documented strictly-monotonic per-instance epoch
+   * (reliability finding detached-epoch-forward-not-atomic).
    */
   private advanceEpochAfterForward(singletonEpoch: number): void {
     const epochBeforeForward = this.mutationEpoch
@@ -285,6 +308,18 @@ export class IndexManager {
     this.mutationEpoch += 1
     this.pendingMutationDelta = undefined
     this.forceRefresh = true
+    if (this.index)
+      this.index = {
+        ...this.index,
+        freshness: 'unverified',
+        unverifiedPaths: undefined,
+      }
+    this.snapshotCache = undefined
+    this.appendJournal({
+      complete: false,
+      coverageGap: true,
+      verifyContent: true,
+    })
   }
 
   /** Queue a precise filesystem mutation delta for the next refresh. */
@@ -318,6 +353,24 @@ export class IndexManager {
       delta,
     )
     this.forceRefresh = true
+    if (this.index) {
+      this.index = {
+        ...this.index,
+        freshness:
+          delta.complete === true && !delta.coverageGap
+            ? 'dirty'
+            : 'unverified',
+        unverifiedPaths: Array.from(
+          new Set([
+            ...(this.index.unverifiedPaths ?? []),
+            ...(delta.changedPaths ?? []),
+            ...(delta.deletedPaths ?? []),
+          ]),
+        ).sort(),
+      }
+    }
+    this.snapshotCache = undefined
+    this.appendJournal(delta)
   }
 
   /**
@@ -325,7 +378,10 @@ export class IndexManager {
    * Starts a build if needed. Returns false when the wait timed out before
    * the build finished (also surfaced via {@link getStatus}).
    */
-  async waitUntilReady(timeoutMs = 30_000): Promise<boolean> {
+  async waitUntilReady(
+    timeoutMs = 30_000,
+    requireReconciled = false,
+  ): Promise<boolean> {
     // Detached-instance gate (reliability finding
     // detached-index-manager-still-runs-own-build-loop): forward readiness to
     // the registered singleton so the holder never builds (or serves) its own
@@ -337,15 +393,17 @@ export class IndexManager {
       // instead of being deferred until something else calls ensureBuilt
       // (reliability finding detached-query-forward-skips-pending-drain).
       this.forwardPendingMutationsTo(registered)
-      return registered.waitUntilReady(timeoutMs)
+      return registered.waitUntilReady(timeoutMs, requireReconciled)
     }
     this.scheduleRefreshIfNeeded()
     if (
       isIndexReady(this.index) &&
       !this.forceRefresh &&
       !this.staleRefreshPending &&
+      (!requireReconciled || !this.buildPromise) &&
       (!this.config.semantic?.enabled || !this.embed || this.isSemanticReady())
     ) {
+      await this.persistencePromise
       this.waitTimedOut = false
       return true
     }
@@ -362,20 +420,39 @@ export class IndexManager {
     this.waitTimedOut = false
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      await Promise.race([
+      // The race outcome MUST NOT be re-derived from the persistent
+      // this.waitTimedOut flag afterwards: the timer callback is the only
+      // writer permitted to set it, and clearTimeout in the finally block
+      // below guarantees a buildPromise-winning call can never observe a
+      // post-resolution tick flipping it stale-true (reliability finding
+      // waituntilready-stale-timeout-flag-not-cleared).
+      const timedOut = await Promise.race([
         this.buildPromise,
-        new Promise<void>((resolve) => {
+        (!requireReconciled ? this.discoveryPromise : null) ??
+          this.buildPromise,
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => {
             this.waitTimedOut = true
-            resolve()
+            resolve(true)
           }, timeoutMs)
           timer.unref?.()
         }),
       ])
+      // clearTimeout in the finally block below prevents the timer from
+      // ever firing after the buildPromise side already won, so the flag
+      // stays false on a build that completed successfully.
+      if (!timedOut) {
+        this.waitTimedOut = false
+      }
+      return !timedOut && Boolean(this.index)
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
-    return !this.waitTimedOut
+  }
+
+  /** Wait for source attestation instead of merely opening cached discovery. */
+  async waitUntilReconciled(timeoutMs = 30_000): Promise<boolean> {
+    return this.waitUntilReady(timeoutMs, true)
   }
 
   /**
@@ -394,6 +471,12 @@ export class IndexManager {
       from?: string
       to?: string
       lexicalWeights?: LexicalWeights
+      /**
+       * Blend weight for the personalized-PageRank component (P3-T9); see
+       * {@link QueryOptions.pageRankWeight}. Default: absent (= 0, opt-in) —
+       * omitting it keeps ranking byte-identical to the lexical baseline.
+       */
+      pageRankWeight?: number
     } = {},
   ): {
     results: QueryIndexResult[]
@@ -477,6 +560,12 @@ export class IndexManager {
       from?: string
       to?: string
       lexicalWeights?: LexicalWeights
+      /**
+       * Blend weight for the personalized-PageRank component (P3-T9); see
+       * {@link QueryOptions.pageRankWeight}. Default: absent (= 0, opt-in) —
+       * omitting it keeps ranking byte-identical to the lexical baseline.
+       */
+      pageRankWeight?: number
     } = {},
   ): Promise<{
     results: QueryIndexResult[]
@@ -561,14 +650,69 @@ export class IndexManager {
     return { ...lexical, results }
   }
 
-  private async _build(mutationDelta?: IndexMutationDelta): Promise<void> {
+  private async _build(
+    mutationDelta?: IndexMutationDelta,
+    coldStart = false,
+  ): Promise<void> {
     if (this.config.enabled === false) return
     this.lastBuildAttempt = Date.now()
     const cacheDir = this.config.cacheDir ?? '.codebuff-index'
     let stage: IndexBuildError['stage'] = 'load'
     try {
-      const existing = await loadIndex(this.projectRoot, cacheDir)
+      await this.persistencePromise
+      await this.journalPromise
+      const existing = await loadIndex(this.projectRoot, cacheDir, {
+        onDiscovery: (discovery) => {
+          if (coldStart) {
+            this.index = {
+              ...discovery,
+              freshness: 'unverified',
+              unverifiedPaths: undefined,
+            }
+            this.snapshotCache = undefined
+            this.finishDiscovery?.()
+          }
+        },
+      })
+      if (coldStart && existing) {
+        this.index = {
+          ...existing,
+          freshness: 'unverified',
+          unverifiedPaths: undefined,
+        }
+        this.snapshotCache = undefined
+        this.finishDiscovery?.()
+      }
       const expectedBuiltAt = existing?.builtAt ?? null
+      const expectedSnapshotId = existing
+        ? computeIndexSnapshotId(existing)
+        : null
+      const expectedPublicationToken = existing
+        ? getIndexPublicationToken(existing)
+        : null
+      const journal = await loadIndexMutationJournal(
+        this.projectRoot,
+        existing?.indexedJournalCursor ?? 0,
+        cacheDir,
+      )
+      for (const entry of journal)
+        mutationDelta = mergeMutationDeltas(mutationDelta, entry.delta)
+      const journalCursor =
+        journal[journal.length - 1]?.sequence ??
+        existing?.indexedJournalCursor ??
+        0
+      if (coldStart || this.journalFailed || mutationDelta?.coverageGap) {
+        mutationDelta = {
+          ...mutationDelta,
+          complete: false,
+          verifyContent: true,
+        }
+      } else if (!mutationDelta) {
+        // Age-based safety reconciliation attests content, including offline
+        // touch-less changes that a timestamp-only sweep cannot detect.
+        mutationDelta = { complete: false, verifyContent: true }
+      }
+      const buildEpoch = this.mutationEpoch
       let index: MetadataIndex
       stage = 'walk'
       if (existing) {
@@ -596,9 +740,37 @@ export class IndexManager {
       ) {
         index.workspaceRevision = mutationDelta.revision
       }
+      if (!index.parserDegraded && !index.unverifiedPaths?.length) {
+        index.indexedJournalCursor = journalCursor
+        if (mutationDelta?.verifyContent && this.mutationEpoch === buildEpoch)
+          this.journalFailed = false
+      }
+      if (
+        this.journalFailed ||
+        this.mutationEpoch !== buildEpoch ||
+        this.pendingMutationDelta ||
+        this.forceRefresh
+      ) {
+        index.freshness =
+          this.pendingMutationDelta?.complete === true &&
+          !this.pendingMutationDelta.coverageGap &&
+          !this.journalFailed
+            ? 'dirty'
+            : 'unverified'
+        index.unverifiedPaths = [
+          ...(this.pendingMutationDelta?.changedPaths ?? []),
+          ...(this.pendingMutationDelta?.deletedPaths ?? []),
+        ]
+      }
       stage = 'persist'
+      let verifiedWrite = false
       const persisted = await saveIndex(index, this.projectRoot, cacheDir, {
         expectedBuiltAt,
+        expectedSnapshotId,
+        expectedPublicationToken,
+        onVerifiedWrite: (verified) => {
+          verifiedWrite = verified
+        },
       })
       if (!persisted) {
         this.forceRefresh = true
@@ -629,7 +801,12 @@ export class IndexManager {
       } else if (persisted && !index.parserDegraded) {
         this.degradedDeltaRequeued = false
       }
-      if (persisted) {
+      if (persisted && verifiedWrite) {
+        // The store read back the exact bytes under its write lock. The
+        // locally-built snapshot is already available, so avoid parsing and
+        // validating the same document again on the event loop.
+        this.index = index
+      } else if (persisted) {
         // Fail-closed verification: only trust disk when it still holds the
         // snapshot we just built. Verified by comparing snapshot content
         // directly rather than by re-deriving a content digest, so the check
@@ -698,6 +875,11 @@ export class IndexManager {
       ...(index.workspaceRevision !== undefined
         ? { workspaceRevision: index.workspaceRevision }
         : {}),
+      freshness: index.freshness,
+      generationId: index.generationId,
+      repositoryId: index.repositoryId,
+      worktreeId: index.worktreeId,
+      indexedJournalCursor: index.indexedJournalCursor,
     }
     this.snapshotCache = { index, identity }
     return identity
@@ -726,12 +908,26 @@ export class IndexManager {
         fingerprint,
         cacheDir,
       )
+      let checkpointCount = 0
       this.fileVectors = await buildFileVectors(
         Object.values(index.files),
         this.embed,
-        64,
+        this.embed.maxBatchSize ?? 64,
         [...this.fileVectors, ...persisted],
         diagnostics,
+        async (vectors) => {
+          // Preserve the first batch, then amortize writes over 64 new vectors.
+          // A slow or interrupted local build can resume from durable progress.
+          if (checkpointCount > 0 && vectors.length - checkpointCount < 64)
+            return
+          await saveSemanticVectors(
+            this.projectRoot,
+            fingerprint,
+            [...vectors],
+            cacheDir,
+          )
+          checkpointCount = vectors.length
+        },
       )
       this.semanticSkippedCount = diagnostics.skippedCount
       await saveSemanticVectors(
@@ -775,6 +971,10 @@ export class IndexManager {
         err,
         getIndexDir(this.projectRoot, cacheDir),
       )
+      this.semanticSkippedCount = Math.max(
+        0,
+        Object.keys(index.files).length - this.fileVectors.length,
+      )
     }
   }
 
@@ -787,8 +987,205 @@ export class IndexManager {
     )
   }
 
+  /**
+   * P3-T4 production wiring: read accessor for the manager's current index
+   * snapshot, for callers that run an out-of-band enrichment pass (e.g. the
+   * `/index scip` CLI path) against a captured snapshot and then adopt the
+   * merged result via {@link adoptMergedIndex}. Returns null until a build
+   * has produced an index.
+   */
+  getSnapshot(): MetadataIndex | null {
+    // Detached-instance gate: serve the registered singleton's snapshot,
+    // mirroring every other query/readiness seam.
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) return registered.getSnapshot()
+    return this.index
+  }
+
+  /**
+   * P3-T4 production wiring: adopt an externally merged snapshot (e.g. the
+   * merged result of `runScipIngest`) into the live manager — but only when
+   * the manager's CURRENT snapshot is still the one the caller captured,
+   * keyed by the existing content-addressed snapshotId machinery (the same
+   * {@link getSnapshotIdentity} helper the query seams and `_build`'s
+   * verification use). A concurrent rebuild between snapshot capture and
+   * adopt changes the current snapshotId, so the merge is refused (returns
+   * false) and the caller must rerun its scan against the fresh snapshot
+   * instead of silently grafting stale precise edges onto a rebuilt index.
+   *
+   * Persistence: rides the same async `saveIndex` CAS flow `_build` uses,
+   * pinned to the exact persisted bytes so a concurrent writer wins
+   * gracefully instead of being clobbered by the merged snapshot. When the
+   * save wins, the persisted snapshot is verified fail-closed (mirroring
+   * `_build`) and merged precise edges survive across sessions. If the
+   * merged edges stay in memory only until the next successful adopt (the
+   * lost-CAS branch serves the concurrent on-disk snapshot, discarding the
+   * adopter's merged edges); any persistence error degrades to the
+   * in-memory-only adoption. Persistence is an upgrade, not a correctness
+   * gate: the boolean result still only reports adopt (true) vs.
+   * stale-snapshot refusal (false) and never reflects persistence success.
+   */
+  async adoptMergedIndex(
+    merged: MetadataIndex,
+    expectedSnapshotId: string,
+  ): Promise<boolean> {
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) {
+      return registered.adoptMergedIndex(merged, expectedSnapshotId)
+    }
+    const current = this.index
+    if (!current) return false
+    if (this.getSnapshotIdentity(current).snapshotId !== expectedSnapshotId) {
+      return false
+    }
+    try {
+      const cacheDir = this.config.cacheDir ?? '.codebuff-index'
+      const persisted = await saveIndex(merged, this.projectRoot, cacheDir, {
+        expectedBuiltAt: current.builtAt,
+        expectedSnapshotId,
+        expectedPublicationToken: getIndexPublicationToken(current),
+      })
+      if (persisted) {
+        // Fail-closed verification: only trust disk when it still holds the
+        // snapshot we just saved. Verified by comparing snapshot content
+        // directly rather than by re-deriving a content digest, so the check
+        // cannot be silently disabled if this module's identity hash and
+        // index-store's ever drift apart. A mismatch falls back to the
+        // in-memory merged index so a concurrent writer can't swap content
+        // under us.
+        let verified: MetadataIndex | null = null
+        try {
+          verified = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          verified = null
+        }
+        if (verified && !isSameIndexSnapshot(verified, merged)) {
+          verified = null
+        }
+        if (!verified) {
+          console.warn(
+            '[indexer] persisted index failed snapshot verification; serving the in-memory index.',
+          )
+        }
+        this.index = verified ?? merged
+      } else {
+        // Our save lost the CAS race: preserve concurrent-newest-wins by
+        // serving the newest on-disk index (unverified). The read is guarded
+        // so a failed read can't discard the merge entirely; the merged
+        // precise edges then stay in memory only for this session.
+        let onDisk: MetadataIndex | null = null
+        try {
+          onDisk = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          onDisk = null
+        }
+        this.index = onDisk ?? current
+        console.debug(
+          '[indexer] merged snapshot adoption refused after losing the publication CAS; serving the winning snapshot.',
+        )
+        this.snapshotCache = undefined
+        return false
+      }
+    } catch (err) {
+      // Persistence is an upgrade, not a correctness gate: any error here
+      // degrades to the previous in-memory-only adoption.
+      console.debug('[indexer] merged snapshot persistence failed:', err)
+      this.index = merged
+    }
+    // Mirror _build's snapshot swap: assign, then drop the identity cache so
+    // the adopted snapshot's identity is derived fresh on next use.
+    this.snapshotCache = undefined
+    return true
+  }
+
+  /**
+   * Opt-in SCIP ingestion (P3-T4): parse an already-produced SCIP JSON
+   * document and merge its precise cross-reference edges into the manager's
+   * current index snapshot. The merge is in-memory only — a subsequent
+   * refresh rebuild replaces the snapshot from disk, so callers that want the
+   * merge to survive should pair this with their own persistence story.
+   * Automatic refresh-time scip-* running is deliberately deferred (cost
+   * control); see `scip-runner.ts` for the explicit opt-in runner.
+   *
+   * Fails closed: a malformed dump throws the typed `ScipIngestError` from
+   * scip-ingest; an index that is not built yet throws `Error`.
+   *
+   * @returns the number of precise edges added by the merge.
+   */
+  ingestScipDump(dumpJson: unknown): number {
+    // Detached-instance gate: mirror adoptMergedIndex's seam contract — a
+    // holder evicted from the registry (MAX_INSTANCE_ROOTS) must merge
+    // SCIP edges into the snapshot the registered singleton actually
+    // serves, not its own (possibly still-null) private copy that the
+    // singleton would discard on the next rebuild (reliability finding
+    // scip-ingest-missing-detached-gate).
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) {
+      return registered.ingestScipDump(dumpJson)
+    }
+    if (!this.index) {
+      throw new Error(
+        'ingestScipDump requires a built index; call waitUntilReady() first.',
+      )
+    }
+    const scip = parseScipJson(dumpJson)
+    // Count exactly what the merge adds (the documented contract): each
+    // deduped precise edge that lands in the merged snapshot — including one
+    // that supersedes a heuristic duplicate of the same (from, to, type)
+    // tuple. A raw graph-edge length delta would net to 0 here (and go
+    // negative when one precise edge supersedes several heuristic
+    // duplicates), because the merge replaces heuristic edges instead of
+    // appending alongside them.
+    const preciseEdges = scipPreciseEdges(scip)
+    const merged = mergeScipEdgesIntoIndex(this.index, preciseEdges)
+    this.index = merged.index
+    this.snapshotCache = undefined
+    if (merged.edgesMerged > 0) {
+      const liveMerged = merged.index
+      const sourceId = computeIndexSnapshotId(liveMerged)
+      this.persistencePromise = this.persistencePromise
+        .then(async () => {
+          const cacheDir = this.config.cacheDir ?? '.codebuff-index'
+          const current = await loadIndex(this.projectRoot, cacheDir)
+          if (!current || computeIndexSnapshotId(current) !== sourceId) {
+            this.forceRefresh = true
+            return
+          }
+          const durableMerge = mergeScipEdgesIntoIndex(
+            current,
+            preciseEdges,
+          ).index
+          const saved = await saveIndex(
+            durableMerge,
+            this.projectRoot,
+            cacheDir,
+            {
+              expectedPublicationToken: getIndexPublicationToken(current),
+              expectedSnapshotId: sourceId,
+              expectedBuiltAt: current.builtAt,
+            },
+          )
+          if (saved && this.index === liveMerged) {
+            this.index = durableMerge
+            this.snapshotCache = undefined
+          }
+        })
+        .catch((error) => {
+          console.debug('[indexer] precise graph persistence failed:', error)
+        })
+    }
+    return merged.edgesMerged
+  }
+
   getStatus(): IndexStatus {
-    this.scheduleRefreshIfNeeded()
+    // READ-ONLY status peek: no build-loop side effects here. The 2s UI chip
+    // poll (peekIndexStatus in cli/src/utils/index-status.ts) calls this
+    // method synchronously; scheduling ensureBuilt() from a poll tick made
+    // UI reads mutate build-loop state (sticky forceRefresh + the 30s retry
+    // window can pin 'idx stale'/'idx refreshing' with zero CPU activity).
+    // Refresh scheduling belongs to awaiter/query paths that already call
+    // scheduleRefreshIfNeeded() explicitly (waitUntilReady, query,
+    // queryBlended).
     const indexAge = this.index ? Date.now() - this.index.builtAt : 0
     const refreshing = Boolean(this.buildPromise || this.staleRefreshPending)
     const stale = Boolean(
@@ -796,9 +1193,27 @@ export class IndexManager {
       (this.forceRefresh ||
         refreshing ||
         this.lastBuildError ||
+        this.index.freshness === 'unverified' ||
+        this.index.freshness === 'dirty' ||
         isIndexStale(this.index)),
     )
     const diagnostics = this.index?.parseDiagnostics ?? []
+    // Whole-index 'degraded' should reflect a genuine build-level failure or a
+    // non-negligible number of per-file parse failures — NOT budget-driven
+    // coverage truncation (the expected outcome for a large healthy repo,
+    // already surfaced via coverageNotice) and NOT a handful of diagnostics
+    // out of thousands of files. Small repos degrade on a single failure;
+    // large repos tolerate a bounded handful. coverage.parser.truncated is
+    // intentionally excluded from this trigger: budget truncation is a notice,
+    // and failure-driven skips are already counted through `diagnostics`.
+    const corpusSize =
+      this.index?.fileCount || Object.keys(this.index?.files ?? {}).length
+    const parseFailureFloor = Math.min(
+      10,
+      Math.max(1, Math.ceil(corpusSize * 0.05)),
+    )
+    const indexDegraded =
+      Boolean(this.lastBuildError) || diagnostics.length >= parseFailureFloor
     const state: IndexStatus['state'] =
       this.config.enabled === false
         ? 'disabled'
@@ -808,9 +1223,7 @@ export class IndexManager {
             : this.lastBuildError
               ? 'failed'
               : 'empty'
-          : diagnostics.length > 0 ||
-              this.lastBuildError ||
-              this.index.coverage?.parser?.truncated
+          : indexDegraded
             ? 'degraded'
             : stale
               ? 'stale'
@@ -842,6 +1255,8 @@ export class IndexManager {
       ready: Boolean(this.index),
       stale,
       refreshing,
+      freshness: this.index?.freshness,
+      unverifiedPaths: this.index?.unverifiedPaths,
       semantic,
       totalIndexed: this.index?.fileCount ?? 0,
       indexAge,
@@ -851,7 +1266,7 @@ export class IndexManager {
       ...(this.semanticSkippedCount > 0
         ? { semanticSkippedFiles: this.semanticSkippedCount }
         : {}),
-      message: `${state === 'ready' ? 'Index ready.' : state === 'stale' ? 'Serving a stale snapshot while refreshing.' : state === 'degraded' ? 'Index ready with partial coverage or diagnostics.' : state === 'failed' ? 'Index build failed.' : state === 'building' ? 'Index is building.' : state === 'disabled' ? 'Indexing is disabled.' : 'Index is empty or unavailable.'}${coverageNotice}${errorNotice}${semanticSkippedNotice}${waitTimeoutNotice}`,
+      message: `${this.index?.freshness === 'unverified' ? 'Serving a previously valid discovery snapshot; source freshness is unverified.' : state === 'ready' ? 'Index ready.' : state === 'stale' ? 'Serving a stale snapshot while refreshing.' : state === 'degraded' ? 'Index ready with partial coverage or diagnostics.' : state === 'failed' ? 'Index build failed.' : state === 'building' ? 'Index is building.' : state === 'disabled' ? 'Indexing is disabled.' : 'Index is empty or unavailable.'}${coverageNotice}${errorNotice}${semanticSkippedNotice}${waitTimeoutNotice}`,
     }
   }
 
@@ -901,7 +1316,10 @@ export class IndexManager {
   private scheduleRefreshIfNeeded(): void {
     if (
       !this.index ||
-      (!isIndexStale(this.index) && !this.lastBuildError?.retryable) ||
+      (!isIndexStale(this.index) &&
+        !this.lastBuildError?.retryable &&
+        this.index.freshness !== 'unverified' &&
+        this.index.freshness !== 'dirty') ||
       this.buildPromise ||
       this.forceRefresh ||
       Date.now() - this.lastBuildAttempt < this.MIN_RETRY_INTERVAL_MS
@@ -910,6 +1328,22 @@ export class IndexManager {
     }
     this.forceRefresh = true
     this.ensureBuilt()
+  }
+
+  private appendJournal(delta: IndexMutationDelta): void {
+    if (this.config.enabled === false) return
+    this.journalPromise = this.journalPromise
+      .then(() =>
+        recordIndexMutation(
+          this.projectRoot,
+          delta,
+          this.config.cacheDir ?? '.codebuff-index',
+        ),
+      )
+      .catch((error) => {
+        this.journalFailed = true
+        console.debug('[indexer] mutation journal persistence failed:', error)
+      })
   }
 }
 
@@ -959,6 +1393,11 @@ function mergeMutationDeltas(
 ): IndexMutationDelta {
   // P8.3: select the max revision with numeric-aware comparison; plain string
   // territory ("10" < "9") would let an older-dated delta win the merge.
+  // Mixed-type numeric tie (e.g. `9` vs `'9'`, `'09'` vs `9`): compareRevisions
+  // returns 0 and the incoming revision wins verbatim — an arbitrary but
+  // harmless tiebreak, because every consumer (the staleness check in
+  // updateMetadataIndex) compares through the same numeric-aware key, so the
+  // stored revision's string/number type never re-enters a raw comparison.
   const revision =
     current?.revision !== undefined &&
     next.revision !== undefined &&
@@ -981,6 +1420,9 @@ function mergeMutationDeltas(
       ? current.complete === true && next.complete === true
       : next.complete,
     revision,
+    verifyContent:
+      current?.verifyContent === true || next.verifyContent === true,
+    coverageGap: current?.coverageGap === true || next.coverageGap === true,
   }
 }
 

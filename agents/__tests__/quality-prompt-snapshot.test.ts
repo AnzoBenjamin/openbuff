@@ -11,6 +11,7 @@ import {
   decisionCapturePolicySection,
   gateAwarenessSection,
   gitDisciplineSection,
+  outputHygieneSection,
   preReviewSelfCheckSection,
   qualitySection,
   securityReviewSection,
@@ -377,5 +378,23 @@ describe('shared craftsmanship prompt sections', () => {
     const base2 = createBase2('default')
 
     expect(base2.systemPrompt).toContain('params.command')
+  })
+})
+
+describe('outputHygieneSection', () => {
+  test('is byte-stable (snapshot) and interpolates into both deep consumers', () => {
+    expect(outputHygieneSection).toMatchSnapshot()
+    expect(outputHygieneSection).toContain('# Output hygiene')
+    // The named failure mode: models echo harness-injected pseudo-XML into
+    // visible output, so the contract must name the tag explicitly.
+    expect(outputHygieneSection).toContain('<system_warning>')
+
+    const base2 = createBase2('default', {
+      progressivePromptDisclosure: false,
+    })
+    const baseDeep = createBaseDeep()
+
+    expect(base2.systemPrompt).toContain(outputHygieneSection)
+    expect(baseDeep.systemPrompt).toContain(outputHygieneSection)
   })
 })

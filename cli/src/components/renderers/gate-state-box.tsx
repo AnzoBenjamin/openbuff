@@ -38,11 +38,13 @@ const STATUS_TONE: Record<
  *
  * PUBLISHED BLOCK SCHEMA (the rendered surface of the consumer contract
  * declared on `GateStateContentBlock` in cli/src/types/chat.ts): `gate` and
- * `status` are required; `details`, `origin`, `advisories`, and `workflow` are
- * optional and additive. Rendered order is details -> `workflow` (declared
- * write_todos progress remaining on a PASSING gate, warning tone) ->
- * `advisories` (non-blocking reviewer observations, secondary tone). Keep this
- * list, the type, and the parser docblock in step when the producer adds a key.
+ * `status` are required; `details`, `origin`, `advisories`, `workflow`,
+ * `reviewers`, and `skipReason` are optional and additive. Rendered order is
+ * details -> `reviewers` (comma-joined reviewer-family agent types) ->
+ * `skipReason` (machine skip reason) -> `workflow` (declared write_todos
+ * progress remaining on a PASSING gate, warning tone) -> `advisories`
+ * (non-blocking reviewer observations, secondary tone). Keep this list, the
+ * type, and the parser docblock in step when the producer adds a key.
  */
 export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
   const theme = useTheme()
@@ -74,6 +76,26 @@ export const GateStateBox = memo(({ block }: GateStateBoxProps) => {
           }}
         >
           {block.details}
+        </text>
+      ) : null}
+      {block.reviewers && block.reviewers.length > 0 ? (
+        <text
+          style={{
+            wrapMode: 'word',
+            fg: theme.foreground,
+          }}
+        >
+          {`Reviewers: ${block.reviewers.join(', ')}`}
+        </text>
+      ) : null}
+      {block.skipReason ? (
+        <text
+          style={{
+            wrapMode: 'word',
+            fg: theme.foreground,
+          }}
+        >
+          {`Skip reason: ${block.skipReason}`}
         </text>
       ) : null}
       {block.workflow ? (

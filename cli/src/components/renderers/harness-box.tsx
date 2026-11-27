@@ -1,4 +1,5 @@
 import { memo, type ReactNode } from 'react'
+import { TextAttributes } from '@opentui/core'
 
 import { useTheme } from '../../hooks/use-theme'
 import { BORDER_CHARS } from '../../utils/ui-constants'
@@ -51,7 +52,14 @@ export const HarnessBox = memo(
           paddingBottom,
         }}
       >
-        {title ? <text style={{ fg: borderColor }}>{title}</text> : null}
+        {title ? (
+          <text
+            attributes={TextAttributes.BOLD}
+            style={{ fg: tone === 'secondary' ? theme.primary : borderColor }}
+          >
+            {title}
+          </text>
+        ) : null}
         {children}
       </box>
     )

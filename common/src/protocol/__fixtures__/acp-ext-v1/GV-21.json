@@ -1,0 +1,50 @@
+{
+  "_note": "Semantic vector (§12.7 GV-21, §12.4 display sanitization): an approval whose branch is 'x\\u001b]0;pwn\\u0007evil' has every C0 control / ESC / BEL replaced by U+FFFD before emission; the emitted title contains no ESC or BEL. (Bidi/zero-width chars are sanitized identically by the §12.4 display step; this fixture uses only escapes that JSON.stringify round-trips byte-exactly.)",
+  "approval": {
+    "action": "push",
+    "target": "origin",
+    "branch": "x\u001b]0;pwn\u0007evil"
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 101,
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "toolCall": {
+        "toolCallId": "call_10",
+        "title": "Approve push: origin x�]0;pwn�evil",
+        "kind": "execute",
+        "status": "pending"
+      },
+      "options": [
+        {
+          "optionId": "allow_once",
+          "name": "Allow once",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "reject_once",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "_meta": {
+        "openbuff.dev": {
+          "approval": {
+            "action": "push",
+            "target": "origin",
+            "branch": "x�]0;pwn�evil",
+            "risk": "high",
+            "reason": "git push to remote",
+            "scope": {
+              "workspaceId": "ws_1",
+              "runId": "run_root_1",
+              "snapshotId": "workspace.v1.12.abcdef01"
+            }
+          }
+        }
+      }
+    }
+  }
+}

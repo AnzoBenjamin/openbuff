@@ -217,6 +217,75 @@ describe('GateStateBox', () => {
     expect(markup).not.toContain('Next:')
   })
 
+  // Additive reviewer attribution + machine skip reason: one bounded line
+  // each, in the foreground tone like details, between details and the
+  // declared-workflow/advisory sections.
+  test('renders a comma-joined reviewers line when reviewers are present', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({
+          gateStatus: 'passed',
+          reviewers: ['reliability-reviewer', 'security-reviewer'],
+        })}
+      />,
+    )
+
+    expect(markup).toContain(
+      'Reviewers: reliability-reviewer, security-reviewer',
+    )
+  })
+
+  test('renders a skip reason line when a machine skip reason is present', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({
+          gateStatus: 'skipped',
+          skipReason: 'specialist-rate-limited',
+        })}
+      />,
+    )
+
+    expect(markup).toContain('Skip reason: specialist-rate-limited')
+  })
+
+  test('renders reviewers and skip reason between details and the advisories', () => {
+    const markup = renderToStaticMarkup(
+      <GateStateBox
+        block={makeBlock({
+          gateStatus: 'skipped',
+          details: 'specialist quota exhausted',
+          reviewers: ['reliability-reviewer'],
+          skipReason: 'specialist-rate-limited',
+          advisories: ['naming nit in helper'],
+        })}
+      />,
+    )
+
+    expect(markup.indexOf('specialist quota exhausted')).toBeLessThan(
+      markup.indexOf('Reviewers: reliability-reviewer'),
+    )
+    expect(markup.indexOf('Reviewers: reliability-reviewer')).toBeLessThan(
+      markup.indexOf('Skip reason: specialist-rate-limited'),
+    )
+    expect(markup.indexOf('Skip reason: specialist-rate-limited')).toBeLessThan(
+      markup.indexOf('Advisory (non-blocking)'),
+    )
+  })
+
+  test('renders no reviewers or skip reason lines when the fields are absent', () => {
+    const block = makeBlock({
+      gateStatus: 'skipped',
+      details: 'no reviewable diff in the pending set',
+    })
+    delete block.reviewers
+    delete block.skipReason
+    const markup = renderToStaticMarkup(<GateStateBox block={block} />)
+
+    expect(markup).toContain('no reviewable diff in the pending set')
+    expect(markup).not.toContain('Reviewers:')
+    expect(markup).not.toContain('Skip reason:')
+  })
+
   test('uses error color for failed status', () => {
     const failedMarkup = renderToStaticMarkup(
       <GateStateBox block={makeBlock({ gateStatus: 'failed' })} />,

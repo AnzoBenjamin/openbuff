@@ -2,19 +2,25 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { validateAgents } from '@openbuff/sdk'
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+} from 'bun:test'
 
-// Mock the logger to prevent analytics initialization errors in tests
-mock.module('../../utils/logger', () => ({
-  logger: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    fatal: () => {},
-  },
-}))
+// TEST-ONLY: replace the registry's module logger with a noop so logger
+// side effects (analytics initialization) cannot run in tests. This uses
+// the registry's injection seam instead of mock.module, which is
+// registry-wide for the whole bun test worker and cannot be unregistered.
+const noopLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  fatal: () => {},
+} as typeof import('../../utils/logger').logger
 
 import { setProjectRoot, getProjectRoot } from '../../project-files'
 import {
@@ -27,6 +33,7 @@ import {
   getAgentRegistryDiagnostics,
   announceLoadedAgents,
   __resetLocalAgentRegistryForTests,
+  setAgentRegistryLoggerForTests,
 } from '../../utils/local-agent-registry'
 
 const initializeAgentRegistry = () =>
@@ -55,6 +62,7 @@ describe('Local Agent Integration', () => {
     process.chdir(tempDir)
     setProjectRoot(tempDir)
     __resetLocalAgentRegistryForTests()
+    setAgentRegistryLoggerForTests(noopLogger)
 
     agentsDir = path.join(tempDir, '.agents')
   })
@@ -63,8 +71,8 @@ describe('Local Agent Integration', () => {
     process.chdir(originalCwd)
     setProjectRoot(originalProjectRoot ?? originalCwd)
     __resetLocalAgentRegistryForTests()
+    setAgentRegistryLoggerForTests(null)
     rmSync(tempDir, { recursive: true, force: true })
-    mock.restore()
   })
 
   test('handles missing .agents directory gracefully', async () => {

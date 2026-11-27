@@ -1,0 +1,31 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "session/prompt",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "Rename foo to bar in src/a.ts"
+        }
+      ]
+    }
+  },
+  "update": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "run_root_1",
+        "content": {
+          "type": "text",
+          "text": "Updating src/a.ts."
+        }
+      }
+    }
+  }
+}

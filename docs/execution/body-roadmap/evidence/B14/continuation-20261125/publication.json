@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "kind": "selected-local-capture-publication",
+  "verification": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/verification.json",
+  "verificationSha256": "23a981ece99d3fbb2ec8f43b7eb5868f23f3a014cf5095e615678bba6a58d3ef",
+  "captures": [
+    {
+      "originalPath": ".tmp/b14-continuation/actual-captures/changed-after-emission.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-captures/changed-after-emission.json",
+      "sha256": "e6038c0748d812b18671e30b6b9953e8a357ec932d3f024288e418ee4826078e",
+      "bytes": 71451
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-captures/required-refresh.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-captures/required-refresh.json",
+      "sha256": "4d5fae56fd3c1730ebc3a2f77385f700148436c80f697775f1d031f9a84cacf7",
+      "bytes": 61146
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-captures/unchanged-a.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-captures/unchanged-a.json",
+      "sha256": "2d851cfaba49d8cd408da7fd464240aff2ea70bc41097a0b93acbcf1cd330669",
+      "bytes": 72784
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-captures/unrelated-c.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-captures/unrelated-c.json",
+      "sha256": "591a7f2252ea5b3a5274578c7022e598e27106460f2932c97757dafbaff37c04",
+      "bytes": 71440
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-debug.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-debug.log",
+      "sha256": "445e3841a9659d8a32bf3a4587781f5a215f1725366c877400acf142d754577d",
+      "bytes": 6545
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-r1.log",
+      "sha256": "7fadbb7cde390d4751c28cd939556bee04bad640b20b9a9bcd2886763cdb6af2",
+      "bytes": 2328
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-r2.log",
+      "sha256": "e45012b32fbfe40ce00edbcc07739927155aa41d931a85cf7a9b966f09157df8",
+      "bytes": 2370
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-r3.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-r3.log",
+      "sha256": "713b21a18d625b8df4570dc9c205c3756b75f1baf4943f766d3d09bdf7f19330",
+      "bytes": 1490
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-r4.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-r4.log",
+      "sha256": "3bdc476cf4393be7aa78d4341f9bc17bc7518cd7c0fd17919c769d8bed093d87",
+      "bytes": 13641
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-r5.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-r5.log",
+      "sha256": "36e2919a0edc625d3ecaf5ee8e406b25d441ee2919ed70624c86133da1097495",
+      "bytes": 410
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/actual-usage-r6.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/actual-usage-r6.log",
+      "sha256": "8de91eee469b39e4bdf86b430ffe7f4fea0a92296a1915c807f0332e59b6a3b1",
+      "bytes": 1352
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-bounded.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-bounded.log",
+      "sha256": "0d86c4d52ac47839dbe990013c090a8156140e13825d43c6bf0cc356c67651e3",
+      "bytes": 588194
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-build-final-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-build-final-r1.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-census-driver-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-census-driver-r1.log",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "bytes": 1
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-census-driver-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-census-driver-r2.log",
+      "sha256": "aa9b14969e8d04d125db1547b287ac9cb0aceed6425360012e3a85f95fb511c2",
+      "bytes": 94
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-regression-final-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-regression-final-r1.log",
+      "sha256": "f89657eb0e41f29af4734b37eb9862cce4471f8d89d8372a88d0af20f3e1791c",
+      "bytes": 16184
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-result.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-result.json",
+      "sha256": "6438708c720c28063607d2bd14483a7d2fa8d886880797e76a2477fae6d79921",
+      "bytes": 18115
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-schedule.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-schedule.json",
+      "sha256": "924f9b078fad4f9b56d5d8b9991363cf4cf8bd638583f0095b66712dd666906b",
+      "bytes": 18038
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-timeout-r1.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-timeout-r1.json",
+      "sha256": "685c8874b61436732dcc88175efc6f9f91b888be6fa5f2d863cdfb96cb0e6338",
+      "bytes": 18122
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-timeout-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-timeout-r1.log",
+      "sha256": "1df19eee84a7636e7aa013b9e75d35c5b05cfd670164280d44a097057b8d7d8d",
+      "bytes": 550267
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/cli-timeout-schedule-r1.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/cli-timeout-schedule-r1.json",
+      "sha256": "924f9b078fad4f9b56d5d8b9991363cf4cf8bd638583f0095b66712dd666906b",
+      "bytes": 18038
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/doc-defaults-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/format-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/format-final.log",
+      "sha256": "1a3a1a472f5e838ee103b0756d7676dd42c413540716f2c1782acc1381b1256d",
+      "bytes": 1105
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/ledger-validator.json",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/ledger-validator.json",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77",
+      "bytes": 2352
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/memory-regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/memory-regression-r1.log",
+      "sha256": "5667ebfa8c65f9e2e255ba3ae27d947ec2db79ecf934530e005e5da63a059b48",
+      "bytes": 1701
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/read-authority-regression.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/read-authority-regression.log",
+      "sha256": "f629065e46cb76fbbe698aa72a30d4b8d4f1d487f54c7967425efe977100aa33",
+      "bytes": 21583
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/read-producer-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/read-producer-r1.log",
+      "sha256": "8955442bad3579debbf9bbf33c8f4e7d7c3193701ea2b06c33e0d278db96ebfd",
+      "bytes": 289
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/runtime-regression-final-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/runtime-regression-final-r1.log",
+      "sha256": "16906712656547ffa2475a419af07a482aaca1ab63ae799aa0093f435acf0b2c",
+      "bytes": 25916
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/runtime-regression-final-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/runtime-regression-final-r2.log",
+      "sha256": "9dfdcb25cd70dd649d335a7d6636acb21a3f7ac13bebdc9c56cb0fffb4f6feb6",
+      "bytes": 24907
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/scope-red.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/scope-red.log",
+      "sha256": "8dcbb4cdbeea401f395273c17f4d161d031a7ebec30fe38d27a648595f177a19",
+      "bytes": 1423
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/scope-regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/scope-regression-r1.log",
+      "sha256": "157d455cecde8e914085921c63ac900044bfaeb4d9431091553ef56e1619c8c6",
+      "bytes": 4558
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/scope-regression-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/scope-regression-r2.log",
+      "sha256": "5ee376aa46743de498c2ae20b665354556fb8a9ef42c82a06a4bbf28a262abfa",
+      "bytes": 3740
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/sdk-build-final-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/sdk-build-final-r1.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/sdk-regression-final-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/sdk-regression-final-r1.log",
+      "sha256": "028b3ebbd7897616070a7e61698fe28271056e5389dc25e39b3877d5ecfd45bb",
+      "bytes": 19229
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/typecheck-final-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/typecheck-final-r1.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/typecheck-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/typecheck-r1.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/typecheck-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/typecheck-r2.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/typecheck-r3.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/typecheck-r3.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/usage-compiler-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/usage-compiler-r1.log",
+      "sha256": "8c678a03196bf6395440fcb7039a384b2e43232179356b33e49c45784b46c180",
+      "bytes": 2583
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/usage-red.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/usage-red.log",
+      "sha256": "6769f6dcb2ef7ea2f5b336e065033fa2ba6482ced36b3de0c6f186a41ec0644f",
+      "bytes": 5462
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/usage-regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/usage-regression-r1.log",
+      "sha256": "3be56663ef07572d02d3f936fe7cb3e44c63275a0b82883a53627f5e8cf7e2ca",
+      "bytes": 13548
+    },
+    {
+      "originalPath": ".tmp/b14-continuation/usage-regression-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B14/continuation-20261125/published-captures/usage-regression-r2.log",
+      "sha256": "7dacebeba91119cdb373d3edd6f89d07f5e2e4e175157831097ccad215a85aee",
+      "bytes": 8386
+    }
+  ],
+  "limits": [
+    "Copies preserve the recorded local observations; not formal roadmap acceptance or full source closure.",
+    "Original artifact hashes may name historical ignored builds; publication does not manufacture executable availability."
+  ]
+}

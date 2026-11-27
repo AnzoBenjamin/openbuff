@@ -1,0 +1,55 @@
+bun test v1.4.4 (38afee6c8)
+
+common/src/__tests__/json-schema.test.ts:
+(pass) exact JSON Schema boundaries > tuple projections preserve native length and item acceptance, including empty and rest tuples [69.77ms]
+(pass) exact JSON Schema boundaries > advisory tuples retain short inputs accepted by executable host members [8.49ms]
+(pass) exact JSON Schema boundaries > reserved external root fields refuse without treating nested or output fields as control [3.66ms]
+(pass) exact JSON Schema boundaries > required prototype names need actual own JSON members [17.64ms]
+(pass) exact JSON Schema boundaries > refuses prototype map entries that the compiler silently omits at every schema scope [0.34ms]
+(pass) exact JSON Schema boundaries > optional prototype properties stay optional with empty and unrelated required arrays [30.34ms]
+(pass) exact JSON Schema boundaries > refuses large closed maps whose hasOwnProperty schema would crash validation [8.40ms]
+(pass) exact JSON Schema boundaries > fractional multipleOf uses exact decimal divisibility, including exponents [13.78ms]
+(pass) exact JSON Schema boundaries > preserves closed required objects in validation, transport and nested projection [11.97ms]
+(pass) exact JSON Schema boundaries > preserves schema-valued additional properties in validation, transport and nested projection [6.54ms]
+(pass) exact JSON Schema boundaries > preserves enum siblings in validation, transport and nested projection [7.13ms]
+(pass) exact JSON Schema boundaries > preserves not in validation, transport and nested projection [6.22ms]
+(pass) exact JSON Schema boundaries > preserves allOf required closed objects in validation, transport and nested projection [9.72ms]
+(pass) exact JSON Schema boundaries > preserves oneOf exclusivity in validation, transport and nested projection [6.36ms]
+(pass) exact JSON Schema boundaries > preserves conditional schemas in validation, transport and nested projection [9.09ms]
+(pass) exact JSON Schema boundaries > preserves unique and contains in validation, transport and nested projection [10.52ms]
+(pass) exact JSON Schema boundaries > preserves Unicode code point length in validation, transport and nested projection [6.16ms]
+(pass) exact JSON Schema boundaries > preserves tuple constraints in validation, transport and nested projection [6.08ms]
+(pass) exact JSON Schema boundaries > supports boolean schemas and never under composition [14.06ms]
+(pass) exact JSON Schema boundaries > preserves literal values, descriptions and nonmutating defaults [2.55ms]
+(pass) exact JSON Schema boundaries > resolves local references without leaking their root into nested provider schemas [4.10ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"string"} [0.07ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"type":"object","unevaluatedProperties":false} [1.94ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"type":"string","format":"not-a-known-format"} [1.90ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"$ref":"https://example.test/schema.json"} [0.03ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"$ref":"#/definitions/missing"} [4.13ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"definitions":{"":{"type":"string"}},"$ref":"#/definitions/"} [2.30ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"definitions":{"alias":{"$ref":"#/definitions/target","properties":{"value":{"type":"number"}}},"target":{"properties":{"value":{"type":"string"}}}},"$ref":"#/definitions/alias/properties/value"} [2.23ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"$ref":"#"} [2.01ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"$async":true,"type":"string"} [0.03ms]
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"type":"integer","minimum":null}
+(pass) exact JSON Schema boundaries > refuses unsupported schemas explicitly: {"type":"string"}
+(pass) exact JSON Schema boundaries > checks prompt type declarations without evaluating a sentinel [0.31ms]
+
+common/src/util/__tests__/run-output-schema.test.ts:
+(pass) nonexecutable run-output schema capture > nonenumerable toJSON cannot replace the inspected schema or execute [0.48ms]
+(pass) nonexecutable run-output schema capture > accessors are rejected without evaluating their returned schema [0.09ms]
+(pass) nonexecutable run-output schema capture > symbol and sparse-array data refuse instead of disappearing during capture [0.07ms]
+(pass) nonexecutable run-output schema capture > literal $ref output property names and literal annotation data are not schema references [6.70ms]
+(pass) nonexecutable run-output schema capture > plain parsed JSON retains its exact prototype-like property names and validation constraints [3.97ms]
+
+common/src/types/__tests__/print-mode-usage.test.ts:
+(pass) per-request usage events > explicit zero counts are representable and missing usage stays unknown [1.89ms]
+(pass) per-request usage events > invalid counts cannot cross the public usage schema [0.22ms]
+(pass) per-request usage events > invalid counts cannot cross the public usage schema [0.12ms]
+(pass) per-request usage events > invalid counts cannot cross the public usage schema [0.04ms]
+(pass) per-request usage events > invalid counts cannot cross the public usage schema [0.02ms]
+
+ 43 pass
+ 0 fail
+ 428 expect() calls
+Ran 43 tests across 3 files. [366.00ms]

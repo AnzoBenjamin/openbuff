@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "reviewKind": "scoped-static-postfix",
+  "verdict": "no-confirmed-new-finding",
+  "authenticatedVerificationReceipt": false,
+  "testsExecuted": false,
+  "scope": "Changed contract and serialized-manager blocks, plus their memory-agents.test.ts regressions",
+  "sha256": {
+    "agents/memory/contracts.ts": "a58ef177867405eeb627c6acb66a99723d11c98592f995cc042e75c627e0dfb7",
+    "agents/memory/memory-manager.ts": "1fd2e51b942a052743209cc660c899c00e67cff83d0bd227354552d78addf329",
+    "agents/memory/memory-agents.test.ts": "87472bd7588eb00ed10f60635ee395c6d51addf371b1344a83751b0704af6315"
+  },
+  "priorFindings": {
+    "multilineTraversal": "addressed in reviewed pattern",
+    "blankHostEvidenceReferences": "addressed in base and verifiedKnowledge-conditional item schemas",
+    "discardedChildFailureDiagnostics": "addressed with generator-local bounded reasons and unavailable omissions"
+  },
+  "coverageSuggestions": [
+    "Future regressions could cover U+2029 and control-only paths without traversal, rejected acceptance, receipt-nested causes, reviewer-side failure, and oversized diagnostic truncation. No tests were added or run by this review."
+  ],
+  "hostReadEnforcement": {
+    "status": "unresolved",
+    "reviewed": false,
+    "reason": "Separate coder owns strict read enforcement; excluded from this review."
+  }
+}

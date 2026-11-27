@@ -1,17 +1,20 @@
 import { MAX_TRANSACTION_FILE_BYTES } from '@codebuff/common/actions'
-import { replaceRangeParams } from '@codebuff/common/tools/params/tool/replace-range'
+import {
+  preparedRangeMutationSchema,
+  replaceRangeParams,
+} from '@codebuff/common/tools/params/tool/replace-range'
 import {
   decodeReadCapabilityToken,
-  getContentHash,
   getExactContentHash,
-  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 import {
-  describeReanchorFailure,
-  getLineCoordinates,
-  reanchorCapabilityRange,
-} from '@codebuff/common/util/line-coordinates'
+  captureTextDocument,
+  describeRawReadFailure,
+  reanchorRawReadCapability,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
+import { getLineCoordinates } from '@codebuff/common/util/line-coordinates'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { boundedDiagnosticEcho, changeFile } from './change-file'
 
@@ -21,59 +24,13 @@ import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { FileFilter } from './read-files'
 import type { FilesystemAuthorityPolicy } from './filesystem-authority'
+import type { CapturedTextDocument } from '@codebuff/common/util/byte-text'
 
 function errorResult(
   file: string,
   errorMessage: string,
 ): CodebuffToolOutput<'replace_range'> {
   return [{ type: 'json', value: { file, errorMessage } }]
-}
-
-/**
- * Raw span of the 1-indexed range [startLine, endLine], ending just past
- * endLine's text and before its terminator. Normalization only rewrites
- * newlines, so raw terminators can be spliced around verbatim; the walk (and
- * therefore `sawCrlf`) stops at endLine.
- */
-function getRawRangeSpan(
-  content: string,
-  lines: string[],
-  startLine: number,
-  endLine: number,
-): { start: number; end: number; sawCrlf: boolean } {
-  let cursor = 0
-  let start = 0
-  let end = 0
-  let sawCrlf = false
-  for (let index = 0; index < endLine; index++) {
-    if (index === startLine - 1) start = cursor
-    end = cursor + lines[index]!.length
-    if (content.startsWith('\r\n', end)) {
-      sawCrlf = true
-      cursor = end + 2
-    } else {
-      cursor = end < content.length ? end + 1 : end
-    }
-  }
-  return { start, end, sawCrlf }
-}
-
-/**
- * Terminator for multi-line newContent, preferred from inside the replaced
- * span, then from the terminator ending it, then from the CRLF seen up to
- * endLine. `normalizeLineEndings` maps only \r\n, so CR-only files are out of
- * scope: a lone CR is content, not a terminator.
- */
-function getRangeLineEnding(
-  content: string,
-  span: { start: number; end: number; sawCrlf: boolean },
-): '\r\n' | '\n' {
-  const replaced = content.slice(span.start, span.end)
-  if (replaced.includes('\r\n')) return '\r\n'
-  if (replaced.includes('\n')) return '\n'
-  if (content.startsWith('\r\n', span.end)) return '\r\n'
-  if (content.startsWith('\n', span.end)) return '\n'
-  return span.sawCrlf ? '\r\n' : '\n'
 }
 
 export async function replaceRange(params: {
@@ -87,14 +44,39 @@ export async function replaceRange(params: {
   filesystemPolicy?: FilesystemAuthorityPolicy
   logger?: Logger
 }): Promise<CodebuffToolOutput<'replace_range'>> {
+  const rawParameters =
+    typeof params.parameters === 'object' && params.parameters !== null
+      ? (params.parameters as Record<string, unknown>)
+      : null
+  if (rawParameters?.type === 'file') {
+    const prepared = preparedRangeMutationSchema.safeParse(params.parameters)
+    if (!prepared.success) {
+      return errorResult(
+        rawParameters.path === undefined
+          ? ''
+          : boundedDiagnosticEcho(rawParameters.path),
+        'Missing or invalid prepared replace_range parameters.',
+      )
+    }
+    // The runtime authenticated and spliced its lossless current source.
+    // Recheck both preimages against the SDK's initial snapshot before commit.
+    return changeFile({
+      parameters: prepared.data,
+      expectedExactHash: prepared.data.expectedRawHash,
+      cwd: params.cwd,
+      fs: params.fs,
+      signal: params.signal,
+      fileFilter: params.fileFilter,
+      callId: params.callId,
+      filesystemPolicy: params.filesystemPolicy,
+      capabilityIssuer: params.capabilityIssuer,
+      logger: params.logger,
+    })
+  }
   const parsed = replaceRangeParams.inputSchema.safeParse(params.parameters)
   if (!parsed.success) {
     // Echo a best-effort, length-bounded path so the agent can tell which call
     // failed even though the input never parsed.
-    const rawParameters =
-      typeof params.parameters === 'object' && params.parameters !== null
-        ? (params.parameters as Record<string, unknown>)
-        : null
     return errorResult(
       // No path supplied stays the empty path; any other unusable value becomes
       // `boundedDiagnosticEcho`'s obviously synthetic `(unparsed)` sentinel, so
@@ -124,7 +106,7 @@ export async function replaceRange(params: {
   }
 
   const { operationPath: fullPath, relativePath } = resolvedPath
-  // `rawInputSchema.superRefine` already rejected any undecodable or non-cap.v3
+  // `rawInputSchema.superRefine` already rejected any undecodable capability,
   // token, so only the scope can still mismatch; the `typeof` test is narrowing.
   const decoded = decodeReadCapabilityToken(input.readCapability)
   if (
@@ -136,7 +118,7 @@ export async function replaceRange(params: {
   ) {
     return errorResult(
       relativePath,
-      `replace_range blocked: the readCapability belongs to a different project, path, or agent run. Re-read ${relativePath} in this run and copy its cap.v3 token.`,
+      `replace_range blocked: the readCapability belongs to a different project, path, or agent run. Re-read ${relativePath} in this run and copy its cap.v4 token.`,
     )
   }
 
@@ -150,9 +132,9 @@ export async function replaceRange(params: {
     )
   }
 
-  let oldContent: string
+  let raw: string | NodeJS.ArrayBufferView
   try {
-    oldContent = await params.fs.readFile(fullPath, 'utf-8')
+    raw = await params.fs.readFile(fullPath)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const code =
@@ -168,7 +150,8 @@ export async function replaceRange(params: {
   // Refuse an already-oversize target before normalizing and splitting it: no
   // range edit to such a file could be committed anyway, and rejecting here
   // avoids materializing the normalized copy and the line array for it.
-  const oldBytes = Buffer.byteLength(oldContent)
+  const oldBytes =
+    typeof raw === 'string' ? Buffer.byteLength(raw) : raw.byteLength
   if (oldBytes > MAX_TRANSACTION_FILE_BYTES) {
     return errorResult(
       relativePath,
@@ -176,8 +159,26 @@ export async function replaceRange(params: {
     )
   }
 
-  const coordinates = getLineCoordinates(oldContent)
-  const { normalized: normalizedOldContent, lines } = coordinates
+  let document: CapturedTextDocument
+  let normalizedNewContent: string
+  try {
+    document = captureTextDocument(
+      typeof raw === 'string'
+        ? raw
+        : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
+    )
+    normalizedNewContent = captureTextDocument(input.newContent, {
+      includesBom: false,
+    }).observation
+  } catch {
+    return errorResult(
+      relativePath,
+      'replace_range rejected: source and newContent must be valid lossless UTF-8 text.',
+    )
+  }
+  const oldContent = document.rawText
+  const coordinates = getLineCoordinates(document.observation)
+  const { lines } = coordinates
 
   // The schema contains the target inside the capability range, and a
   // successful re-anchor below proves that range sits inside the current file,
@@ -190,15 +191,11 @@ export async function replaceRange(params: {
   // Freshness is proven by locating the exact observed slice, which tolerates
   // lines inserted or deleted ABOVE the span without widening what the
   // capability authorizes: a missing or duplicated span still fails closed.
-  // The match is LF-normalized, so a purely CRLF<->LF external rewrite is not
-  // detected here; any content-level change still fails to match, and the
-  // byte-exact expectation passed to `changeFile` below refuses the commit if
-  // only the terminators changed.
-  const reanchored = reanchorCapabilityRange({
-    coordinates,
-    startLine: input.capabilityStartLine,
-    endLine: input.capabilityEndLine,
-    expectedHash: input.capabilityHash,
+  // The authenticated raw slice includes its BOM/terminator identity. Whole
+  // observations refuse all raw drift; scoped relocation requires uniqueness.
+  const reanchored = reanchorRawReadCapability({
+    content: oldContent,
+    capability: decoded,
   })
   if (!reanchored.ok) {
     // Stale bounds are only reported once relocation has also failed: a
@@ -220,7 +217,7 @@ export async function replaceRange(params: {
     }
     return errorResult(
       relativePath,
-      `replace_range rejected: ${relativePath} changed after the readCapability was issued (${describeReanchorFailure(reanchored)}). Re-read the exact target in this run and retry with the fresh cap.v3 token.`,
+      `replace_range rejected: ${relativePath} changed after the readCapability was issued (${describeRawReadFailure(reanchored)}). Re-read the exact target in this run and retry with the fresh cap.v4 token.`,
     )
   }
   if (reanchored.shiftedBy !== undefined) {
@@ -235,7 +232,6 @@ export async function replaceRange(params: {
   const currentRange = lines
     .slice(targetStartLine - 1, targetEndLine)
     .join('\n')
-  const normalizedNewContent = normalizeLineEndings(input.newContent)
   // Both sides are LF-normalized, so a line-endings-only edit is rejected as a
   // no-op: the splice below cannot apply newContent's terminator style anyway.
   if (currentRange === normalizedNewContent) {
@@ -247,23 +243,12 @@ export async function replaceRange(params: {
 
   // Splice on the raw content so bytes outside [startLine, endLine] keep their
   // original line terminators; `changeFile` is still handed the whole file.
-  const rawRangeSpan = getRawRangeSpan(
-    oldContent,
-    lines,
+  const updatedContent = spliceDocumentRange(
+    document,
     targetStartLine,
     targetEndLine,
+    input.newContent,
   )
-  // Single-line newContent has no terminator to rewrite, so the terminator
-  // inference — which slices and scans the whole replaced span — is skipped.
-  const splicedNewContent = normalizedNewContent.includes('\n')
-    ? normalizedNewContent
-        .split('\n')
-        .join(getRangeLineEnding(oldContent, rawRangeSpan))
-    : normalizedNewContent
-  const updatedContent =
-    oldContent.slice(0, rawRangeSpan.start) +
-    splicedNewContent +
-    oldContent.slice(rawRangeSpan.end)
   // `newContent` is unbounded in the schema and `changeFile` starts with
   // `FileContentChangeSchema.parse`, whose per-file byte refine *throws*. The
   // same bound is checked here so an oversize edit still returns this tool's
@@ -287,9 +272,8 @@ export async function replaceRange(params: {
       type: 'file',
       path: relativePath,
       content: updatedContent,
-      // `getContentHash` normalizes internally, so hashing the already
-      // normalized copy yields the identical digest without a second rewrite.
-      expectedHash: getContentHash(normalizedOldContent),
+      expectedHash: document.observationHash,
+      expectedRawHash: document.rawHash,
     },
     expectedExactHash: getExactContentHash(oldContent),
     cwd: params.cwd,

@@ -4,6 +4,7 @@ import {
   setAllBlocksCollapsedState,
   hasAnyExpandedBlocks,
 } from '../collapse-helpers'
+import { createAgentBlock as createRuntimeAgentBlock } from '../message-block-helpers'
 
 import type {
   ChatMessage,
@@ -137,9 +138,9 @@ describe('hasAnyExpandedBlocks', () => {
       expect(hasAnyExpandedBlocks(messages)).toBe(false)
     })
 
-    test('returns false for agent variant message with undefined isCollapsed (treated as collapsed)', () => {
+    test('detects the renderer-expanded default of legacy agent messages', () => {
       const messages = [createMessage('1', 'agent')]
-      expect(hasAnyExpandedBlocks(messages)).toBe(false)
+      expect(hasAnyExpandedBlocks(messages)).toBe(true)
     })
   })
 
@@ -351,17 +352,14 @@ describe('setAllBlocksCollapsedState', () => {
       const messages = [createMessage('1', 'agent')]
       const result = setAllBlocksCollapsedState(messages, true)
 
-      // undefined is treated as collapsed, so no change should be made
-      expect(result[0]).toBe(messages[0])
+      expect(result[0]?.metadata?.isCollapsed).toBe(true)
     })
 
     test('expands agent variant message with undefined isCollapsed', () => {
       const messages = [createMessage('1', 'agent')]
       const result = setAllBlocksCollapsedState(messages, false)
 
-      // undefined is treated as collapsed, so expand should work
-      expect(result[0]?.metadata?.isCollapsed).toBe(false)
-      expect(result[0]?.metadata?.userOpened).toBe(true)
+      expect(result[0]).toBe(messages[0])
     })
   })
 
@@ -729,8 +727,7 @@ describe('setAllBlocksCollapsedState', () => {
 
       const result = setAllBlocksCollapsedState([message], true)
 
-      // undefined metadata is treated as collapsed, so no change should be made
-      expect(result[0]).toBe(message)
+      expect(result[0]?.metadata?.isCollapsed).toBe(true)
     })
 
     test('handles message with undefined metadata for agent variant when expanding', () => {
@@ -739,9 +736,7 @@ describe('setAllBlocksCollapsedState', () => {
 
       const result = setAllBlocksCollapsedState([message], false)
 
-      // undefined metadata is treated as collapsed, so expand should work
-      expect(result[0]?.metadata?.isCollapsed).toBe(false)
-      expect(result[0]?.metadata?.userOpened).toBe(true)
+      expect(result[0]).toBe(message)
     })
   })
 })
@@ -904,7 +899,7 @@ describe('toggle-all edge cases', () => {
     })
 
     test('setAllBlocksCollapsedState: expands all 3 levels with undefined states', () => {
-      // All undefined (treated as collapsed)
+      // Agents default expanded; the nested tool defaults collapsed.
       const level3Blocks = [createToolBlock('deep-tool')]
       const level2Blocks = [
         createAgentBlock('level2-agent', undefined, undefined, level3Blocks),
@@ -917,12 +912,10 @@ describe('toggle-all edge cases', () => {
       const result = setAllBlocksCollapsedState(messages, false)
 
       const level1 = result[0]?.blocks?.[0] as AgentContentBlock
-      expect(level1?.isCollapsed).toBe(false)
-      expect(level1?.userOpened).toBe(true)
+      expect(level1?.isCollapsed).toBeUndefined()
 
       const level2 = level1?.blocks?.[0] as AgentContentBlock
-      expect(level2?.isCollapsed).toBe(false)
-      expect(level2?.userOpened).toBe(true)
+      expect(level2?.isCollapsed).toBeUndefined()
 
       const level3 = level2?.blocks?.[0] as CollapsibleBlock
       expect(level3?.isCollapsed).toBe(false)
@@ -1098,24 +1091,22 @@ describe('toggle-all edge cases', () => {
       )
     })
 
-    test('toggle: fresh session with undefined states expands all', () => {
+    test('toggle: a fresh runtime agent collapses first, then expands predictably', () => {
       // Simulates first Ctrl+T on fresh session
       const messages = [
         createMessage('1', 'ai', [
           createToolBlock('tool-1'), // undefined = collapsed
-          createAgentBlock('agent-1'), // undefined = collapsed
+          createRuntimeAgentBlock({agentId: 'agent-1', agentType: 'general-agent'}),
         ]),
       ]
 
-      // Check if any expanded (should be false since undefined = collapsed)
       const hasExpanded = hasAnyExpandedBlocks(messages)
-      expect(hasExpanded).toBe(false)
+      expect(hasExpanded).toBe(true)
 
-      // Expand all since none are expanded
-      const result = setAllBlocksCollapsedState(messages, false)
+      const result = setAllBlocksCollapsedState(messages, true)
 
-      // Verify all are now expanded
-      expect(hasAnyExpandedBlocks(result)).toBe(true)
+      expect(hasAnyExpandedBlocks(result)).toBe(false)
+      expect(hasAnyExpandedBlocks(setAllBlocksCollapsedState(result, false))).toBe(true)
     })
 
     test('toggle: double-toggle returns to expanded state', () => {

@@ -10,7 +10,7 @@ import type { WidthLayoutHelper } from '../hooks/use-terminal-layout'
 
 /** Expanded (hovered) label. Short on purpose: the button reserves its width
  * permanently, so a longer hint would crowd the status-bar chips. */
-export const SCROLL_HINT_LABEL = '↓ Bottom'
+export const SCROLL_HINT_LABEL = '↓ Latest'
 
 /**
  * Fixed width of the expanded button: the hint label plus one column of padding
@@ -20,10 +20,10 @@ export const SCROLL_HINT_LABEL = '↓ Bottom'
  */
 export const SCROLL_BUTTON_WIDTH = stringWidth(SCROLL_HINT_LABEL) + 2
 
-/** Resting/compact glyph. */
-export const SCROLL_GLYPH = '↓'
+/** Resting/compact label, visible without hover. */
+export const SCROLL_GLYPH = 'Latest'
 
-/** Fixed width of the compact (narrow-terminal) form: glyph plus padding. */
+/** Fixed width of the compact (narrow-terminal) form: label plus padding. */
 export const SCROLL_BUTTON_COMPACT_WIDTH = stringWidth(SCROLL_GLYPH) + 2
 
 /** Single source for which form the button renders; StatusBar uses the same
@@ -45,6 +45,7 @@ export const ScrollToBottomButton = ({
 
   return (
     <Button
+      id="chat-latest"
       style={{
         // Fixed width and stable padding: the hovered and resting states must
         // occupy identical space or the whole status row reflows on hover.

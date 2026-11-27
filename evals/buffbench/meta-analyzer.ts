@@ -144,6 +144,8 @@ Focus on actionable patterns that can inform agent improvements, not individual 
 }
 
 export async function analyzeAllTasks(params: {
+  env?: Record<string, string>
+  inheritEnv?: boolean
   client: OpenbuffClient
   logsDir: string
   agents: string[]
@@ -240,8 +242,12 @@ Analyze these results to identify:
 Focus on patterns across multiple tasks, not individual task details.`
 
     const agentOutput: string[] = []
+    const controller = new AbortController()
     const analyzerResult = await withTimeout(
       client.run({
+        signal: controller.signal,
+        env: params.env,
+        inheritEnv: params.inheritEnv,
         agent: 'buffbench-meta-analyzer',
         prompt,
         agentDefinitions: [metaAnalyzerAgent],
@@ -257,6 +263,7 @@ Focus on patterns across multiple tasks, not individual task details.`
       }),
       30 * 60 * 1000,
       'Meta analyzer agent timed out after 30 minutes',
+      { controller },
     )
 
     const { output } = analyzerResult

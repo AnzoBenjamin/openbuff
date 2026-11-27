@@ -1,0 +1,62 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { SidecarSupervisor } from '/home/ben/Code/CLI/openbuff/sdk/src/services/sidecar-supervisor.ts'
+
+const evidence = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const work = path.join(evidence, '09-work')
+const fake = path.join(work, '09-fake-sidecar.py')
+fs.writeFileSync(fake, "import sys,json,os\nfor line in sys.stdin:\n try:\n  req=json.loads(line)\n  result={'protocolVersion':'1'} if req.get('method')=='initialize' else ('pong' if req.get('method')=='ping' else {'overridePresent':os.environ.get('OPENAI_API_KEY')=='09_OVERRIDE_SENTINEL'})\n  print(json.dumps({'jsonrpc':'2.0','id':req.get('id'),'result':result}),flush=True)\n except Exception: pass\n")
+process.env.OPENAI_API_KEY = '09_HOST_SENTINEL'
+let secondPid: number | undefined
+const supervisor = new SidecarSupervisor({sidecarPath:'/usr/bin/python3',args:[fake], protocolVersion:'1',requestTimeoutMs:1000,env:{OPENAI_API_KEY:'09_OVERRIDE_SENTINEL'}})
+let reusable: any
+try {
+  const first = await supervisor.start()
+  const envResult = await supervisor.request('env')
+  await supervisor.stop()
+  const second = await supervisor.start()
+  secondPid = second.pid
+  await supervisor.stop()
+  reusable = {firstPid:first.pid, secondPid, envResult, stateAfterSecondStop:supervisor.state, pingAfterSecondStop:await supervisor.request('ping')}
+} finally {
+  if (secondPid) {
+    try {
+      if (fs.readFileSync(`/proc/${secondPid}/cmdline`,'utf8').includes(fake)) process.kill(secondPid,'SIGKILL')
+    } catch {}
+  }
+}
+
+const native = new SidecarSupervisor({sidecarPath:path.join(evidence,'rust-target/debug/openbuff-native'),args:['exec'],protocolVersion:'1',requestTimeoutMs:500,maxRestartAttempts:0})
+let nativeAdapter: any
+try {
+  const started = await native.start()
+  try {
+    const value = await native.request('execute',{cmd:'/bin/echo',args:['09_NEVER_EXECUTED'],env:[],no_landlock:true})
+    nativeAdapter = {handshake:started, value}
+  } catch (error: any) {
+    nativeAdapter = {handshake:started, requestError:{name:error.name,reason:error.reason,message:error.message,cause:error.cause}}
+  }
+} finally { await native.stop() }
+
+// Replace protocol connect/close in this one throwaway process: constructors
+// remain real; no transport starts and no socket/stdio child can be created.
+const require = createRequire('/home/ben/Code/CLI/openbuff/common/src/mcp/client.ts')
+const {Client} = require('@modelcontextprotocol/sdk/client/index.js')
+const originalConnect = Client.prototype.connect
+const originalClose = Client.prototype.close
+let connects = 0, closes = 0
+Client.prototype.connect = async function() { connects++ }
+Client.prototype.close = async function() { closes++ }
+let mcp: any
+try {
+  const {getMCPClient} = await import('/home/ben/Code/CLI/openbuff/common/src/mcp/client.ts')
+  for (let i=0;i<65;i++) await getMCPClient({type:'stdio',command:'09-NOT-SPAWNED',args:[String(i)],env:{}},{origin:'project'})
+  mcp = {fakeConnections:connects, closesOnEviction:closes, expectedRegistryLimit:64}
+} finally {
+  Client.prototype.connect = originalConnect
+  Client.prototype.close = originalClose
+}
+const result = {reusable,nativeAdapter,mcp,constraints:'Two own Python fake sidecars with verified argv/PID cleanup. Native request cannot execute a payload because it is deliberately a JSON-RPC envelope. MCP connects are fake and never start transports. Only known synthetic environment sentinel values were inspected.'}
+fs.writeFileSync(path.join(evidence,'09-supervisor-probe.json'),JSON.stringify(result,null,2))
+console.log(JSON.stringify(result,null,2))

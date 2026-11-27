@@ -1,0 +1,7 @@
+# Acquisition selection only. Verification never invokes mise install.
+[tools]
+bun = "1.4.4"
+node = "26.1.0"
+
+# Rust remains rust/rust-toolchain.toml channel 1.87.0.
+# Its separately reviewed acquisition must not silently select system 1.99.1.

@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto'
 import { deriveClaimId } from '@codebuff/common/util/claim-identity'
 import { STABLE_CHUNK_ID_RE } from '@codebuff/common/util/contradiction-detector'
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
+import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
+import { redactSecretValues } from '@codebuff/common/util/redact-secrets'
 
 import {
   MemoryAppendOutcomeSchema,
@@ -34,6 +37,7 @@ import type {
 import {
   fileMutationResultV1Schema,
   getConfirmedAppliedActionsV1,
+  readFilesResultV1Schema,
 } from '@codebuff/common/tools/results/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
@@ -123,14 +127,25 @@ const DIMENSION_MAP: Readonly<Record<string, 'tests' | 'validation'>> = {
   get_change_review_bundle: 'validation',
 }
 
-function inferCoverageDimension(toolName: string): 'tests' | 'validation' | undefined {
+function inferCoverageDimension(
+  toolName: string,
+): 'tests' | 'validation' | undefined {
   return DIMENSION_MAP[toolName]
 }
 
-export type ObservationKindHint = 'decision' | 'fact' | 'discovery' | 'outcome' | 'constraint'
+export type ObservationKindHint =
+  | 'decision'
+  | 'fact'
+  | 'discovery'
+  | 'outcome'
+  | 'constraint'
 
 const DECISION_TOOL_NAMES: ReadonlySet<string> = new Set(['create_plan'])
-const REASONING_TOOL_NAMES: ReadonlySet<string> = new Set(['architect', 'thinker', 'think_deeply'])
+const REASONING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'architect',
+  'thinker',
+  'think_deeply',
+])
 const DECISION_STRUCTURAL_KEYS: ReadonlyArray<string> = [
   'decision',
   'conclusion',
@@ -162,7 +177,9 @@ function hasNonEmptyField(value: unknown): boolean {
   return false
 }
 
-function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean {
+function valuesContainDecisionSignal(
+  values: Record<string, unknown>[],
+): boolean {
   for (const value of values.slice(0, 16)) {
     for (const key of DECISION_STRUCTURAL_KEYS) {
       const candidate = value[key]
@@ -173,7 +190,13 @@ function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean
         return true
       }
     }
-    for (const key of ['summary', 'detail', 'content', 'text', 'reasoning'] as const) {
+    for (const key of [
+      'summary',
+      'detail',
+      'content',
+      'text',
+      'reasoning',
+    ] as const) {
       const candidate = value[key]
       if (
         typeof candidate === 'string' &&
@@ -185,7 +208,9 @@ function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean
   return false
 }
 
-function valuesContainConstraintSignal(values: Record<string, unknown>[]): boolean {
+function valuesContainConstraintSignal(
+  values: Record<string, unknown>[],
+): boolean {
   for (const value of values.slice(0, 16)) {
     for (const key of CONSTRAINT_STRUCTURAL_KEYS) {
       const candidate = value[key]
@@ -196,7 +221,13 @@ function valuesContainConstraintSignal(values: Record<string, unknown>[]): boole
         return true
       }
     }
-    for (const key of ['summary', 'detail', 'content', 'text', 'reasoning'] as const) {
+    for (const key of [
+      'summary',
+      'detail',
+      'content',
+      'text',
+      'reasoning',
+    ] as const) {
       const candidate = value[key]
       if (
         typeof candidate === 'string' &&
@@ -274,7 +305,10 @@ function normalizeProjectPath(candidate: unknown): string | undefined {
   return decision.allowed ? decision.normalizedPath : undefined
 }
 
-function collectPaths(input: unknown, values: Record<string, unknown>[]): string[] {
+function collectPaths(
+  input: unknown,
+  values: Record<string, unknown>[],
+): string[] {
   const paths = new Set<string>()
   const add = (candidate: unknown) => {
     const normalized = normalizeProjectPath(candidate)
@@ -373,7 +407,8 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   if (!path) return undefined
   const startLine = boundedLineNumber(candidate.startLine)
   const endLine = boundedLineNumber(candidate.endLine)
-  if (startLine === undefined || endLine === undefined || endLine < startLine) return undefined
+  if (startLine === undefined || endLine === undefined || endLine < startLine)
+    return undefined
   const rawChunkId = candidate.chunkId
   let chunkId: string | undefined
   if (typeof rawChunkId === 'string' && rawChunkId.length > 0) {
@@ -387,13 +422,18 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
       const sanitized = rawSymbol.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 64)
       const occurrence = boundedLineNumber(candidate.occurrence) ?? startLine
       const synth = `${sanitized}:${occurrence}`.slice(0, 128)
-      chunkId = CHUNK_ID_RE.test(synth) ? synth : `lines-${startLine}-${endLine}`
+      chunkId = CHUNK_ID_RE.test(synth)
+        ? synth
+        : `lines-${startLine}-${endLine}`
     } else {
       chunkId = `lines-${startLine}-${endLine}`
     }
   }
   const rawQualified =
-    candidate.qualifiedName ?? candidate.symbol ?? candidate.name ?? candidate.title
+    candidate.qualifiedName ??
+    candidate.symbol ??
+    candidate.name ??
+    candidate.title
   let qualifiedName: string
   if (typeof rawQualified === 'string' && rawQualified.trim().length > 0) {
     qualifiedName = rawQualified.slice(0, 512)
@@ -411,7 +451,10 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   let observedDigest: string | undefined
   for (const key of ['hash', 'contentDigest', 'observedDigest', 'digest']) {
     const digestCandidate = candidate[key]
-    if (typeof digestCandidate === 'string' && VERIFY_DIGEST_RE.test(digestCandidate)) {
+    if (
+      typeof digestCandidate === 'string' &&
+      VERIFY_DIGEST_RE.test(digestCandidate)
+    ) {
       observedDigest = digestCandidate
       break
     }
@@ -441,10 +484,19 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   // itself stays schema-strict; the stable id is preserved in provenance
   // metadata at capture time (see chunkEvidence below).
   const stableChunkId = normalizeStableChunkId(candidate.stableChunkId)
-  return { selector, ...(stableChunkId ? { stableChunkId } : {}), ...(observedDigest ? { observedDigest } : {}), signature, ...(linesText ? { linesText } : {}) }
+  return {
+    selector,
+    ...(stableChunkId ? { stableChunkId } : {}),
+    ...(observedDigest ? { observedDigest } : {}),
+    signature,
+    ...(linesText ? { linesText } : {}),
+  }
 }
 
-function collectChunkHints(input: unknown, values: Record<string, unknown>[]): CollectedChunk[] {
+function collectChunkHints(
+  input: unknown,
+  values: Record<string, unknown>[],
+): CollectedChunk[] {
   const collected: CollectedChunk[] = []
   const seen = new Set<string>()
   const push = (candidate: unknown) => {
@@ -465,7 +517,14 @@ function collectChunkHints(input: unknown, values: Record<string, unknown>[]): C
     push(candidate)
     pushArray(candidate.chunks)
     // Results/matches/entries may nest chunk hits one level deep.
-    for (const key of ['results', 'matches', 'entries', 'files', 'hits', 'symbols'] as const) {
+    for (const key of [
+      'results',
+      'matches',
+      'entries',
+      'files',
+      'hits',
+      'symbols',
+    ] as const) {
       const nested = candidate[key]
       if (!Array.isArray(nested)) continue
       for (const item of nested.slice(0, MAX_CHUNKS)) {
@@ -540,7 +599,8 @@ export function extractV1MigrationExtras(migration: V1MigrationOutcome): {
   sourceItemCount?: number
   truncatedFields?: number
 } {
-  if (migration.outcome !== 'imported' && migration.outcome !== 'no-op') return {}
+  if (migration.outcome !== 'imported' && migration.outcome !== 'no-op')
+    return {}
   const marker: unknown = migration
   if (!isRecord(marker)) return {}
   const extras: {
@@ -625,7 +685,9 @@ export function computeMemoryParity(params: {
   }
 }
 
-function countSummary(values: Record<string, unknown>[]): Record<string, number> {
+function countSummary(
+  values: Record<string, unknown>[],
+): Record<string, number> {
   const summary: Record<string, number> = {}
   const keys = [
     'results',
@@ -646,7 +708,11 @@ function countSummary(values: Record<string, unknown>[]): Record<string, number>
       if (Array.isArray(item)) {
         count += Math.min(item.length, 100)
         recognized = true
-      } else if (typeof item === 'number' && Number.isInteger(item) && item >= 0) {
+      } else if (
+        typeof item === 'number' &&
+        Number.isInteger(item) &&
+        item >= 0
+      ) {
         count += Math.min(item, 100)
         recognized = true
       }
@@ -694,10 +760,11 @@ export class MemoryV2Coordinator {
     events: MemoryEventDraft[],
     runtimeState: MemoryRuntimeStateV2,
     preparation?: PreparationOperation,
+    current = () => this.isCurrent(preparation),
   ): Promise<boolean> {
     let committed = false
     const queued = this.queue.then(async () => {
-      if (!this.isCurrent(preparation)) return
+      if (!current()) return
       if (events.length === 0) {
         committed = true
         return
@@ -709,13 +776,14 @@ export class MemoryV2Coordinator {
         events,
         runtimeState,
         preparation,
+        current,
       )
     })
     this.queue = queued.catch((error) => {
       this.logger?.warn({ error }, 'Memory V2 append failed')
     })
     await this.queue
-    return committed && this.isCurrent(preparation)
+    return committed && current()
   }
 
   private appendBounded(
@@ -738,11 +806,13 @@ export class MemoryV2Coordinator {
     events: MemoryEventDraft[],
     runtimeState: MemoryRuntimeStateV2,
     preparation?: PreparationOperation,
+    current = () => this.isCurrent(preparation),
   ): Promise<boolean> {
     let expectedTail = runtimeState.lastEventId
       ? { kind: 'event' as const, eventId: runtimeState.lastEventId }
       : { kind: 'empty' as const }
     for (let attempt = 0; ; attempt++) {
+      if (!current()) return false
       const outcome = MemoryAppendOutcomeSchema.parse(
         await repository.append(
           MemoryAppendRequestSchema.parse({
@@ -753,19 +823,29 @@ export class MemoryV2Coordinator {
           }),
         ),
       )
-      if (!this.isCurrent(preparation)) return false
+      if (!current()) return false
       if (outcome.outcome === 'appended') {
         runtimeState.lastEventId = outcome.lastEventId
         return true
       }
       this.logger?.warn(
-        { outcome: outcome.outcome, code: outcome.error.code, attempt },
+        {
+          outcome: outcome.outcome,
+          code: outcome.error.code,
+          message: outcome.error.message,
+          attempt,
+        },
         'Memory V2 append was not committed',
       )
-      const conflict = outcome.error.code === 'conflict' && outcome.error.retryable
+      const conflict =
+        outcome.error.code === 'conflict' && outcome.error.retryable
       if (!conflict || attempt >= MAX_CONFLICT_RETRIES) return false
-      const tail = await this.deriveRepositoryTail(repository, preparation)
-      if (!this.isCurrent(preparation) || tail.kind === 'failed') return false
+      const tail = await this.deriveRepositoryTail(
+        repository,
+        preparation,
+        current,
+      )
+      if (!current() || tail.kind === 'failed') return false
       expectedTail =
         tail.kind === 'empty'
           ? { kind: 'empty' }
@@ -776,6 +856,7 @@ export class MemoryV2Coordinator {
   private async deriveRepositoryTail(
     repository: MemoryRepositoryV2,
     preparation?: PreparationOperation,
+    current = () => this.isCurrent(preparation),
   ): Promise<TailDerivationResult> {
     let afterEventId: MemoryEventId | undefined
     let tail: MemoryEventId | undefined
@@ -788,18 +869,23 @@ export class MemoryV2Coordinator {
           ...(afterEventId ? { afterEventId } : {}),
           limit: 1_000,
         })
-        if (!this.isCurrent(preparation)) return { kind: 'failed' }
+        if (!current()) return { kind: 'failed' }
         const parsed = MemoryExportOutcomeSchema.safeParse(rawOutcome)
         if (!parsed.success || parsed.data.outcome !== 'page') {
           return { kind: 'failed' }
         }
         const outcome = parsed.data
-        if (outcome.events.some((event) => event.projectId !== this.config.projectId)) {
+        if (
+          outcome.events.some(
+            (event) => event.projectId !== this.config.projectId,
+          )
+        ) {
           return { kind: 'failed' }
         }
         if (outcome.rawTailEventId) tail = outcome.rawTailEventId
         const next = outcome.nextAfterEventId
-        if (!next) return tail ? { kind: 'found', eventId: tail } : { kind: 'empty' }
+        if (!next)
+          return tail ? { kind: 'found', eventId: tail } : { kind: 'empty' }
         if (next === afterEventId || seenCursors.has(next)) {
           return { kind: 'failed' }
         }
@@ -824,6 +910,7 @@ export class MemoryV2Coordinator {
     reason: MemoryAuthorityReasonCode,
   ): void {
     agentState.memoryV2Context = undefined
+    agentState.playbookContext = []
     if (!agentState.memoryAuthority) return
     agentState.memoryAuthority.active =
       agentState.memoryAuthority.requested === 'sqlite-v2-opt-in'
@@ -861,6 +948,9 @@ export class MemoryV2Coordinator {
       memoryV2Context: params.agentState.memoryV2Context
         ? structuredClone(params.agentState.memoryV2Context)
         : undefined,
+      playbookContext: params.agentState.playbookContext
+        ? structuredClone(params.agentState.playbookContext)
+        : [],
     }
     const invalidate = () => {
       if (this.activePreparation !== operation) return
@@ -876,6 +966,7 @@ export class MemoryV2Coordinator {
       params.agentState.memoryV2 = stagedState.memoryV2
       params.agentState.memoryV2Context = stagedState.memoryV2Context
       params.agentState.memoryAuthority = stagedState.memoryAuthority
+      params.agentState.playbookContext = stagedState.playbookContext
       this.runtimeState = operation.runtimeState
       this.queryTerminal = operation.queryTerminal
       this.preparationReady = operation.ready
@@ -883,9 +974,14 @@ export class MemoryV2Coordinator {
     }
 
     try {
-      const { requested, invalidAuthority } =
-        getEffectiveMemoryAuthority(this.config)
+      const { requested, invalidAuthority } = getEffectiveMemoryAuthority(
+        this.config,
+      )
       stagedState.memoryV2Context = undefined
+      // Playbooks are staged and cleared on the same terms as the injected V2
+      // context: a fresh turn starts with no inherited rules until the
+      // preparation below reinstalls them for this workspace.
+      stagedState.playbookContext = []
       stagedState.memoryAuthority = {
         schemaVersion: 1,
         userInputId: params.trustedUserInputId.slice(0, 128),
@@ -932,14 +1028,18 @@ export class MemoryV2Coordinator {
     }
   }
 
-  private async prepareConfiguredTurn(params: {
-    agentState: AgentState
-    trustedUserInputId: string
-    query: string
-    workspaceState?: WorkspaceStateV1
-    resumeInterruptedTurn?: boolean
-    signal?: AbortSignal
-  }, authority: Exclude<MemoryAuthorityMode, 'json-v1'>, operation: PreparationOperation): Promise<void> {
+  private async prepareConfiguredTurn(
+    params: {
+      agentState: AgentState
+      trustedUserInputId: string
+      query: string
+      workspaceState?: WorkspaceStateV1
+      resumeInterruptedTurn?: boolean
+      signal?: AbortSignal
+    },
+    authority: Exclude<MemoryAuthorityMode, 'json-v1'>,
+    operation: PreparationOperation,
+  ): Promise<void> {
     const repository = this.config.repository
     if (!repository) {
       this.applyDegradedState(params.agentState, 'backend-unavailable')
@@ -1065,7 +1165,10 @@ export class MemoryV2Coordinator {
           omittedFields: migration.omittedFields,
           warningCodes: migration.warnings,
         }
-      } else if (migration.outcome === 'rejected' || migration.outcome === 'failed') {
+      } else if (
+        migration.outcome === 'rejected' ||
+        migration.outcome === 'failed'
+      ) {
         const reason: MemoryAuthorityReasonCode =
           migration.reason === 'checksum-mismatch'
             ? 'migration-checksum-mismatch'
@@ -1074,8 +1177,12 @@ export class MemoryV2Coordinator {
               : 'migration-failed'
         params.agentState.memoryAuthority!.v1Import = {
           status: 'failed',
-          ...(migration.revision !== undefined ? { revision: migration.revision } : {}),
-          ...(migration.checksum ? { checksum: migration.checksum.slice(0, 256) } : {}),
+          ...(migration.revision !== undefined
+            ? { revision: migration.revision }
+            : {}),
+          ...(migration.checksum
+            ? { checksum: migration.checksum.slice(0, 256) }
+            : {}),
           reason,
         }
         this.applyDegradedState(params.agentState, reason)
@@ -1147,21 +1254,28 @@ export class MemoryV2Coordinator {
         }),
       )
     }
-    const lifecycleCommitted = await this.append(drafts, runtimeState, operation)
+    const lifecycleCommitted = await this.append(
+      drafts,
+      runtimeState,
+      operation,
+    )
     if (!this.isCurrent(operation)) return
     if (!lifecycleCommitted) {
       this.applyDegradedState(params.agentState, 'lifecycle-append-failed')
       if (authority === 'sqlite-v2-opt-in') return
     }
 
-    const query = params.query.trim().slice(0, MAX_QUERY_LENGTH) || 'SDK agent turn'
+    const query =
+      params.query.trim().slice(0, MAX_QUERY_LENGTH) || 'SDK agent turn'
     const queryRequest = MemoryRetrievalRequestSchema.parse({
       schemaVersion: 2,
       queryId,
       projectId: this.config.projectId,
       sessionId,
       query,
-      taskId,
+      // taskId is a retrieval scope, not correlation metadata. A fresh turn
+      // has no observations yet; restricting to it hides all prior knowledge.
+      // Lifecycle events and MemoryTurnContextV2 retain the active task ID.
       ...(params.workspaceState
         ? {
             workspaceRevision: params.workspaceState.revision,
@@ -1208,7 +1322,10 @@ export class MemoryV2Coordinator {
         result.projectId !== this.config.projectId ||
         result.queryId !== queryId
       ) {
-        this.logger?.warn({}, 'Memory V2 query result failed correlation checks')
+        this.logger?.warn(
+          {},
+          'Memory V2 query result failed correlation checks',
+        )
         operation.queryTerminal = {
           outcome: 'failed',
           error: 'Memory repository query result failed correlation checks',
@@ -1239,10 +1356,12 @@ export class MemoryV2Coordinator {
             ? { state: 'none' }
             : {
                 state: 'degraded',
-                reasons: result.degradation.reasons.map(({ code, retryable }) => ({
-                  code,
-                  retryable,
-                })),
+                reasons: result.degradation.reasons.map(
+                  ({ code, retryable }) => ({
+                    code,
+                    retryable,
+                  }),
+                ),
               },
       }
       // Shared decision S4: a retrieval that degraded because the backend,
@@ -1272,6 +1391,28 @@ export class MemoryV2Coordinator {
         params.agentState.memoryAuthority!.fallbackOccurred = false
         params.agentState.memoryAuthority!.reason = undefined
       }
+      // Procedural memory (playbook gate): load the workspace's active
+      // playbooks so the runtime gate can enforce them. FAIL-OPEN — a load
+      // failure installs an empty set and never breaks the turn. One indexed
+      // SELECT; ensureSeedPlaybooks is idempotent and provides the baseline
+      // CI-before-commit rule on first turn.
+      const playbookRepository = this.config.repository
+      if (
+        playbookRepository?.ensureSeedPlaybooks &&
+        playbookRepository.listPlaybooks
+      ) {
+        try {
+          await playbookRepository.ensureSeedPlaybooks(this.config.projectId)
+          params.agentState.playbookContext =
+            await playbookRepository.listPlaybooks(this.config.projectId)
+        } catch (error) {
+          this.logger?.warn(
+            { error },
+            'Playbook load failed; proceeding without rules',
+          )
+          params.agentState.playbookContext = []
+        }
+      }
       return
     }
     const rejected = outcome.outcome === 'rejected'
@@ -1297,6 +1438,8 @@ export class MemoryV2Coordinator {
     workspaceState?: WorkspaceStateV1
     native: boolean
     mcp?: boolean
+    /** Host-correlated completed metadata only; does not authorize execution. */
+    completed?: boolean
   }): Promise<void> {
     return this.bestEffort(() => this.captureToolObservation(params))
   }
@@ -1311,11 +1454,13 @@ export class MemoryV2Coordinator {
       const preparation = this.activePreparation
       const repository = this.config.repository
       if (!this.preparationReady || !runtimeState || !repository) return
-      if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+      if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState)
+        return
       const entries = this.lastCapturedVerifies.slice(0, MAX_VERIFY_STORED)
       if (entries.length === 0) return
       for (const entry of entries) {
-        if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+        if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState)
+          return
         if (!VERIFY_DIGEST_RE.test(entry.observedDigest)) continue
         try {
           const request = MemoryVerifyRequestSchema.parse({
@@ -1355,11 +1500,28 @@ export class MemoryV2Coordinator {
     workspaceState?: WorkspaceStateV1
     native: boolean
     mcp?: boolean
+    completed?: boolean
   }): Promise<void> {
     const runtimeState = this.runtimeState
     const preparation = this.activePreparation
+    const completed =
+      params.completed === true &&
+      params.toolName === 'record_decision' &&
+      params.native &&
+      !params.mcp
+    // Completed local outcomes outlive cancellation, but never their registered
+    // preparation generation or active turn. Query/finish guards are unchanged.
+    const current = () =>
+      this.runtimeState === runtimeState &&
+      (completed
+        ? runtimeState?.turn.status === 'active' &&
+          preparation !== undefined &&
+          this.activePreparation === preparation &&
+          preparation.generation === this.preparationGeneration
+        : this.isCurrent(preparation))
     if (
       this.config.capture !== 'safe' ||
+      !current() ||
       !this.preparationReady ||
       !runtimeState ||
       runtimeState.turn.status !== 'active' ||
@@ -1392,12 +1554,18 @@ export class MemoryV2Coordinator {
           const normalizedDestination = action.destinationPath
             ? normalizeProjectPath(action.destinationPath)
             : undefined
-          if (!normalizedPath || (action.destinationPath && !normalizedDestination)) return []
+          if (
+            !normalizedPath ||
+            (action.destinationPath && !normalizedDestination)
+          )
+            return []
           return [
             {
               action: action.action,
               path: normalizedPath,
-              ...(normalizedDestination ? { destinationPath: normalizedDestination } : {}),
+              ...(normalizedDestination
+                ? { destinationPath: normalizedDestination }
+                : {}),
               beforeHash: action.beforeHash,
               afterHash: action.afterHash,
             },
@@ -1406,7 +1574,60 @@ export class MemoryV2Coordinator {
       if (actions.length === 0) return
     }
 
-    const paths = collectPaths(params.input, values)
+    // Only native, schema-valid complete reads or confirmed mutations can
+    // establish a file digest. Rendered content and discovery counts cannot.
+    const fileDigests = new Map<string, string>()
+    for (const action of actions) {
+      if (!isRecord(action) || typeof action.afterHash !== 'string') continue
+      const path =
+        action.action === 'move' ? action.destinationPath : action.path
+      if (typeof path === 'string' && VERIFY_DIGEST_RE.test(action.afterHash)) {
+        fileDigests.set(path, action.afterHash)
+      }
+    }
+    if (params.toolName === 'read_files') {
+      for (const value of values) {
+        const result = readFilesResultV1Schema.safeParse(value)
+        if (!result.success) continue
+        for (const item of result.data.results.slice(0, MAX_PATHS)) {
+          if (
+            item.selector !== 'file' ||
+            item.status !== 'ok' ||
+            !item.complete ||
+            item.metadataComplete !== true ||
+            item.template ||
+            item.truncation ||
+            !item.editAnchor
+          )
+            continue
+          const decoded = decodeReadCapabilityToken(
+            item.editAnchor.readCapability,
+          )
+          const path = normalizeProjectPath(item.path)
+          if (
+            !path ||
+            typeof decoded === 'string' ||
+            decoded.tokenVersion !== 'v4' ||
+            decoded.rawBasis?.scope !== 'whole' ||
+            decoded.startLine !== 1 ||
+            decoded.startLine !== item.editAnchor.startLine ||
+            decoded.endLine !== item.editAnchor.endLine ||
+            decoded.hash !== item.editAnchor.contentHash ||
+            !rawReadBasesMatch(decoded.rawBasis, item.editAnchor.rawBasis)
+          )
+            continue
+          // rawSourceContent is intentionally stripped from the model result;
+          // the authenticated whole-byte basis retains the actual file hash.
+          fileDigests.set(path, decoded.rawBasis.rawHash)
+        }
+      }
+    }
+    const paths = [
+      ...new Set([
+        ...fileDigests.keys(),
+        ...collectPaths(params.input, values),
+      ]),
+    ].slice(0, MAX_PATHS)
     const chunkHints = collectChunkHints(params.input, values)
     const counts = countSummary(values)
     const hasPositiveCount = Object.values(counts).some((count) => count > 0)
@@ -1514,8 +1735,12 @@ export class MemoryV2Coordinator {
     }
     const fileEvidence = paths.slice(0, 32).map((path) => {
       const decision = classifyMemoryArtifactPath(path)
-      const excerpt = `${toolNameBounded} ${captureKind} ${path} counts=${countsJson.slice(0, 512)}`.slice(0, 1024)
-      const contentDigest = `sha256:${createHash('sha256').update(`${path}\n${countsJson}`).digest('hex')}`
+      const excerpt =
+        `${toolNameBounded} ${captureKind} ${path} counts=${countsJson.slice(0, 512)}`.slice(
+          0,
+          1024,
+        )
+      const contentDigest = fileDigests.get(path)
       return {
         artifact: {
           artifactId: path,
@@ -1537,13 +1762,17 @@ export class MemoryV2Coordinator {
           metadata: {},
         },
         capturedAt: observedAt,
-        contentDigest,
+        ...(contentDigest ? { contentDigest } : {}),
         excerpt,
       }
     })
     const chunkEvidence = chunkHints.slice(0, MAX_CHUNKS).map((hint) => {
       const decision = classifyMemoryArtifactPath(hint.selector.path)
-      const excerpt = `${toolNameBounded} ${captureKind} ${hint.selector.qualifiedName} ${hint.selector.path}:${hint.selector.startLine}-${hint.selector.endLine}${hint.signature ? ` ${hint.signature}` : ''}${hint.linesText ? ` ${hint.linesText}` : ''}`.slice(0, 1024)
+      const excerpt =
+        `${toolNameBounded} ${captureKind} ${hint.selector.qualifiedName} ${hint.selector.path}:${hint.selector.startLine}-${hint.selector.endLine}${hint.signature ? ` ${hint.signature}` : ''}${hint.linesText ? ` ${hint.linesText}` : ''}`.slice(
+          0,
+          1024,
+        )
       const contentDigest =
         hint.observedDigest ??
         `sha256:${createHash('sha256').update(`${hint.selector.path}\n${hint.selector.chunkId}\n${hint.selector.startLine}-${hint.selector.endLine}\n${countsJson}`).digest('hex')}`
@@ -1569,7 +1798,9 @@ export class MemoryV2Coordinator {
           // so the strict MemorySelector chunk schema never gains a field.
           // Old captures without it still verify (metadata is optional).
           metadata: {
-            ...(hint.stableChunkId ? { stableChunkId: hint.stableChunkId } : {}),
+            ...(hint.stableChunkId
+              ? { stableChunkId: hint.stableChunkId }
+              : {}),
           },
         },
         capturedAt: observedAt,
@@ -1578,6 +1809,14 @@ export class MemoryV2Coordinator {
       }
     })
     const evidence = [...fileEvidence, ...chunkEvidence].slice(0, 32)
+    const preservedDecisionText =
+      recordDecisionText === undefined
+        ? undefined
+        : redactSecretValues(recordDecisionText).slice(0, 1024)
+    const preservedDecisionExcerpt =
+      recordDecisionText && typeof recordDecisionValue?.excerpt === 'string'
+        ? redactSecretValues(recordDecisionValue.excerpt).slice(0, 1024)
+        : undefined
     const event = createMemoryEventDraft({
       projectId: this.config.projectId,
       sessionId: runtimeState.sessionId,
@@ -1591,11 +1830,32 @@ export class MemoryV2Coordinator {
           observationId,
           taskId: runtimeState.activeTask.taskId,
           kind: observationKindHint,
-          summary: `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
-          detail: `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
+          // Explicitly recorded decisions are the reusable fact/rationale,
+          // not merely an index entry saying that record_decision was called.
+          summary:
+            preservedDecisionText ??
+            `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(
+              0,
+              1024,
+            ),
+          detail: [
+            preservedDecisionText,
+            preservedDecisionExcerpt
+              ? `Supporting excerpt: ${preservedDecisionExcerpt}`
+              : undefined,
+            `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           confidence: 0.5,
           evidence,
-          selectors: [...paths.map((projectPath) => ({ kind: 'file' as const, path: projectPath })), ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector)].slice(0, 32),
+          selectors: [
+            ...paths.map((projectPath) => ({
+              kind: 'file' as const,
+              path: projectPath,
+            })),
+            ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector),
+          ].slice(0, 32),
           provenance: {
             origin: 'tool',
             recordedBy: 'sdk-memory-v2',
@@ -1628,8 +1888,17 @@ export class MemoryV2Coordinator {
           },
         })
       : event
-    if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
-    await this.append([mainEvent], runtimeState, preparation)
+    if (!current()) return
+    const captureCommitted = await this.append(
+      [mainEvent],
+      runtimeState,
+      preparation,
+      current,
+    )
+    // Dependent retractions/citations/verification need the confirmed primary
+    // record (or reinforcement). A failed/lost-ack capture cannot erase an old
+    // useful claim or cite a replacement that has not been confirmed stored.
+    if (!captureCommitted) return
 
     // P7 wave X: explicit record_decision supersedes targets emit a
     // best-effort second batch: one claim.superseded draft per validated,
@@ -1663,8 +1932,7 @@ export class MemoryV2Coordinator {
             ? statusRead.entries
                 .filter(
                   (entry) =>
-                    entry.status === 'active' &&
-                    entry.taskId === activeTaskId,
+                    entry.status === 'active' && entry.taskId === activeTaskId,
                 )
                 .map((entry) => entry.observationId)
             : [],
@@ -1677,8 +1945,14 @@ export class MemoryV2Coordinator {
           ),
         ]
           .sort((left, right) => {
-            const leftPoints = Array.from(left, (character) => character.codePointAt(0)!)
-            const rightPoints = Array.from(right, (character) => character.codePointAt(0)!)
+            const leftPoints = Array.from(
+              left,
+              (character) => character.codePointAt(0)!,
+            )
+            const rightPoints = Array.from(
+              right,
+              (character) => character.codePointAt(0)!,
+            )
             const length = Math.min(leftPoints.length, rightPoints.length)
             for (let index = 0; index < length; index++) {
               const difference = leftPoints[index]! - rightPoints[index]!
@@ -1723,14 +1997,12 @@ export class MemoryV2Coordinator {
               ignored: [],
             },
           })
-          if (
-            this.isCurrent(preparation) &&
-            this.runtimeState === runtimeState
-          ) {
+          if (current()) {
             await this.append(
               [...supersededDrafts, reusedDraft],
               runtimeState,
               preparation,
+              current,
             )
           }
         }
@@ -1750,7 +2022,11 @@ export class MemoryV2Coordinator {
         observedAt,
         workspaceState: params.workspaceState,
       })
-      if (coverageEvents.length > 0 && this.isCurrent(preparation) && this.runtimeState === runtimeState) {
+      if (
+        coverageEvents.length > 0 &&
+        this.isCurrent(preparation) &&
+        this.runtimeState === runtimeState
+      ) {
         await this.append(coverageEvents, runtimeState, preparation)
       }
     }
@@ -1767,7 +2043,11 @@ export class MemoryV2Coordinator {
           (value) => value.passed === true || value.success === true,
         )
         const state: 'covered' | 'partial' =
-          dimension === 'tests' ? (hasSuccessMarker ? 'covered' : 'partial') : 'partial'
+          dimension === 'tests'
+            ? hasSuccessMarker
+              ? 'covered'
+              : 'partial'
+            : 'partial'
         const coverageDraft = createMemoryEventDraft({
           projectId: this.config.projectId,
           sessionId: runtimeState.sessionId,
@@ -1780,8 +2060,17 @@ export class MemoryV2Coordinator {
             taskId: runtimeState.activeTask.taskId,
             dimension,
             state,
-            selectors: [...paths.slice(0, 10).map((path) => ({ kind: 'file' as const, path })), ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector)].slice(0, 10),
-            notes: `${params.toolName.slice(0, 128)} ${dimension} ${state}: ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
+            selectors: [
+              ...paths
+                .slice(0, 10)
+                .map((path) => ({ kind: 'file' as const, path })),
+              ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector),
+            ].slice(0, 10),
+            notes:
+              `${params.toolName.slice(0, 128)} ${dimension} ${state}: ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(
+                0,
+                1024,
+              ),
             ...(params.workspaceState
               ? {
                   workspaceRevision: params.workspaceState.revision,
@@ -1797,32 +2086,52 @@ export class MemoryV2Coordinator {
     }
 
     // Phase P2 (+P-C): verification promotion hook (additive, bounded, best-effort).
-    // File mutation verifies preserved; chunk verifies enqueue for any capture
-    // kind when chunk hints carry a valid observed digest. Never throws.
+    // Complete native reads and confirmed mutations use the same actual digest
+    // in the evidence and verification. Other discovery remains unverified.
     {
-      const fileVerifyEntries: Array<{ observationId: string; selector: MemorySelector; observedDigest: string }> =
-        captureKind === 'mutation'
-          ? actions.slice(0, MAX_VERIFY_PER_CAPTURE).flatMap((action) => {
-              if (!isRecord(action)) return []
-              const actionPath = typeof action.path === 'string' ? normalizeProjectPath(action.path) : undefined
-              const afterHash = action.afterHash
-              if (!actionPath || typeof afterHash !== 'string' || !VERIFY_DIGEST_RE.test(afterHash)) return []
-              return [{ observationId, selector: { kind: 'file' as const, path: actionPath }, observedDigest: afterHash }]
-            })
-          : []
-      const chunkVerifyEntries: Array<{ observationId: string; selector: MemorySelector; observedDigest: string }> = chunkHints
+      const fileVerifyEntries: Array<{
+        observationId: string
+        selector: MemorySelector
+        observedDigest: string
+      }> = [...fileDigests]
         .slice(0, MAX_VERIFY_PER_CAPTURE)
-        .flatMap((hint) => {
-          if (!hint.observedDigest || !VERIFY_DIGEST_RE.test(hint.observedDigest)) return []
-          return [{ observationId, selector: hint.selector as MemorySelector, observedDigest: hint.observedDigest }]
-        })
-      const verifyEntries = [...fileVerifyEntries, ...chunkVerifyEntries].slice(0, MAX_VERIFY_PER_CAPTURE)
+        .map(([path, observedDigest]) => ({
+          observationId,
+          selector: { kind: 'file' as const, path },
+          observedDigest,
+        }))
+      const chunkVerifyEntries: Array<{
+        observationId: string
+        selector: MemorySelector
+        observedDigest: string
+      }> = chunkHints.slice(0, MAX_VERIFY_PER_CAPTURE).flatMap((hint) => {
+        if (!hint.observedDigest || !VERIFY_DIGEST_RE.test(hint.observedDigest))
+          return []
+        return [
+          {
+            observationId,
+            selector: hint.selector as MemorySelector,
+            observedDigest: hint.observedDigest,
+          },
+        ]
+      })
+      const verifyEntries = [...fileVerifyEntries, ...chunkVerifyEntries].slice(
+        0,
+        MAX_VERIFY_PER_CAPTURE,
+      )
       if (verifyEntries.length > 0) {
-        this.lastCapturedVerifies = [...verifyEntries, ...this.lastCapturedVerifies].slice(0, MAX_VERIFY_STORED)
+        this.lastCapturedVerifies = [
+          ...verifyEntries,
+          ...this.lastCapturedVerifies,
+        ].slice(0, MAX_VERIFY_STORED)
         const repository = this.config.repository
         if (repository) {
           for (const entry of verifyEntries) {
-            if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+            if (
+              !this.isCurrent(preparation) ||
+              this.runtimeState !== runtimeState
+            )
+              return
             try {
               const request = MemoryVerifyRequestSchema.parse({
                 schemaVersion: 2,
@@ -1881,16 +2190,28 @@ export class MemoryV2Coordinator {
           dimension: 'validation' as const,
           state: state as 'covered' | 'partial',
           selectors: features
-            .filter((f: unknown): f is { feature: string } =>
-              typeof f === 'object' && f !== null && typeof (f as Record<string, unknown>).feature === 'string'
+            .filter(
+              (f: unknown): f is { feature: string } =>
+                typeof f === 'object' &&
+                f !== null &&
+                typeof (f as Record<string, unknown>).feature === 'string',
             )
             .slice(0, 64)
-            .map((f: { feature: string }) => ({ kind: 'file' as const, path: f.feature.slice(0, 512) })),
-          notes: `Audit coverage evaluation: ${value.status}. Features evaluated: ${features.length}.`.slice(0, 4_096),
-          ...(params.workspaceState ? {
-            workspaceRevision: params.workspaceState.revision,
-            workspaceSnapshotId: params.workspaceState.snapshotId,
-          } : {}),
+            .map((f: { feature: string }) => ({
+              kind: 'file' as const,
+              path: f.feature.slice(0, 512),
+            })),
+          notes:
+            `Audit coverage evaluation: ${value.status}. Features evaluated: ${features.length}.`.slice(
+              0,
+              4_096,
+            ),
+          ...(params.workspaceState
+            ? {
+                workspaceRevision: params.workspaceState.revision,
+                workspaceSnapshotId: params.workspaceState.snapshotId,
+              }
+            : {}),
         },
       })
       drafts.push(draft)
@@ -1928,8 +2249,7 @@ export class MemoryV2Coordinator {
           ? 'failed'
           : 'completed')
     const endedAt = parked?.endedAt ?? this.now()
-    const query =
-      parked?.query ??
+    const query = parked?.query ??
       this.queryTerminal ?? {
         outcome: 'failed' as const,
         error: 'Memory query did not produce a result',
@@ -1967,6 +2287,18 @@ export class MemoryV2Coordinator {
     runtimeState.activeTask.status = status
     runtimeState.pendingTerminal = undefined
     params.agentState.memoryV2 = runtimeState
+    // The committed terminal decision must not stay half-active while optional
+    // maintenance waits or fails. Maintenance grants no lifecycle authority.
+    if (status === 'completed' && this.config.repository?.consolidateExact) {
+      try {
+        await this.config.repository.consolidateExact({
+          projectId: this.config.projectId,
+          maxGroups: 16,
+        })
+      } catch (error) {
+        this.logger?.warn({ error }, 'Exact knowledge maintenance deferred')
+      }
+    }
   }
 
   private parsePendingTerminal(
@@ -1977,8 +2309,12 @@ export class MemoryV2Coordinator {
       value.status !== 'completed' &&
       value.status !== 'failed' &&
       value.status !== 'cancelled'
-    ) return undefined
-    if (typeof value.endedAt !== 'string' || Number.isNaN(Date.parse(value.endedAt))) {
+    )
+      return undefined
+    if (
+      typeof value.endedAt !== 'string' ||
+      Number.isNaN(Date.parse(value.endedAt))
+    ) {
       return undefined
     }
     if (!isRecord(value.query)) return undefined
@@ -2004,7 +2340,8 @@ export class MemoryV2Coordinator {
       value.query.error.length < 1 ||
       value.query.error.length > 1_024 ||
       typeof value.query.retryable !== 'boolean'
-    ) return undefined
+    )
+      return undefined
     return {
       status: value.status,
       endedAt: value.endedAt,
@@ -2030,9 +2367,22 @@ export class MemoryV2Coordinator {
     try {
       const receipt = agentState.memoryUsageTurn
       const context = agentState.memoryV2Context
-      if (!receipt || receipt.turnId !== runtimeState.turn.userInputId) return []
-      if (!context || context.queryId !== runtimeState.turn.queryId) return []
-      const signals = correlateUsage({ context, receipt })
+      if (!receipt || receipt.turnId !== runtimeState.turn.userInputId)
+        return []
+      if (
+        !context ||
+        context.userInputId !== runtimeState.turn.userInputId.slice(0, 128) ||
+        context.result.projectId !== this.config.projectId ||
+        context.result.queryId !== context.queryId ||
+        (context.queryId !== runtimeState.turn.queryId &&
+          !agentState.memoryV2EmittedQueryIds?.includes(context.queryId))
+      )
+        return []
+      const signals = correlateUsage({
+        context,
+        receipt,
+        emittedObservationIds: agentState.memoryV2EmittedObservationIds,
+      })
       if (signals.length === 0) return []
       const used = signals
         .filter((signal) => signal.kind === 'used')
@@ -2115,7 +2465,10 @@ export class MemoryV2Coordinator {
       queryEvent,
       createMemoryEventDraft({
         ...common,
-        sourceIndex: 1,
+        // Index 1 identifies created -> active at turn startup. A terminal
+        // transition needs its own identity so the append-only store can
+        // accept both events and replay this decision idempotently.
+        sourceIndex: 2,
         eventType: 'task.transitioned',
         payload: {
           payloadSchemaVersion: 1,

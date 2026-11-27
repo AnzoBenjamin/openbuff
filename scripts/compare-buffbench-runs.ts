@@ -1,328 +1,211 @@
 #!/usr/bin/env bun
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  isMeasuredScoreEligible,
+  mean,
+  sumFiniteCosts,
+  pairedBootstrapMeanDiffCI,
+  wilcoxonSignedRankTest,
+} from '../evals/buffbench/statistics'
 
-/**
- * Compare buffbench runs on the tasks that they **BOTH** completed successfully.
- */
-
-import { readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-
-interface AgentResult {
+interface Attempt {
   agentId: string
-  analysis: string
-  strengths: string[]
-  weaknesses: string[]
-  completionScore: number
-  codeQualityScore: number
+  commitSha: string
+  taskId?: string
+  repeat?: number
+  languages?: string[]
+  providerRoute?: string
+  experimentId?: string
+  workloadHash?: string
+  measurementConfigHash?: string
+  evaluatorVersion?: string
   overallScore: number
   cost: number
   durationMs: number
   error?: string | null
+  scoringStatus?: string
+  runOutcome?: { termination: string }
+  costEvidence?: { status: string }
 }
 
-interface AnalysisFile {
-  commitSha: string
-  timestamp: string
-  results: AgentResult[]
+function loadAttempts(directory: string): Attempt[] {
+  return readdirSync(directory)
+    .filter((file) => file.includes('ANALYSIS') && file.endsWith('.json'))
+    .sort()
+    .flatMap((file) => {
+      const analysis = JSON.parse(readFileSync(join(directory, file), 'utf8'))
+      if (
+        !analysis ||
+        !Array.isArray(analysis.results) ||
+        typeof analysis.commitSha !== 'string'
+      )
+        throw new Error(`Invalid analysis artifact ${file}`)
+      return analysis.results.map((result: Attempt) => {
+        const attempt: Attempt = {
+          ...analysis,
+          ...result,
+          commitSha: analysis.commitSha,
+        }
+        if (
+          attempt.runOutcome !== undefined &&
+          (!attempt.runOutcome ||
+            ![
+              'completed',
+              'failed',
+              'cancelled',
+              'budget_exhausted',
+              'step_exhausted',
+              'deadline_exhausted',
+              'resource_failure',
+              'cleanup_failure',
+            ].includes(attempt.runOutcome.termination))
+        )
+          throw new Error(`Invalid typed run outcome in ${file}`)
+        if (
+          [
+            attempt.taskId,
+            attempt.providerRoute,
+            attempt.experimentId,
+            attempt.workloadHash,
+            attempt.measurementConfigHash,
+            attempt.evaluatorVersion,
+          ].some((value) => value !== undefined && typeof value !== 'string')
+        )
+          throw new Error(`Invalid attempt identity in ${file}`)
+        if (
+          typeof attempt.agentId !== 'string' ||
+          !attempt.agentId ||
+          !Number.isFinite(attempt.overallScore) ||
+          attempt.overallScore < 0 ||
+          attempt.overallScore > 10 ||
+          !Number.isFinite(attempt.cost) ||
+          attempt.cost < 0 ||
+          !Number.isFinite(attempt.durationMs) ||
+          attempt.durationMs < 0 ||
+          (attempt.repeat !== undefined &&
+            (!Number.isSafeInteger(attempt.repeat) || attempt.repeat < 0)) ||
+          (attempt.languages !== undefined &&
+            (!Array.isArray(attempt.languages) ||
+              attempt.languages.some(
+                (language) => typeof language !== 'string',
+              )))
+        ) {
+          throw new Error(`Invalid or nonfinite attempt evidence in ${file}`)
+        }
+        return attempt
+      })
+    })
 }
 
-function compareBuffbenchRuns(dir1: string, dir2: string) {
-  // Read all ANALYSIS files from both directories
-  const files1 = readdirSync(dir1).filter((f) => f.includes('ANALYSIS'))
-  const files2 = readdirSync(dir2).filter((f) => f.includes('ANALYSIS'))
-
-  // Parse analysis files and group by commit SHA
-  const run1Data = new Map<string, AnalysisFile>()
-  const run2Data = new Map<string, AnalysisFile>()
-
-  for (const file of files1) {
-    const content = readFileSync(join(dir1, file), 'utf-8')
-    const data: AnalysisFile = JSON.parse(content)
-    run1Data.set(data.commitSha, data)
-  }
-
-  for (const file of files2) {
-    const content = readFileSync(join(dir2, file), 'utf-8')
-    const data: AnalysisFile = JSON.parse(content)
-    run2Data.set(data.commitSha, data)
-  }
-
-  // Find common commit SHAs where both runs have successful completions (no errors)
-  // and no agent scored <= 1.0
-  const commonCommitShas = Array.from(run1Data.keys()).filter((sha) => {
-    if (!run2Data.has(sha)) return false
-
-    // Check that all agents in both runs completed without errors
-    const run1Results = run1Data.get(sha)!.results
-    const run2Results = run2Data.get(sha)!.results
-
-    const run1HasErrors = run1Results.some(
-      (r) => r.error !== undefined && r.error !== null,
-    )
-    const run2HasErrors = run2Results.some(
-      (r) => r.error !== undefined && r.error !== null,
-    )
-
-    // Check that no agent scored <= 1.0 or has null/undefined scores in either run
-    const run1HasLowScores = run1Results.some(
-      (r) => r.overallScore == null || r.overallScore <= 1.0,
-    )
-    const run2HasLowScores = run2Results.some(
-      (r) => r.overallScore == null || r.overallScore <= 1.0,
-    )
-
-    return (
-      !run1HasErrors && !run2HasErrors && !run1HasLowScores && !run2HasLowScores
-    )
-  })
-
-  // Count tasks with various issues for reporting
-  const run1Shas = Array.from(run1Data.keys())
-  const run2Shas = Array.from(run2Data.keys())
-
-  const run1TasksWithErrors = run1Shas.filter((sha) => {
-    const results = run1Data.get(sha)!.results
-    return results.some((r) => r.error !== undefined && r.error !== null)
-  })
-
-  const run2TasksWithErrors = run2Shas.filter((sha) => {
-    const results = run2Data.get(sha)!.results
-    return results.some((r) => r.error !== undefined && r.error !== null)
-  })
-
-  const run1TasksWithLowScores = run1Shas.filter((sha) => {
-    const results = run1Data.get(sha)!.results
-    return results.some((r) => r.overallScore == null || r.overallScore <= 1.0)
-  })
-
-  const run2TasksWithLowScores = run2Shas.filter((sha) => {
-    const results = run2Data.get(sha)!.results
-    return results.some((r) => r.overallScore == null || r.overallScore <= 1.0)
-  })
-
-  // Count tasks excluded (either errors OR low scores)
-  const run1ExcludedTasks = new Set([
-    ...run1TasksWithErrors,
-    ...run1TasksWithLowScores,
+function pairKey(attempt: Attempt): string {
+  // Unreported legacy strata stay visible. Duplicate legacy repeats are refused.
+  return JSON.stringify([
+    attempt.commitSha,
+    attempt.taskId ?? '',
+    attempt.agentId,
+    attempt.repeat ?? 0,
+    [...(attempt.languages ?? [])].sort(),
+    attempt.providerRoute ?? 'unreported',
+    attempt.experimentId ?? 'unreported',
+    attempt.workloadHash ?? 'unreported',
+    attempt.measurementConfigHash ?? 'unreported',
+    attempt.evaluatorVersion ?? 'unreported',
   ])
-  const run2ExcludedTasks = new Set([
-    ...run2TasksWithErrors,
-    ...run2TasksWithLowScores,
-  ])
+}
 
-  console.log(`\nRun 1: ${dir1}`)
-  console.log(`Run 2: ${dir2}`)
-  console.log(`\nTotal tasks in Run 1: ${run1Data.size}`)
-  console.log(`  - With errors: ${run1TasksWithErrors.length}`)
-  console.log(`  - With scores ≤1.0: ${run1TasksWithLowScores.length}`)
-  console.log(`  - Excluded (errors OR low scores): ${run1ExcludedTasks.size}`)
-  console.log(`  - Valid: ${run1Data.size - run1ExcludedTasks.size}`)
-  console.log(`\nTotal tasks in Run 2: ${run2Data.size}`)
-  console.log(`  - With errors: ${run2TasksWithErrors.length}`)
-  console.log(`  - With scores ≤1.0: ${run2TasksWithLowScores.length}`)
-  console.log(`  - Excluded (errors OR low scores): ${run2ExcludedTasks.size}`)
-  console.log(`  - Valid: ${run2Data.size - run2ExcludedTasks.size}`)
-  console.log(
-    `\nCommon tasks (both completed successfully with scores >1.0): ${commonCommitShas.length}\n`,
-  )
+function indexAttempts(attempts: Attempt[]): Map<string, Attempt> {
+  const index = new Map<string, Attempt>()
+  for (const attempt of attempts) {
+    const key = pairKey(attempt)
+    if (index.has(key))
+      throw new Error(
+        'Duplicate or ambiguous task/repeat identity; comparison refuses overwritten repeats',
+      )
+    index.set(key, attempt)
+  }
+  return index
+}
 
-  if (commonCommitShas.length === 0) {
+export function compareBuffbenchRuns(beforeDir: string, afterDir: string) {
+  const beforeAttempts = loadAttempts(beforeDir)
+  const afterAttempts = loadAttempts(afterDir)
+  const before = indexAttempts(beforeAttempts)
+  const after = indexAttempts(afterAttempts)
+  if (
+    before.size !== after.size ||
+    [...before.keys()].some((key) => !after.has(key))
+  ) {
+    throw new Error(
+      'Incomparable workload/repeat/language/provider/experiment populations',
+    )
+  }
+  const pairsByAgent = new Map<string, { before: number; after: number }[]>()
+  for (const [key, previous] of before) {
+    const next = after.get(key)!
+    if (!isMeasuredScoreEligible(previous) || !isMeasuredScoreEligible(next))
+      continue
+    const pairs = pairsByAgent.get(previous.agentId) ?? []
+    pairs.push({ before: previous.overallScore, after: next.overallScore })
+    pairsByAgent.set(previous.agentId, pairs)
+  }
+  const population = (attempts: Attempt[]) => ({
+    attempts: attempts.length,
+    eligibleScores: attempts.filter(isMeasuredScoreEligible).length,
+    totalCost: sumFiniteCosts(attempts.map((attempt) => attempt.cost)),
+    unknownCostAttempts: attempts.filter(
+      (attempt) => attempt.costEvidence?.status !== 'reported',
+    ).length,
+  })
+  const populations = {
+    before: population(beforeAttempts),
+    after: population(afterAttempts),
+  }
+  console.log(`Complete attempt populations: ${JSON.stringify(populations)}`)
+  const results = [...pairsByAgent].map(([agentId, pairs]) => {
+    if (pairs.length < 2)
+      throw new Error(`Insufficient paired evidence for ${agentId}`)
+    const ci = pairedBootstrapMeanDiffCI(pairs)
+    const wilcoxon = wilcoxonSignedRankTest(pairs)
+    const averageBefore = mean(pairs.map((pair) => pair.before))
+    const averageAfter = mean(pairs.map((pair) => pair.after))
     console.log(
-      'No common successfully-completed tasks with scores >1.0 found between the two runs!',
+      `${agentId}: Overall Score: ${averageBefore.toFixed(2)} → ${averageAfter.toFixed(2)} (${ci.meanDiff.toFixed(2)}); paired repeats=${pairs.length}`,
     )
-    return
-  }
-
-  // Collect scores for each agent across common tasks
-  const agentScores: Record<
-    string,
-    {
-      run: 1 | 2
-      scores: number[]
-      completionScores: number[]
-      qualityScores: number[]
-      costs: number[]
-      durations: number[]
-    }
-  > = {}
-
-  // Process Run 1
-  for (const sha of commonCommitShas) {
-    const data = run1Data.get(sha)!
-    for (const result of data.results) {
-      const key = `${result.agentId} (Run 1)`
-      if (!agentScores[key]) {
-        agentScores[key] = {
-          run: 1,
-          scores: [],
-          completionScores: [],
-          qualityScores: [],
-          costs: [],
-          durations: [],
-        }
-      }
-      agentScores[key].scores.push(result.overallScore)
-      agentScores[key].completionScores.push(result.completionScore)
-      agentScores[key].qualityScores.push(result.codeQualityScore)
-      agentScores[key].costs.push(result.cost)
-      agentScores[key].durations.push(result.durationMs)
-    }
-  }
-
-  // Process Run 2
-  for (const sha of commonCommitShas) {
-    const data = run2Data.get(sha)!
-    for (const result of data.results) {
-      const key = `${result.agentId} (Run 2)`
-      if (!agentScores[key]) {
-        agentScores[key] = {
-          run: 2,
-          scores: [],
-          completionScores: [],
-          qualityScores: [],
-          costs: [],
-          durations: [],
-        }
-      }
-      agentScores[key].scores.push(result.overallScore)
-      agentScores[key].completionScores.push(result.completionScore)
-      agentScores[key].qualityScores.push(result.codeQualityScore)
-      agentScores[key].costs.push(result.cost)
-      agentScores[key].durations.push(result.durationMs)
-    }
-  }
-
-  // Calculate averages and stats
-  const results = Object.entries(agentScores).map(([agentKey, data]) => {
-    const avgOverall =
-      data.scores.reduce((a, b) => a + b, 0) / data.scores.length
-    const avgCompletion =
-      data.completionScores.reduce((a, b) => a + b, 0) /
-      data.completionScores.length
-    const avgQuality =
-      data.qualityScores.reduce((a, b) => a + b, 0) / data.qualityScores.length
-
-    const minOverall = Math.min(...data.scores)
-    const maxOverall = Math.max(...data.scores)
-
-    // Calculate standard deviation
-    const variance =
-      data.scores.reduce(
-        (sum, score) => sum + Math.pow(score - avgOverall, 2),
-        0,
-      ) / data.scores.length
-    const stdDev = Math.sqrt(variance)
-
-    const avgCost = data.costs.reduce((a, b) => a + b, 0) / data.costs.length
-    const avgDuration =
-      data.durations.reduce((a, b) => a + b, 0) / data.durations.length
-
+    console.log(
+      `  Significance: ${wilcoxon.applicable ? `p=${wilcoxon.pValueTwoSided.toFixed(4)}` : `rejected (${wilcoxon.reason})`}`,
+    )
     return {
-      agentKey,
-      run: data.run,
-      count: data.scores.length,
-      averageOverallScore: avgOverall,
-      averageCompletionScore: avgCompletion,
-      averageQualityScore: avgQuality,
-      minOverallScore: minOverall,
-      maxOverallScore: maxOverall,
-      stdDevOverall: stdDev,
-      averageCost: avgCost,
-      averageDurationMs: avgDuration,
+      agentId,
+      pairCount: pairs.length,
+      averageBefore,
+      averageAfter,
+      ci,
+      wilcoxon,
     }
   })
+  if (results.length === 0)
+    throw new Error('Insufficient eligible paired evidence')
+  return {
+    populations,
+    results,
+    attempts: { before: beforeAttempts, after: afterAttempts },
+  }
+}
 
-  // Sort by run, then by average overall score descending
-  results.sort((a, b) => {
-    if (a.run !== b.run) return a.run - b.run
-    return b.averageOverallScore - a.averageOverallScore
-  })
-
-  // Print comparison table
-  console.log('Comparison on Common Tasks (N=' + commonCommitShas.length + ')')
-  console.log('='.repeat(140))
-  console.log(
-    'Agent'.padEnd(45),
-    'Count'.padEnd(8),
-    'Overall'.padEnd(10),
-    'Min'.padEnd(8),
-    'Max'.padEnd(8),
-    'StdDev'.padEnd(10),
-    'Completion'.padEnd(12),
-    'Quality'.padEnd(10),
-    'Cost ($)'.padEnd(10),
-    'Duration (s)',
-  )
-  console.log('='.repeat(140))
-
-  for (const result of results) {
+if (import.meta.main) {
+  if (process.argv.includes('--help') || !process.argv[2] || !process.argv[3]) {
     console.log(
-      result.agentKey.padEnd(45),
-      result.count.toString().padEnd(8),
-      result.averageOverallScore.toFixed(2).padEnd(10),
-      result.minOverallScore.toFixed(2).padEnd(8),
-      result.maxOverallScore.toFixed(2).padEnd(8),
-      result.stdDevOverall.toFixed(2).padEnd(10),
-      result.averageCompletionScore.toFixed(2).padEnd(12),
-      result.averageQualityScore.toFixed(2).padEnd(10),
-      result.averageCost.toFixed(2).padEnd(10),
-      (result.averageDurationMs / 1000).toFixed(1),
+      'Usage: bun scripts/compare-buffbench-runs.ts <log-dir-before> <log-dir-after>',
     )
-  }
-
-  console.log('='.repeat(140))
-
-  // Calculate and display head-to-head comparisons
-  console.log('\n=== Head-to-Head Comparison ===\n')
-
-  // Group by agent name (without run suffix)
-  const agentGroups = new Map<string, typeof results>()
-  for (const result of results) {
-    const agentName = result.agentKey.replace(/ \(Run [12]\)$/, '')
-    if (!agentGroups.has(agentName)) {
-      agentGroups.set(agentName, [])
-    }
-    agentGroups.get(agentName)!.push(result)
-  }
-
-  for (const [agentName, agentResults] of agentGroups.entries()) {
-    if (agentResults.length === 2) {
-      const run1 = agentResults.find((r) => r.run === 1)
-      const run2 = agentResults.find((r) => r.run === 2)
-
-      if (run1 && run2) {
-        console.log(`${agentName}:`)
-        const scoreDiff = run2.averageOverallScore - run1.averageOverallScore
-        const costDiff = run2.averageCost - run1.averageCost
-        const durationDiff =
-          (run2.averageDurationMs - run1.averageDurationMs) / 1000
-
-        console.log(
-          `  Overall Score: ${run1.averageOverallScore.toFixed(2)} → ${run2.averageOverallScore.toFixed(2)} (${scoreDiff >= 0 ? '+' : ''}${scoreDiff.toFixed(2)})`,
-        )
-        console.log(
-          `  Cost: $${run1.averageCost.toFixed(2)} → $${run2.averageCost.toFixed(2)} (${costDiff >= 0 ? '+' : ''}${costDiff.toFixed(2)})`,
-        )
-        console.log(
-          `  Duration: ${(run1.averageDurationMs / 1000).toFixed(1)}s → ${(run2.averageDurationMs / 1000).toFixed(1)}s (${durationDiff >= 0 ? '+' : ''}${durationDiff.toFixed(1)}s)`,
-        )
-        console.log()
-      }
+  } else {
+    try {
+      compareBuffbenchRuns(process.argv[2], process.argv[3])
+    } catch (error) {
+      console.error(
+        `Comparison rejected: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      process.exitCode = 1
     }
   }
 }
-
-// Main execution
-const logDir1 = process.argv[2] || 'evals/buffbench/logs/2025-10-20T06-29'
-const logDir2 = process.argv[3] || 'evals/buffbench/logs/2025-10-20T21-26'
-
-if (!process.argv[2] || !process.argv[3]) {
-  console.log(
-    'Usage: bun run scripts/compare-buffbench-runs.ts <log-dir-1> <log-dir-2>',
-  )
-  console.log('\nUsing default directories:')
-  console.log(`  Dir 1: ${logDir1}`)
-  console.log(`  Dir 2: ${logDir2}\n`)
-}
-
-compareBuffbenchRuns(logDir1, logDir2)

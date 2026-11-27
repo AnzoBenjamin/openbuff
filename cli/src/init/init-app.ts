@@ -1,3 +1,4 @@
+import { initializeRepositoryIntelligenceNative } from '../services/repository-intelligence-native'
 import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
 import { IndexManager } from '@codebuff/indexer'
 import {
@@ -35,6 +36,7 @@ export async function switchProjectContext(cwd: string): Promise<void> {
   const baseCwd = process.cwd()
   setProjectRoot(baseCwd)
   initializeDirenv()
+  await initializeRepositoryIntelligenceNative()
   startProjectIndex(baseCwd)
 }
 
@@ -61,6 +63,7 @@ export async function initializeApp(params: { cwd?: string }): Promise<void> {
   enableManualThemeRefresh()
   initTimestampFormatter()
 
+  await initializeRepositoryIntelligenceNative()
   startProjectIndex(baseCwd)
 
   // Compute the hardware-based fingerprint in the background so it's ready

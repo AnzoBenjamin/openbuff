@@ -238,10 +238,18 @@ export const createBatchedMessageUpdater = (
     // Stop the interval
     dispose()
 
-    // Apply error immediately while preserving existing content and blocks
+    // Apply error immediately while preserving existing content and blocks.
+    // A message an abort listener already terminalized (markComplete) is
+    // terminal: a late setError write that can follow the same run rejecting
+    // must NOT land after that terminal write (single-final-writer
+    // invariant; reliability finding
+    // post-abort-error-write-lands-after-terminal-mark-complete).
     setMessages((prev) =>
       prev.map((msg) => {
         if (msg.id !== aiMessageId) return msg
+        // Idempotent against an already-marked-complete message: skip the
+        // write entirely instead of overwriting the terminal state.
+        if (msg.isComplete) return msg
         return {
           ...msg,
           userError: message,

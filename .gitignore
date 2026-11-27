@@ -53,3 +53,33 @@ docs/bot-detection.md
 
 # CommandCode local state
 .commandcode/
+
+# Rust cargo workspace (X-3b) build artifacts; Cargo.lock stays tracked
+/rust/target/
+
+# Captured agent-session logs (transcripts of prior runs, not source)
+openbuffissues.txt
+
+# Agent and harness scratch (Ralph/OMX state, roadmap toolchains, ad-hoc logs)
+/.tmp/
+/.omx/
+/scratch-logs/
+/e2e-traces/
+
+# BuffBench per-task error dumps written by eval runs
+/evals/buffbench/*-error-*.json
+
+# Legacy binary lockfile; bun.lock is canonical
+/bun.lockb
+
+# Expanded roadmap evidence is restored into disposable checkouts.
+/docs/execution/body-roadmap/evidence/
+/docs/execution/body-roadmap/.ledger-promotion.lock
+/docs/execution/body-roadmap/**/__pycache__/
+
+# SDK external-tool fixture scratch; maintained fixtures stay tracked.
+/sdk/src/__tests__/.external-tools-*/
+
+# Python bytecode from roadmap/fixture helper scripts
+__pycache__/
+*.pyc

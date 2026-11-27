@@ -1,0 +1,17 @@
+#!/bin/sh
+case "$1" in
+  --smoke-tree-sitter)
+    echo 'Unhandled rejection: injected fixture defect' >&2
+    echo 'tree-sitter smoke ok'
+    ;;
+  --smoke-opentui)
+    echo 'Unhandled rejection: injected fixture defect' >&2
+    echo 'opentui smoke ok'
+    ;;
+  --smoke-bootscreen)
+    echo 'openbuff bootscreen ok'
+    echo 'Unhandled rejection: injected fixture defect' >&2
+    ;;
+esac
+sleep 0.05
+exit 0

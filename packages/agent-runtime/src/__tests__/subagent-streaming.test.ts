@@ -3,6 +3,7 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { assistantMessage } from '@codebuff/common/util/messages'
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { z } from 'zod/v4'
 
 import * as runAgentStep from '../run-agent-step'
 import { mockFileContext } from './test-utils'
@@ -40,9 +41,7 @@ describe('Subagent Streaming', () => {
       displayName: 'Thinker',
       outputMode: 'last_message',
       inputSchema: {
-        prompt: {
-          safeParse: () => ({ success: true }),
-        } as unknown as AgentTemplate['inputSchema']['prompt'],
+        prompt: z.string(),
       },
       spawnerPrompt: '',
       model: '',

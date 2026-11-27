@@ -79,7 +79,8 @@ describe('IndexStatusBox', () => {
         })}
       />,
     )
-    expect(markup).toContain('Diagnostics (2)')
+    expect(markup).toContain('showing 1 of 1 captured details')
+    expect(markup).toContain('Diagnostics: 2 parser issues.')
     expect(markup).toContain('src/bad.ts')
     expect(markup).toContain(theme.secondary)
     expect(markup).toContain(theme.muted)

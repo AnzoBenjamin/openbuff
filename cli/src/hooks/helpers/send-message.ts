@@ -1,4 +1,6 @@
 import { getErrorObject } from '@codebuff/common/util/error'
+import { runFailureMessage } from '@codebuff/common/types/run-outcome'
+import { projectRunOutcomes } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../../project-files'
 import { useChatStore } from '../../state/chat-store'
@@ -22,6 +24,8 @@ import {
   type BatchedMessageUpdater,
 } from '../../utils/message-updater'
 import { createModeDividerMessage } from '../../utils/send-message-helpers'
+import { notifyTerminal } from '../../utils/terminal-notify'
+import { writeToTty } from '../../utils/terminal-title'
 import { yieldToEventLoop } from '../../utils/yield-to-event-loop'
 
 import type {
@@ -37,6 +41,10 @@ import type { StreamController } from '../stream-state'
 import type { QueuedMessage, StreamStatus } from '../use-message-queue'
 import type { MessageContent, RunState } from '@openbuff/sdk'
 import type { MutableRefObject, SetStateAction } from 'react'
+import {
+  createTurnSnapshot,
+  logTurnSnapshotFailure,
+} from '../../utils/turn-snapshots'
 
 /** Resets queue state on early return (before streaming starts). */
 export type ResetEarlyReturnStateParams = {
@@ -56,11 +64,11 @@ export const resetEarlyReturnState = (
     isQueuePausedRef,
   } = params
 
-  updateChainInProgress(false)
   setCanProcessQueue(!isQueuePausedRef?.current)
   if (isProcessingQueueRef) {
     isProcessingQueueRef.current = false
   }
+  updateChainInProgress(false)
 }
 
 export const createRunOwnership = (
@@ -144,10 +152,13 @@ export const finalizeQueueState = (params: FinalizeQueueStateParams): void => {
   if (isProcessingQueueRef) {
     isProcessingQueueRef.current = false
   }
-  if (resumeQueue) {
+  // Completing or cancelling a run is not the user's explicit Resume action.
+  // In particular, cancellation cleanup must not reopen an interrupted queue.
+  const queuePaused = isQueuePausedRef?.current ?? false
+  if (resumeQueue && !queuePaused) {
     resumeQueue()
   } else {
-    setCanProcessQueue(!isQueuePausedRef?.current)
+    setCanProcessQueue(!queuePaused)
   }
   updateChainInProgress(false)
 }
@@ -216,11 +227,16 @@ export const formatQueuedMessageForHistory = (
   return parts.join('\n\n')
 }
 
+export class PromptPreparationBlocked extends Error {}
+
 export const prepareUserMessage = async (params: {
   content: string
   agentMode: AgentMode
   postUserMessage?: (prev: ChatMessage[]) => ChatMessage[]
   attachments?: PendingAttachment[]
+  consumeComposerAttachments?: boolean
+  isCurrent?: () => boolean
+  beforeCommit?: () => void
   deps: PrepareUserMessageDeps
 }): Promise<{
   userMessageId: string
@@ -229,25 +245,20 @@ export const prepareUserMessage = async (params: {
   finalContent: string
 }> => {
   const { content, agentMode, postUserMessage, attachments, deps } = params
+  const assertCurrent = () => {
+    if (params.isCurrent?.() === false)
+      throw new DOMException('Conversation changed', 'AbortError')
+  }
+  assertCurrent()
   const { setMessages, lastMessageMode, setLastMessageMode, scrollToLatest } =
     deps
 
-  const { pendingBashMessages, clearPendingBashMessages } =
-    useChatStore.getState()
-  const { bashMessages, bashContextForPrompt } =
-    processBashContext(pendingBashMessages)
-
-  if (bashMessages.length > 0) {
-    setMessages((prev) => [...prev, ...bashMessages])
-  }
-  clearPendingBashMessages()
-
-  // Split attachments by kind
+  // Stage the captured context without draining it. Image preparation may
+  // fail or yield long enough for the composer or turn owner to be replaced.
   const allAttachments =
     attachments ?? useChatStore.getState().pendingAttachments
-  if (!attachments && allAttachments.length > 0) {
-    useChatStore.getState().clearPendingAttachments()
-  }
+  const consumeComposerAttachments =
+    params.consumeComposerAttachments ?? attachments === undefined
 
   const pendingImages = allAttachments.filter(
     (a): a is PendingImageAttachment => a.kind === 'image',
@@ -290,6 +301,26 @@ export const prepareUserMessage = async (params: {
       pendingImages,
       projectRoot: getProjectRoot(),
     })
+  await yieldToEventLoop()
+  assertCurrent()
+  const context = useChatStore.getState()
+  if (
+    consumeComposerAttachments &&
+    allAttachments.some(
+      (attachment) => !context.pendingAttachments.includes(attachment),
+    )
+  ) {
+    throw new PromptPreparationBlocked(
+      'The captured attachments changed before sending. Review them and retry.',
+    )
+  }
+  // Running commands still own their pending rows; only harvest completed
+  // output that is actually delivered with this prompt.
+  const pendingBashMessages = context.pendingBashMessages.filter(
+    ({ isRunning }) => !isRunning,
+  )
+  const { bashMessages, bashContextForPrompt } =
+    processBashContext(pendingBashMessages)
 
   const shouldInsertDivider =
     lastMessageMode === null || lastMessageMode !== agentMode
@@ -324,8 +355,9 @@ export const prepareUserMessage = async (params: {
     userMessage.attachments = imageAttachments
   }
 
+  params.beforeCommit?.()
   setMessages((prev) => {
-    let next = [...prev]
+    let next = [...prev, ...bashMessages]
     if (shouldInsertDivider) {
       next.push(createModeDividerMessage(agentMode))
     }
@@ -333,15 +365,36 @@ export const prepareUserMessage = async (params: {
     if (postUserMessage) {
       next = postUserMessage(next)
     }
-    if (next.length > 100) {
-      next = next.slice(-100)
-    }
+    // Keep the durable transcript complete. Pagination and viewport windowing
+    // bound presentation independently; slicing here permanently loses IDs,
+    // bodies and chronological history before saveChatState can persist them.
     return next
   })
 
+  if (
+    pendingBashMessages.length ||
+    (consumeComposerAttachments && allAttachments.length)
+  ) {
+    // Read the unproxied store values. An Immer updater wraps the entries in
+    // drafts, which would make an identity comparison miss its own capture.
+    const latest = useChatStore.getState()
+    useChatStore.setState({
+      pendingBashMessages: latest.pendingBashMessages.filter(
+        (message) => !pendingBashMessages.includes(message),
+      ),
+      ...(consumeComposerAttachments
+        ? {
+            pendingAttachments: latest.pendingAttachments.filter(
+              (attachment) => !allAttachments.includes(attachment),
+            ),
+          }
+        : {}),
+    })
+  }
   setLastMessageMode(agentMode)
-  await yieldToEventLoop()
-  setTimeout(() => scrollToLatest(), 0)
+  setTimeout(() => {
+    if (params.isCurrent?.() !== false) scrollToLatest()
+  }, 0)
 
   return {
     userMessageId,
@@ -390,6 +443,7 @@ export const setupStreamingContext = (params: {
   abortControllerRef.current = abortController
 
   abortController.signal.addEventListener('abort', () => {
+    if (abortControllerRef.current !== abortController) return
     // Cancellation is a state, not completion. Keep the chain/queue lock until
     // client.run() settles so its authoritative preserved RunState becomes the
     // continuation base before another prompt is admitted.
@@ -428,7 +482,7 @@ export const setupStreamingContext = (params: {
   return { updater, hasReceivedContentRef, abortController }
 }
 
-export const handleRunCompletion = (params: {
+export const handleRunCompletion = async (params: {
   runState: RunState
   actualCredits: number | undefined
   agentMode: AgentMode
@@ -443,6 +497,8 @@ export const handleRunCompletion = (params: {
   resumeQueue?: () => void
   isProcessingQueueRef?: MutableRefObject<boolean>
   isQueuePausedRef?: MutableRefObject<boolean>
+  isCurrentRunOwner?: () => boolean
+  onSnapshotStarted?: (completion: Promise<void>) => void
 }) => {
   const {
     runState,
@@ -458,9 +514,35 @@ export const handleRunCompletion = (params: {
     resumeQueue,
     isProcessingQueueRef,
     isQueuePausedRef,
+    isCurrentRunOwner,
+    onSnapshotStarted,
   } = params
 
+  const projected = projectRunOutcomes(
+    runState,
+    wasAbortedByUser
+      ? {
+          runOutcome:
+            runState.runOutcome?.termination === 'cancelled'
+              ? runState.runOutcome
+              : {
+                  termination: 'cancelled',
+                  cause: {
+                    code: 'run_cancelled',
+                    message: 'Run cancelled by user.',
+                  },
+                },
+        }
+      : undefined,
+  )
+  updater.updateAiMessage((message) => ({
+    ...message,
+    runOutcome: projected.runOutcome,
+    taskAcceptance: projected.taskAcceptance,
+    actionOutcomes: projected.actionOutcomes,
+  }))
   if (wasAbortedByUser) {
+    updater.flush()
     finalizeQueueState({
       setStreamStatus,
       setCanProcessQueue,
@@ -472,8 +554,17 @@ export const handleRunCompletion = (params: {
     return
   }
 
-  const output = runState.output
+  const output = projected.output
   const finalizeAfterError = () => {
+    // The caller has already applied the terminal error write (setError) right
+    // before this helper runs; the timer stop must also settle BEFORE the
+    // queue gate reopens (reliability finding
+    // queue-gate-reopens-before-batched-updater-settles):
+    // finalizeQueueState releases setStreamStatus('idle') / the chain lock,
+    // and a queued follow-up that starts afterwards would mutate the same
+    // chat-store messages batch while the previous turn's writes are still
+    // in flight.
+    timerController.stop('error')
     finalizeQueueState({
       setStreamStatus,
       setCanProcessQueue,
@@ -481,7 +572,6 @@ export const handleRunCompletion = (params: {
       isProcessingQueueRef,
       isQueuePausedRef,
     })
-    timerController.stop('error')
   }
 
   if (!output) {
@@ -492,22 +582,42 @@ export const handleRunCompletion = (params: {
     return
   }
 
-  if (output.type === 'error') {
-    // Pass the raw error message to setError (displayed in UserErrorBanner without additional wrapper formatting)
-    updater.setError(output.message ?? DEFAULT_RUN_OUTPUT_ERROR_MESSAGE)
+  const failureMessage = runFailureMessage(projected)
+  if (failureMessage) {
+    updater.setError(failureMessage)
 
     finalizeAfterError()
     return
   }
 
-  finalizeQueueState({
-    setStreamStatus,
-    setCanProcessQueue,
-    updateChainInProgress,
-    isProcessingQueueRef,
-    isQueuePausedRef,
-    resumeQueue,
-  })
+  // P1-T7: Successful turn — fire-and-forget terminal notification so the
+  // user knows the run finished. Aborts and errors return above, so this
+  // fires exactly once per successful turn.
+  notifyTerminal(
+    { body: 'Turn complete' },
+    {
+      write: (sequence) => {
+        writeToTty(sequence)
+      },
+    },
+  )
+
+  // Keep the queue locked until the successful turn's capture settles:
+  // a queued turn can otherwise mutate the tracked tree before git add -u.
+  // Snapshot errors are logged and leave the turn outcome intact.
+  const snapshotCompletion = createTurnSnapshot({ label: 'turn' })
+    .then((outcome) => logTurnSnapshotFailure(outcome, 'turn'))
+    .catch(() => undefined)
+  onSnapshotStarted?.(snapshotCompletion)
+
+  // The previous turn's terminal message write must settle BEFORE the queue
+  // gate reopens (reliability finding
+  // queue-gate-reopens-before-batched-updater-settles):
+  // finalizeQueueState releases setStreamStatus('idle') / resumeQueue() / the
+  // chain lock, and a queued follow-up that starts afterwards would mutate
+  // the same chat-store messages batch while this turn's batched AI-message
+  // write-out is still in flight. Settle the timer and markComplete first;
+  // reopen the queue gate LAST.
   const timerResult = timerController.stop('success')
 
   if (agentMode === 'PLAN') {
@@ -523,7 +633,12 @@ export const handleRunCompletion = (params: {
 
   const cacheStats = runState.sessionState?.mainAgentState
   const cacheHitRate =
-    cacheStats && cacheStats.cacheTotalInputTokens > 0
+    cacheStats?.cacheUsageComplete === true &&
+    Number.isSafeInteger(cacheStats.cacheInputTokens) &&
+    cacheStats.cacheInputTokens >= 0 &&
+    Number.isSafeInteger(cacheStats.cacheTotalInputTokens) &&
+    cacheStats.cacheTotalInputTokens > 0 &&
+    cacheStats.cacheInputTokens <= cacheStats.cacheTotalInputTokens
       ? cacheStats.cacheInputTokens / cacheStats.cacheTotalInputTokens
       : undefined
 
@@ -531,9 +646,20 @@ export const handleRunCompletion = (params: {
     ...(completionTime && { completionTime }),
     ...(actualCredits !== undefined && { credits: actualCredits }),
     ...(cacheHitRate !== undefined && { cacheHitRate }),
-    metadata: {
-      runState,
-    },
+  })
+
+  // Stop the timer and settle UI writes immediately, then wait for capture
+  // before admitting another turn. Settled snapshot failures also release
+  // the queue. A replaced conversation must not release a newer send's gate.
+  await snapshotCompletion
+  if (isCurrentRunOwner && !isCurrentRunOwner()) return
+  finalizeQueueState({
+    setStreamStatus,
+    setCanProcessQueue,
+    updateChainInProgress,
+    isProcessingQueueRef,
+    isQueuePausedRef,
+    resumeQueue,
   })
 }
 
@@ -564,6 +690,21 @@ export const handleRunError = (params: {
 
   logger.error({ error: errorInfo }, 'SDK client.run() failed')
   setIsRetrying(false)
+
+  // The previous turn's terminal message write and the timer stop must
+  // settle BEFORE the queue gate reopens (reliability finding
+  // queue-gate-reopens-before-batched-updater-settles):
+  // finalizeQueueState releases setStreamStatus('idle') / the chain lock,
+  // and a queued follow-up that starts afterwards would mutate the same
+  // chat-store messages batch while this turn's writes are still in flight.
+  timerController.stop('error')
+
+  // Use setError for all errors so they display in UserErrorBanner consistently
+  const errorMessage = errorInfo.message || 'An unexpected error occurred'
+  updater.setError(errorMessage)
+
+  // Queue gate reopens only after the timer stop and terminal setError
+  // above have settled.
   finalizeQueueState({
     setStreamStatus,
     setCanProcessQueue,
@@ -571,9 +712,4 @@ export const handleRunError = (params: {
     isProcessingQueueRef,
     isQueuePausedRef,
   })
-  timerController.stop('error')
-
-  // Use setError for all errors so they display in UserErrorBanner consistently
-  const errorMessage = errorInfo.message || 'An unexpected error occurred'
-  updater.setError(errorMessage)
 }

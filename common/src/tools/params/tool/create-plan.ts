@@ -1,7 +1,7 @@
 import z from 'zod/v4'
 
 import { updateFileResultSchema } from './str-replace'
-import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { $getNativeToolCallExampleString, editToolResultSchema } from '../utils'
 
 import type { $ToolParams } from '../../constants'
 
@@ -75,5 +75,5 @@ export const createPlanParams = {
   endsAgentStep,
   description,
   inputSchema,
-  outputSchema: jsonToolResultSchema(updateFileResultSchema),
+  outputSchema: editToolResultSchema(updateFileResultSchema),
 } satisfies $ToolParams

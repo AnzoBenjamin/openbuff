@@ -54,9 +54,14 @@ export const killJobParams = {
         status: z.enum(
           ['running', 'stopping', 'completed', 'error', 'lost', 'stopped'],
         ),
+        /** True only after the job's exit was observed (exec-jobs-13). */
         killed: z.boolean(),
+        exitObserved: z.boolean().optional(),
         signal: z.enum(['SIGTERM', 'SIGKILL']),
         exitCode: z.number().nullable().optional(),
+        /** Why `killed` is false while the job is still stopping. */
+        reason: z.string().optional(),
+        nextStep: z.string().optional(),
       }),
       z.object({
         jobId: z.string(),

@@ -3,6 +3,7 @@ import { TextAttributes } from '@opentui/core'
 import { useTheme } from '../../hooks/use-theme'
 import { defineToolComponent } from './types'
 import { getToolOutputValues } from '../../utils/tool-result-normalizer'
+import { classifyValidationResult } from '../../utils/output-outcome'
 
 import type { ToolRenderConfig } from './types'
 
@@ -17,21 +18,24 @@ type HookResult = {
   changedFiles?: string[]
 }
 
+export function isHookResultFailed(result: HookResult): boolean {
+  return classifyValidationResult(result) === 'failed'
+}
+
 export function formatHookRunHeader(results: HookResult[]): string {
   if (results.length === 0) return 'Validation hooks'
-  const failed = results.filter(
-    (result) =>
-      Boolean(result.errorMessage) ||
-      (typeof result.exitCode === 'number' && result.exitCode !== 0),
-  ).length
+  const failed = results.filter(isHookResultFailed).length
   const skipped = results.filter((result) =>
     ['no_hooks_configured', 'hooks_skipped'].includes(
       result.validationStatus ?? '',
     ),
   ).length
-  const passed = Math.max(0, results.length - failed - skipped)
+  const passed = results.filter(
+    (result) => classifyValidationResult(result) === 'passed',
+  ).length
+  const unknown = results.length - failed - skipped - passed
   if (skipped === results.length) return 'Validation skipped'
-  return `Hooks (${passed} passed${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''})`
+  return `Hooks (${passed} passed${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''}${unknown ? `, ${unknown} outcome unknown` : ''})`
 }
 
 /**
@@ -48,9 +52,18 @@ export const RunFileChangeHooksComponent = defineToolComponent({
     const files = Array.isArray(input?.files) ? input!.files : []
 
     const results = getToolOutputValues(toolBlock.outputRaw).flatMap((value) =>
-      Array.isArray(value) ? (value as HookResult[]) : [],
+      Array.isArray(value)
+        ? (value.filter(
+            (entry) =>
+              entry && typeof entry === 'object' && !Array.isArray(entry),
+          ) as HookResult[])
+        : value && typeof value === 'object' && !Array.isArray(value)
+          ? [value as HookResult]
+          : [],
     )
-    const header = formatHookRunHeader(results)
+    const header = results.length
+      ? formatHookRunHeader(results)
+      : `Validation ${toolBlock.lifecycle === 'queued' || toolBlock.lifecycle === 'running' || toolBlock.lifecycle === 'cancelled' || toolBlock.lifecycle === 'failed' ? toolBlock.lifecycle : 'output unavailable'}`
     const body = files.length > 0 ? files.join(', ') : 'no files'
 
     const content = (
@@ -64,12 +77,11 @@ export const RunFileChangeHooksComponent = defineToolComponent({
           <span fg={theme.muted}>{body}</span>
         </text>
         {results.map((result, index) => {
-          const isFailed =
-            Boolean(result.errorMessage) ||
-            (typeof result.exitCode === 'number' && result.exitCode !== 0)
+          const isFailed = isHookResultFailed(result)
           const isSkipped = ['no_hooks_configured', 'hooks_skipped'].includes(
             result.validationStatus ?? '',
           )
+          const state = classifyValidationResult(result)
           const output = [result.errorMessage, result.stderr, result.stdout]
             .find((value) => typeof value === 'string' && value.trim())
             ?.trim()
@@ -82,9 +94,21 @@ export const RunFileChangeHooksComponent = defineToolComponent({
               style={{ flexDirection: 'column' }}
             >
               <text fg={isFailed ? theme.error : theme.muted}>
-                {`${isFailed ? '✗' : isSkipped ? '○' : '✓'} ${result.hookName ?? result.message ?? 'hook'}${typeof result.exitCode === 'number' ? ` (exit ${result.exitCode})` : ''}`}
+                {`${isFailed ? '✗' : isSkipped ? '○' : state === 'passed' ? '✓' : '?'} ${result.hookName ?? result.message ?? 'hook'}${typeof result.exitCode === 'number' ? ` (exit ${result.exitCode})` : ''}`}
               </text>
               {output ? <text fg={theme.muted}>{output}</text> : null}
+              {[result.stdout, result.stderr, result.errorMessage].some(
+                (value) =>
+                  typeof value === 'string' && value.split('\n').length > 4,
+              ) ||
+              [result.stdout, result.stderr, result.errorMessage].filter(
+                Boolean,
+              ).length > 1 ? (
+                <text fg={theme.warning}>
+                  Preview limited · Inspect for every retained stream and
+                  diagnostic
+                </text>
+              ) : null}
             </box>
           )
         })}

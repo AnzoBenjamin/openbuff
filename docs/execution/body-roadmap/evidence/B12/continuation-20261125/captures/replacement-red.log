@@ -1,0 +1,88 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-replacement-capture.test.ts:
+48 |   expect(old).toBeDefined()
+49 |   failReplacement = true
+50 |   await capture(replacement, 'replacement', [old.observationId])
+51 |   const after = await repository.listEvents({ limit: 1000 })
+52 |   if (after.status === 'error') throw new Error(after.error.message)
+53 |   expect(after.events.filter(event => event.eventType === 'claim.superseded')).toEqual([])
+                                                                                    ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "artifactId": undefined,
++     "eventId": "event:148dbeafb44ba66d99ca2f3a505d878c3a85446a6dddce746db69f651e5caf0c",
++     "eventType": "claim.superseded",
++     "idempotencyKey": "event:event:148dbeafb44ba66d99ca2f3a505d878c3a85446a6dddce746db69f651e5caf0c",
++     "metadata": {
++       "eventSchemaVersion": 1,
++       "projectId": "project:b12-replacement",
++       "schemaVersion": 2,
++       "sessionId": "session:c2cddc9ea680bdb3072e78a79eba95e9dc4dae0bfe74c664720238ad9774bf44",
++     },
++     "occurredAt": "2026-11-25T15:20:12.431Z",
++     "payload": {
++       "observationId": "observation:093ee985d7db7062f6075f072febb1c0370a600f9d8f36fddd041fc3ed325aa5",
++       "payloadSchemaVersion": 1,
++       "reason": "Superseded by explicit record_decision resolution",
++       "supersededByObservationId": "observation:3ac102939df7beb9128d43001adfd75dc55f2502ffc462ba577c20e3f1d8618f",
++     },
++     "sequence": 6,
++     "sessionId": "session:c2cddc9ea680bdb3072e78a79eba95e9dc4dae0bfe74c664720238ad9774bf44",
++     "taskId": undefined,
++   },
++ ]
+
+- Expected  - 1
++ Received  + 24
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-replacement-capture.test.ts:53:80)
+(fail) precommit replacement observation does not retract a prior claim without confirmation [57.54ms]
+48 |   expect(old).toBeDefined()
+49 |   failReplacement = true
+50 |   await capture(replacement, 'replacement', [old.observationId])
+51 |   const after = await repository.listEvents({ limit: 1000 })
+52 |   if (after.status === 'error') throw new Error(after.error.message)
+53 |   expect(after.events.filter(event => event.eventType === 'claim.superseded')).toEqual([])
+                                                                                    ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "artifactId": undefined,
++     "eventId": "event:148dbeafb44ba66d99ca2f3a505d878c3a85446a6dddce746db69f651e5caf0c",
++     "eventType": "claim.superseded",
++     "idempotencyKey": "event:event:148dbeafb44ba66d99ca2f3a505d878c3a85446a6dddce746db69f651e5caf0c",
++     "metadata": {
++       "eventSchemaVersion": 1,
++       "projectId": "project:b12-replacement",
++       "schemaVersion": 2,
++       "sessionId": "session:c2cddc9ea680bdb3072e78a79eba95e9dc4dae0bfe74c664720238ad9774bf44",
++     },
++     "occurredAt": "2026-11-25T15:20:12.466Z",
++     "payload": {
++       "observationId": "observation:093ee985d7db7062f6075f072febb1c0370a600f9d8f36fddd041fc3ed325aa5",
++       "payloadSchemaVersion": 1,
++       "reason": "Superseded by explicit record_decision resolution",
++       "supersededByObservationId": "observation:3ac102939df7beb9128d43001adfd75dc55f2502ffc462ba577c20e3f1d8618f",
++     },
++     "sequence": 7,
++     "sessionId": "session:c2cddc9ea680bdb3072e78a79eba95e9dc4dae0bfe74c664720238ad9774bf44",
++     "taskId": undefined,
++   },
++ ]
+
+- Expected  - 1
++ Received  + 24
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-replacement-capture.test.ts:53:80)
+(fail) lost-ack replacement observation does not retract a prior claim without confirmation [37.03ms]
+
+ 0 pass
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [172.00ms]

@@ -1,15 +1,22 @@
 import { z } from 'zod/v4'
 
 import { MAX_AGENT_STEPS_DEFAULT } from '../constants/agents'
+import { rawReadBasisV1Schema } from '../util/raw-read-basis'
+import type { RawReadBasisV1 } from '../util/raw-read-basis'
 
 import type { Message } from './messages/codebuff-message'
-import type { ContextArchiveSnapshot } from './context-archive'
+import type {
+  ContextArchiveSnapshot,
+  ContextArchiveBody,
+  ContextArchiveRetentionReceipt,
+} from './context-archive'
 import type { ContextConsolidation } from './context-consolidation'
 import type { ProjectFileContext } from '../util/file'
 import type { TaskMemoryV1 } from './task-memory'
 import type { OrchestrationLedgerV1 } from './orchestration-ledger'
 import type { DiscoveryCoverageV1 } from './discovery-coverage'
 import type { AgentReceipt } from './agent-handoff'
+import type { ActionOutcome, RunOutcome, TaskAcceptance } from './run-outcome'
 import type { WorkspaceStateV1 } from './workspace-state'
 import { createInitialWorkspaceState } from './workspace-state'
 import type {
@@ -25,6 +32,8 @@ import type {
   TaskId,
   TaskStatus,
 } from './memory-v2'
+import type { MemoryPlaybook } from './memory-playbook'
+import type { RequestAdmissionReference } from './request-admission'
 
 export const toolCallSchema = z.object({
   toolName: z.string(),
@@ -58,7 +67,7 @@ export type EditRereadRequirement = {
 }
 
 /**
- * Whole-file post-edit anchor: hash+bounds are durable; cap.v3 is reminted only
+ * Whole-file post-edit anchor: hashes, raw basis and bounds are durable; cap.v4 is reminted only
  * when the stored issuer matches the current project+run or the stored token
  * still authenticates for that scope. Optional projectId/runId stamp the minting
  * issuer so process restart can remint without a live HMAC (legacy anchors
@@ -69,6 +78,8 @@ export type ConfirmedPostEditAnchor = {
   endLine: number
   contentHash: string
   readCapability: string
+  /** Original authenticated exact-byte authority; missing on legacy anchors. */
+  rawBasis?: RawReadBasisV1
   /** Issuing project identity; optional for legacy session parse. */
   projectId?: string
   /** Issuing run identity; optional for legacy session parse. */
@@ -90,7 +101,12 @@ export const confirmedPostEditAnchorSchema = z
     startLine: z.number().int().min(1),
     endLine: z.number().int().min(1),
     contentHash: z.string().regex(SHA256_CONTENT_HASH_PATTERN),
-    readCapability: z.string().min(1).max(4096).regex(/^cap\.v3\./),
+    readCapability: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^cap\.v[34]\./),
+    rawBasis: rawReadBasisV1Schema.optional(),
     projectId: z.string().optional(),
     runId: z.string().optional(),
   })
@@ -107,6 +123,7 @@ export const confirmedPostEditAnchorSchema = z
 type AgentStateSecurityMapsView = {
   readAuthorizationsByPath?: unknown
   readAuthorizationHashesByPath?: unknown
+  rawReadAuthorizationHashesByPath?: unknown
   confirmedPostEditAnchorsByPath?: unknown
 }
 
@@ -156,6 +173,7 @@ export function sanitizeAgentStateSecurityMaps<
     AgentState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'confirmedPostEditAnchorsByPath'
   >,
 >(state: T): T {
@@ -170,6 +188,11 @@ export function sanitizeAgentStateSecurityMaps<
       maps.readAuthorizationHashesByPath,
       (value): value is string =>
         typeof value === 'string' && SHA256_CONTENT_HASH_PATTERN.test(value),
+    ),
+    rawReadAuthorizationHashesByPath: sanitizeSecurityMapEntries(
+      maps.rawReadAuthorizationHashesByPath,
+      (value): value is string =>
+        typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value),
     ),
     confirmedPostEditAnchorsByPath: sanitizeSecurityMapEntries(
       maps.confirmedPostEditAnchorsByPath,
@@ -381,6 +404,12 @@ export interface MemoryRuntimeStateV2 {
 }
 
 export type AgentState = {
+  /** Runtime terminal reason for this run; never inferred from task output. */
+  runOutcome?: RunOutcome
+  /** A named task oracle may accept a recovered task or reject a completed run. */
+  taskAcceptance?: TaskAcceptance
+  /** Earlier failed/refused attempts survive subsequent recovery. */
+  actionOutcomes?: ActionOutcome[]
   /**
    * @deprecated agentId is replaced by runId
    */
@@ -406,18 +435,24 @@ export type AgentState = {
    */
   cacheInputTokens: number
   /**
-   * Cumulative count of total input tokens processed by the provider across
-   * all steps in this run. This is the denominator for the cache-hit rate
-   * (cacheInputTokens / cacheTotalInputTokens). Accumulated alongside
-   * cacheInputTokens.
+   * Cumulative input-token count across all steps in this turn, including
+   * cached input tokens. This is the denominator for the cache-hit rate
+   * (cacheInputTokens / cacheTotalInputTokens). The separate per-step count
+   * passed to token-budget enforcement retains its existing provider-reported
+   * input-token semantics.
    */
   cacheTotalInputTokens: number
   /**
-   * Optional per-run cost cap in US cents. Lazy-initialized from the agent
-   * template's maxCostCents on the first step, then enforced after each step's
-   * cost accumulation: if creditsUsed exceeds this cap, the turn ends with a
-   * budget-exceeded system message. Gives BYOK users a hard spend guardrail.
-   * Undefined = no cap (default, preserves existing behavior).
+   * Whether every provider request contributing to this turn's cache ratio
+   * reported valid input and cached-input counts. Optional for legacy states;
+   * only `true` permits the CLI to display a cache-hit rate.
+   */
+  cacheUsageComplete?: boolean
+  /**
+   * Legacy per-agent cost cap in US cents. A root template maps this to the
+   * durable strict-capped request authority when no newer policy is selected;
+   * this field remains a secondary post-step stop signal for compatibility.
+   * Undefined = no legacy cap.
    */
   maxCostCents?: number
   /**
@@ -427,9 +462,13 @@ export type AgentState = {
    * cap, the turn ends. Undefined = no cap.
    */
   maxTokensPerTurn?: number
+  /** Root-only durable admission reference; checkpoints carry no ledger bytes. */
+  requestAdmission?: RequestAdmissionReference
   output?: Record<string, any>
   parentId?: string
   systemPrompt: string
+  /** Template identity for the cached system prompt; absent on legacy states. */
+  systemPromptTemplateIdentity?: string
   toolDefinitions: Record<
     string,
     { description: string | undefined; inputSchema: {} }
@@ -475,9 +514,11 @@ export type AgentState = {
    * content the agent read or most recently wrote successfully.
    */
   readAuthorizationHashesByPath?: Record<string, string>
+  /** Exact whole-file byte hash granted only from verified raw basis or a confirmed write. */
+  rawReadAuthorizationHashesByPath?: Record<string, string>
   /**
    * Durable confirmed whole-file post-edit anchors (hash + bounds + remintable
-   * cap.v3). Hydrated into per-turn FileProcessingState the same way sticky
+   * capabilities). Hydrated into per-turn FileProcessingState the same way sticky
    * hashes are; tokens are reminted only when the stored issuer matches the
    * current project+run or the stored token authenticates for that scope.
    * Cross-project/run restore drops anchors. Optional so old sessions parse
@@ -496,6 +537,14 @@ export type AgentState = {
    * `packages/agent-runtime/src/util/context-archive.ts`).
    */
   compactionArchive?: Array<ContextArchiveSnapshot>
+  /** Bounded single-copy originals, referenced by snapshot provenance rather than prompt text. */
+  contextArchiveBodies?: Record<string, ContextArchiveBody>
+  /** Storage/memory cutoff disclosure; not a source/edit/execution capability. */
+  contextArchiveRetention?: ContextArchiveRetentionReceipt
+  /** Persisted originals may be inline fallback data or confirmed host-only references. */
+  contextArchiveStorage?: 'inline' | 'references'
+  /** Edited conversation branches must not hydrate later project-wide transcripts. */
+  contextArchiveHydration?: 'project' | 'in-memory-only'
   /**
    * Capped list of background LLM consolidations of archived snapshots (the
    * canary-gated prototype leg of the compaction fidelity pipeline). Written
@@ -517,6 +566,8 @@ export type AgentState = {
     startedAt: number
     completedAt?: number
     error?: string
+    /** Original stream holding the durably joined settlement, when available. */
+    parentRunId?: string
     childRunId?: string
     receipt?: AgentReceipt
   }>
@@ -532,12 +583,23 @@ export type AgentState = {
   memoryAuthority?: MemoryAuthorityStateV2
   /** Validated retrieval context for the current trusted turn only. */
   memoryV2Context?: MemoryTurnContextV2
+  /** Active procedural playbooks for the turn: loaded by the coordinator, consumed by the runtime playbook gate. */
+  playbookContext?: MemoryPlaybook[]
+  /** Host-prepared actor-specific discovery and knowledge, independent of transcript inheritance. */
+  repositoryContext?: import('./contracts/repository-intelligence').RepositoryContextPacket
+  playbookApplicability?: import('../util/playbook-applicability').PlaybookApplicabilityContext
   /** Per-turn memory-cover reuse accumulator (S2 reuse receipt). Reset each turn. */
   memoryReuse?: MemoryReuseReceiptV1
   /** Snapshot of the completed turn's reuse receipt handed to the SDK coordinator for usage correlation; cleared by coordinator finishTurn. */
   memoryUsageTurn?: MemoryReuseReceiptV1
+  /** Host/runtime compiler receipt: only complete records actually packed in model requests. */
+  memoryV2EmittedObservationIds?: string[]
+  /** Query identities actually packed by this actor; source compiler and coordinator may issue separate queries. */
+  memoryV2EmittedQueryIds?: string[]
   /** Monotonic workspace state shared by reads, mutations, indexing, validation, and review. */
   workspaceState?: WorkspaceStateV1
+  /** Per-run recovery budget; reset at loop entry, independent of model retries. */
+  executionRecovery?: { staleRefusals: number }
   /**
    * Process-owned mutation paths for concurrent gate isolation; published by
    * runtime after confirmed mutations / terminal touchedPaths.
@@ -696,6 +758,8 @@ export type AgentTemplateType =
 export type SessionState = {
   fileContext: ProjectFileContext
   mainAgentState: AgentState
+  /** Durable root-shared provider-request admission authority for interrupted resume. */
+  requestAdmission?: RequestAdmissionReference
 }
 
 export function getInitialAgentState(): AgentState {
@@ -713,6 +777,8 @@ export function getInitialAgentState(): AgentState {
     directCreditsUsed: 0,
     cacheInputTokens: 0,
     cacheTotalInputTokens: 0,
+    cacheUsageComplete: true,
+    requestAdmission: undefined,
     output: undefined,
     parentId: undefined,
     systemPrompt: '',
@@ -721,6 +787,7 @@ export function getInitialAgentState(): AgentState {
     contextWindowTokens: undefined,
     readAuthorizationsByPath: {},
     readAuthorizationHashesByPath: {},
+    rawReadAuthorizationHashesByPath: {},
     confirmedPostEditAnchorsByPath: {},
     editRereadRequirementsByPath: {},
     taskMemory: undefined,

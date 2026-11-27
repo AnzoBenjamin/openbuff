@@ -1,0 +1,64 @@
+bun test v1.4.4 (38afee6c8)
+
+src/hooks/__tests__/use-send-message-restore.test.tsx:
+Using environment: test
+(pass) B13 mounted selected-session recovery > missing selection blocks send before draft/attachment drain and retry restores the actual saved file [167.99ms]
+(pass) B13 mounted selected-session recovery > corrupt selection blocks send before draft/attachment drain and retry restores the actual saved file [109.61ms]
+(pass) B13 mounted selected-session recovery > cancel aborts an in-flight restore, preserves draft/queue and ignores the late old result [57.28ms]
+
+src/hooks/__tests__/use-chat-messages-retention.test.tsx:
+Using environment: dev
+(pass) 500 retained messages start with a 15-message hot page, load older pages and reveal the earliest through the viewport [1980.56ms]
+
+src/utils/__tests__/persisted-context-archive.test.ts:
+(pass) B13 persistence projection > publishes references only after all corresponding archive commits are confirmed [4.34ms]
+(pass) B13 persistence projection > failed, incomplete or unconfirmed storage keeps bounded inline originals, not dangling refs [0.34ms]
+(pass) B13 persistence projection > a disclosed partial retention cutoff cannot publish dangling refs or an overquota inline shadow [0.20ms]
+(pass) B13 persistence projection > normalizes sanitized text and all references together before sending them to storage [0.54ms]
+
+src/utils/__tests__/b13-transcript-restart.test.ts:
+Using environment: test
+(pass) 500 actual prepareUserMessage sends save, drain and resume all IDs and bodies in a fresh process [2700.94ms]
+(pass) non-cloneable state takes the synchronous save fallback without capping a 500-message transcript [1599.68ms]
+
+src/services/memory-v2/__tests__/b13-archive-originals.test.ts:
+(pass) B13 normalized original archive policy > persists 30 distinct originals, reopens, and pages the exact hash and tail [695.26ms]
+(pass) B13 normalized original archive policy > discloses quota cutoff and an old envelope cannot resurrect a removed original [15.92ms]
+(pass) B13 normalized original archive policy > expiry includes the current run and protected overflow refuses atomically [19.70ms]
+(pass) B13 normalized original archive policy > source-run ambiguity, Unicode cursors, conflicting originals and corruption fail closed [21.76ms]
+(pass) B13 normalized original archive policy > new pointer timestamps cannot renew an original TTL, while an explicit pin protects its closure [17.83ms]
+(pass) B13 normalized original archive policy > constructor policy is captured, 4MiB quota is logical bytes, and shared originals are charged once [177.77ms]
+(pass) B13 normalized original archive policy > keep-until-delete is explicitly unbounded aggregate storage, and malformed policy never opens a store [11.08ms]
+
+src/services/memory-v2/__tests__/context-archive-sync.test.ts:
+Using environment: dev
+(pass) mergeContextArchives > orders the merged archive chronologically oldest-first [1.29ms]
+(pass) mergeContextArchives > dedupes an identical checked manifest; in-memory wins [0.54ms]
+(pass) mergeContextArchives > same-time actions, content and distinct source runs survive repeated restoration [1.46ms]
+(pass) mergeContextArchives > a legacy unnamed snapshot binds only to one exact matching source manifest [0.88ms]
+(pass) mergeContextArchives > ambiguous legacy source runs are retained without guessing ownership [1.07ms]
+(pass) mergeContextArchives > treats the same action at different archivedAt as distinct [0.26ms]
+(pass) mergeContextArchives > dedupes repeated restores: a second hydrate with the merged archive is a no-op [0.47ms]
+(pass) mergeContextArchives > caps semantic/mechanical fills at 8 while eviction keeps its own cap [1.26ms]
+(pass) mergeContextArchives > eviction cap is 16 and independent of the semantic/mechanical cap [1.56ms]
+(pass) mergeContextArchives > in-memory entries are never dropped even when already over cap [0.80ms]
+(pass) mergeContextArchives > handles undefined in-memory archive and empty durable set [0.21ms]
+(pass) mergeContextArchives > mechanical_trim and semantic_compaction share the same cap kind [0.80ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > persist returns null when the repository lacks the method [1.21ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > persist returns null (never throws) when the method rejects [0.54ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > persist forwards the request and returns the outcome [0.34ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > binds prototype methods to the repository (this-aware invocation) [0.56ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load returns null when the repository lacks the method [0.16ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load returns null (never throws) when the method rejects [0.36ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load forwards the request and returns snapshots [0.25ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load coerces a malformed (non-array) snapshots field to [] [0.10ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > successful empty and unavailable loads remain distinct; degraded snapshots remain readable [7.90ms]
+(pass) flushContextArchiveSnapshots skip paths (best-effort, no-throw) > resolves without touching the provider when runId is missing [0.29ms]
+(pass) flushContextArchiveSnapshots skip paths (best-effort, no-throw) > resolves without touching the provider when the archive is empty [0.23ms]
+(pass) flushContextArchiveSnapshots skip paths (best-effort, no-throw) > resolves when sessionState is absent entirely [0.10ms]
+(pass) hydrateContextArchiveSnapshots (merge-through seam) > merges loaded durable snapshots into the in-memory archive [0.59ms]
+
+ 42 pass
+ 0 fail
+ 1925 expect() calls
+Ran 42 tests across 6 files. [11.73s]

@@ -1,4 +1,6 @@
+import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { MAX_SPAWN_BATCH_SIZE } from '@codebuff/common/constants/agents'
 
 import {
@@ -21,15 +23,17 @@ import {
   buildSpawnParamsWithHandoff,
   deriveSpawnTemplateCapabilities,
   validateVersionedAgentHandoff,
-  buildRuntimeAgentReceipt,
+  buildRuntimeAgentReceiptWithArtifacts,
   reconcileAgentReceiptIntoParent,
+  mergeChildEvidenceIntoParent,
   createCombinedAbortSignal,
 } from './spawn-agent-utils'
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
+import { retainJournalForChild } from '../../../util/run-journal'
 import {
-  acquireWorkspacePathLease,
-  releaseWorkspacePathLease,
+  acquireRenewingWorkspacePathLease,
+  afterSubagentCleanup,
 } from '../../../util/workspace-path-leases'
 import {
   buildDiscoveryQuestion,
@@ -43,18 +47,21 @@ import {
 import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
 
 import type { BackgroundAgentJob } from '../../../util/background-agent-jobs'
+import type { WorkspacePathLeaseOptions } from '../../../util/workspace-path-leases'
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { AgentHandoff } from '@codebuff/common/types/agent-handoff'
+import type { AgentHandoff, AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { JSONObject, JSONValue } from '@codebuff/common/types/json'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { SharedSpawnCloneCache } from './spawn-agent-utils'
 import type { ToolSet } from 'ai'
 
 export type SendSubagentChunk = (data: {
@@ -78,7 +85,7 @@ type ValidatedSpawnAgent = {
   subAgentState: AgentState
   capabilityId: string
   schedulingReasons: string[]
-  leaseId?: string
+  releasePathLease?: () => void
   discoveryShardKey?: string
   handoff?: AgentHandoff
 }
@@ -101,9 +108,9 @@ function backgroundAgentStatusForChunk(
           (record['toolCall'] as Record<string, unknown> | undefined)?.[
             'toolName'
           ] ?? (record['tool'] as Record<string, unknown> | undefined)?.['name']
-        const raw = record['toolName'] ?? record['tool_name'] ?? record['name'] ?? nested
-        const name =
-          typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
+        const raw =
+          record['toolName'] ?? record['tool_name'] ?? record['name'] ?? nested
+        const name = typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
         return `tool:${name.slice(0, 100)}`
       }
       case 'tool_result':
@@ -149,6 +156,9 @@ export const handleSpawnAgents = (async (
     userInputId: string
     sendSubagentChunk: SendSubagentChunk
     writeToClient: (chunk: string | PrintModeEvent) => void
+    clock?: Clock
+    /** Host-only lease timing; tool inputs cannot set it. */
+    workspacePathLeaseOptions?: WorkspacePathLeaseOptions
   } & ParamsExcluding<
     typeof validateAndGetAgentTemplate,
     'agentTypeStr' | 'parentAgentTemplate'
@@ -183,8 +193,21 @@ export const handleSpawnAgents = (async (
   } = params
   const { agents } = toolCall.input
   const { logger } = params
+  const leaseClock = params.clock ?? realClock
 
   await previousToolCallFinished
+
+  // A worker's socket and process belong to its own foreground settlement.
+  // Refuse the entire batch before acquiring any leases or starting an actor.
+  if (params.detachedAgentUnavailable && agents.some((agent) => agent.background)) {
+    return {
+      output: jsonToolResult(agents.map((agent) => ({
+        agentType: agent.agent_type,
+        agentName: agent.agent_type,
+        value: { errorMessage: 'Detached background agents require an independent owner; the batch did not start. Use a foreground child in a supervised worker.' },
+      }))),
+    }
+  }
 
   if (agents.length > MAX_SPAWN_BATCH_SIZE) {
     throw new Error(
@@ -198,7 +221,19 @@ export const handleSpawnAgents = (async (
   // that vanished mid-turn keeps a 'running' intent for the rest of the turn
   // and can reject a later legitimate background spawn. Same field writes as
   // the turn-entry pass and idempotent, so a retried spawn behaves identically.
-  reconcileInterruptedBackgroundAgentIntents(parentAgentState)
+  reconcileInterruptedBackgroundAgentIntents(
+    parentAgentState,
+    (params.clock ?? realClock).now(),
+    params.journalReader,
+  )
+
+  // One clone cache per handler invocation: every child in THIS batch shares
+  // the same memoized clones of the parent's taskMemory/playbookContext/
+  // workspaceState (1 deep clone per field instead of N children). The object
+  // is re-created on the next spawn_agents call, so nothing is ever reused
+  // across batches. Safe to share because every runtime writer of these fields
+  // is copy-on-write (fresh revisions are assigned, never mutated in place).
+  const spawnBatchCloneCache: SharedSpawnCloneCache = {}
 
   // Validate the complete batch before launching any detached work. Without
   // this preflight, an invalid later entry could throw after earlier
@@ -222,11 +257,13 @@ export const handleSpawnAgents = (async (
         handoff && typeof handoff === 'object' && handoff.schemaVersion === 1
           ? (handoff as AgentHandoff)
           : undefined
+      // Tolerate an absent fileContext/projectRoot: '' keeps lease and
+      // capability scope checks failing closed instead of throwing.
       const effectiveAgentTemplate = deriveSpawnTemplateCapabilities({
         agentTemplate,
         parentAgentTemplate,
         handoff: canonicalHandoff,
-        projectRoot: params.fileContext.projectRoot,
+        projectRoot: resolveProjectRootOrEmpty(params.fileContext),
       })
       const serializedHandoff = handoff ? JSON.stringify(handoff) : ''
       const contextWindowTokens = params.resolveModelContextWindow?.({
@@ -279,6 +316,7 @@ export const handleSpawnAgents = (async (
           selection.candidate.template,
           parentAgentState,
           {},
+          spawnBatchCloneCache,
         ),
       }
     }),
@@ -299,7 +337,7 @@ export const handleSpawnAgents = (async (
   try {
     verifiedExcerptsForSpawn = getVerifiedMemoryExcerpts(parentAgentState, {
       limit: 5,
-      maxCharsPerExcerpt: 500,
+      maxCharsPerExcerpt: 2_000,
     }).slice(0, 5)
   } catch {
     verifiedExcerptsForSpawn = []
@@ -323,7 +361,10 @@ export const handleSpawnAgents = (async (
         ].slice(0, 5)
         return
       }
-      if ('verifiedMemoryExcerpts' in record && record['verifiedMemoryExcerpts'] === undefined) {
+      if (
+        'verifiedMemoryExcerpts' in record &&
+        record['verifiedMemoryExcerpts'] === undefined
+      ) {
         record['verifiedMemoryExcerpts'] = bounded
         return
       }
@@ -371,6 +412,7 @@ export const handleSpawnAgents = (async (
         workspaceRevision: parentAgentState.workspaceState?.revision,
         taskId,
         workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        now: (params.clock ?? realClock).now(),
       })
       nextDiscoveryCoverage = claimed.state
       // A duplicate claim serves the existing receipt: leave the shard key
@@ -380,10 +422,7 @@ export const handleSpawnAgents = (async (
       if (!claimed.duplicate) {
         validated.discoveryShardKey = claimed.shardKey
       }
-      forwardVerifiedExcerpts(
-        validated.subAgentState,
-        verifiedExcerptsForSpawn,
-      )
+      forwardVerifiedExcerpts(validated.subAgentState, verifiedExcerptsForSpawn)
     }
   }
   // Commit the whole batch of claims at once. If any claim is rejected, the
@@ -403,6 +442,13 @@ export const handleSpawnAgents = (async (
   // subsequent spawn) nor emit an `interrupted` event that pairs with the
   // `spawn_finished` it settles with.
   const wiredBackgroundAgentIds = new Set<string>()
+  const releaseUnlaunchedPathLeases = () => {
+    for (const validated of validatedAgents) {
+      if (!wiredBackgroundAgentIds.has(validated.subAgentState.agentId)) {
+        validated.releasePathLease?.()
+      }
+    }
+  }
   // Release everything the batch already claimed when a whole-batch step
   // fails, so a rejected batch never leaves an active workspace path lease, an
   // active discovery shard, or an unterminated `spawn_started` behind for an
@@ -410,15 +456,16 @@ export const handleSpawnAgents = (async (
   // (see `wiredBackgroundAgentIds`) are skipped: their settle handlers own
   // every terminal transition.
   const rollbackValidatedClaims = (reason: string) => {
+    releaseUnlaunchedPathLeases()
     for (const validated of validatedAgents) {
       if (wiredBackgroundAgentIds.has(validated.subAgentState.agentId)) {
         continue
       }
-      releaseWorkspacePathLease(parentAgentState, validated.leaseId)
       parentAgentState.discoveryCoverage = completeDiscoveryShard({
         existing: parentAgentState.discoveryCoverage,
         shardKey: validated.discoveryShardKey,
         status: 'interrupted',
+        now: (params.clock ?? realClock).now(),
       })
       // `interrupted` is the terminal marker reconcileInterruptedLedgerSpawns
       // recognizes, so a spawn that never launched settles in the ledger
@@ -441,12 +488,20 @@ export const handleSpawnAgents = (async (
   }
   try {
     for (const validated of validatedAgents) {
-      validated.leaseId = acquireWorkspacePathLease({
+      const ownerAgentId = validated.subAgentState.agentId
+      validated.releasePathLease = acquireRenewingWorkspacePathLease({
+        ...params.workspacePathLeaseOptions,
         state: parentAgentState,
-        projectRoot: params.fileContext.projectRoot,
-        ownerAgentId: validated.subAgentState.agentId,
+        projectRoot: resolveProjectRootOrEmpty(params.fileContext),
+        ownerAgentId,
         taskId: validated.handoff?.taskId,
         paths: validated.handoff?.permissions.writablePaths ?? [],
+        clock: leaseClock,
+        onHeartbeatError: (error) =>
+          logger.warn(
+            { agentId: ownerAgentId, error: String(error) },
+            'Workspace path lease heartbeat failed; retaining scope until settlement',
+          ),
       })
     }
   } catch (error) {
@@ -455,22 +510,28 @@ export const handleSpawnAgents = (async (
     )
     throw error
   }
-  for (const validated of validatedAgents) {
-    appendOrchestrationEvent({
-      state: parentAgentState,
-      event: {
-        type: 'spawn_started',
-        runId: parentAgentState.runId ?? parentAgentState.agentId,
-        spawnId: validated.subAgentState.agentId,
-        taskId: validated.handoff?.taskId,
-        agentType: validated.agentType,
-        parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
-        capabilityId: validated.capabilityId,
-        workspaceRevision: parentAgentState.workspaceState?.revision,
-        workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
-      },
-    })
-    startedSpawnIds.add(validated.subAgentState.agentId)
+  try {
+    for (const validated of validatedAgents) {
+      appendOrchestrationEvent({
+        state: parentAgentState,
+        event: {
+          type: 'spawn_started',
+          runId: parentAgentState.runId ?? parentAgentState.agentId,
+          spawnId: validated.subAgentState.agentId,
+          taskId: validated.handoff?.taskId,
+          agentType: validated.agentType,
+          parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
+          capabilityId: validated.capabilityId,
+          workspaceRevision: parentAgentState.workspaceState?.revision,
+          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        },
+      })
+      startedSpawnIds.add(validated.subAgentState.agentId)
+    }
+  } catch (error) {
+    // No child has launched. Release even if the start bookkeeping failed.
+    releaseUnlaunchedPathLeases()
+    throw error
   }
   // Claim the whole background batch's capacity in ONE atomic check that also
   // pre-allocates every job id: a concurrent spawn can no longer land between
@@ -517,7 +578,18 @@ export const handleSpawnAgents = (async (
   // the jobs whose coroutine WAS launched — those keep normal settle handling
   // and must never be abandoned — and terminally abandon only the rest.
   const wiredBackgroundJobIds = new Set<string>()
+  const releaseJournal = new Map<string, () => void>()
   try {
+    // Acquire every admitted connection interest before starting a coroutine.
+    // A failing retain cannot leave part of the batch untracked.
+    for (const job of backgroundJobs) {
+      const release = retainJournalForChild(
+        params.journalWriter,
+        job.jobId,
+        parentAgentState.runId,
+      )
+      if (release) releaseJournal.set(job.jobId, release)
+    }
     for (const [backgroundIndex, validated] of backgroundAgents.entries()) {
       const {
         agentTemplate,
@@ -550,7 +622,65 @@ export const handleSpawnAgents = (async (
         agentType,
         status: 'running',
         startedAt: job.startedAt,
+        ...(parentAgentState.runId
+          ? { parentRunId: parentAgentState.runId }
+          : {}),
       })
+
+      // P2-T2: durable parent spawn intent for the background child, appended
+      // AT LAUNCH TIME. The loop-level spawn append (run-programmatic-step)
+      // only fires at the parent's NEXT step_boundary from childRunIds, which
+      // the detached settle chain fills asynchronously — so a parent turn
+      // that ends first left NO durable intent in the journal. childRunId is
+      // not yet known while the coroutine is detached (it is minted inside
+      // the child's own loopAgentSteps call), so correlate on the allocated
+      // jobId and keep the payload minimal. Fail-open: a journal failure
+      // must never fail the background job.
+      const backgroundWriter = params.journalWriter
+      const parentRunId = parentAgentState.runId
+      let retainedSettlement = false
+      const recordSettlement = async (receipt: AgentReceipt, childRunId?: string) => {
+        if (retainedSettlement || !parentRunId || !releaseJournal.has(job.jobId) || !backgroundWriter?.appendDurable) return
+        // Record the joined outcome under the original parent, not a later
+        // turn, and never treat it as replay or transaction-recovery authority.
+        await backgroundWriter.appendDurable(parentRunId, {
+          eventType: 'spawn',
+          stepNumber: 0,
+          correlation: job.jobId,
+          payload: {
+            backgroundSettled: true,
+            jobId: job.jobId,
+            agentType,
+            ...(childRunId ? { childRunId } : {}),
+            receipt,
+          },
+        })
+        retainedSettlement = true
+      }
+      const recordLaunch = async () => {
+        if (!parentRunId || !backgroundWriter) return
+        const event = {
+          eventType: 'spawn' as const,
+          stepNumber: 0,
+          correlation: job.jobId,
+          payload: { agentType, background: true, jobId: job.jobId },
+        }
+        if (releaseJournal.has(job.jobId) && backgroundWriter.appendDurable) {
+          // Built-in admission must not run a child with a lost launch record.
+          await backgroundWriter.appendDurable(parentRunId, event)
+        } else {
+          // Preserve compatibility for embedders that supply observation-only journals.
+          try {
+            backgroundWriter.append(parentRunId, event)
+          } catch (error) {
+            logger.warn(
+              { jobId: job.jobId, agentType, error: String(error) },
+              'Background spawn observation unavailable',
+            )
+          }
+        }
+      }
+      await recordLaunch()
 
       // Detached coroutine: do NOT await. The unified job-registry core (via
       // the background-agent adapter) is the source of truth for lifecycle
@@ -569,6 +699,26 @@ export const handleSpawnAgents = (async (
         fingerprintId,
         spawnToolCallId: toolCall.toolCallId,
         spawnIndex,
+        // P2-T2b: thread the job -> parent-run linkage so the child itself can
+        // journal its backgroundLink spawn event at its runId-mint site inside
+        // loopAgentSteps — the launch-time intent above could only correlate on
+        // jobId because the childRunId did not exist yet, and this link is what
+        // a later resume (resumeBackgroundFromOwnJournal) reads back to find
+        // the child's own journal stream. Guarded: a background spawn of a
+        // non-journaled parent passes no link, and the append inside
+        // loopAgentSteps is separately guarded on journalWriter, so an
+        // unjournaled run appends nothing (byte-identical default path). The
+        // executeSubagent options type derives from loopAgentSteps' params, so
+        // the new optional field flows through without touching
+        // spawn-agent-utils.
+        ...(parentAgentState.runId
+          ? {
+              backgroundJobLink: {
+                jobId: job.jobId,
+                parentRunId: parentAgentState.runId,
+              },
+            }
+          : {}),
         // Background agents are detached; the parent never waits for them, so
         // the "only child" step-count semantics (tuned for blocking spawns the
         // parent blocks on) never apply. Force false regardless of how many
@@ -609,57 +759,100 @@ export const handleSpawnAgents = (async (
         },
       })
 
+      // The coroutine is now live even before its promise reaches the job
+      // registry. Rollback must leave its scope with the settle chain.
+      wiredBackgroundJobIds.add(job.jobId)
+      wiredBackgroundAgentIds.add(subAgentState.agentId)
+      const scopeClosed = Promise.withResolvers<void>()
       attachBackgroundAgentPromise(
         job,
         detachedPromise
-          .then((result) => {
-            // Exception-safe settle chain: the lease release and shard
-            // completion in the finally below run even when an early settle
-            // step throws, so a fault mid-settle can neither leak the
-            // workspace path lease nor strand the discovery shard.
+          .then(async (result) => {
+            // Shard completion still runs if a receipt step throws. The lease
+            // stays held through the error settlement below, too.
             let settleSucceeded = false
+            let childSucceeded = false
             try {
               // The coroutine settled: detach the combined signal's abort
               // listeners from the long-lived parent signal (idempotent, and a
               // no-op when there was no parent signal to combine).
               combinedSignal?.cleanup?.()
-              const receipt = buildRuntimeAgentReceipt({
-                agentType,
-                agentId: result.agentState.agentId,
-                handoff: validated.handoff,
-                spawnParams: validated.runtimeSpawnParams,
-                output: result.output,
-                agentState: result.agentState,
+              // P2-T8: a supervised spawn carries its own validated receipt
+              // from the supervisor settle; it is used verbatim so
+              // reconcileAgentReceiptIntoParent and the lease/ledger chain
+              // run unchanged. The in-process path keeps building the
+              // receipt here exactly as before.
+              const receipt =
+                result.supervisedReceipt ??
+                (await buildRuntimeAgentReceiptWithArtifacts({
+                  agentType,
+                  agentId: result.agentState.agentId,
+                  handoff: validated.handoff,
+                  spawnParams: validated.runtimeSpawnParams,
+                  output: result.output,
+                  agentState: result.agentState,
+                }))
+              await recordSettlement(receipt, result.agentState.runId)
+              childSucceeded = receipt.runOutcome
+                ? receipt.runOutcome.termination === 'completed'
+                : receipt.status !== 'failed' && receipt.status !== 'cancelled'
+              // Fold the child's in-process playbook-gate evidence into the
+              // parent's ledger before reconciling, so delegated work (e.g.
+              // CI run inside basher) satisfies the parent's rules. No-op for
+              // a supervised settle: result.agentState is the parent-built
+              // state carrying no ledger.
+              mergeChildEvidenceIntoParent({
+                parentAgentState,
+                childAgentState: result.agentState,
               })
               reconcileAgentReceiptIntoParent({
                 parentAgentState,
                 receipt,
                 agentType,
                 objective: validated.handoff?.objective,
+                // Ledger pairing keys on the parent-side spawn id (see
+                // reconcileAgentReceiptIntoParent's spawnId doc).
+                spawnId: subAgentState.agentId,
               })
               const intent = parentAgentState.backgroundAgentJobs?.find(
                 (entry) => entry.jobId === job.jobId,
               )
               if (intent) {
-                intent.status = 'completed'
-                intent.completedAt = Date.now()
+                intent.status = (
+                  receipt.runOutcome
+                    ? receipt.runOutcome.termination === 'cancelled'
+                    : receipt.status === 'cancelled'
+                )
+                  ? 'cancelled'
+                  : childSucceeded
+                    ? 'completed'
+                    : 'error'
+                intent.completedAt = (params.clock ?? realClock).now()
                 intent.childRunId = result.agentState.runId
                 intent.receipt = receipt
               }
-              parentAgentState.discoveryCoverage = recordDiscoveryResult({
-                existing: parentAgentState.discoveryCoverage,
-                agentType,
-                question: buildDiscoveryQuestion({
+              if (childSucceeded)
+                parentAgentState.discoveryCoverage = recordDiscoveryResult({
+                  existing: parentAgentState.discoveryCoverage,
                   agentType,
-                  prompt: validated.input.prompt,
-                  objective: validated.handoff?.objective,
-                  spawnParams: validated.runtimeSpawnParams,
-                }),
-                result: result.output,
-                workspaceRevision: parentAgentState.workspaceState?.revision,
-                workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
-                verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
-              })
+                  question: buildDiscoveryQuestion({
+                    agentType,
+                    prompt: validated.input.prompt,
+                    objective: validated.handoff?.objective,
+                    spawnParams: validated.runtimeSpawnParams,
+                  }),
+                  result: result.output,
+                  workspaceRevision: parentAgentState.workspaceState?.revision,
+                  workspaceSnapshotId:
+                    parentAgentState.workspaceState?.snapshotId,
+                  verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
+                })
+              // Fold the background child's cost into the parent exactly
+              // like the foreground settle path aggregates subagent cost.
+              const backgroundCredits = result.agentState.creditsUsed || 0
+              if (backgroundCredits > 0) {
+                parentAgentState.creditsUsed += backgroundCredits
+              }
               settleSucceeded = true
               return {
                 agentId: result.agentState.agentId,
@@ -670,20 +863,21 @@ export const handleSpawnAgents = (async (
                 creditsUsed: result.agentState.creditsUsed || 0,
               }
             } finally {
-              releaseWorkspacePathLease(parentAgentState, validated.leaseId)
               parentAgentState.discoveryCoverage = completeDiscoveryShard({
                 existing: parentAgentState.discoveryCoverage,
                 shardKey: validated.discoveryShardKey,
-                status: settleSucceeded ? 'completed' : 'interrupted',
+                status: settleSucceeded
+                  ? childSucceeded
+                    ? 'completed'
+                    : 'failed'
+                  : 'interrupted',
+                now: (params.clock ?? realClock).now(),
               })
             }
           })
-          .catch((error) => {
-            // Same exception-safe settle chain on the failure/cancellation
-            // path: the finally below guarantees the lease release and shard
-            // completion even when an early settle step throws, and a
-            // mid-settle throw may replace the original error but is never
-            // swallowed.
+          .catch(async (error) => {
+            // A fault on the failure/cancellation path must not strand the
+            // shard; the outer finally owns lease release on every path.
             try {
               combinedSignal?.cleanup?.()
               // A rejection driven by THIS job's own
@@ -695,7 +889,7 @@ export const handleSpawnAgents = (async (
               // subagent timeouts and a parent-signal abort — keep the
               // error/failed path unchanged.
               const cancelled = backgroundAgentJobWasCancelled(job)
-              const receipt = buildRuntimeAgentReceipt({
+              const receipt = await buildRuntimeAgentReceiptWithArtifacts({
                 agentType,
                 agentId: subAgentState.agentId,
                 handoff: validated.handoff,
@@ -708,18 +902,29 @@ export const handleSpawnAgents = (async (
                 // with no error and carries the reason on the intent instead.
                 error: cancelled ? undefined : error,
               })
+              await recordSettlement(receipt, subAgentState.runId)
+              // Same evidence fold on the failure path: an in-process child
+              // may have recorded gate evidence before it rejected, and the
+              // pre-allocated subAgentState is the object it recorded onto.
+              mergeChildEvidenceIntoParent({
+                parentAgentState,
+                childAgentState: subAgentState,
+              })
               reconcileAgentReceiptIntoParent({
                 parentAgentState,
                 receipt,
                 agentType,
                 objective: validated.handoff?.objective,
+                // Ledger pairing keys on the parent-side spawn id (see
+                // reconcileAgentReceiptIntoParent's spawnId doc).
+                spawnId: subAgentState.agentId,
               })
               const intent = parentAgentState.backgroundAgentJobs?.find(
                 (entry) => entry.jobId === job.jobId,
               )
               if (intent) {
                 intent.status = cancelled ? 'cancelled' : 'error'
-                intent.completedAt = Date.now()
+                intent.completedAt = (params.clock ?? realClock).now()
                 // Keep the cancellation reason check_background_agent already
                 // recorded; fall back to the adapter's canonical reason.
                 intent.error = cancelled
@@ -727,26 +932,45 @@ export const handleSpawnAgents = (async (
                   : error instanceof Error
                     ? error.message
                     : String(error)
+                intent.childRunId = subAgentState.runId
                 intent.receipt = receipt
               }
+              // A failed/cancelled background child may still have incurred
+              // partial cost: fold it into the parent exactly like the
+              // foreground failed-agent path does.
+              const failedBackgroundCredits = subAgentState.creditsUsed || 0
+              if (failedBackgroundCredits > 0) {
+                parentAgentState.creditsUsed += failedBackgroundCredits
+              }
             } finally {
-              releaseWorkspacePathLease(parentAgentState, validated.leaseId)
               parentAgentState.discoveryCoverage = completeDiscoveryShard({
                 existing: parentAgentState.discoveryCoverage,
                 shardKey: validated.discoveryShardKey,
                 status: 'failed',
+                now: (params.clock ?? realClock).now(),
               })
             }
             throw error
+          })
+          .finally(() => {
+            afterSubagentCleanup(subAgentState, () => {
+              try {
+                validated.releasePathLease?.()
+              } finally {
+                try {
+                  releaseJournal.get(job.jobId)?.()
+                } finally {
+                  scopeClosed.resolve()
+                }
+              }
+            })
           }),
       )
-      // Wired: this job's coroutine is launched and its settle handlers own
-      // the terminal transition from here on, so it must never be abandoned.
-      wiredBackgroundJobIds.add(job.jobId)
-      // Mirror by agent id so rollbackValidatedClaims (declared before this
-      // loop) can skip coroutine-owned agents: their settle handlers alone
-      // release the lease, complete the shard, and terminate the ledger pair.
-      wiredBackgroundAgentIds.add(subAgentState.agentId)
+      if (releaseJournal.has(job.jobId)) {
+        // Only a genuine owned job with a retained writer may defer successful
+        // turn teardown. The registry may settle logically before a recovery.
+        params.retainDetachedAgent?.(Promise.allSettled([job.promise, scopeClosed.promise]))
+      }
 
       reports[spawnIndex] = {
         agentId: subAgentState.agentId,
@@ -762,9 +986,11 @@ export const handleSpawnAgents = (async (
   } catch (error) {
     const abandonReason =
       'Background agent spawn failed before its coroutine was launched.'
+    const abandonedAt = (params.clock ?? realClock).now()
     for (const job of backgroundJobs) {
       if (wiredBackgroundJobIds.has(job.jobId)) continue
-      abandonPreLaunchBackgroundAgentJob(job, abandonReason)
+      releaseJournal.get(job.jobId)?.()
+      abandonPreLaunchBackgroundAgentJob(job, abandonReason, abandonedAt)
       // The durable intent doubles as the per-root background budget, so an
       // abandoned job's intent must settle here too instead of counting as
       // 'running' for the rest of the turn. Jobs whose coroutine WAS launched
@@ -774,7 +1000,7 @@ export const handleSpawnAgents = (async (
       )
       if (intent && intent.status === 'running') {
         intent.status = 'error'
-        intent.completedAt = Date.now()
+        intent.completedAt = abandonedAt
         intent.error = abandonReason
       }
     }
@@ -894,7 +1120,7 @@ export const handleSpawnAgents = (async (
       // handlers and the inline handler): every settle step runs inside one
       // try whose finally guarantees the lease release and the discovery-shard
       // completion, so a fault in a settle step can neither leak the
-      // workspace path lease (30-min TTL) nor strand the claimed shard. The
+      // workspace path lease nor strand the claimed shard. The
       // catch additionally closes the spawn's `spawn_started` ledger pair
       // with `interrupted` unless the terminal receipt was already
       // reconciled, then re-throws so Promise.all still rejects with the
@@ -903,23 +1129,43 @@ export const handleSpawnAgents = (async (
       const spawnIndex = validated.spawnIndex
       let receiptReconciled = false
       let settleSucceeded = false
+      let childSucceeded = false
       try {
         if (result.status === 'fulfilled') {
           const { output, agentType, agentName, agentState } = result.value
           const handoff = validated.handoff
-          const receipt = buildRuntimeAgentReceipt({
-            agentType,
-            agentId: agentState.agentId,
-            handoff,
-            spawnParams: validated.runtimeSpawnParams,
-            output,
-            agentState,
+          // P2-T8: prefer a supervised spawn's own validated receipt
+          // verbatim (see the background settle comment); the in-process
+          // path keeps building the receipt here exactly as before.
+          const receipt =
+            result.value.supervisedReceipt ??
+            (await buildRuntimeAgentReceiptWithArtifacts({
+              agentType,
+              agentId: agentState.agentId,
+              handoff,
+              spawnParams: validated.runtimeSpawnParams,
+              output,
+              agentState,
+            }))
+          childSucceeded = receipt.runOutcome
+            ? receipt.runOutcome.termination === 'completed'
+            : receipt.status !== 'failed' && receipt.status !== 'cancelled'
+          // Fold the child's in-process playbook-gate evidence into the
+          // parent's ledger before reconciling, so delegated work (e.g. CI
+          // run inside basher) satisfies the parent's rules. No-op for a
+          // supervised settle: agentState is the parent-built state.
+          mergeChildEvidenceIntoParent({
+            parentAgentState,
+            childAgentState: agentState,
           })
           reconcileAgentReceiptIntoParent({
             parentAgentState,
             receipt,
             agentType,
             objective: handoff?.objective,
+            // Ledger pairing keys on the parent-side spawn id (see
+            // reconcileAgentReceiptIntoParent's spawnId doc).
+            spawnId: agentState.agentId,
           })
           receiptReconciled = true
           reports[spawnIndex] = {
@@ -928,11 +1174,15 @@ export const handleSpawnAgents = (async (
             agentType,
             value: receipt.output as JSONValue,
             agentReceipt: receipt as unknown as JSONValue,
+            // P2-T2: why the runtime scheduled this spawn (capability tier,
+            // context window, handoff constraints). Structured so surfaces can
+            // render WHY an agent ran instead of guessing from the type.
+            schedulingReasons: validated.schedulingReasons,
           }
         } else {
           const agentTypeStr = validated.input.agent_type
           const handoff = validated.handoff
-          const receipt = buildRuntimeAgentReceipt({
+          const receipt = await buildRuntimeAgentReceiptWithArtifacts({
             agentType: agentTypeStr,
             agentId: validated.subAgentState.agentId,
             handoff,
@@ -942,11 +1192,20 @@ export const handleSpawnAgents = (async (
             status: 'failed',
             error: result.reason,
           })
+          // Same best-effort evidence fold as the fulfilled branch: an
+          // in-process child may have recorded gate evidence before it threw.
+          mergeChildEvidenceIntoParent({
+            parentAgentState,
+            childAgentState: validated.subAgentState,
+          })
           reconcileAgentReceiptIntoParent({
             parentAgentState,
             receipt,
             agentType: agentTypeStr,
             objective: handoff?.objective,
+            // Ledger pairing keys on the parent-side spawn id (see
+            // reconcileAgentReceiptIntoParent's spawnId doc).
+            spawnId: validated.subAgentState.agentId,
           })
           receiptReconciled = true
           reports[spawnIndex] = {
@@ -954,9 +1213,10 @@ export const handleSpawnAgents = (async (
             agentName: agentTypeStr,
             value: { errorMessage: `Error spawning agent: ${result.reason}` },
             agentReceipt: receipt as unknown as JSONValue,
+            schedulingReasons: validated.schedulingReasons,
           }
         }
-        if (result.status === 'fulfilled') {
+        if (result.status === 'fulfilled' && childSucceeded) {
           parentAgentState.discoveryCoverage = recordDiscoveryResult({
             existing: parentAgentState.discoveryCoverage,
             agentType: validated.agentType,
@@ -993,16 +1253,20 @@ export const handleSpawnAgents = (async (
         }
         throw error
       } finally {
-        releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+        if (validated.releasePathLease)
+          afterSubagentCleanup(validated.subAgentState, validated.releasePathLease)
         parentAgentState.discoveryCoverage = completeDiscoveryShard({
           existing: parentAgentState.discoveryCoverage,
           shardKey: validated.discoveryShardKey,
           status:
             result.status === 'fulfilled'
               ? settleSucceeded
-                ? 'completed'
+                ? childSucceeded
+                  ? 'completed'
+                  : 'failed'
                 : 'interrupted'
               : 'failed',
+          now: (params.clock ?? realClock).now(),
         })
       }
     }),

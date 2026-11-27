@@ -1,0 +1,46 @@
+{
+  "notification": {
+    "jsonrpc": "2.0",
+    "method": "_openbuff.dev/capabilities_changed",
+    "params": {
+      "capabilities": {
+        "kind": "openbuff.capabilities",
+        "version": 1,
+        "generation": 2,
+        "sandbox": {
+          "tier": "landlock+seccomp",
+          "enforced": true,
+          "network": "allowlist"
+        },
+        "index": {
+          "state": "ready",
+          "files": 4213
+        },
+        "lsp": [
+          {
+            "language": "typescript",
+            "server": "tsserver",
+            "state": "ready"
+          }
+        ],
+        "sidecars": [
+          {
+            "id": "openbuff-sandbox",
+            "version": "0.1.0",
+            "state": "ready"
+          }
+        ],
+        "lanes": {
+          "supported": false
+        },
+        "journal": {
+          "resume": false,
+          "replay": false
+        },
+        "gate": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}

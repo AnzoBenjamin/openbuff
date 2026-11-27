@@ -1,13 +1,38 @@
-import {
-  clearMockedModules,
-  mockModule,
-} from '@codebuff/common/testing/mock-modules'
 import { createMockChildProcess } from '@codebuff/common/testing/mocks'
 import { describe, expect, it, mock, beforeEach, afterEach } from 'bun:test'
 
 import { gitBranch } from '../tools/git-branch'
 
 import type { MockChildProcess } from '@codebuff/common/testing/mocks'
+
+
+import { createTerminalExecutionFixture } from './fixtures/b19-terminal-execution'
+import type { ChildProcess } from 'node:child_process'
+import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+
+const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
+let activeSpawn: CodebuffSpawn
+function runMediatedBranch(params: Parameters<typeof gitBranch>[0]) {
+  const host = createTerminalExecutionFixture({ projectRoot: params.cwd, signal: params.signal, spawn: activeSpawn })
+  executionHosts.push(host)
+  return gitBranch({ ...params, executionContext: host.context })
+}
+
+const EXPECTED_GIT_READ_PREFIX = [
+  '--no-pager',
+  '--no-optional-locks',
+  '--no-lazy-fetch',
+  '-c',
+  'core.fsmonitor=false',
+]
+
+function gitCommandArgs(args: readonly string[] = []): readonly string[] {
+  if (args[0] === 'checkout' || args[0] === 'branch') return args
+  expect(args.slice(0, EXPECTED_GIT_READ_PREFIX.length)).toEqual(
+    EXPECTED_GIT_READ_PREFIX,
+  )
+  return args.slice(EXPECTED_GIT_READ_PREFIX.length)
+}
 
 /**
  * Helper: creates a mock spawn that auto-responds to sequential `git` calls
@@ -24,11 +49,14 @@ function createSequencedMockSpawn(
   }>,
 ) {
   const procs: MockChildProcess[] = []
-  const mockSpawn = mock((_cmd: string, args: string[]) => {
-    const response = responses.find((r) => r.matchArgs(args))
+  const mockSpawn = mock((_cmd: string, args: readonly string[] = []) => {
+    const commandArgs = gitCommandArgs(args)
+    const response = responses.find((r) => r.matchArgs([...commandArgs]))
     const proc = createMockChildProcess()
+    proc.pid = 42_424_001
     procs.push(proc)
     queueMicrotask(() => {
+      proc.emit('spawn')
       if (response) {
         if (response.stdout) {
           proc.stdout.emit('data', Buffer.from(response.stdout))
@@ -39,7 +67,7 @@ function createSequencedMockSpawn(
         proc.emit('close', response.exitCode)
       }
     })
-    return proc as unknown as MockChildProcess
+    return proc as unknown as ChildProcess
   })
   return { mockSpawn, procs }
 }
@@ -50,14 +78,12 @@ describe('gitBranch', () => {
   beforeEach(() => {
     const { mockSpawn: spawn } = createSequencedMockSpawn([])
     mockSpawn = spawn
-    void mockModule('child_process', () => ({
-      spawn: mockSpawn,
-    }))
+    activeSpawn = mockSpawn
   })
 
   afterEach(() => {
     mock.restore()
-    clearMockedModules()
+    for (const host of executionHosts.splice(0)) host.dispose()
   })
 
   describe('dirty-tree refusal', () => {
@@ -69,9 +95,9 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
       })
@@ -102,9 +128,9 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
       })
@@ -130,9 +156,9 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
         allowDirty: true,
@@ -143,8 +169,8 @@ describe('gitBranch', () => {
       // No status call — only rev-parse + checkout
       expect(spawn.mock.calls.length).toBe(2)
       const calls = spawn.mock.calls
-      expect(calls[0][1][0]).toBe('rev-parse')
-      expect(calls[1][1][0]).toBe('checkout')
+      expect(gitCommandArgs(calls[0][1])[0]).toBe('rev-parse')
+      expect(gitCommandArgs(calls[1][1])[0]).toBe('checkout')
     })
   })
 
@@ -162,9 +188,9 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
         switch: false,
@@ -176,14 +202,14 @@ describe('gitBranch', () => {
       // No rev-parse call (only needed when switching)
       expect(spawn.mock.calls.length).toBe(2)
       const calls = spawn.mock.calls
-      expect(calls[0][1][0]).toBe('status')
-      expect(calls[1][1][0]).toBe('branch')
+      expect(gitCommandArgs(calls[0][1])[0]).toBe('status')
+      expect(gitCommandArgs(calls[1][1])[0]).toBe('branch')
     })
   })
 
   describe('validation', () => {
     it('rejects empty branch name without spawning git', async () => {
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: '',
       })
@@ -194,7 +220,7 @@ describe('gitBranch', () => {
     })
 
     it('rejects branch name with spaces', async () => {
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'bad name',
       })
@@ -205,7 +231,7 @@ describe('gitBranch', () => {
     })
 
     it('rejects branch name starting with a dot', async () => {
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: '.hidden',
       })
@@ -225,9 +251,9 @@ describe('gitBranch', () => {
           exitCode: 128,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
       })
@@ -255,9 +281,9 @@ describe('gitBranch', () => {
           exitCode: 128,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
       })
@@ -279,9 +305,9 @@ describe('gitBranch', () => {
           exitCode: 128,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
-      const result = await gitBranch({
+      const result = await runMediatedBranch({
         cwd: '/test',
         branchName: 'feature-x',
         switch: false,
@@ -335,7 +361,7 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
       // Dispatch receives snake_case; the mapping must produce camelCase.
       const dispatchInput = {
@@ -343,7 +369,7 @@ describe('gitBranch', () => {
         switch: true,
         allow_dirty: false,
       }
-      const result = await gitBranch(mapDispatchInput(dispatchInput))
+      const result = await runMediatedBranch(mapDispatchInput(dispatchInput))
 
       expect(result.created).toBe(true)
       expect(result.switched).toBe(true)
@@ -352,7 +378,7 @@ describe('gitBranch', () => {
       expect(result.errorMessage).toBeUndefined()
       // The checkout call must carry the mapped branchName, proving the mapping
       // preserved the value end-to-end through the dispatch → gitBranch path.
-      const checkoutCall = spawn.mock.calls.find((c) => c[1][0] === 'checkout')
+      const checkoutCall = spawn.mock.calls.find((c) => gitCommandArgs(c[1])[0] === 'checkout')
       expect(checkoutCall).toBeDefined()
       expect(checkoutCall![1]).toContain('-b')
       expect(checkoutCall![1]).toContain('feat/dispatch-path')
@@ -371,14 +397,14 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
       const dispatchInput = {
         branch_name: 'feat/allow-dirty',
         switch: true,
         allow_dirty: true,
       }
-      const result = await gitBranch(mapDispatchInput(dispatchInput))
+      const result = await runMediatedBranch(mapDispatchInput(dispatchInput))
 
       expect(result.created).toBe(true)
       expect(result.switched).toBe(true)
@@ -387,9 +413,9 @@ describe('gitBranch', () => {
       // call would appear first and this assertion would fail.
       expect(spawn.mock.calls.length).toBe(2)
       const firstArgs = spawn.mock.calls[0][1]
-      expect(firstArgs[0]).toBe('rev-parse')
+      expect(gitCommandArgs(firstArgs)[0]).toBe('rev-parse')
       const secondArgs = spawn.mock.calls[1][1]
-      expect(secondArgs[0]).toBe('checkout')
+      expect(gitCommandArgs(secondArgs)[0]).toBe('checkout')
     })
 
     it('maps switch: false → switch: false (creates without checking out)', async () => {
@@ -405,28 +431,28 @@ describe('gitBranch', () => {
           exitCode: 0,
         },
       ])
-      await mockModule('child_process', () => ({ spawn }))
+      activeSpawn = spawn
 
       const dispatchInput = {
         branch_name: 'feat/no-switch',
         switch: false,
         allow_dirty: false,
       }
-      const result = await gitBranch(mapDispatchInput(dispatchInput))
+      const result = await runMediatedBranch(mapDispatchInput(dispatchInput))
 
       expect(result.created).toBe(true)
       expect(result.switched).toBe(false)
       expect(result.branch).toBe('feat/no-switch')
       // switch: false → `git branch <name>` (NOT `git checkout -b`).
-      const branchCall = spawn.mock.calls.find((c) => c[1][0] === 'branch')
+      const branchCall = spawn.mock.calls.find((c) => gitCommandArgs(c[1])[0] === 'branch')
       expect(branchCall).toBeDefined()
       expect(branchCall![1]).not.toContain('-b')
       expect(branchCall![1]).toContain('feat/no-switch')
       // No checkout should fire when switch: false.
-      const checkoutCall = spawn.mock.calls.find((c) => c[1][0] === 'checkout')
+      const checkoutCall = spawn.mock.calls.find((c) => gitCommandArgs(c[1])[0] === 'checkout')
       expect(checkoutCall).toBeUndefined()
       // No rev-parse either (that only runs when switching).
-      const revParseCall = spawn.mock.calls.find((c) => c[1][0] === 'rev-parse')
+      const revParseCall = spawn.mock.calls.find((c) => gitCommandArgs(c[1])[0] === 'rev-parse')
       expect(revParseCall).toBeUndefined()
     })
   })

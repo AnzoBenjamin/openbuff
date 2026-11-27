@@ -1,0 +1,28 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b13-memory-restart.test.ts:
+Using environment: test
+(pass) B13 actual tool outputs → three production compactions → SQLite → fresh SDK first request and original pages [9006.48ms]
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+(pass) B14 actual SDK request/read unchanged-a retains only justified efficiency signals [428.19ms]
+(pass) B14 actual SDK request/read unrelated-c retains only justified efficiency signals [317.78ms]
+(pass) B14 actual SDK request/read required-refresh retains only justified efficiency signals [229.67ms]
+(pass) B14 actual SDK request/read changed-after-emission retains only justified efficiency signals [345.94ms]
+
+sdk/src/services/memory-v2/__tests__/usage-observer.test.ts:
+(pass) correlateUsage > gate-skip: chunk covered by a skip entry yields exactly one used signal [0.36ms]
+(pass) correlateUsage > dedup: the same chunk covered by two tools produces one signal [1.10ms]
+(pass) correlateUsage > aggregate full count alone marks no injected observation ignored [0.24ms]
+(pass) correlateUsage > no ignored signals when the turn performed no full read [0.07ms]
+(pass) correlateUsage > determinism: identical inputs produce deep-equal, code-point-ordered output [0.16ms]
+(pass) correlateUsage > caps: more than 128 signals is sliced to 128 after sorting [4.14ms]
+(pass) correlateUsage > no-op: empty byTool or empty injected categories yield [] [0.16ms]
+
+packages/agent-runtime/src/util/__tests__/memory-read-observation.test.ts:
+(pass) B14 completed source read distinguishes unchanged reread from necessary refresh and unknown paths [1.15ms]
+
+ 13 pass
+ 0 fail
+ 78 expect() calls
+Ran 13 tests across 4 files. [11.58s]

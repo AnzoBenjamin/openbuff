@@ -1,0 +1,995 @@
+{
+  "shardId": "13-perception",
+  "question": "Where are browser/CDP/screenshot/screen interaction, read_image/attachments/render_ui, 3D asset inspect/edit/preview/game-dev helpers, computer/perception/audio/voice capabilities and their CLI/model/tool consumers implemented, wired, tested and documented?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "agents",
+    "common",
+    "packages",
+    "sdk",
+    "cli",
+    "docs"
+  ],
+  "selectedFiles": [
+    {
+      "path": "agents/browser-use/browser-use.ts",
+      "from": 1,
+      "to": 282,
+      "reason": "Complete browser agent entrypoint, default interactionPolicy, required Chrome availability, declared action/observation workflow, tool grants and structured success/failure/partial output consumed by the parent and CLI. Compare the stated policy with the real runtime and parameter path below."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+      "from": 1,
+      "to": 104,
+      "reason": "Production browser tool handler: sequencing, browser-use identity check, its action allowlist, recursive diagnose inspection, plan-only ancestry, denial output and browser owner stamp. Compare this effective policy with the shared policy, schema default and generic-agent/SDK call paths."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2776,
+      "to": 2853,
+      "reason": "Real SDK dispatch for read_image, inspect_3d_asset, render_3d_preview, edit_3d_asset and browser_logs; AbortSignal/fileFilter/host-process-view checks, input conversion and trusted browser ownership. Follow this consumer rather than assuming exported helpers are callable from every host."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 164,
+      "to": 608,
+      "reason": "Complete browser action dispatcher: actual CDP navigation, snapshot, screenshot media, input, state/emulation, tabs, recording, JSON-only PDF, pixel_diff and diagnose execution; unsupported actions, empty captures and caught failures. Trace optional advertised controls and recursive ownership through real helpers."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1462,
+      "to": 1672,
+      "reason": "Browser creation and attachment implementation: pipe launch, WebSocket port fallback, per-run user data, transport selection, target discovery, event routing, registration and rollback when spawn or stop races fail. Generic subprocess/env/sandbox policy is pair09; this slice establishes the actual browser consumer and transport."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1887,
+      "to": 2012,
+      "reason": "Actual browser teardown, stop-versus-spawn markers, transport/socket disposal, child-exit wait, deferred directory cleanup and owner-based reaping. Compare the isolation and cancellation promises with run-end ownership and concurrently active browser sessions."
+    },
+    {
+      "path": "sdk/src/tools/cdp-pipe-transport.ts",
+      "from": 126,
+      "to": 376,
+      "reason": "CDP send/framing, request timeouts, write backpressure, buffer growth/caps, parsed response/event routing and close rejection/cleanup. This is the real action/observation transport, with a separate WebSocket bridge available as an optional edge."
+    },
+    {
+      "path": "sdk/src/tools/read-image.ts",
+      "from": 1,
+      "to": 282,
+      "reason": "Complete native image read: original-byte media and per-path metadata, supported-format/path/filter checks, initial cancellation, file and total attachment bounds, concurrent I/O, missing/ignored/unsupported/oversize results. Provider vision routing and model content conversion remain pair02."
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "from": 225,
+      "to": 368,
+      "reason": "Production user-message preparation: atomic attachment drain, pending image/text/file selection, image processor invocation, conversation-change cancellation, prompt versus displayed attachment data and resulting MessageContent. Follow the processor and client.run edge in secondary sections."
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 1,
+      "to": 242,
+      "reason": "Image input capability from file and clipboard to CLI store: processing/ready/error states, source provenance, replacement identity, removal during asynchronous work, preserved errors and validate-and-add behavior. Recovery and retry are explicit optional consumer edges."
+    },
+    {
+      "path": "cli/src/components/tools/render-ui.tsx",
+      "from": 1,
+      "to": 200,
+      "reason": "Complete real render_ui consumer: supported button recognition, theme colors, browser-opening and clipboard services, loading/launch/failure/copy states, stale async generation protection, retained address fallback and tool component registration contract. Compare runtime success output with actual rendered support."
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 102,
+      "to": 438,
+      "reason": "Fixed Blender inspection/import/preview/edit Python scripts and bounded subprocess execution. Inspect actual supported formats, camera/material/wireframe behavior, declarative operation vocabulary, nonzero/Python/spawn/output-limit/timeout/cancellation results. Child environment and generic kill guarantees belong to pair09."
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 591,
+      "to": 895,
+      "reason": "Native 3D inspection and deterministic preview orchestration: project/filter/size checks, built-in versus Blender formats, source hashes and derived metadata cache, render artifacts and source-bound receipts, read_image media projection and failure results. Verify both format coverage and receipt/evidence truth."
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 896,
+      "to": 1402,
+      "reason": "Complete bounded .blend mutation capability: exact source hash, conditionalCommit requirement, declarative payload file, attempt-scoped working copy ownership, re-open validation, cancellation, stale/CAS rejection, unknown commit result, retained artifacts, post-commit preview and published mutation receipts. Binary tool semantics belong here; common mutation broker authority is pair06."
+    },
+    {
+      "path": "sdk/src/__tests__/browser-logs.test.ts",
+      "from": 972,
+      "to": 1400,
+      "reason": "Current behavior tests for nested/malformed diagnose, concurrent log/network observation windows, buffer trimming, pipe probe dedup, waiter timeout cleanup, recording-start rollback/retry and concurrent page reconnect. Distinguish synthetic transport assurance from a real Chrome end-to-end test."
+    },
+    {
+      "path": "sdk/src/__tests__/3d-assets.test.ts",
+      "from": 49,
+      "to": 429,
+      "reason": "Current 3D tests for glTF/GLB/OBJ observations, path/filter rejection, stale mutation before Blender/artifacts, payload file transport, exact payload bounds and rejected-attempt cleanup. Read without launching Blender; distinguish native parser assurance from successful render/edit integration."
+    },
+    {
+      "path": "common/src/util/game-dev-presets.ts",
+      "from": 1,
+      "to": 371,
+      "reason": "Complete Unity/Godot/Unreal/Bevy/Blender preset and job-guidance API: prompt insertion versus executable commands, build/run/test/watch flows, local/native 3D tool suggestions and job/readiness/error/stop recipes. Trace actual slash-command and system-prompt consumers before crediting structured guidance as wired."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 41,
+      "to": 150,
+      "reason": "Current user-facing policy and capability claims: browser default/read-only ancestry/isolated run cleanup, intentional full-access context, specialist/control-plane edges and the documented 3D discovery/inspect/preview/edit workflow and Blender absence behavior. Treat docs as contracts to compare with current implementation."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "common/src/browser-actions.ts",
+      "from": 98,
+      "to": 224,
+      "reason": "Declared retry/log-filter/error-threshold/visual-verification/screenshot and response fields; compare with the real browser dispatcher and response builder."
+    },
+    {
+      "path": "common/src/browser-actions.ts",
+      "from": 391,
+      "to": 767,
+      "reason": "Extended action schemas, diagnose step validation, discriminated action union and flattened provider schema. Trace action-specific requirements and accepted optional controls through effective execution."
+    },
+    {
+      "path": "common/src/tools/browser-policy.ts",
+      "from": 1,
+      "to": 69,
+      "reason": "Shared explicit-read-only allowlist, absent-policy semantics and model denial message; compare with the independent browser handler policy."
+    },
+    {
+      "path": "common/src/tools/params/tool/browser-logs.ts",
+      "from": 1,
+      "to": 107,
+      "reason": "Canonical published browser tool schema and descriptions, including model-visible media and optional control claims."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 2774,
+      "to": 2799,
+      "reason": "Earlier generic browser policy backstop and error-chunk behavior, before the browser-specific handler runs."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "from": 245,
+      "to": 295,
+      "reason": "Real spawn input validation and runtimeSpawnParams construction; trace whether schema defaults are preserved before the browser policy sees params. Pair03 owns general spawn lifecycle."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 3304,
+      "to": 3374,
+      "reason": "Parameter schema safeParse and resulting validation control flow; compare parsed default data with the params passed by the caller."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts",
+      "from": 1,
+      "to": 107,
+      "reason": "Handler-level default policy, explicit interaction, plan-only ancestry and nested diagnose tests."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/__tests__/browser-policy.test.ts",
+      "from": 1,
+      "to": 79,
+      "reason": "Shared-policy test contract for absent/unknown policy and the read-only allowlist."
+    },
+    {
+      "path": "agents/browser-use/browser-use.test.ts",
+      "from": 1,
+      "to": 217,
+      "reason": "Agent/schema/prompt/tool-grant contract tests and advertised browser features."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1844,
+      "to": 1863,
+      "reason": "Run-end cleanup consumer after prompt and callback queues settle: reaps browser sessions by clientSessionId."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 109,
+      "to": 163,
+      "reason": "Browser session owner/key tuple, current per-session bounds and diagnose-depth contract."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 809,
+      "to": 1024,
+      "reason": "Single-flight session spawn, stop markers, stale rollback and ensureBrowserSession behavior."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1106,
+      "to": 1218,
+      "reason": "Pipe compatibility probe, positive cache, fallback distinction and timeout behavior; browser transport choice rather than generic sandbox audit."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 2317,
+      "to": 2550,
+      "reason": "Actual command/load/event waits, evaluate exception semantics, iframe targeting and real BrowserResponse log/network window production."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 2642,
+      "to": 2744,
+      "reason": "Actual screenshot empty data result, element click and real/setValue typing behavior behind the action dispatcher."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 3014,
+      "to": 3074,
+      "reason": "Native upload path resolution, DOM file-input execution and project-root requirement."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 3130,
+      "to": 3296,
+      "reason": "Actual tab operations and recording state/start/stop/APNG media path, including zero-frame and failed-start semantics."
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 3297,
+      "to": 3423,
+      "reason": "Actual PNG pixel comparison and captured diff media plus snapshot selector/text observation script. Inspect size mismatch, local reference reads and observation limits."
+    },
+    {
+      "path": "sdk/src/tools/cdp-pipe-transport.ts",
+      "from": 377,
+      "to": 479,
+      "reason": "Bounded WebSocket bridge used by browsers that lack the pipe transport."
+    },
+    {
+      "path": "sdk/src/__tests__/cdp-pipe-transport.test.ts",
+      "from": 373,
+      "to": 448,
+      "reason": "Closed-pipe, malformed/oversize framing, timeout and write-failure transport tests."
+    },
+    {
+      "path": "sdk/src/__tests__/cdp-pipe-transport.test.ts",
+      "from": 1409,
+      "to": 1530,
+      "reason": "Explicit transport disposal and owned/ownerless run-end reaping tests."
+    },
+    {
+      "path": "sdk/src/__tests__/browser-logs.test.ts",
+      "from": 395,
+      "to": 575,
+      "reason": "APNG empty/mismatched/missing-IHDR frame assembly tests."
+    },
+    {
+      "path": "sdk/src/__tests__/browser-logs.test.ts",
+      "from": 576,
+      "to": 902,
+      "reason": "Single-flight spawn, stop race, child-exit cleanup and deferred user-data cleanup tests."
+    },
+    {
+      "path": "sdk/src/__tests__/read-image.test.ts",
+      "from": 66,
+      "to": 201,
+      "reason": "Native supported image, filter, original screenshot, symlink and unsupported format behavior tests."
+    },
+    {
+      "path": "common/src/tools/params/tool/read-image.ts",
+      "from": 1,
+      "to": 75,
+      "reason": "Canonical read_image input, supported formats, original-media and path/result contract."
+    },
+    {
+      "path": "cli/src/utils/image-processor.ts",
+      "from": 1,
+      "to": 133,
+      "reason": "Actual image attachments-to-SDK MessageContent conversion, ready/error/processing and inline-path behavior."
+    },
+    {
+      "path": "cli/src/utils/image-handler.ts",
+      "from": 189,
+      "to": 292,
+      "reason": "CLI file image containment, size/read/compression and format/MIME output implementation."
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 778,
+      "to": 818,
+      "reason": "Real client.run configuration consumer of prepared MessageContent and AbortSignal."
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 554,
+      "to": 657,
+      "reason": "Processing blockers, capture/drain identity and retained-source retry results, including unavailable clipboard data."
+    },
+    {
+      "path": "cli/src/utils/__tests__/attachment-retry.test.ts",
+      "from": 1,
+      "to": 100,
+      "reason": "Attachment retry assurance; exact available bounds are clipped by the picker validator."
+    },
+    {
+      "path": "cli/src/components/blocks/image-block.tsx",
+      "from": 1,
+      "to": 148,
+      "reason": "Real native terminal image consumer, protocol capability detection, empty/redacted/unsupported/invalid/decode-failed fallback and inspect-capture UI."
+    },
+    {
+      "path": "cli/src/components/blocks/__tests__/image-block.test.tsx",
+      "from": 1,
+      "to": 138,
+      "reason": "Image output consumer tests for media availability and supported terminal rendering; bounded sample only."
+    },
+    {
+      "path": "cli/src/utils/message-block-helpers.ts",
+      "from": 700,
+      "to": 790,
+      "reason": "Real browser-use structured receipt formatting into human-visible status, step outcomes, media flags and console error/lesson text."
+    },
+    {
+      "path": "common/src/tools/params/tool/render-ui.ts",
+      "from": 1,
+      "to": 97,
+      "reason": "Published one-button widget schema and http(s)-only URL validation."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+      "from": 1,
+      "to": 15,
+      "reason": "Runtime render_ui output producer; compare its message with actual CLI widget state or hosts lacking the renderer."
+    },
+    {
+      "path": "cli/src/components/tools/registry.ts",
+      "from": 120,
+      "to": 146,
+      "reason": "Real CLI tool renderer registration including RenderUIComponent."
+    },
+    {
+      "path": "cli/src/components/tools/__tests__/render-ui.test.tsx",
+      "from": 1,
+      "to": 209,
+      "reason": "Current rendered button/unsupported widget/colors/open/copy/retry state tests."
+    },
+    {
+      "path": "common/src/tools/params/tool/3d-assets.ts",
+      "from": 1,
+      "to": 105,
+      "reason": "Published bounded 3D inspect/preview/declarative-edit schema, formats/view/mode dimensions and operation constraints."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/3d-assets.ts",
+      "from": 1,
+      "to": 72,
+      "reason": "Real native runtime-to-client 3D dispatch handlers."
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 1,
+      "to": 101,
+      "reason": "3D byte/payload/artifact bounds, receipt fields and derived concept collection omitted from primary scripts."
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 439,
+      "to": 590,
+      "reason": "Built-in glTF/GLB/OBJ metadata parsers and dependency resolution implementation."
+    },
+    {
+      "path": "sdk/src/tools/3d-artifact-retention.ts",
+      "from": 1,
+      "to": 143,
+      "reason": "Current retained mutation artifact pruning and stat/byte/count bounds; inspect receipt lifetime against post-commit cleanup."
+    },
+    {
+      "path": "sdk/src/__tests__/3d-assets.test.ts",
+      "from": 448,
+      "to": 685,
+      "reason": "Cleanup throws and retries with the same operationId while preserving previous attempt artifacts."
+    },
+    {
+      "path": "sdk/src/__tests__/3d-assets.test.ts",
+      "from": 686,
+      "to": 931,
+      "reason": "Retained artifact bounds, cancellation before render and glTF dependency/caching regressions."
+    },
+    {
+      "path": "sdk/src/__tests__/3d-discovery.test.ts",
+      "from": 1,
+      "to": 42,
+      "reason": "Current live discovery and derived-concept query behavior for 3D assets."
+    },
+    {
+      "path": "common/src/project-file-tree.ts",
+      "from": 211,
+      "to": 254,
+      "reason": "Metadata-only 3D tree nodes enabling tool and engine discovery. Pair07/08 own general language/index algorithms."
+    },
+    {
+      "path": "packages/indexer/src/file-walker.ts",
+      "from": 243,
+      "to": 265,
+      "reason": "Explicit binary 3D indexing exception and metadata record edge; cross-reference pair08 rather than re-auditing the walker."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 925,
+      "to": 977,
+      "reason": "Derived hash-bound 3D metadata adoption edge into query_index; cross-reference pair08."
+    },
+    {
+      "path": "common/src/util/engine-profiles.ts",
+      "from": 189,
+      "to": 307,
+      "reason": "Actual supported engine detection from live file-tree metadata and system-prompt guidance formatter."
+    },
+    {
+      "path": "cli/src/data/slash-commands.ts",
+      "from": 285,
+      "to": 314,
+      "reason": "Actual detected-engine preset-to-slash-command consumer."
+    },
+    {
+      "path": "cli/src/components/help-banner.tsx",
+      "from": 1,
+      "to": 75,
+      "reason": "Detected game preset help-banner consumer; compare prompt insertion with native action capability."
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/strings.ts",
+      "from": 174,
+      "to": 193,
+      "reason": "Actual engine guidance injection at the language-profile prompt placeholder."
+    },
+    {
+      "path": "common/src/util/__tests__/game-dev-presets.test.ts",
+      "from": 1,
+      "to": 200,
+      "reason": "Preset contract and insertion behavior tests, sampled without treating helper coverage as runtime engine assurance."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 528,
+      "to": 553,
+      "reason": "ACP image/audio/resource byte accounting edge; protocol admission and native media capability are separate questions."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 806,
+      "to": 842,
+      "reason": "Explicit image/audio/embedded-context capability advertisement at initialize."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 1020,
+      "to": 1055,
+      "reason": "Actual ACP prompt content projection and cancellation consumer; compare admitted richer blocks with the forwarded prompt."
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 849,
+      "to": 896,
+      "reason": "Necessary MCP media observation cross-reference for image/audio/resource projection; pair10 owns MCP trust and result contract audit."
+    },
+    {
+      "path": "common/src/tools/constants.ts",
+      "from": 1,
+      "to": 180,
+      "reason": "Current native tool name and client/programmatic catalogs for GUI/computer/audio/voice availability checks. Exclude historical plans from implementation credit."
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93,
+      "reason": "Actual browser/media dependencies and exported/distributed SDK surface; system Blender availability is documented separately. Pair11 owns general release provenance."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/base2-tool-tiers.ts",
+      "from": 79,
+      "to": 105,
+      "reason": "Real progressive media_3d tool tier grant names. Trace its resolution with pair12 rather than assuming the tool descriptor makes it available to every model turn."
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 576,
+      "to": 585,
+      "reason": "Root model instruction to use read_image for local images, plus plan-only browser analysis constraint. Pair12 owns the larger model tool disclosure/orchestrator policy."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "browser-cdp-action-observation",
+      "name": "Browser/CDP automation and structured observation",
+      "trace": [
+        "agents/browser-use/browser-use.ts",
+        "common/src/tools/params/tool/browser-logs.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/browser-logs.ts",
+        "sdk/src/tools/cdp-pipe-transport.ts",
+        "cli/src/utils/message-block-helpers.ts"
+      ],
+      "inspect": [
+        "Default versus explicit interactionPolicy, parameter defaults and plan ancestry at every effective layer",
+        "Real selector/coordinate/iframe/tab action results and page/log/network observations",
+        "Chrome availability, pipe-versus-port compatibility, retries/timeouts/empty/error/stop/cancel/ownership",
+        "Declared richer schema fields versus consumed runtime controls"
+      ],
+      "tests": [
+        "agents/browser-use/browser-use.test.ts",
+        "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts",
+        "packages/agent-runtime/src/tools/__tests__/browser-policy.test.ts",
+        "sdk/src/__tests__/browser-logs.test.ts",
+        "sdk/src/__tests__/cdp-pipe-transport.test.ts"
+      ]
+    },
+    {
+      "id": "browser-visual-media-evidence",
+      "name": "Screenshots, snapshots, pixel diffs, PDFs and recordings",
+      "trace": [
+        "common/src/browser-actions.ts",
+        "sdk/src/tools/browser-logs.ts",
+        "cli/src/components/blocks/image-block.tsx",
+        "cli/src/utils/message-block-helpers.ts"
+      ],
+      "inspect": [
+        "Actual screenshot/diff/APNG media versus JSON-only PDF metadata",
+        "Captured geometry and reference-size mismatch, selector visibility limits and empty capture behavior",
+        "Model-visible versus terminal-visible versus persisted/replayed media consumers; pair02 owns provider MIME/vision conversion"
+      ],
+      "tests": [
+        "sdk/src/__tests__/browser-logs.test.ts",
+        "cli/src/components/blocks/__tests__/image-block.test.tsx"
+      ]
+    },
+    {
+      "id": "local-image-attachments",
+      "name": "Native read_image and CLI image/clipboard attachments",
+      "trace": [
+        "common/src/tools/params/tool/read-image.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/read-image.ts",
+        "cli/src/utils/pending-attachments.ts",
+        "cli/src/utils/image-handler.ts",
+        "cli/src/utils/image-processor.ts",
+        "cli/src/hooks/helpers/send-message.ts",
+        "cli/src/hooks/use-send-message.ts",
+        "cli/src/components/blocks/image-block.tsx"
+      ],
+      "inspect": [
+        "Original media versus compressed input and source/filename/dimension metadata",
+        "Format/path/filter/size and total budgets; cancellation during I/O and preparation",
+        "Processing/error/removal/retry/clipboard-empty states and truthful displayed versus sent capture",
+        "Terminal protocol support, decoded media errors and persisted-redaction fallback"
+      ],
+      "tests": [
+        "sdk/src/__tests__/read-image.test.ts",
+        "cli/src/utils/__tests__/pending-attachments.test.ts",
+        "cli/src/utils/__tests__/image-processor.test.ts",
+        "cli/src/utils/__tests__/attachment-retry.test.ts",
+        "cli/src/components/blocks/__tests__/image-block.test.tsx"
+      ]
+    },
+    {
+      "id": "render-ui-link-widget",
+      "name": "Model-produced CLI link UI",
+      "trace": [
+        "common/src/tools/params/tool/render-ui.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+        "cli/src/components/tools/registry.ts",
+        "cli/src/components/tools/render-ui.tsx"
+      ],
+      "inspect": [
+        "Actual supported widget vocabulary and host/CLI consumer existence",
+        "Link schema versus rendering/opening/copying contract",
+        "Loading/launched/failure/retry/copy/stale async state and what UI-rendered output proves"
+      ],
+      "tests": [
+        "cli/src/components/tools/__tests__/render-ui.test.tsx"
+      ]
+    },
+    {
+      "id": "3d-inspection-and-preview",
+      "name": "Structured 3D discovery, inspection and deterministic preview",
+      "trace": [
+        "common/src/tools/params/tool/3d-assets.ts",
+        "common/src/project-file-tree.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/3d-assets.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/3d-assets.ts",
+        "sdk/src/tools/read-image.ts",
+        "packages/indexer/src/metadata-indexer.ts"
+      ],
+      "inspect": [
+        "Format discovery versus actual built-in parser and Blender importer support",
+        "Exact scene revision, structured metadata/cache and material/clay/wireframe/camera preview",
+        "Source/preview hashes and dimensions versus actual reopened input and produced PNGs",
+        "Missing Blender/dependency/file/cache/media/timeout/cancellation states and artifact retention"
+      ],
+      "tests": [
+        "sdk/src/__tests__/3d-assets.test.ts",
+        "sdk/src/__tests__/3d-discovery.test.ts",
+        "common/src/__tests__/project-file-tree-3d-assets.test.ts",
+        "packages/indexer/src/3d-asset-indexing.test.ts"
+      ]
+    },
+    {
+      "id": "3d-declarative-edit",
+      "name": "Source-guarded .blend mutations and preview receipts",
+      "trace": [
+        "common/src/tools/params/tool/3d-assets.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/3d-assets.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/3d-assets.ts",
+        "sdk/src/tools/3d-artifact-retention.ts"
+      ],
+      "inspect": [
+        "Bounded operation language, guard authority, working copy and source hash before/at commit",
+        "Reopened validation and trust in subprocess exit/structured receipt",
+        "Not-applied versus unknown/applied outcome, cancellation after commit and previewRendered semantics",
+        "Retry isolation, artifact lifetime and error/cleanup observability; pair06 owns generic broker authority"
+      ],
+      "tests": [
+        "sdk/src/__tests__/3d-assets.test.ts"
+      ]
+    },
+    {
+      "id": "game-engine-workflow-helpers",
+      "name": "Game engine discovery, prompt presets and job guidance",
+      "trace": [
+        "common/src/util/engine-profiles.ts",
+        "common/src/util/game-dev-presets.ts",
+        "cli/src/data/slash-commands.ts",
+        "cli/src/components/help-banner.tsx",
+        "packages/agent-runtime/src/templates/strings.ts"
+      ],
+      "inspect": [
+        "Detected engine evidence and actual prompt/slash consumers",
+        "Prompt recipes and exported structured job guidance versus specialized callable engine actions",
+        "Build/run/test/watch/preview workflow failure and cancellation support through existing tools",
+        "Current generic body fit across Unity/Godot/Unreal/Bevy/Blender languages; pair07/08 own generic language intelligence"
+      ],
+      "tests": [
+        "common/src/util/__tests__/game-dev-presets.test.ts",
+        "common/src/util/__tests__/engine-profiles.test.ts"
+      ]
+    },
+    {
+      "id": "native-computer-screen-frontier",
+      "name": "Native desktop/computer screen perception and action frontier",
+      "trace": [
+        "common/src/tools/constants.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/browser-logs.ts",
+        "cli/src/components/blocks/image-block.tsx"
+      ],
+      "inspect": [
+        "Search current native catalogs/dispatch/Rust manifests for desktop screenshot/accessibility/UI input and per-app permission consumers",
+        "Distinguish browser-only coordinate input and image display from OS desktop perception",
+        "Historical planned native macOS/Windows/Linux adapters versus verified installed/callable current paths"
+      ],
+      "tests": []
+    },
+    {
+      "id": "audio-voice-frontier",
+      "name": "Audio observation and voice input/output frontier",
+      "trace": [
+        "common/src/tools/constants.ts",
+        "common/src/mcp/client.ts",
+        "sdk/src/services/acp/acp-agent.ts"
+      ],
+      "inspect": [
+        "Actual native audio record/transcribe/speech/VAD/playback tools and CLI consumers rather than audio file discovery/provider price fields",
+        "MCP audio text projection and ACP admission/advertisement/forwarding boundaries",
+        "Historical whisper/Silero/piper proposal versus current implementation and verification evidence; provider routing is pair02"
+      ],
+      "tests": []
+    }
+  ],
+  "searchCoverage": {
+    "primarySections": 18,
+    "primaryUniqueFiles": 14,
+    "primaryLines": 4805,
+    "inventoryFiles": 3056,
+    "retrieval": "Read supplied pinned INVENTORY.json and cached RETRIEVAL.json query/path packets. Cached retrieval has no perception-specific query; used inventory filenames, rg source/test/doc/consumer searches and exact bounded source reads. Native query_index/read_files/read_subtree are repository code and are not exposed tools in this Codex session. Cached line references were not treated as current line authority.",
+    "rootsSearched": [
+      "agents",
+      "common/src",
+      "packages/agent-runtime/src",
+      "packages/indexer/src",
+      "packages/internal/src",
+      "sdk/src",
+      "cli/src",
+      "docs",
+      "README.md",
+      "sdk/README.md",
+      "rust/crates",
+      "sdk/package.json"
+    ],
+    "queries": [
+      "browser / CDP / screenshot / BrowserAction / BrowserResponse / interactionPolicy / stopBrowserSessionsByOwner",
+      "read_image / MessageContent / pending image / clipboard / compression / media rendering / capture recovery",
+      "render_ui / button widget / component registry / safeOpen / opening and copy state",
+      "inspect_3d_asset / render_3d_preview / edit_3d_asset / Blender scripts / source hash / preview receipts",
+      "getGameDevPresets / getGameDevJobGuidance / detectEngineProfiles / slash preset / language-profile placeholder",
+      "audio / voice / speech / microphone / transcription / computer_use / computerUse / screen_capture / realtime",
+      "current tool catalogs, native Rust source paths, and documented historical GUI/voice frontier"
+    ],
+    "docsRead": [
+      {
+        "path": "docs/architecture.md",
+        "from": 110,
+        "to": 180
+      },
+      {
+        "path": "docs/request-flow.md",
+        "from": 1,
+        "to": 110
+      },
+      {
+        "path": "docs/agents-and-tools.md",
+        "from": 1,
+        "to": 175
+      },
+      {
+        "path": "agents/patterns/audit-codebase.md",
+        "from": 1,
+        "to": 296
+      }
+    ],
+    "verifiedConsumerReads": [
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2776,
+        "to": 2873
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1820,
+        "to": 1870
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 2770,
+        "to": 2806
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/browser-logs.ts",
+        "from": 1,
+        "to": 104
+      },
+      {
+        "path": "common/src/tools/browser-policy.ts",
+        "from": 1,
+        "to": 69
+      },
+      {
+        "path": "common/src/browser-actions.ts",
+        "from": 98,
+        "to": 224
+      },
+      {
+        "path": "common/src/browser-actions.ts",
+        "from": 643,
+        "to": 767
+      },
+      {
+        "path": "sdk/src/tools/browser-logs.ts",
+        "from": 1,
+        "to": 610
+      },
+      {
+        "path": "sdk/src/tools/browser-logs.ts",
+        "from": 1462,
+        "to": 1672
+      },
+      {
+        "path": "sdk/src/tools/browser-logs.ts",
+        "from": 1887,
+        "to": 2041
+      },
+      {
+        "path": "sdk/src/tools/browser-logs.ts",
+        "from": 2490,
+        "to": 2550
+      },
+      {
+        "path": "sdk/src/tools/browser-logs.ts",
+        "from": 2642,
+        "to": 2744
+      },
+      {
+        "path": "sdk/src/tools/browser-logs.ts",
+        "from": 3297,
+        "to": 3423
+      },
+      {
+        "path": "sdk/src/tools/cdp-pipe-transport.ts",
+        "from": 1,
+        "to": 376
+      },
+      {
+        "path": "sdk/src/tools/read-image.ts",
+        "from": 1,
+        "to": 282
+      },
+      {
+        "path": "cli/src/hooks/helpers/send-message.ts",
+        "from": 225,
+        "to": 370
+      },
+      {
+        "path": "cli/src/hooks/use-send-message.ts",
+        "from": 768,
+        "to": 826
+      },
+      {
+        "path": "cli/src/utils/pending-attachments.ts",
+        "from": 1,
+        "to": 242
+      },
+      {
+        "path": "cli/src/utils/image-processor.ts",
+        "from": 1,
+        "to": 133
+      },
+      {
+        "path": "cli/src/components/blocks/image-block.tsx",
+        "from": 1,
+        "to": 148
+      },
+      {
+        "path": "cli/src/components/tools/render-ui.tsx",
+        "from": 1,
+        "to": 200
+      },
+      {
+        "path": "cli/src/components/tools/registry.ts",
+        "from": 120,
+        "to": 146
+      },
+      {
+        "path": "common/src/tools/params/tool/render-ui.ts",
+        "from": 1,
+        "to": 97
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/render-ui.ts",
+        "from": 1,
+        "to": 15
+      },
+      {
+        "path": "sdk/src/tools/3d-assets.ts",
+        "from": 102,
+        "to": 438
+      },
+      {
+        "path": "sdk/src/tools/3d-assets.ts",
+        "from": 591,
+        "to": 1402
+      },
+      {
+        "path": "common/src/util/game-dev-presets.ts",
+        "from": 1,
+        "to": 371
+      },
+      {
+        "path": "cli/src/data/slash-commands.ts",
+        "from": 285,
+        "to": 314
+      },
+      {
+        "path": "packages/agent-runtime/src/templates/strings.ts",
+        "from": 174,
+        "to": 193
+      },
+      {
+        "path": "sdk/src/services/acp/acp-agent.ts",
+        "from": 515,
+        "to": 555
+      },
+      {
+        "path": "sdk/src/services/acp/acp-agent.ts",
+        "from": 806,
+        "to": 842
+      },
+      {
+        "path": "sdk/src/services/acp/acp-agent.ts",
+        "from": 1020,
+        "to": 1055
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+        "from": 3286,
+        "to": 3395
+      },
+      {
+        "path": "sdk/package.json",
+        "from": 1,
+        "to": 93
+      },
+      {
+        "path": "packages/agent-runtime/src/util/base2-tool-tiers.ts",
+        "from": 79,
+        "to": 105
+      },
+      {
+        "path": "agents/base2/base2.ts",
+        "from": 576,
+        "to": 585
+      }
+    ],
+    "sampling": "18 primary sections across 14 current files, 4805 lines; secondary ranges are optional hypothesis-driven edges and are not inspection credit until the reviewer reads them. This artifact is a picker handoff, not findings or a full-line audit.",
+    "policyContext": "Intentional first-party full-access execution and current relaxed/keep policy are established by the parent. Assess actual browser declared/effective policy consistency and opted-in boundaries; do not prescribe general restrictions against that preference.",
+    "excluded": [
+      "No source edits, findings, tests/probes, browser/model/API launches, credential values or private images were used. Only the assigned picker artifact is written.",
+      "Pair09 owns generic environment/process/kill/sandbox/approval/egress behavior; browser transport/owner/action-observation wiring is inspected here.",
+      "Pair10 owns plugin/MCP provenance/trust/result semantics; MCP audio projection is a necessary observation cross-reference.",
+      "Pair02 owns provider/model vision routing and multimodal content conversion; image/media body producers and CLI consumers are inspected here.",
+      "Pair06 owns common filesystem mutation broker/receipt authority; the specific binary .blend capability and evidence are inspected here.",
+      "Pair07/08 own generic language and indexer behavior; only 3D/engine discovery and consumer edges are selected here.",
+      "Historical polyglot plans are context only and excluded from current inventory receipts."
+    ],
+    "remainingQuestions": [
+      "Which exact browser actions and declared optional controls are effective for default, explicit read-only, plan-descendant, generic-agent and direct-SDK calls?",
+      "Does per-agent browser ownership survive real SDK trust stamping and run-end cleanup during concurrent runs and startup/cancellation races?",
+      "Are screenshots/snapshots/diffs/recordings/PDF metadata truthful and usable by their actual model and CLI consumers in empty/error/unsupported media states?",
+      "Do attachments retain the capture the user sees through send preparation, stale conversation changes, removal, retry and provider conversion?",
+      "Does render_ui success describe actual supported UI on every host, and do opening/copy failure states preserve a useful fallback?",
+      "Do all discoverable 3D formats actually inspect/render, and do preview hashes/dimensions bind the exact bytes Blender opened and images emitted?",
+      "Are successful, rejected, stale, unknown and post-commit-preview-failed 3D edits and artifact lifetimes reported accurately?",
+      "Which game helper exports are actual consumers and which are prompt-only recipes or unwired guidance?",
+      "What current desktop/computer/audio/voice paths are callable and tested, as opposed to browser input, image display, protocol fields and historical plans?"
+    ],
+    "negativeAvailabilitySearch": {
+      "roots": [
+        "rust",
+        "sdk/package.json",
+        "common/src/tools/constants.ts"
+      ],
+      "terms": [
+        "computer",
+        "screen",
+        "voice",
+        "audio",
+        "speech",
+        "whisper",
+        "silero",
+        "piper",
+        "desktop",
+        "ui_automation",
+        "objc2",
+        "atspi",
+        "ashpd"
+      ],
+      "matches": 0,
+      "limit": "Keyword absence on these current roots is a bounded discovery result, not proof of absence in arbitrary external custom tools/plugins."
+    }
+  },
+  "contextFiles": [
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/AUDIT-CONTRACT.md",
+      "reason": "Pinned macro/micro body-for-a-model objective, eight domains, maturity/assurance and read-only picker boundaries."
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/INVENTORY.json",
+      "reason": "Pinned current paths and snapshot authority."
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/RETRIEVAL.json",
+      "reason": "Cached retrieval query/path packets; no dedicated perception query was available."
+    },
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+      "from": 130,
+      "to": 138,
+      "reason": "Historical GUI/screen and voice frontier capability claims.",
+      "inventoryStatus": "historical plan context excluded from structural receipt"
+    },
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 216,
+      "to": 224,
+      "reason": "Historical native Rust OS screen/GUI adapters and whisper/Silero/piper voice proposal; compare only with current verified source, never checked boxes.",
+      "inventoryStatus": "historical plan context excluded from structural receipt"
+    }
+  ]
+}

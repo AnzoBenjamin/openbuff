@@ -2,6 +2,11 @@ import {
   taskMemoryDraftV1Schema,
   taskMemoryV1Schema,
 } from '@codebuff/common/types/task-memory'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+import {
+  getConfirmedAppliedActionsV1,
+  isFileMutationResultV1,
+} from '@codebuff/common/tools/results/filesystem'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 
 import type {
@@ -60,12 +65,16 @@ function boundText(value: string, maxChars: number): string {
 
 function normalizeTrustedRequestText(value: string): string {
   const normalized = boundText(value, CURRENT_REQUEST_MAX_CHARS)
-  if (!normalized || /^(?:\/compact|compact)$/i.test(normalized)) return ''
+  if (!normalized || /^(?:\/compact(?:\s[\s\S]*)?|compact)$/i.test(normalized))
+    return ''
   return normalized
 }
 
 function currentRequestRankingTerms(value: string | undefined): string[] {
-  const normalized = boundText(value ?? '', CURRENT_REQUEST_MAX_CHARS).toLowerCase()
+  const normalized = boundText(
+    value ?? '',
+    CURRENT_REQUEST_MAX_CHARS,
+  ).toLowerCase()
   if (!normalized) return []
   const seen = new Set<string>()
   const terms: string[] = []
@@ -401,6 +410,7 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
   current?: TaskMemoryV1
   receipt: AgentReceipt
   objective?: string
+  now?: number
 }): TaskMemoryV1 {
   const { current, receipt } = params
   const evidence: TaskMemoryEvidenceV1[] = receipt.evidence
@@ -417,7 +427,8 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
         ? boundText(item.freshnessHash, 256)
         : undefined,
       workspaceRevision: item.workspaceRevision ?? receipt.workspaceRevision,
-      verifiedAt: Date.now(),
+      // P2-T1b: verifiedAt uses the injected clock when threaded.
+      verifiedAt: params.now ?? realClock.now(),
     }))
   const blockers =
     receipt.status === 'blocked' || receipt.status === 'failed'
@@ -613,20 +624,19 @@ type DerivedToolEvidence = {
 }
 
 /**
- * Derives — but deliberately does not commit — the read/edit evidence a single
- * tool result proves. No zod parse and no checksum happen here, so this stays
- * cheap enough to run on every tool result while the expensive commit
- * (`normalizeDraft` + `JSON.stringify` + `stableHash` over the whole memory)
- * runs once per step.
+ * Derives read/edit evidence and validates mutation receipts for each result.
+ * Memory normalization and checksums run once per step when committing.
  */
 function deriveToolEvidence(params: {
   toolName: string
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): DerivedToolEvidence {
   const { toolName, callId, output, workspaceState } = params
-  const verifiedAt = Date.now()
+  // P2-T1b: verifiedAt uses the injected clock (the tool executor threads it).
+  const verifiedAt = params.now ?? realClock.now()
   const source = boundText(`${toolName}:${callId}`, 1_000)
   const evidence: TaskMemoryEvidenceV1[] = []
   const filesInspected: string[] = []
@@ -679,6 +689,12 @@ function deriveToolEvidence(params: {
       path,
       freshnessHash: toStoredFreshnessHash(anchor.contentHash),
       verifiedAt,
+      // Tier 1D: derived read evidence is session-ephemeral. It stays
+      // available to compileTaskMemoryContext within the run but is dropped
+      // by the store at merge time, so per-read boilerplate ("Read X lines
+      // 1-N") no longer occupies durable evidence slots across sessions.
+      // Mutation evidence below remains durable.
+      sessionScoped: true,
       workspaceRevision: workspaceState?.revision,
     })
     filesInspected.push(path)
@@ -689,20 +705,17 @@ function deriveToolEvidence(params: {
   // (edit_transaction, str_replace, write_file, replace_range, create_plan)
   // returns this kind, and an override returning something else is skipped.
   const mutation = findToolResultValueByKind(output, 'file_mutation_result')
-  const mutationApplied = mutation?.outcome === 'applied'
   let editCount = 0
-  for (const action of asRecordArray(mutation?.actions)) {
+  // Bind confirmed effects to this call, including effects surviving rollback.
+  const confirmedActions =
+    isFileMutationResultV1(mutation) &&
+    mutation.authorityReceipt?.callId === callId
+      ? getConfirmedAppliedActionsV1(mutation)
+      : []
+  for (const action of confirmedActions) {
     if (editCount >= TOOL_EVIDENCE_PER_RESULT_CAP) break
-    // Trust a per-action outcome when the payload carries one; without it only
-    // a fully applied mutation confirms the action landed.
-    const applied =
-      typeof action.outcome === 'string'
-        ? action.outcome === 'applied'
-        : mutationApplied
-    if (!applied || typeof action.path !== 'string' || !action.path) continue
     const path = boundText(action.path, 1_000)
-    const actionKind =
-      typeof action.action === 'string' ? boundText(action.action, 32) : 'edit'
+    const actionKind = action.action
     evidence.push({
       id: boundText(`edit:${path}`, 160),
       kind: 'edit',
@@ -810,11 +823,18 @@ export function recordToolEvidenceInTaskMemory(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): TaskMemoryV1 | undefined {
   const { current, toolName, callId, output, workspaceState } = params
   return commitDerivedToolEvidence({
     current,
-    derived: deriveToolEvidence({ toolName, callId, output, workspaceState }),
+    derived: deriveToolEvidence({
+      toolName,
+      callId,
+      output,
+      workspaceState,
+      now: params.now,
+    }),
     workspaceState,
   })
 }
@@ -839,6 +859,7 @@ export function bufferToolEvidenceForStep(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): void {
   const { owner, toolName, callId, output, workspaceState } = params
   const derived = deriveToolEvidence({
@@ -846,6 +867,7 @@ export function bufferToolEvidenceForStep(params: {
     callId,
     output,
     workspaceState,
+    now: params.now,
   })
   if (derived.evidence.length === 0) return
   const buffered = BUFFERED_STEP_EVIDENCE.get(owner)

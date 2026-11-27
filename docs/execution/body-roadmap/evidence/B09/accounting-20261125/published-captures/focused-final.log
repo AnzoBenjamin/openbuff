@@ -1,0 +1,19 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/impl/__tests__/b09-cost-precision.test.ts:
+(pass) B09 cost precision and unknown data > preserves sub-cent configured prices without per-request rounding [1.49ms]
+(pass) B09 cost precision and unknown data > missing or malformed counts never become a zero-cost completed request [0.34ms]
+(pass) B09 cost precision and unknown data > provider metadata preserves exact zero and fractional cost but never converts absent/null/invalid into zero [0.20ms]
+(pass) B09 cost precision and unknown data > positive unpriced components and non-USD currency do not fabricate USD totals [0.07ms]
+
+sdk/src/__tests__/b09-cost-wire.test.ts:
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=false [44.93ms]
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=true [7.98ms]
+
+sdk/src/__tests__/b09-cost-unknown-wire.test.ts:
+(pass) B09 actual unpriced usage stays explicitly unknown rather than reporting a free request [11.37ms]
+
+ 7 pass
+ 0 fail
+ 30 expect() calls
+Ran 7 tests across 3 files. [659.00ms]

@@ -10,7 +10,11 @@ import {
 } from '../../error-utils'
 import {
   FAILOVER_ELIGIBLE_STATUS_CODES,
+  createRouteHealthRegistry,
+  getScopedSessionRouteHealth,
+  clearDegradedProviderRoutes,
   isFailoverEligibleError,
+  orderModelsByRouteHealth,
   resolveModelsToTry,
 } from '../failover'
 import type { LoadedProviderConfig } from '../../provider-config'
@@ -134,6 +138,17 @@ describe('FAILOVER_ELIGIBLE_STATUS_CODES', () => {
     expect(FAILOVER_ELIGIBLE_STATUS_CODES.has(502)).toBe(true)
     expect(FAILOVER_ELIGIBLE_STATUS_CODES.has(503)).toBe(true)
     expect(FAILOVER_ELIGIBLE_STATUS_CODES.has(504)).toBe(true)
+  })
+
+  it('contains 529 (Anthropic overloaded)', () => {
+    expect(FAILOVER_ELIGIBLE_STATUS_CODES.has(529)).toBe(true)
+    expect(isFailoverEligibleError(createHttpError('Overloaded', 529))).toBe(true)
+  })
+
+  it('treats an SSE overloaded_error event as failover-eligible', () => {
+    expect(
+      isFailoverEligibleError({ type: 'overloaded_error', message: 'Overloaded' }),
+    ).toBe(true)
   })
 
   it('does NOT contain 408 (timeout) or 429 (rate limit) — retry-only', () => {
@@ -322,5 +337,64 @@ describe('isFailoverEligibleError', () => {
     const error = new Error('bad') as Error & { statusCode: unknown }
     ;(error as { statusCode: unknown }).statusCode = '500'
     expect(isFailoverEligibleError(error)).toBe(false)
+  })
+})
+
+describe('default route health scoping', () => {
+  it('keeps BYOK demotion stable across mixed OAuth candidates and OAuth file revisions', () => {
+    const loadedConfig = makeLoadedConfig(['byok', 'backup'])!
+    let oauthRevision = 'oauth-file-v1'
+    const shared = { loadedConfig, configurationIdentity: 'mixed-config', environment: {} }
+    const mixed = getScopedSessionRouteHealth({ ...shared, credentialSourceIdentity: (model) => model === 'oauth' ? oauthRevision : 'default' })
+    mixed.markDegraded({ model: 'byok', statusCode: 401 })
+    mixed.markDegraded({ model: 'oauth', statusCode: 403 })
+    const byokOnly = getScopedSessionRouteHealth({ ...shared, credentialSourceIdentity: 'default' })
+    expect(byokOnly.get('byok')?.statusCode).toBe(401)
+    oauthRevision = 'oauth-file-v2'
+    expect(mixed.get('oauth')).toBeUndefined()
+    expect(mixed.get('byok')?.statusCode).toBe(401)
+    expect(orderModelsByRouteHealth(['byok', 'backup'], mixed)).toEqual(['backup', 'byok'])
+    clearDegradedProviderRoutes()
+  })
+
+  it('reuses equivalent captured scope and isolates credential rotations', () => {
+    const loadedConfig = makeLoadedConfig(['backup'])!
+    loadedConfig.config.providers = { fixture: { type: 'openai-compatible', baseURL: 'https://fixture.invalid/v1', apiKeyEnv: 'FIXTURE_KEY', models: ['primary'] } } as unknown as typeof loadedConfig.config.providers
+    const first = getScopedSessionRouteHealth({ loadedConfig, configurationIdentity: 'capture-a', environment: { FIXTURE_KEY: 'first-key' } })
+    first.markDegraded({ model: 'primary', statusCode: 401 })
+    const same = getScopedSessionRouteHealth({ loadedConfig, configurationIdentity: 'capture-a', environment: { FIXTURE_KEY: 'first-key', UNRELATED: 'changed' } })
+    expect(same).toBe(first)
+    expect(same.get('primary')?.statusCode).toBe(401)
+    const rotated = getScopedSessionRouteHealth({ loadedConfig, configurationIdentity: 'capture-a', environment: { FIXTURE_KEY: 'second-key' } })
+    expect(rotated.get('primary')).toBeUndefined()
+    const other = getScopedSessionRouteHealth({ loadedConfig, configurationIdentity: 'capture-b', environment: { FIXTURE_KEY: 'first-key' } })
+    expect(other.get('primary')).toBeUndefined()
+    clearDegradedProviderRoutes()
+    expect(first.get('primary')).toBeUndefined()
+    expect(getScopedSessionRouteHealth({ loadedConfig, configurationIdentity: 'capture-a', environment: { FIXTURE_KEY: 'first-key' } }).get('primary')).toBeUndefined()
+  })
+})
+
+describe('session route health (N07)', () => {
+  it('moves a degraded route behind the healthy ones', () => {
+    const health = createRouteHealthRegistry(() => 1)
+    health.markDegraded({ model: 'p', statusCode: 401, replacementModel: 'b1' })
+    expect(orderModelsByRouteHealth(['p', 'b1', 'b2'], health)).toEqual(['b1', 'b2', 'p'])
+    expect(health.get('p')).toEqual({ model: 'p', statusCode: 401, replacementModel: 'b1', markedAtMs: 1 })
+  })
+
+  it('keeps the order when every route, or no route, is degraded', () => {
+    const health = createRouteHealthRegistry()
+    expect(orderModelsByRouteHealth(['p', 'b'], health)).toEqual(['p', 'b'])
+    health.markDegraded({ model: 'p', statusCode: 401 })
+    health.markDegraded({ model: 'b', statusCode: 403 })
+    expect(orderModelsByRouteHealth(['p', 'b'], health)).toEqual(['p', 'b'])
+  })
+
+  it('clear() restores the configured order', () => {
+    const health = createRouteHealthRegistry()
+    health.markDegraded({ model: 'p', statusCode: 401 })
+    health.clear()
+    expect(orderModelsByRouteHealth(['p', 'b'], health)).toEqual(['p', 'b'])
   })
 })

@@ -7,10 +7,39 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import z from 'zod/v4'
 
 import {
+  buildTextToolInstructions,
+  textOnlyToolHistory,
   countRequestOverheadTokens,
   getMessagesForModelContext,
   getProviderContextLimitFromError,
 } from '../llm'
+
+describe('text tool instructions', () => {
+  test('renders actual structured schemas and descriptions for text-only providers', () => {
+    const result = buildTextToolInstructions({
+      example: { description: 'Read paths', inputSchema: z.object({ paths: z.array(z.string()) }) },
+    })
+    expect(result).toContain('<codebuff_tool_call>')
+    expect(result).toContain('"cb_tool_name"')
+    expect(result).toContain('Read paths')
+    expect(result).toContain('"paths":{"type":"array","items":{"type":"string"}}')
+  })
+
+  test('fails explicitly when a tool schema cannot be rendered', () => {
+    expect(() => buildTextToolInstructions({ broken: { inputSchema: z.function() } })).toThrow('broken')
+  })
+
+  test('converts prior tool calls and results to text without tool roles', () => {
+    const messages = textOnlyToolHistory([
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read', input: { paths: ['a.ts'] } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call-1', toolName: 'read', output: { type: 'text', value: 'file content' } }] },
+    ])
+    expect(messages[0].role).toBe('assistant')
+    expect(JSON.stringify(messages[0])).toContain('\\"paths\\":[\\"a.ts\\"]')
+    expect(messages[1].role).toBe('user')
+    expect(JSON.stringify(messages[1])).toContain('file content')
+  })
+})
 
 import type { RequestContextTrimInfo } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'

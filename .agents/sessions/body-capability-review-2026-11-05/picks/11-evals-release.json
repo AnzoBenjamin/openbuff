@@ -1,0 +1,872 @@
+{
+  "shardId": "11-evals-release",
+  "question": "Where do evaluator orchestration/scoring, paired statistics/per-language strata, mutation/retention/correctness oracles, measured learning/proposal/routing promotion, task trace/artifact hygiene, CI/performance/provenance guards, and SDK Node/CJS/ESM plus CLI/native build/release/installed-consumer checks actually run?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "evals",
+    "scripts",
+    ".github",
+    "packages",
+    "test",
+    ".",
+    "sdk",
+    "cli",
+    "common",
+    "agents",
+    "rust",
+    "docs"
+  ],
+  "selectedFiles": [
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 135,
+      "to": 512,
+      "reason": "Complete runTask consumer: real agent execution, judges, deterministic metrics, opt-in lessons/proposals/promotion decision, trace/artifact writes and task failure settlement."
+    },
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 717,
+      "to": 1112,
+      "reason": "Actual multi-task entrypoint: schema validation, binary setup, concurrency/repeats/seed, measured versus failed scoring, aggregation, FINAL_RESULTS metadata and cleanup."
+    },
+    {
+      "path": "evals/buffbench/agent-runner.ts",
+      "from": 264,
+      "to": 471,
+      "reason": "Final-check correctness oracle: named prerequisite graph, sequential legacy checks, concurrent independent checks, cache-recall signals, shell execution, timeout/abort and exit/output shape."
+    },
+    {
+      "path": "evals/buffbench/judge.ts",
+      "from": 247,
+      "to": 507,
+      "reason": "Live judge dispatch and failure states, untrusted task/diff framing, per-judge scores, averaged score/narrative selection and real deterministic-clamp consumer."
+    },
+    {
+      "path": "scripts/compare-buffbench-runs.ts",
+      "from": 1,
+      "to": 328,
+      "reason": "Executable comparison entrypoint: ANALYSIS artifact discovery, commit-SHA pairing, exclusion criteria, repeat handling through maps, per-agent summaries and command-line defaults."
+    },
+    {
+      "path": "evals/buffbench/statistics.ts",
+      "from": 147,
+      "to": 274,
+      "reason": "Wilcoxon applicability, tied/zero differences, rank construction, normal approximation and returned p-value contract. Bootstrap implementation is an adjacent section."
+    },
+    {
+      "path": "evals/buffbench/proposals.ts",
+      "from": 1,
+      "to": 490,
+      "reason": "Closed proposal schemas, agent-copy application semantics and promotion policy with before/after aggregates and optional paired significance. Trace actual persistence and consumer wiring independently."
+    },
+    {
+      "path": "evals/buffbench/lessons-extractor.ts",
+      "from": 172,
+      "to": 341,
+      "reason": "Real lesson extractor invocation, injected/local agent definitions, model output handling, proposal validation and per-agent Markdown persistence."
+    },
+    {
+      "path": "evals/compaction-fidelity/scenario.test.ts",
+      "from": 1,
+      "to": 292,
+      "reason": "Deterministic planted-fact correctness/retention oracle across eviction, destructive compaction, archive recall and aging; inspect which shipped seams and summaries the fixture really exercises."
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "from": 1,
+      "to": 414,
+      "reason": "Actual blocking build/guard stages, package discovery matrix, CLI SDK prebuild, test isolation/retry/flake artifacts and separate integration discovery."
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 1,
+      "to": 200,
+      "reason": "Public Node ESM/CJS build entrypoint: externals, declarations, post-bundle repairs, WASM/vendor copying and spawned Node export checks. Asset omission ownership stays pair07."
+    },
+    {
+      "path": "sdk/scripts/verify.ts",
+      "from": 89,
+      "to": 204,
+      "reason": "Real SDK compatibility runner and CLI invocation: dist-copy/file-reference subprojects, npm setup/test calls, skip-build behavior and verification sequencing."
+    },
+    {
+      "path": "sdk/smoke-test-dist.ts",
+      "from": 1,
+      "to": 248,
+      "reason": "Actual Node dist smoke environment, dependency setup and CJS import/parser probes; compare tested operations and resolution paths with published package behavior."
+    },
+    {
+      "path": "cli/scripts/build-binary.ts",
+      "from": 465,
+      "to": 699,
+      "reason": "Complete active build main: agent/SDK prebuilds, compiler/env definitions, native loader lock/patch cycle, platform/legacy branches, sibling assets and opt-in built-binary smoke."
+    },
+    {
+      "path": "cli/scripts/smoke-binary.ts",
+      "from": 300,
+      "to": 466,
+      "reason": "Actual compiled CLI probe/TUI invocation, deterministic probe-only mode, boot marker and fatal-output checks, timeout and process settlement. Capture helpers are adjacent."
+    },
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 1,
+      "to": 148,
+      "reason": "Native build/test/target/upload wiring, host-executable lanes and matrix YAML values versus step predicates. Static workflow inspection alone does not establish actual GitHub execution."
+    },
+    {
+      "path": "scripts/dependency-provenance-guard.ts",
+      "from": 624,
+      "to": 1045,
+      "reason": "Offline provenance release reconciliation, integrity/origin/license/deprecation checks and exact/range/resolved dependency scope consumed by the CI guard."
+    },
+    {
+      "path": "scripts/measure-perf-guards-baseline.ts",
+      "from": 1874,
+      "to": 2243,
+      "reason": "Benchmark driver options, real case dispatch, contract/timing attribution, measured-row return and command entrypoint; pair with the scaled CI smoke to assess numeric versus behavioral assurance."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "evals/buffbench/main.ts",
+      "from": 1,
+      "to": 27,
+      "reason": "Default BuffBench caller and lesson-extraction option supplied to runBuffBench."
+    },
+    {
+      "path": "evals/buffbench/main-nightly.ts",
+      "from": 1,
+      "to": 113,
+      "reason": "Scheduled workflow target: actual agent selection, runner flags, summary and exit behavior."
+    },
+    {
+      "path": "evals/buffbench/main-openbuff.ts",
+      "from": 1,
+      "to": 110,
+      "reason": "Openbuff-authored task caller, local repository override, task concurrency and temporary eval cleanup."
+    },
+    {
+      "path": "evals/buffbench/types.ts",
+      "from": 1,
+      "to": 218,
+      "reason": "Task/run/artifact schema, cache-recall checks, scoring-status mirrors, proposal decisions and language/stratum metadata contract."
+    },
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 513,
+      "to": 554,
+      "reason": "Input schema used before side effects; optional validation, install and task metadata accepted by the live entrypoint."
+    },
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 624,
+      "to": 710,
+      "reason": "Actual binary installation consumer and temporary environment; read only source, never execute installer or inspect private eval data."
+    },
+    {
+      "path": "evals/buffbench/agent-runner.ts",
+      "from": 34,
+      "to": 220,
+      "reason": "Timed run wrapper, checkout/run/trace/diff collection, final-check call and cleanup consumer feeding runTask."
+    },
+    {
+      "path": "evals/buffbench/judge.ts",
+      "from": 1,
+      "to": 246,
+      "reason": "Scoring status/schema, prompt/tool surface and judge model definitions consumed by the primary judge dispatcher."
+    },
+    {
+      "path": "evals/buffbench/deterministic-signals.ts",
+      "from": 1,
+      "to": 268,
+      "reason": "Compiler/test/lint classification, check metadata, empty and skipped signals and score-clamping rules."
+    },
+    {
+      "path": "evals/buffbench/compare-runs.ts",
+      "from": 1,
+      "to": 255,
+      "reason": "Pure aggregate before/after comparison helper imported by proposal policy; compare with the executable ANALYSIS-file comparison path."
+    },
+    {
+      "path": "evals/buffbench/statistics.ts",
+      "from": 1,
+      "to": 117,
+      "reason": "Mean/standard error, seeded RNG and paired bootstrap confidence interval implementation used by promotion."
+    },
+    {
+      "path": "evals/buffbench/trace-utils.ts",
+      "from": 1,
+      "to": 58,
+      "reason": "Trace truncation and serialization input used by lessons and analysis."
+    },
+    {
+      "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "from": 900,
+      "to": 1110,
+      "reason": "Injected runTask lessons/proposal/trace consumer tests; inspect mocks and asserted live decision/persistence boundaries."
+    },
+    {
+      "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "from": 1217,
+      "to": 1502,
+      "reason": "Current aggregation, status, runner metadata and artifact tests adjacent to the primary pipeline."
+    },
+    {
+      "path": "evals/buffbench/__tests__/agent-runner.test.ts",
+      "from": 253,
+      "to": 333,
+      "reason": "Final-check dependency/concurrency/cancellation and structured result assertions."
+    },
+    {
+      "path": "evals/buffbench/__tests__/proposals.test.ts",
+      "from": 38,
+      "to": 255,
+      "reason": "Pure promotion threshold/significance tests, including underpowered comparisons; separate their assurance from live candidate promotion."
+    },
+    {
+      "path": "evals/buffbench/__tests__/statistics.test.ts",
+      "from": 75,
+      "to": 213,
+      "reason": "Seeded bootstrap, empty/tied samples and Wilcoxon applicability/statistic assertions."
+    },
+    {
+      "path": "evals/buffbench/__tests__/judge-calibration.test.ts",
+      "from": 175,
+      "to": 253,
+      "reason": "Checked-in gold-set and recorded/injected judge calibration tests; inspect whether providers are actually invoked."
+    },
+    {
+      "path": "evals/buffbench/__tests__/fixtures/judge-gold-set.json",
+      "from": 1,
+      "to": 45,
+      "reason": "Explicit public golden fixture for judge calibration; historical private run/error JSON is excluded."
+    },
+    {
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "from": 920,
+      "to": 1156,
+      "reason": "Additional retention/continuation assertions; pair04 owns runtime memory wiring, so use only for oracle adequacy and scenario assurance."
+    },
+    {
+      "path": "evals/edit-blocks/scenario.test.ts",
+      "from": 388,
+      "to": 529,
+      "reason": "Mutation transport equivalence and adversarial injection oracle; mutation commit correctness belongs pair06."
+    },
+    {
+      "path": "scripts/run-mutation-gate.ts",
+      "from": 1,
+      "to": 18,
+      "reason": "Actual opt-in mutation framework launcher: external command forwarding, gate environment marker and exit handling."
+    },
+    {
+      "path": "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+      "from": 1,
+      "to": 61,
+      "reason": "Scaled benchmark test actually found by CI; inspect case/row assertions and temporal ceiling versus numerical regression thresholds."
+    },
+    {
+      "path": "scripts/__tests__/ci-workflow.test.ts",
+      "from": 1,
+      "to": 272,
+      "reason": "CI discovery, drift/failure truth and provenance-base guard contract tests; distinguish parsed workflow assertions from execution."
+    },
+    {
+      "path": "scripts/__tests__/release-workflow.test.ts",
+      "from": 1,
+      "to": 78,
+      "reason": "Release commit/tag/source wiring tests and macOS build assertions."
+    },
+    {
+      "path": "scripts/check-ci-local.ts",
+      "from": 355,
+      "to": 526,
+      "reason": "Local guard entrypoint, actual guard command argv, timeout/lock cleanup and full-suite selection; compare with remote CI."
+    },
+    {
+      "path": "cli/scripts/run-cli-tests.ts",
+      "from": 1,
+      "to": 184,
+      "reason": "CI-equivalent real CLI discovery/preload/native-asset runner and empty-list failure behavior."
+    },
+    {
+      "path": "cli/src/__tests__/run-cli-tests.test.ts",
+      "from": 83,
+      "to": 131,
+      "reason": "Discovery exclusion, empty-list and runner argv/environment contract tests."
+    },
+    {
+      "path": "test/setup-scm-loader.ts",
+      "from": 1,
+      "to": 15,
+      "reason": "Root test-loader source: compare existence with the actual root Bun preload configuration."
+    },
+    {
+      "path": "bunfig.toml",
+      "from": 1,
+      "to": 14,
+      "reason": "Root package test exclusions and active preload entrypoint."
+    },
+    {
+      "path": "sdk/test/setup-env.ts",
+      "from": 1,
+      "to": 47,
+      "reason": "Actual root test preload and test-only environment defaults; no runtime credentials are read."
+    },
+    {
+      "path": "package.json",
+      "from": 1,
+      "to": 80,
+      "reason": "Workspace/build/test/release command contract and pinned runtime/overrides."
+    },
+    {
+      "path": "evals/package.json",
+      "from": 1,
+      "to": 55,
+      "reason": "Declared evaluator/test/mutation-adjacent experiment entrypoints and workspace dependency graph."
+    },
+    {
+      "path": "scripts/package.json",
+      "from": 1,
+      "to": 39,
+      "reason": "Declared CI/local/provenance/mutation guard and experiment commands."
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93,
+      "reason": "Public Node engine, ESM/CJS/types exports, publish files/prepack and external runtime dependency contract."
+    },
+    {
+      "path": "cli/package.json",
+      "from": 1,
+      "to": 64,
+      "reason": "Private development CLI build/test/export contract and native package pins."
+    },
+    {
+      "path": "packages/build-tools/executors/infisical-run/executor.ts",
+      "from": 1,
+      "to": 61,
+      "reason": "Legacy build executor implementation and shell/cwd/result contract; search actual consumers instead of inferring active Nx orchestration."
+    },
+    {
+      "path": "packages/build-tools/executors.json",
+      "from": 1,
+      "to": 9,
+      "reason": "Build executor registration consumed by Nx-compatible tooling."
+    },
+    {
+      "path": "packages/build-tools/package.json",
+      "from": 1,
+      "to": 15,
+      "reason": "Build-tools package export/build and dev/runtime dependency declaration."
+    },
+    {
+      "path": "packages/build-tools/project.json",
+      "from": 1,
+      "to": 23,
+      "reason": "Legacy build-target declaration; compare with root Bun workspace commands and actual consumer searches."
+    },
+    {
+      "path": ".github/workflows/sdk-release.yml",
+      "from": 1,
+      "to": 109,
+      "reason": "Actual SDK release invokes verify, selects Node and publishes the checked-out SDK."
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 395,
+      "to": 475,
+      "reason": "Real matrix smoke-directory construction, binary/version/probe invocation and archive/upload; query/grammar omission remains pair07."
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 593,
+      "to": 655,
+      "reason": "Windows smoke-directory, version/probe invocation and archive branch."
+    },
+    {
+      "path": ".github/workflows/buffbench.yml",
+      "from": 1,
+      "to": 50,
+      "reason": "Manual BuffBench workflow invocation and result/artifact steps."
+    },
+    {
+      "path": ".github/workflows/nightly-evals.yml",
+      "from": 1,
+      "to": 53,
+      "reason": "Scheduled evaluator caller and configuration; do not read injected secret values."
+    },
+    {
+      "path": "cli/src/__tests__/release-wrapper.test.ts",
+      "from": 1320,
+      "to": 1385,
+      "reason": "Installed-version/offline launch fixtures using injected wrapper/download/probe seams; assess actual installed-binary assurance."
+    },
+    {
+      "path": "sdk/test/cjs-compatibility/package.json",
+      "from": 1,
+      "to": 21,
+      "reason": "Compatibility setup/copy and test commands using the published CJS condition."
+    },
+    {
+      "path": "sdk/test/cjs-compatibility/test-imports.js",
+      "from": 1,
+      "to": 77,
+      "reason": "Node CJS consumer operations and assertions executed by verify."
+    },
+    {
+      "path": "sdk/test/esm-compatibility/package.json",
+      "from": 1,
+      "to": 21,
+      "reason": "Compatibility setup/copy and test/compile commands using the published ESM condition."
+    },
+    {
+      "path": "sdk/test/esm-compatibility/test-imports.js",
+      "from": 1,
+      "to": 83,
+      "reason": "Node ESM consumer operations and assertions executed by verify."
+    },
+    {
+      "path": "sdk/scripts/publish.ts",
+      "from": 1,
+      "to": 51,
+      "reason": "npm pack dry-run/prepack/publish consumer; read source only, no packaging or network action authorized to picker."
+    },
+    {
+      "path": "sdk/scripts/esm-export-fixup.ts",
+      "from": 1,
+      "to": 132,
+      "reason": "ESM export repair implementation called by build and exercised by its adjacent tests."
+    },
+    {
+      "path": "sdk/src/__tests__/build-esm-fixup.test.ts",
+      "from": 1,
+      "to": 55,
+      "reason": "Export-repair correctness fixtures and Node validation seam."
+    },
+    {
+      "path": "cli/scripts/smoke-binary.ts",
+      "from": 109,
+      "to": 299,
+      "reason": "Smoke environment, bounded capture/scanning and child probe/error/timeout helpers."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1380,
+      "to": 1399,
+      "reason": "Production memory outcome reporter creation and forwarding into agent runtime; learning memory implementation is pair04."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1920,
+      "to": 1968,
+      "reason": "Bound repository callback for playbook counter persistence with failure behavior; distinguish this from config/model proposal promotion."
+    },
+    {
+      "path": "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts",
+      "from": 1,
+      "to": 49,
+      "reason": "Runtime outcome reporting contract connecting real tool gate observations to repository counters."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 3090,
+      "to": 3177,
+      "reason": "Actual playbook gate tool-call producer and reporting consumers; only use as learning-loop boundary context."
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1755,
+      "to": 1809,
+      "reason": "Production persisted playbook effectiveness counter fold; pair04 owns full memory repository semantics."
+    },
+    {
+      "path": "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts",
+      "from": 1,
+      "to": 195,
+      "reason": "Counter callback threading/failure tests at the SDK/runtime seam."
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1934,
+      "to": 1998,
+      "reason": "Actual local model routing rules and explicit-model override; compare any learned-routing claim with config-selected provider behavior."
+    },
+    {
+      "path": "common/src/util/router.ts",
+      "from": 133,
+      "to": 191,
+      "reason": "Agent/task knowledge routing and task classification; distinguish knowledge-file routing from measured model-selection promotion."
+    },
+    {
+      "path": "agents/base2/base-deep.ts",
+      "from": 275,
+      "to": 295,
+      "reason": "Shipped prompt-level lesson/skill writing consumer; inspect whether it implements an autonomous measured promotion loop."
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 144,
+      "to": 153,
+      "reason": "Documented evaluation workflow and its package dependencies."
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 95,
+      "reason": "Declared package invocation, CI discovery/isolation/preload and pinned runtime validation contract."
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 176,
+      "to": 194,
+      "reason": "Documented opt-in mutation/ablation/cross-model experiment commands."
+    },
+    {
+      "path": "sdk/PUBLISHING.md",
+      "from": 1,
+      "to": 55,
+      "reason": "SDK build/verification/publish claims to compare with current scripts and installed-consumer checks."
+    },
+    {
+      "path": "evals/buffbench/README.md",
+      "from": 335,
+      "to": 416,
+      "reason": "Current documented idiom seed, final-check and experimental evaluation workflow claims; no private eval run records."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "evaluation-orchestration-and-oracles",
+      "name": "Task execution, real validation and score provenance",
+      "trace": [
+        "evals/package.json",
+        "evals/buffbench/main.ts",
+        "evals/buffbench/run-buffbench.ts",
+        "evals/buffbench/agent-runner.ts",
+        "evals/buffbench/judge.ts",
+        "evals/buffbench/deterministic-signals.ts"
+      ],
+      "inspect": [
+        "Entrypoint flags, concurrency/repeats/cancellation and repository/binary lifecycle",
+        "Measured zero versus synthetic failure, skipped/dependent checks and missing score evidence",
+        "Task/spec/ground-truth/trace framing, provider failure and diagnostic output bounds",
+        "Per-language task labels and external/native correctness evidence rather than named test presence"
+      ],
+      "tests": [
+        "evals/buffbench/__tests__/run-buffbench.test.ts",
+        "evals/buffbench/__tests__/agent-runner.test.ts",
+        "evals/buffbench/__tests__/judge-calibration.test.ts"
+      ]
+    },
+    {
+      "id": "paired-polyglot-evidence",
+      "name": "Repeat-safe paired comparisons and language-stratified promotion evidence",
+      "trace": [
+        "evals/buffbench/types.ts",
+        "scripts/compare-buffbench-runs.ts",
+        "evals/buffbench/compare-runs.ts",
+        "evals/buffbench/statistics.ts",
+        "evals/buffbench/proposals.ts"
+      ],
+      "inspect": [
+        "Task/run identity, commit SHA collisions, repeated observations and matched versus missing pairs",
+        "Low measured scores/failures, aggregation weighting and error/cost/quality tradeoffs",
+        "Actual bootstrap/Wilcoxon consumer, applicability threshold and validated numeric inputs",
+        "Per-language strata, polyglot workload selection and generated versus held-out benchmark evidence"
+      ],
+      "tests": [
+        "evals/buffbench/__tests__/statistics.test.ts",
+        "evals/buffbench/__tests__/proposals.test.ts"
+      ]
+    },
+    {
+      "id": "learning-proposal-promotion",
+      "name": "Lesson extraction through reviewed candidate change and measured adoption",
+      "trace": [
+        "evals/buffbench/run-buffbench.ts",
+        "evals/buffbench/lessons-extractor.ts",
+        "evals/buffbench/proposals.ts",
+        "sdk/src/run.ts",
+        "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts",
+        "sdk/src/provider-config.ts",
+        "agents/base2/base-deep.ts"
+      ],
+      "inspect": [
+        "Which production callers enable extraction and what generated guidance/proposals are consumed next",
+        "Single-run decision logging versus before/after candidate execution, persistence and rollback",
+        "User model routing, task knowledge routing, playbook outcome counters and optional model-authored lesson/skill edits as distinct mechanisms",
+        "Validation failure, unavailable repository, bad proposal/agent/model/tool, empty lessons and cancellation"
+      ],
+      "tests": [
+        "evals/buffbench/__tests__/run-buffbench.test.ts",
+        "evals/buffbench/__tests__/proposals.test.ts",
+        "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts"
+      ]
+    },
+    {
+      "id": "retention-mutation-quality-oracles",
+      "name": "Deterministic evidence for retained knowledge and safe edit transport",
+      "trace": [
+        "evals/compaction-fidelity/scenario.test.ts",
+        "evals/compaction-retention/scenario.test.ts",
+        "evals/edit-blocks/scenario.test.ts",
+        "scripts/run-mutation-gate.ts",
+        "docs/testing.md"
+      ],
+      "inspect": [
+        "Planted facts, recall/aging/summary authenticity and assertion falsifiability",
+        "Mutation framework invocation versus an integrated surviving-mutant correctness gate",
+        "Fixture/helper tests versus actual generator/process/installed invocation assurance",
+        "Runtime memory and mutation production implementation remains with pairs04/06"
+      ]
+    },
+    {
+      "id": "task-trace-artifact-hygiene",
+      "name": "Evaluation result identity, trace persistence and cleanup",
+      "trace": [
+        "evals/buffbench/run-buffbench.ts",
+        "evals/buffbench/lessons-extractor.ts",
+        "evals/buffbench/trace-utils.ts",
+        "scripts/compare-buffbench-runs.ts"
+      ],
+      "inspect": [
+        "Concurrent/repeated task/run/agent artifact uniqueness and aggregation identity",
+        "Default opt-in traces, named failure statuses, durable failure and missing artifact states",
+        "Output provenance, untrusted task text, directory/filename containment and temporary cleanup",
+        "Do not inspect or quote private historical logs, traces, task errors or credential values"
+      ]
+    },
+    {
+      "id": "ci-performance-provenance",
+      "name": "Actual repository guards and assurance boundaries",
+      "trace": [
+        "package.json",
+        ".github/workflows/ci.yml",
+        "scripts/check-ci-local.ts",
+        "scripts/dependency-provenance-guard.ts",
+        "scripts/measure-perf-guards-baseline.ts",
+        "packages/build-tools/executors/infisical-run/executor.ts",
+        "bunfig.toml",
+        "test/setup-scm-loader.ts"
+      ],
+      "inspect": [
+        "Blocking guard argv versus package-script execution, matrix/empty discovery and retries",
+        "Static YAML tests versus real invoked suites; omissions, flaky attempts and failure propagation",
+        "Behavior/parity/retention bounds versus numeric timing regressions and machine-dependent measurements",
+        "Pinned/ranged/locked runtime/dev/transitive provenance, source records versus independent identity proof",
+        "Legacy build executor registration and actual active consumers"
+      ],
+      "tests": [
+        "scripts/__tests__/ci-workflow.test.ts",
+        "scripts/__tests__/measure-perf-guards-baseline.test.ts"
+      ]
+    },
+    {
+      "id": "sdk-node-and-installed-release",
+      "name": "Public SDK dual-module and installed consumer contracts",
+      "trace": [
+        "sdk/package.json",
+        "sdk/scripts/build.ts",
+        "sdk/scripts/verify.ts",
+        "sdk/smoke-test-dist.ts",
+        "sdk/test/cjs-compatibility/test-imports.js",
+        "sdk/test/esm-compatibility/test-imports.js",
+        ".github/workflows/sdk-release.yml",
+        "sdk/scripts/publish.ts"
+      ],
+      "inspect": [
+        "Node engine/exports/dependency declarations and runtime environment behavior",
+        "Post-build repair, public symbol/ToolHelpers existence versus executable SDK/tool behavior",
+        "Workspace dist, copied package, file reference and npm-packed isolated consumer distinctions",
+        "Build/verify/prepack/publish sequencing and platform/parser/native dependency coverage",
+        "Pair07 owns query/grammar asset omission; use as validation adequacy context"
+      ]
+    },
+    {
+      "id": "cli-native-build-installed-proof",
+      "name": "Compiled CLI and native sidecar CI/release proof",
+      "trace": [
+        "cli/scripts/build-binary.ts",
+        "cli/scripts/smoke-binary.ts",
+        ".github/workflows/cli-release-build.yml",
+        ".github/workflows/rust-workspace.yml",
+        "cli/release/index.js",
+        "cli/release/package.json",
+        "cli/src/__tests__/release-wrapper.test.ts"
+      ],
+      "inspect": [
+        "Host/target/legacy/native-loader build branches and actual smoke predicates",
+        "Direct build output versus archive extraction and real npm wrapper-installed launch",
+        "YAML matrix bool/string conditions and evidence that executable native lanes actually ran",
+        "Checksums/asset verification, installed versions, offline behavior and rollback cleanup",
+        "Pair09 owns stale native exec-stub smoke and supervisor/ExecPlan protocol; do not duplicate those findings"
+      ]
+    }
+  ],
+  "searchCoverage": {
+    "primarySections": 18,
+    "primaryUniqueFiles": 17,
+    "primaryLines": 4971,
+    "secondarySections": 68,
+    "secondaryUniqueFiles": 63,
+    "contextSections": 5,
+    "inventoryFiles": 3056,
+    "retrieval": "Reused pinned INVENTORY.json and RETRIEVAL.json, especially context archive memory learning and commands build test typecheck smoke release. Native query_index/read_files/read_subtree are not exposed in this Codex session; source discovery used rg and selected exact sed/cat reads.",
+    "rootsSearched": [
+      "evals",
+      "scripts",
+      ".github",
+      "packages/build-tools",
+      "test",
+      "sdk/src",
+      "sdk/scripts",
+      "sdk/test",
+      "cli/scripts",
+      "cli/src",
+      "cli/release",
+      "common/src",
+      "packages/agent-runtime/src",
+      "agents",
+      "docs"
+    ],
+    "queries": [
+      "Evaluator runTask/runBuffBench flags/scoring/oracles/trace/artifact writes",
+      "paired bootstrap/Wilcoxon applicability/compare-runs/commit SHA/repeats/language strata",
+      "extractAgentLessons/applyProposals/decideProposalPromotion/agent-lessons and production callers",
+      "playbook gate outcome producer/repository callback; configured model routing versus task knowledge routing",
+      "mutation framework/compaction fidelity/retention/adversarial edit-block oracle",
+      "CI matrix/discovery/isolation/retry/preloads/provenance/performance benchmark consumers",
+      "SDK public Node engines/ESM/CJS exports/build repairs/verify/publish/compatibility test setup",
+      "CLI native/legacy build main/smoke/archive/npm wrapper; Rust host-run conditions and installed proof",
+      "Legacy infisical-run build executor registration and actual consumer search"
+    ],
+    "docsRead": [
+      "agents/patterns/audit-codebase.md",
+      "docs/testing.md",
+      "docs/architecture.md 138-159",
+      "sdk/PUBLISHING.md",
+      "evals/buffbench/README.md 335-370",
+      "AUDIT-CONTRACT.md",
+      "SCOPE.md"
+    ],
+    "verifiedConsumerReads": [
+      {
+        "path": "evals/buffbench/run-buffbench.ts",
+        "from": 135,
+        "to": 330,
+        "detail": "Real lessons/proposal/promotion caller and opt-in persistence boundary."
+      },
+      {
+        "path": "evals/buffbench/run-buffbench.ts",
+        "from": 717,
+        "to": 1112,
+        "detail": "Real evaluator input, aggregation, result metadata and cleanup consumer."
+      },
+      {
+        "path": "evals/buffbench/judge.ts",
+        "from": 338,
+        "to": 507,
+        "detail": "Real judge aggregation and final-check deterministic-clamp consumer."
+      },
+      {
+        "path": "scripts/compare-buffbench-runs.ts",
+        "from": 1,
+        "to": 328,
+        "detail": "Actual comparison CLI reads ANALYSIS artifacts; no recorded data was opened."
+      },
+      {
+        "path": "sdk/scripts/build.ts",
+        "from": 1,
+        "to": 204,
+        "detail": "Actual Node bundle verification and helper repair invocation sequence."
+      },
+      {
+        "path": "sdk/scripts/verify.ts",
+        "from": 89,
+        "to": 145,
+        "detail": "Actual compatibility package install/setup/test consumers."
+      },
+      {
+        "path": "cli/scripts/build-binary.ts",
+        "from": 465,
+        "to": 706,
+        "detail": "Actual CLI main and built-binary smoke branch."
+      },
+      {
+        "path": ".github/workflows/rust-workspace.yml",
+        "from": 1,
+        "to": 148,
+        "detail": "Static native matrix/build/test/smoke/upload contract, not proof of GitHub execution."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1380,
+        "to": 1401,
+        "detail": "Real playbook counter callback created and threaded into runtime."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1920,
+        "to": 1972,
+        "detail": "Real repository-bound playbook outcome persistence helper."
+      }
+    ],
+    "ownershipBoundaries": [
+      "Pair04: actual memory/retention store semantics; pair11 inspects oracles and learning promotion/caller boundaries.",
+      "Pair06: actual mutation commit safety; pair11 inspects test/oracle adequacy.",
+      "Pair07: query/grammar release omission; here validation and installed-proof context only.",
+      "Pair09: native stale exec-stub smoke failure and supervisor/ExecPlan protocol; here CI predicates, assurance and installed artifact proof only."
+    ],
+    "sampling": "18 required bounded sections are the primary auditor slice. Secondary sections are adaptive contracts, consumers, fixtures, tests and docs. The picker records discovery and selections only; it does not produce conclusions, run tests, execute build/release/install commands, access providers/network or mutate source.",
+    "coverageLimits": [
+      "No assertion of whole-file audit or actual GitHub/native/installed package execution from static workflow or fixture tests.",
+      "cli/release/* is omitted by the global pinned inventory release filter. The active public wrapper/manifest are explicit context-only selections without structuralReceipt membership.",
+      "During discovery one overly broad JSON grep unexpectedly matched historical error-record text; no such record is quoted, archived, selected or used as evidence. Subsequent searches use source files and explicit public manifests/golden fixtures.",
+      "Private eval records, existing full logs/traces, credentials, keys and local provider values are excluded from the selected audit slice."
+    ]
+  },
+  "contextFiles": [
+    {
+      "path": "cli/release/index.js",
+      "from": 890,
+      "to": 1065,
+      "reason": "Supplemental active npm wrapper: verified download, extraction and installed-binary replacement. Excluded by pinned inventory release filter; no structuralReceipt membership. Asset omissions are pair07.",
+      "structuralReceiptMembership": false,
+      "inventoryMember": false
+    },
+    {
+      "path": "cli/release/index.js",
+      "from": 1124,
+      "to": 1279,
+      "reason": "Supplemental actual binary-existence/version/platform/asset repair gate. Assess installed-proof boundaries, while pair07 owns grammar/query asset completeness.",
+      "structuralReceiptMembership": false,
+      "inventoryMember": false
+    },
+    {
+      "path": "cli/release/index.js",
+      "from": 1630,
+      "to": 1757,
+      "reason": "Supplemental real wrapper entrypoint, binary launch and exit/crash handling; no structuralReceipt membership because inventory excludes cli/release/*.",
+      "structuralReceiptMembership": false,
+      "inventoryMember": false
+    },
+    {
+      "path": "cli/release/package.json",
+      "from": 1,
+      "to": 55,
+      "reason": "Supplemental public npm CLI manifest/engine/bin/files/install contract, excluded by pinned inventory release filter.",
+      "structuralReceiptMembership": false,
+      "inventoryMember": false
+    },
+    {
+      "path": "rust/scripts/smoke-test-sidecar.sh",
+      "from": 1,
+      "to": 56,
+      "reason": "Pair09-owned validation context: current smoke contract and root-reported stale exec-stub failure after real native exec. Avoid duplicate audit of the Rust execution implementation.",
+      "structuralReceiptMembership": false,
+      "inventoryMember": true
+    }
+  ]
+}

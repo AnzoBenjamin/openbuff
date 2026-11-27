@@ -131,55 +131,53 @@ describe('handleCodeSearch memory-first', () => {
     expect(agentState.discoveryCoverage).toBeUndefined()
   })
 
-  test('skips the client call on full cover and serves a receipt output', async () => {
+  test('probe: TODO|FIXME in src with only src/auth/login.ts in memory runs the real search', async () => {
+    // read-search-01 negative case. Before the fix, the memory excerpt was
+    // printed as stdout even though it does not match the pattern.
     const agentState = buildVerifiedState(['src/auth/login.ts'])
-    const toolCall = buildToolCall({ paths: ['src/auth/login.ts'] })
-    let clientCalls = 0
-    const output = buildOutput()
-
+    const toolCall = buildToolCall({ pattern: 'TODO|FIXME', cwd: 'src' })
+    const filesystemResult = [
+      { type: 'json', value: { stdout: '', message: 'No matches' } },
+    ] as unknown as CodebuffToolOutput<'code_search'>
+    const seen: Array<ClientToolCall<'code_search'>> = []
     const { output: returned } = await invoke({
       agentState,
-      output,
+      output: filesystemResult,
       toolCall,
-      onClientCall: () => {
-        clientCalls += 1
+      onClientCall: (call) => {
+        seen.push(call)
       },
     })
+    expect(seen).toHaveLength(1)
+    expect(seen[0].input).toEqual(toolCall.input)
+    expect(returned).toEqual(filesystemResult)
+    expect(agentState.memoryReuse?.skip ?? 0).toBe(0)
+    expect(agentState.memoryReuse?.narrow ?? 0).toBe(0)
+  })
 
-    expect(clientCalls).toBe(0)
-    const value = (returned as unknown as Array<{ type: string; value: Record<string, unknown> }>)[0]
-      .value as { stdout: string; message: string }
-    expect(typeof value.stdout).toBe('string')
-    expect(typeof value.message).toBe('string')
-    expect(value.stdout).toContain('src/auth/login.ts')
-    expect(value.message).toContain('verified memory')
-    // Skip still records coverage best-effort without throwing.
+  test('full memory cover of the scope still issues the real call', async () => {
+    const agentState = buildVerifiedState(['src/auth/login.ts'])
+    for (const toolCall of [
+      buildToolCall({ paths: ['src/auth/login.ts'] }),
+      buildToolCall({ cwd: 'src/auth/login.ts' }),
+    ]) {
+      let clientCalls = 0
+      const output = buildOutput()
+      const { output: returned } = await invoke({
+        agentState,
+        output,
+        toolCall,
+        onClientCall: () => {
+          clientCalls += 1
+        },
+      })
+      expect(clientCalls).toBe(1)
+      expect(returned).toEqual(output)
+    }
     expect(agentState.discoveryCoverage).toBeDefined()
   })
 
-  test('skips on full cover via cwd scope', async () => {
-    const agentState = buildVerifiedState(['src/auth/login.ts'])
-    const toolCall = buildToolCall({ cwd: 'src/auth/login.ts' })
-    let clientCalls = 0
-    const output = buildOutput()
-
-    const { output: returned } = await invoke({
-      agentState,
-      output,
-      toolCall,
-      onClientCall: () => {
-        clientCalls += 1
-      },
-    })
-
-    expect(clientCalls).toBe(0)
-    const value = (returned as unknown as Array<{ type: string; value: Record<string, unknown> }>)[0]
-      .value as { stdout: string; message: string }
-    expect(value.stdout).toContain('src/auth/login.ts')
-    expect(agentState.discoveryCoverage).toBeDefined()
-  })
-
-  test('narrows paths on partial cover', async () => {
+  test('partial cover does not narrow the search scope', async () => {
     const agentState = buildVerifiedState(['src/auth/login.ts'])
     const toolCall = buildToolCall({
       paths: ['src/auth/login.ts', 'src/other/file.ts'],
@@ -198,7 +196,10 @@ describe('handleCodeSearch memory-first', () => {
 
     expect(returned).toEqual(output)
     expect(seen).toHaveLength(1)
-    expect(seen[0].input.paths).toEqual(['src/other/file.ts'])
+    expect(seen[0].input.paths).toEqual([
+      'src/auth/login.ts',
+      'src/other/file.ts',
+    ])
   })
 
   test('proceeds full on stale cover', async () => {

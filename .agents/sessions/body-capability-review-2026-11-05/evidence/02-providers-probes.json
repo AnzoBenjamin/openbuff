@@ -1,0 +1,108 @@
+{
+  "kind": "offline-current-behavior-probes",
+  "noExternalApiCalls": true,
+  "noPrivateConfigOrCredentialReads": true,
+  "observations": [
+    {
+      "id": "late-tool-usage",
+      "assurance": "real SDK stream + production configured model + injected HTTP/SSE",
+      "requestIncludesUsage": false,
+      "observedCostCents": [
+        0
+      ],
+      "observedUsage": [
+        {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedInputTokens": 0,
+          "totalTokens": 0
+        }
+      ],
+      "offeredProviderUsage": {
+        "prompt_tokens": 20000,
+        "completion_tokens": 10000,
+        "total_tokens": 30000
+      },
+      "expectedConfiguredCostCents": 21,
+      "toolCallsDelivered": 1
+    },
+    {
+      "id": "strip-provider-metadata-cost-gate",
+      "assurance": "real SDK stream + production configured model + injected HTTP/SSE",
+      "observedCostCents": [],
+      "observedUsage": [
+        {
+          "inputTokens": 20000,
+          "outputTokens": 10000,
+          "cachedInputTokens": 0,
+          "totalTokens": 30000
+        }
+      ],
+      "expectedConfiguredCostCents": 21
+    },
+    {
+      "id": "http-retry-wrapper-disables-failover",
+      "assurance": "real SDK stream + production configured model + injected HTTP",
+      "requests": [
+        "primary",
+        "primary",
+        "primary",
+        "primary"
+      ],
+      "finalErrorName": "AI_RetryError",
+      "classifierStatus": null,
+      "wrappedLastErrorStatus": 503,
+      "backupCalls": 0
+    },
+    {
+      "id": "sse-status-loss",
+      "assurance": "real SDK stream + production configured model + injected SSE",
+      "requests": [
+        "primary"
+      ],
+      "providerStatus": "503",
+      "finalErrorName": "OpenAICompatibleStreamError",
+      "classifierStatus": null,
+      "finalMessage": "Upstream provider failure {\"code\":\"upstream_error\",\"status\":\"503\"}"
+    },
+    {
+      "id": "context-preflight-backup-credential-coupling",
+      "assurance": "real routing/context resolver + real SDK stream + injected HTTP guard",
+      "primaryRoutable": "local/primary",
+      "fetchCalls": 0,
+      "finalMessage": "Missing environment variable 'OPENBUFF_AUDIT_02_MISSING_KEY' required for configured provider 'backup' and model 'backup/emergency'."
+    },
+    {
+      "id": "reasoning-provider-options-namespace",
+      "assurance": "real routing + real SDK stream + production configured model + injected HTTP",
+      "providerId": "local",
+      "selectedReasoningEffort": "high",
+      "wireReasoningEffort": null
+    },
+    {
+      "id": "configured-oauth-ignores-skip",
+      "assurance": "real model resolver + injected credential function, no credential reads or HTTP",
+      "skipChatGptOAuth": true,
+      "selectedOAuth": true,
+      "selectedModel": "codex/gpt-5.5"
+    },
+    {
+      "id": "stream-loop-bypasses-shared-retry-classifier",
+      "assurance": "real SDK stream loop + injected stream/error + injected wait",
+      "sharedClassifier": {
+        "retryable": false
+      },
+      "streamCalls": 4,
+      "backoffCalls": 3,
+      "expectedPolicyCalls": 1
+    },
+    {
+      "id": "advisory-tools-metadata",
+      "assurance": "real routing + real SDK stream + production configured model + injected HTTP",
+      "declaredModelToolsSupported": false,
+      "actualProviderSupportsTools": true,
+      "wireHasNativeTools": true,
+      "assessment": "Capability metadata is not per-model transport negotiation; provider-level compatibility.supportsTools is the actual control. Record as completeness limit rather than assuming a security vulnerability."
+    }
+  ]
+}

@@ -6,6 +6,11 @@ import {
   getContentHash,
   getExactContentHash,
 } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawLineSpan,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { handleRewriteSymbol } from '../tools/handlers/tool/rewrite-symbol'
 
@@ -593,26 +598,39 @@ describe('rewrite_symbol handler', () => {
     const capability = (params: {
       startLine: number
       endLine: number
-      content: string
+      rawContent?: string
       path?: string
-    }) =>
-      encodeReadCapabilityToken({
+    }) => {
+      const document = captureTextDocument(params.rawContent ?? source)
+      const span = getRawLineSpan(document, params.startLine, params.endLine)
+      return encodeReadCapabilityToken({
         startLine: params.startLine,
         endLine: params.endLine,
-        hash: getContentHash(params.content),
+        hash: getContentHash(
+          document.observation.slice(
+            span.startObservationOffset,
+            span.endObservationOffset,
+          ),
+        ),
         scope: {
           projectId: PROJECT_ROOT,
           path: params.path ?? 'svc.ts',
           runId: RUN_ID,
         },
+        rawBasis: getRawReadBasis(
+          document,
+          params.startLine,
+          params.endLine,
+          'lines',
+        ),
       })
+    }
     const beforeHash = getExactContentHash(source)
     const attempts = [
       {
         readCapability: capability({
           startLine: 1,
           endLine: 4,
-          content: symbolContent,
         }),
         shouldSucceed: true,
       },
@@ -620,7 +638,6 @@ describe('rewrite_symbol handler', () => {
         readCapability: capability({
           startLine: 1,
           endLine: 5,
-          content: `${symbolContent}\nexport const tail = 2`,
         }),
         shouldSucceed: false,
       },
@@ -628,7 +645,6 @@ describe('rewrite_symbol handler', () => {
         readCapability: capability({
           startLine: 2,
           endLine: 4,
-          content: 'export function greet() {\n  return 1\n}',
         }),
         shouldSucceed: false,
       },
@@ -636,7 +652,6 @@ describe('rewrite_symbol handler', () => {
         readCapability: capability({
           startLine: 1,
           endLine: 4,
-          content: symbolContent,
           path: 'other.ts',
         }),
         shouldSucceed: false,
@@ -645,7 +660,25 @@ describe('rewrite_symbol handler', () => {
         readCapability: capability({
           startLine: 1,
           endLine: 4,
-          content: '/** stale */\nexport function greet() {\n  return 1\n}',
+          rawContent:
+            '/** stale */\nexport function greet() {\n  return 1\n}\nexport const tail = 2\n',
+        }),
+        shouldSucceed: false,
+      },
+      {
+        readCapability: capability({
+          startLine: 1,
+          endLine: 4,
+          rawContent: source.replaceAll('\n', '\r\n'),
+        }),
+        shouldSucceed: false,
+      },
+      {
+        readCapability: encodeReadCapabilityToken({
+          startLine: 1,
+          endLine: 4,
+          hash: getContentHash(symbolContent),
+          scope: { projectId: PROJECT_ROOT, path: 'svc.ts', runId: RUN_ID },
         }),
         shouldSucceed: false,
       },
@@ -658,8 +691,14 @@ describe('rewrite_symbol handler', () => {
       state.readAuthorizationHashesByPath = {
         'svc.ts': getContentHash(source),
       }
+      state.rawReadAuthorizationHashesByPath = {
+        'svc.ts': getExactContentHash(source),
+      }
       state.modelVisibleReadAuthorizationHashesByPath = {
         'svc.ts': getContentHash(source),
+      }
+      state.modelVisibleRawReadAuthorizationHashesByPath = {
+        'svc.ts': getExactContentHash(source),
       }
       const result = await handleRewriteSymbol({
         previousToolCallFinished: Promise.resolve(),
@@ -749,6 +788,12 @@ describe('rewrite_symbol handler', () => {
         expect(
           state.modelVisibleReadAuthorizationHashesByPath?.['svc.ts'],
         ).toBe(getContentHash(source))
+        expect(state.rawReadAuthorizationHashesByPath?.['svc.ts']).toBe(
+          getExactContentHash(source),
+        )
+        expect(
+          state.modelVisibleRawReadAuthorizationHashesByPath?.['svc.ts'],
+        ).toBe(getExactContentHash(source))
       } else {
         expect(clientCallCount).toBe(0)
         expect(state.failedEditRequiresReadByPath['svc.ts']).toBe(true)
@@ -760,6 +805,12 @@ describe('rewrite_symbol handler', () => {
         expect(state.readAuthorizationHashesByPath?.['svc.ts']).toBeUndefined()
         expect(
           state.modelVisibleReadAuthorizationHashesByPath?.['svc.ts'],
+        ).toBeUndefined()
+        expect(
+          state.rawReadAuthorizationHashesByPath?.['svc.ts'],
+        ).toBeUndefined()
+        expect(
+          state.modelVisibleRawReadAuthorizationHashesByPath?.['svc.ts'],
         ).toBeUndefined()
       }
     }

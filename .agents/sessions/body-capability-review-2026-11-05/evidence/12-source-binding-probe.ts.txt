@@ -1,0 +1,146 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import {
+  inspectCodebaseStructureTool,
+  evaluateAuditCoverageTool,
+} from '/home/ben/Code/CLI/openbuff/sdk/src/tools/audit-intelligence.ts'
+import {
+  auditDomains,
+  inspectCodebaseStructure,
+} from '/home/ben/Code/CLI/openbuff/sdk/src/services/audit-intelligence.ts'
+import { evaluateAuditCoverageParams } from '/home/ben/Code/CLI/openbuff/common/src/tools/params/tool/audit-intelligence.ts'
+import {
+  collectReviewerAttestationIssues,
+  collectReviewerBlockers,
+  collectReviewerFingerprintDrift,
+  getReviewerFinalizationVerdict,
+  isLightweightReceiptEligible,
+} from '/home/ben/Code/CLI/openbuff/agents/base2/gate-reviewer.ts'
+import reviewer from '/home/ben/Code/CLI/openbuff/agents/reviewer/code-reviewer.ts'
+import { reviewerVerdictIssue } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/reviewer-output.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = fs.mkdtempSync(path.join(evidenceDir, '12-source-binding-fixture-'))
+const source = 'export function ready(input: unknown) { if (typeof input !== "string") throw new Error("input"); return input.trim() }\n'
+for (const [file, content] of Object.entries({
+  'index.ts': source,
+  'consumer.ts': 'import { ready } from "./index"; export const consumer = ready(" value ")\n',
+  'index.test.ts': 'import { test, expect } from "bun:test"; import { ready } from "./index"; test("ready", () => { expect(ready(" value ")).toBe("value"); expect(() => ready(null)).toThrow() })\n',
+  'README.md': '# Ready\nUse ready to normalize a string; non-string input fails.\n',
+})) fs.writeFileSync(path.join(fixtureRoot, file), content)
+
+const inventoryPart = inspectCodebaseStructureTool(fixtureRoot)[0]
+if (inventoryPart?.type !== 'json') throw new Error('missing inventory JSON')
+const inventory = inventoryPart.value as ReturnType<typeof inspectCodebaseStructure>
+const input = {
+  snapshot_id: inventory.snapshotId,
+  structural_receipts: [{
+    schema_version: 1 as const,
+    snapshot_id: inventory.snapshotId,
+    shard_id: 'source-binding',
+    subsystem_ids: ['.'],
+    files: inventory.files,
+    domains: [...auditDomains],
+  }],
+  features: [{
+    schema_version: 1 as const,
+    snapshot_id: inventory.snapshotId,
+    feature: 'ready',
+    evidence_kind: 'verified' as const,
+    evidence: {
+      entrypoints: ['index.ts'], implementation: ['index.ts'],
+      consumers: ['consumer.ts'], tests: ['index.test.ts'],
+      docs: ['README.md'], failure_states: ['index.ts'],
+    },
+  }],
+}
+const asValue = (parts: unknown[]) => (parts[0] as { value: unknown }).value
+const baseline = asValue(evaluateAuditCoverageTool(fixtureRoot, input))
+const honestAbsenceInput = {
+  ...input,
+  features: [{
+    ...input.features[0], feature: 'known absent action',
+    evidence: { entrypoints: [], implementation: [], consumers: [], tests: [], docs: ['README.md'], failure_states: [] },
+  }],
+  out_of_scope: [{ id: 'known absent action', reason: 'Every fixture source was inspected; this action is not implemented.' }],
+}
+const honestAbsence = asValue(evaluateAuditCoverageTool(fixtureRoot, honestAbsenceInput))
+const mismatchedFeatureInput = {
+  ...input,
+  features: [{ ...input.features[0], snapshot_id: 'foreign-feature-snapshot' }],
+}
+const mismatchedFeatureSchemaAccepted = evaluateAuditCoverageParams.inputSchema.safeParse(mismatchedFeatureInput).success
+const mismatchedFeature = asValue(evaluateAuditCoverageTool(fixtureRoot, mismatchedFeatureInput))
+fs.writeFileSync(path.join(fixtureRoot, 'index.ts'), 'export function ready() { throw new Error("changed implementation") }\n')
+const freshInventory = inspectCodebaseStructure(fixtureRoot)
+const staleCachedInventory = asValue(evaluateAuditCoverageTool(fixtureRoot, input))
+
+const expectedFingerprint = 'v3:' + 'a'.repeat(64)
+const foreignFingerprint = 'v3:' + 'b'.repeat(64)
+const pendingFiles = ['common/src/types/contracts/api-schema.ts']
+const fullReceipt = {
+  schemaVersion: 1, family: 'reviewer', verdict: 'LOOKS_GOOD',
+  snapshotFingerprint: foreignFingerprint, reviewedFiles: pendingFiles,
+  coverage: 'covered', findings: [],
+  dimensions: { correctness: 'pass', security: 'pass', tests: 'pass', apiCompatibility: 'pass', performance: 'pass' },
+  requirementCoverage: [{ requirement: 'Preserve API behavior', status: 'satisfied', evidence: ['old source read'] }],
+}
+const omittedReceipt = {
+  schemaVersion: 1, family: 'reviewer', verdict: 'LOOKS_GOOD',
+  snapshotFingerprint: expectedFingerprint, reviewedFiles: pendingFiles,
+  coverage: 'covered', dimensions: {},
+}
+const schema = reviewer.outputSchema as { required: string[]; properties: Record<string, { required?: string[] }> }
+const output = {
+  method: 'Public SDK audit wrappers and exported reviewer gate helpers; isolated local fixtures; no model/network calls or private configuration reads.',
+  fixtureRoot,
+  nestedFeatureSnapshot: {
+    outerSnapshot: inventory.snapshotId,
+    nestedFeatureSnapshot: mismatchedFeatureInput.features[0].snapshot_id,
+    schemaAccepted: mismatchedFeatureSchemaAccepted,
+    baseline,
+    mismatchedFeature,
+  },
+  coverageReadinessSeparation: {
+    everyInventoriedFileAndDomainDeclared: true,
+    assessedFeatureMaturity: 'absent',
+    negativeEvidenceRecorded: true,
+    result: honestAbsence,
+    interpretation: 'The API has no assessed-absence coverage state: it requires populated implementation/consumer/test categories even when absence is the correct audit conclusion; feature out-of-scope is not applied to this check.',
+  },
+  cachedSourceDrift: {
+    pinnedSnapshot: inventory.snapshotId,
+    freshSnapshot: freshInventory.snapshotId,
+    sourceChanged: freshInventory.snapshotId !== inventory.snapshotId,
+    resultAgainstCachedInventory: staleCachedInventory,
+  },
+  reviewerForeignFingerprint: {
+    expectedFingerprint, foreignFingerprint, pendingFiles,
+    attestationIssues: collectReviewerAttestationIssues(fullReceipt, expectedFingerprint, pendingFiles),
+    blockers: collectReviewerBlockers(fullReceipt),
+    finalizationVerdict: getReviewerFinalizationVerdict(fullReceipt),
+    telemetryDrift: collectReviewerFingerprintDrift(fullReceipt, expectedFingerprint),
+  },
+  reviewerOmittedAssessment: {
+    receipt: omittedReceipt,
+    lightweightEligible: isLightweightReceiptEligible(pendingFiles),
+    missingRequiredTopLevelFields: schema.required.filter(key => !(key in omittedReceipt)),
+    dimensionRequiredKeys: schema.properties.dimensions.required ?? [],
+    requirementsRequired: schema.required.includes('requirementCoverage'),
+    runtimeVerdictIssue: reviewerVerdictIssue('code-reviewer', omittedReceipt) ?? null,
+    attestationIssues: collectReviewerAttestationIssues(omittedReceipt, expectedFingerprint, pendingFiles),
+    blockers: collectReviewerBlockers(omittedReceipt),
+    finalizationVerdict: getReviewerFinalizationVerdict(omittedReceipt),
+  },
+  limits: ['Reviewer helper results demonstrate accepted evidence shapes; this probe does not invoke a model or measure the frequency of reviewer omissions.', 'The cached-drift probe changes bytes below the hash cap; it is separate from the existing root capped-prefix and excluded-source probes.'],
+}
+fs.writeFileSync(path.join(evidenceDir, '12-source-binding-probe.json'), JSON.stringify(output, null, 2) + '\n')
+console.log(JSON.stringify({
+  nestedFeatureSchemaAccepted: mismatchedFeatureSchemaAccepted,
+  nestedFeatureResult: mismatchedFeature,
+  sourceChanged: output.cachedSourceDrift.sourceChanged,
+  cachedSourceResult: staleCachedInventory,
+  foreignReviewer: output.reviewerForeignFingerprint,
+  omittedReviewer: output.reviewerOmittedAssessment,
+  assessedAbsence: output.coverageReadinessSeparation,
+}, null, 2))

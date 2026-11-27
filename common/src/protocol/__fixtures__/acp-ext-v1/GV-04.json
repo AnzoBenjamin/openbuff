@@ -1,0 +1,88 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "session/new",
+    "params": {
+      "cwd": "/home/dev/proj",
+      "mcpServers": []
+    }
+  },
+  "result": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "configOptions": [
+        {
+          "id": "mode",
+          "name": "Mode",
+          "category": "mode",
+          "type": "select",
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default"
+            },
+            {
+              "value": "plan",
+              "name": "Plan"
+            }
+          ]
+        },
+        {
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select",
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Route default"
+            }
+          ]
+        },
+        {
+          "id": "thought_level",
+          "name": "Reasoning",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "auto",
+          "options": [
+            {
+              "value": "auto",
+              "name": "Auto"
+            },
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ]
+        }
+      ],
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default"
+          },
+          {
+            "id": "plan",
+            "name": "Plan"
+          }
+        ]
+      }
+    }
+  }
+}

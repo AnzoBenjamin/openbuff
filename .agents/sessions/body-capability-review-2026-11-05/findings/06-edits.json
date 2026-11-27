@@ -1,0 +1,1802 @@
+{
+  "shardId": "06-edits",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "06-edits",
+    "subsystemIds": [
+      ".",
+      "agents",
+      "sdk",
+      "packages",
+      "common",
+      "cli",
+      "docs"
+    ],
+    "files": [
+      "agents/base2/base2.ts",
+      "agents/base2/tool-tiers.ts",
+      "cli/src/components/tools/edit-transaction.tsx",
+      "cli/src/components/tools/semantic-edit-tools.tsx",
+      "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "cli/src/utils/create-run-config.ts",
+      "cli/src/utils/index-workspace-watcher.ts",
+      "common/src/actions.ts",
+      "common/src/tools/list.ts",
+      "common/src/tools/params/tool/code-action.ts",
+      "common/src/tools/params/tool/edit-transaction.ts",
+      "common/src/tools/params/tool/rename-symbol.ts",
+      "common/src/tools/results/filesystem.ts",
+      "common/src/types/filesystem.ts",
+      "common/src/util/content-hash.ts",
+      "common/src/util/line-coordinates.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/deterministic-edit-system.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "package.json",
+      "packages/agent-runtime/package.json",
+      "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts",
+      "packages/agent-runtime/src/__tests__/process-str-replace.test.ts",
+      "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts",
+      "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts",
+      "packages/agent-runtime/src/process-edit-transaction.ts",
+      "packages/agent-runtime/src/process-str-replace.ts",
+      "packages/agent-runtime/src/structural-read.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts",
+      "packages/agent-runtime/src/util/base2-tool-tiers.ts",
+      "sdk/package.json",
+      "sdk/src/__tests__/change-file.test.ts",
+      "sdk/src/__tests__/language-intelligence.test.ts",
+      "sdk/src/__tests__/lsp-multiplexer.test.ts",
+      "sdk/src/__tests__/mutation-capabilities.test.ts",
+      "sdk/src/__tests__/read-files.test.ts",
+      "sdk/src/__tests__/run-mutation-dispatch.test.ts",
+      "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "sdk/src/run.ts",
+      "sdk/src/services/language-intelligence.ts",
+      "sdk/src/services/lsp-multiplexer.ts",
+      "sdk/src/services/workspace-mutation-broker.ts",
+      "sdk/src/tools/__tests__/transaction-intent-log.test.ts",
+      "sdk/src/tools/change-file.ts",
+      "sdk/src/tools/code-action.ts",
+      "sdk/src/tools/filesystem-authority.ts",
+      "sdk/src/tools/mutation-capabilities.ts",
+      "sdk/src/tools/node-filesystem.ts",
+      "sdk/src/tools/read-files.ts",
+      "sdk/src/tools/rename-symbol.ts",
+      "sdk/src/tools/semantic-edit-apply.ts",
+      "sdk/src/tools/transaction-intent-log.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 430,
+      "to": 489
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 595,
+      "to": 614
+    },
+    {
+      "path": "agents/base2/tool-tiers.ts",
+      "from": 1,
+      "to": 201
+    },
+    {
+      "path": "cli/src/components/tools/edit-transaction.tsx",
+      "from": 309,
+      "to": 380
+    },
+    {
+      "path": "cli/src/components/tools/edit-transaction.tsx",
+      "from": 470,
+      "to": 587
+    },
+    {
+      "path": "cli/src/components/tools/semantic-edit-tools.tsx",
+      "from": 40,
+      "to": 272
+    },
+    {
+      "path": "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "from": 1,
+      "to": 100
+    },
+    {
+      "path": "cli/src/utils/create-run-config.ts",
+      "from": 217,
+      "to": 330
+    },
+    {
+      "path": "cli/src/utils/index-workspace-watcher.ts",
+      "from": 1,
+      "to": 253
+    },
+    {
+      "path": "common/src/actions.ts",
+      "from": 1,
+      "to": 113
+    },
+    {
+      "path": "common/src/tools/list.ts",
+      "from": 78,
+      "to": 138
+    },
+    {
+      "path": "common/src/tools/params/tool/code-action.ts",
+      "from": 1,
+      "to": 51
+    },
+    {
+      "path": "common/src/tools/params/tool/edit-transaction.ts",
+      "from": 185,
+      "to": 338
+    },
+    {
+      "path": "common/src/tools/params/tool/edit-transaction.ts",
+      "from": 574,
+      "to": 650
+    },
+    {
+      "path": "common/src/tools/params/tool/rename-symbol.ts",
+      "from": 1,
+      "to": 49
+    },
+    {
+      "path": "common/src/tools/results/filesystem.ts",
+      "from": 173,
+      "to": 700
+    },
+    {
+      "path": "common/src/tools/results/filesystem.ts",
+      "from": 930,
+      "to": 1210
+    },
+    {
+      "path": "common/src/types/filesystem.ts",
+      "from": 1,
+      "to": 179
+    },
+    {
+      "path": "common/src/util/content-hash.ts",
+      "from": 1,
+      "to": 215
+    },
+    {
+      "path": "common/src/util/line-coordinates.ts",
+      "from": 1,
+      "to": 245
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 998,
+      "to": 1224
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 49,
+      "to": 55
+    },
+    {
+      "path": "docs/deterministic-edit-system.md",
+      "from": 30,
+      "to": 160
+    },
+    {
+      "path": "docs/deterministic-edit-system.md",
+      "from": 302,
+      "to": 443
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 218,
+      "to": 253
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 125
+    },
+    {
+      "path": "package.json",
+      "from": 1,
+      "to": 80
+    },
+    {
+      "path": "packages/agent-runtime/package.json",
+      "from": 1,
+      "to": 42
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts",
+      "from": 232,
+      "to": 437
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/process-str-replace.test.ts",
+      "from": 69,
+      "to": 111
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts",
+      "from": 1389,
+      "to": 1450
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts",
+      "from": 431,
+      "to": 589
+    },
+    {
+      "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+      "from": 182,
+      "to": 457
+    },
+    {
+      "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+      "from": 726,
+      "to": 885
+    },
+    {
+      "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+      "from": 1073,
+      "to": 1376
+    },
+    {
+      "path": "packages/agent-runtime/src/process-str-replace.ts",
+      "from": 310,
+      "to": 572
+    },
+    {
+      "path": "packages/agent-runtime/src/process-str-replace.ts",
+      "from": 976,
+      "to": 1004
+    },
+    {
+      "path": "packages/agent-runtime/src/process-str-replace.ts",
+      "from": 1320,
+      "to": 1430
+    },
+    {
+      "path": "packages/agent-runtime/src/structural-read.ts",
+      "from": 76,
+      "to": 193
+    },
+    {
+      "path": "packages/agent-runtime/src/structural-read.ts",
+      "from": 345,
+      "to": 525
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts",
+      "from": 127,
+      "to": 223
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts",
+      "from": 328,
+      "to": 430
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+      "from": 421,
+      "to": 990
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+      "from": 1350,
+      "to": 1540
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+      "from": 170,
+      "to": 381
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts",
+      "from": 1,
+      "to": 195
+    },
+    {
+      "path": "packages/agent-runtime/src/util/base2-tool-tiers.ts",
+      "from": 1,
+      "to": 190
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "sdk/src/__tests__/change-file.test.ts",
+      "from": 349,
+      "to": 397
+    },
+    {
+      "path": "sdk/src/__tests__/change-file.test.ts",
+      "from": 554,
+      "to": 604
+    },
+    {
+      "path": "sdk/src/__tests__/change-file.test.ts",
+      "from": 1014,
+      "to": 1140
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 1,
+      "to": 95
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 306,
+      "to": 508
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 1231,
+      "to": 1324
+    },
+    {
+      "path": "sdk/src/__tests__/lsp-multiplexer.test.ts",
+      "from": 1,
+      "to": 155
+    },
+    {
+      "path": "sdk/src/__tests__/mutation-capabilities.test.ts",
+      "from": 1,
+      "to": 92
+    },
+    {
+      "path": "sdk/src/__tests__/read-files.test.ts",
+      "from": 441,
+      "to": 469
+    },
+    {
+      "path": "sdk/src/__tests__/run-mutation-dispatch.test.ts",
+      "from": 333,
+      "to": 410
+    },
+    {
+      "path": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "from": 37,
+      "to": 192
+    },
+    {
+      "path": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "from": 284,
+      "to": 370
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 930,
+      "to": 985
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1610,
+      "to": 1645
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2588,
+      "to": 2601
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3024,
+      "to": 3323
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 1,
+      "to": 448
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 560,
+      "to": 650
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 736,
+      "to": 816
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 64,
+      "to": 115
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 300,
+      "to": 465
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 570,
+      "to": 660
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 750,
+      "to": 825
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1057,
+      "to": 1193
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1270,
+      "to": 1375
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 1,
+      "to": 120
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 216,
+      "to": 527
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 554,
+      "to": 849
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 884,
+      "to": 1042
+    },
+    {
+      "path": "sdk/src/tools/__tests__/transaction-intent-log.test.ts",
+      "from": 970,
+      "to": 1060
+    },
+    {
+      "path": "sdk/src/tools/change-file.ts",
+      "from": 1,
+      "to": 919
+    },
+    {
+      "path": "sdk/src/tools/change-file.ts",
+      "from": 950,
+      "to": 1268
+    },
+    {
+      "path": "sdk/src/tools/code-action.ts",
+      "from": 1,
+      "to": 31
+    },
+    {
+      "path": "sdk/src/tools/filesystem-authority.ts",
+      "from": 310,
+      "to": 440
+    },
+    {
+      "path": "sdk/src/tools/filesystem-authority.ts",
+      "from": 480,
+      "to": 777
+    },
+    {
+      "path": "sdk/src/tools/mutation-capabilities.ts",
+      "from": 1,
+      "to": 92
+    },
+    {
+      "path": "sdk/src/tools/node-filesystem.ts",
+      "from": 1,
+      "to": 180
+    },
+    {
+      "path": "sdk/src/tools/read-files.ts",
+      "from": 263,
+      "to": 930
+    },
+    {
+      "path": "sdk/src/tools/rename-symbol.ts",
+      "from": 1,
+      "to": 33
+    },
+    {
+      "path": "sdk/src/tools/semantic-edit-apply.ts",
+      "from": 1,
+      "to": 189
+    },
+    {
+      "path": "sdk/src/tools/transaction-intent-log.ts",
+      "from": 1,
+      "to": 190
+    },
+    {
+      "path": "sdk/src/tools/transaction-intent-log.ts",
+      "from": 435,
+      "to": 460
+    },
+    {
+      "path": "sdk/src/tools/transaction-intent-log.ts",
+      "from": 675,
+      "to": 736
+    },
+    {
+      "path": "sdk/src/tools/transaction-intent-log.ts",
+      "from": 993,
+      "to": 1534
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "read-authority",
+      "name": "Complete-only authenticated read authority",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          "common/src/tools/list.ts:124",
+          "packages/agent-runtime/src/util/base2-tool-tiers.ts:30"
+        ],
+        "implementation": [
+          "sdk/src/tools/read-files.ts:666",
+          "common/src/util/content-hash.ts:119",
+          "packages/agent-runtime/src/tools/handlers/tool/read-files.ts:223"
+        ],
+        "consumer": [
+          "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:622",
+          "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:812"
+        ],
+        "tests": [
+          "sdk/src/__tests__/read-files.test.ts:441",
+          "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts:1389"
+        ],
+        "docs": [
+          "docs/deterministic-edit-system.md:30",
+          "docs/request-flow.md:218"
+        ]
+      },
+      "evidence": [
+        "sdk/src/tools/read-files.ts:666",
+        "common/src/util/content-hash.ts:119",
+        "packages/agent-runtime/src/tools/handlers/tool/read-files.ts:223",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:622",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:812"
+      ],
+      "strengths": [
+        "HMAC cap.v3 binds project/path/run and observed normalized content; authentication is not a reconstructable checksum.",
+        "Complete-only minting and separate scoped versus whole-file authority constrain destructive overwrites.",
+        "Post-apply anchors can avoid redundant rereads after exact after-state verification; unique-match reanchoring refuses ambiguity and scan-budget exhaustion."
+      ],
+      "gaps": [
+        "Byte/BOM behavior is partial (F7); the oversized reader is not memory-bounded (F11).",
+        "Only sampled tests were inspected; this audit did not rerun full strict-authority suites."
+      ],
+      "states": {
+        "loading": "Reads await previous edit completion and snapshots use bounded concurrency.",
+        "failure": "Per-selector blocked/not_found/binary/unsupported_encoding/too_large/io_error results; incomplete results mint no edit anchor.",
+        "empty": "Complete paths reads can observe an empty file; an empty range is invalid.",
+        "cancellation": "Scheduling checks AbortSignal; filesystem methods themselves do not accept a signal, so in-flight reads are not proven immediately cancellable.",
+        "retry": "Exact failed selectors and read-smaller-range instructions; wrong-scope or stale capabilities require fresh reads.",
+        "permission": "Read path containment and mandatory sensitive policy precede opens; tool capability scope is enforced before mutation.",
+        "durability": "Signing key is process-local; capabilities are reminted only from suitable persisted operational evidence, not trusted across arbitrary restart/scope."
+      }
+    },
+    {
+      "id": "byte-preservation",
+      "name": "Exact-byte authority and localized text preservation",
+      "maturity": "partial",
+      "assurance": "integration",
+      "trace": {
+        "entrypoint": [
+          "common/src/types/filesystem.ts:88",
+          "common/src/tools/results/filesystem.ts:189"
+        ],
+        "implementation": [
+          "sdk/src/tools/filesystem-authority.ts:633",
+          "sdk/src/services/workspace-mutation-broker.ts:248",
+          "packages/agent-runtime/src/process-str-replace.ts:991"
+        ],
+        "consumer": [
+          "sdk/src/tools/change-file.ts:986",
+          "packages/agent-runtime/src/process-edit-transaction.ts:1138"
+        ],
+        "tests": [
+          "sdk/src/__tests__/workspace-mutation-broker.test.ts:37",
+          "sdk/src/__tests__/mutation-capabilities.test.ts:16",
+          "packages/agent-runtime/src/__tests__/process-str-replace.test.ts:89"
+        ],
+        "docs": [
+          "docs/agents-and-tools.md:1147",
+          "docs/agents-and-tools.md:1210"
+        ]
+      },
+      "evidence": [
+        "sdk/src/tools/filesystem-authority.ts:633",
+        "sdk/src/services/workspace-mutation-broker.ts:248",
+        "packages/agent-runtime/src/process-str-replace.ts:991",
+        "sdk/src/tools/change-file.ts:986",
+        "packages/agent-runtime/src/process-edit-transaction.ts:1138"
+      ],
+      "strengths": [
+        "Raw byte SHA-256 is separate from LF-normalized edit freshness.",
+        "Receipt/action afterContent is checked against exact afterHash; str_replace restores original untouched line endings.",
+        "Ordinary staged replacement preserves portable permission bits; native hard-link move retains inode metadata."
+      ],
+      "gaps": [
+        "BOM-stripping preimages fail exact CAS (F7).",
+        "Canonical scoped range/symbol variants rewrite unrelated EOL bytes (F8).",
+        "No general UTF-16/Latin-1 editing capability; invalid UTF-8/binary observations are refused."
+      ],
+      "states": {
+        "loading": "Authorized reads acquire snapshots; the broker stages exact bytes before making a replacement visible.",
+        "failure": "Unsupported byte encodings are refused by read_files; transaction decoding throws on invalid UTF-8.",
+        "empty": "Empty UTF-8 text has stable exact and normalized hashes.",
+        "cancellation": "Commit is tracked through receipt/rollback; no mid-syscall byte rewrite cancellation guarantee.",
+        "retry": "Normalized stale freshness and raw mutation rejection are separate; BOM rereads currently cannot recover.",
+        "permission": "Raw snapshots do not replace path/policy authority.",
+        "scale": "16 MiB/file and 64 MiB prepared/rollback bounds apply after snapshot acquisition.",
+        "foreign-language": "UTF-8 text is broad; target-language encoding and semantic coordinate coverage must be advertised separately."
+      }
+    },
+    {
+      "id": "edit-transaction",
+      "name": "Canonical coordinated multi-file editing",
+      "maturity": "partial",
+      "assurance": "integration",
+      "trace": {
+        "entrypoint": [
+          "common/src/tools/params/tool/edit-transaction.ts:606",
+          "packages/agent-runtime/src/util/base2-tool-tiers.ts:69",
+          "agents/base2/base2.ts:606"
+        ],
+        "implementation": [
+          "packages/agent-runtime/src/process-edit-transaction.ts:182",
+          "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:421",
+          "sdk/src/tools/change-file.ts:257"
+        ],
+        "consumer": [
+          "sdk/src/run.ts:2588",
+          "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts:127",
+          "cli/src/components/tools/edit-transaction.tsx:510"
+        ],
+        "tests": [
+          "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts:232",
+          "sdk/src/__tests__/change-file.test.ts:554",
+          "sdk/src/__tests__/change-file.test.ts:1071"
+        ],
+        "docs": [
+          "docs/agents-and-tools.md:1073",
+          "docs/deterministic-edit-system.md:302"
+        ]
+      },
+      "evidence": [
+        "packages/agent-runtime/src/process-edit-transaction.ts:182",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:421",
+        "sdk/src/tools/change-file.ts:257",
+        "sdk/src/run.ts:2588",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts:127",
+        "cli/src/components/tools/edit-transaction.tsx:510"
+      ],
+      "strengths": [
+        "Pure ordered preflight shares original per-path snapshots; first failure causes zero client writes and identifies the failing selector.",
+        "Same-file provenance mapping refuses overlaps/unmappable prior edits.",
+        "Commit checks each action and supports guarded reverse rollback; absent conditional primitives fail closed."
+      ],
+      "gaps": [
+        "End-to-end fidelity, receipt truth and broker stale takeover need F1/F3/F7/F8 repairs.",
+        "Multi-file commit is a visible sequence, not native all-files atomicity/isolation.",
+        "Durability is optional/degradable and startup restoration is unsafe in F4/F5/F10."
+      ],
+      "states": {
+        "loading": "Waits prior tool work; bounded snapshot and preparation concurrency; per-path leases serialize same-process work.",
+        "failure": "Structured preflight/recovery failures and rolled_back/rollback_incomplete receipts.",
+        "empty": "Empty edit lists rejected; explicit skipIfMissing cleanup can succeed with zero changes; ordinary identical edits are rejected as no change.",
+        "cancellation": "Checked before commit and before each action; already attempted actions enter rollback. In-flight broker lock/syscall cancellation was not proven.",
+        "retry": "Rebuild entire transaction; fresh reads focus failed paths; unrelated verified authorization survives pure preflight failure.",
+        "permission": "Strict read authority plus stage/commit path policy; lifecycle destination absence is separately guarded.",
+        "durability": "Group intent only for multi-action calls with a successfully persisted begin record."
+      }
+    },
+    {
+      "id": "cooperative-mutation-broker",
+      "name": "Default worktree broker and durable per-file receipts",
+      "maturity": "partial",
+      "assurance": "integration",
+      "trace": {
+        "entrypoint": [
+          "sdk/src/run.ts:933",
+          "sdk/src/tools/node-filesystem.ts:21"
+        ],
+        "implementation": [
+          "sdk/src/services/workspace-mutation-broker.ts:216",
+          "sdk/src/services/workspace-mutation-broker.ts:248",
+          "sdk/src/services/workspace-mutation-broker.ts:554"
+        ],
+        "consumer": [
+          "sdk/src/tools/filesystem-authority.ts:699",
+          "sdk/src/tools/change-file.ts:1110"
+        ],
+        "tests": [
+          "sdk/src/__tests__/workspace-mutation-broker.test.ts:37",
+          "sdk/src/__tests__/workspace-mutation-broker.test.ts:126",
+          "sdk/src/__tests__/workspace-mutation-broker.test.ts:284"
+        ],
+        "docs": [
+          "docs/architecture.md:53",
+          "docs/agents-and-tools.md:1217"
+        ]
+      },
+      "evidence": [
+        "sdk/src/services/workspace-mutation-broker.ts:216",
+        "sdk/src/services/workspace-mutation-broker.ts:248",
+        "sdk/src/services/workspace-mutation-broker.ts:554",
+        "sdk/src/tools/filesystem-authority.ts:699",
+        "sdk/src/tools/change-file.ts:1110"
+      ],
+      "strengths": [
+        "State outside workspace, exact-byte comparison, exclusive staged files, fsync and finalized/pending receipt transitions are production-wired.",
+        "Exclusive creates/no-clobber hard-link moves prevent destination replacement in the ordinary path.",
+        "Ambiguous pending receipt state blocks the broker rather than guessing an apply.",
+        "Finalized retention/listing are bounded (1000/500)."
+      ],
+      "gaps": [
+        "Competing stale breakers defeat cooperative exclusion (F1).",
+        "Recovery path canonical containment is weaker than mutation path (F12).",
+        "Arbitrary external editors remain outside cooperative_cas by explicit contract; native_atomic is an adapter capability, not the default."
+      ],
+      "states": {
+        "loading": "Initialization recovers pending receipts under a bounded-poll workspace lock.",
+        "failure": "Unavailable default broker falls back to a filesystem whose guarded update/delete/move primitives are absent; callers refuse.",
+        "empty": "Absent target requires exclusive create; missing delete/source is rejected.",
+        "cancellation": "Lock acquisition has timeout but no AbortSignal seam.",
+        "retry": "Stale hash rejects; incomplete or ambiguous receipts require recovery before another mutation.",
+        "permission": "Ordinary parent realpath containment and private state-file modes; startup canonical check gap in F12.",
+        "durability": "Per-file staged bytes/state/receipt fsync exists; Windows directory fsync has documented best-effort exclusions."
+      }
+    },
+    {
+      "id": "transaction-recovery",
+      "name": "Group intent logging and interrupted-transaction recovery",
+      "maturity": "partial",
+      "assurance": "integration",
+      "trace": {
+        "entrypoint": [
+          "sdk/src/run.ts:954",
+          "sdk/src/tools/change-file.ts:588"
+        ],
+        "implementation": [
+          "sdk/src/tools/transaction-intent-log.ts:993",
+          "sdk/src/tools/transaction-intent-log.ts:1179",
+          "sdk/src/tools/transaction-intent-log.ts:1357"
+        ],
+        "consumer": [
+          "sdk/src/run.ts:968",
+          "sdk/src/tools/change-file.ts:752"
+        ],
+        "tests": [
+          "sdk/src/tools/__tests__/transaction-intent-log.test.ts:970",
+          "sdk/src/__tests__/change-file.test.ts:1014"
+        ],
+        "docs": [
+          "docs/agents-and-tools.md:1218"
+        ]
+      },
+      "evidence": [
+        "sdk/src/tools/transaction-intent-log.ts:993",
+        "sdk/src/tools/transaction-intent-log.ts:1179",
+        "sdk/src/tools/transaction-intent-log.ts:1357",
+        "sdk/src/run.ts:968",
+        "sdk/src/tools/change-file.ts:752"
+      ],
+      "strengths": [
+        "Append-only fsynced intent events, bounded trim, bounded commit-marker retry, owner PID plus process-instance token, and mode preimages are implemented.",
+        "Live sibling owners defer restoration; pending intents are not silently evicted by retention."
+      ],
+      "gaps": [
+        "Unconditional mixed-state restore destroys external bytes (F4).",
+        "Failed restoration is terminal and startup result is not retried (F5).",
+        "8 MiB log admission is smaller than valid mutation preimages and downgrade is invisible in the tool result (F10)."
+      ],
+      "states": {
+        "loading": "Once-per-process startup recovery runs after filesystem/broker construction.",
+        "failure": "Never-throw structured outcomes and warning logs; current SDK continues after failure.",
+        "empty": "No pending tx_begin records means no recovery work.",
+        "cancellation": "Recovery callbacks have no cancellation seam; scope is startup restoration.",
+        "retry": "Commit append retries; failed rollback currently cannot retry after tx_abort.",
+        "permission": "Intent restoration uses contained project paths but bypasses normal per-effect CAS and policy.",
+        "durability": "Before-images are plaintext in mode-0600 state files; crash guarantees require durable begin and truthful terminal markers."
+      }
+    },
+    {
+      "id": "semantic-workspace-edit",
+      "name": "LSP rename, organize-imports and shared semantic apply",
+      "maturity": "partial",
+      "assurance": "integration",
+      "trace": {
+        "entrypoint": [
+          "common/src/tools/params/tool/rename-symbol.ts:17",
+          "common/src/tools/params/tool/code-action.ts:17",
+          "packages/agent-runtime/src/util/base2-tool-tiers.ts:69"
+        ],
+        "implementation": [
+          "sdk/src/services/language-intelligence.ts:736",
+          "sdk/src/services/lsp-multiplexer.ts:1064",
+          "sdk/src/tools/semantic-edit-apply.ts:110"
+        ],
+        "consumer": [
+          "sdk/src/tools/rename-symbol.ts:22",
+          "sdk/src/tools/code-action.ts:20",
+          "sdk/src/run.ts:3024",
+          "cli/src/components/tools/semantic-edit-tools.tsx:186"
+        ],
+        "tests": [
+          "sdk/src/__tests__/language-intelligence.test.ts:306",
+          "sdk/src/__tests__/language-intelligence.test.ts:1231"
+        ],
+        "docs": [
+          "common/src/tools/params/tool/rename-symbol.ts:7",
+          "common/src/tools/params/tool/code-action.ts:7"
+        ]
+      },
+      "evidence": [
+        "sdk/src/services/language-intelligence.ts:736",
+        "sdk/src/services/lsp-multiplexer.ts:1064",
+        "sdk/src/tools/semantic-edit-apply.ts:110",
+        "sdk/src/tools/rename-symbol.ts:22",
+        "sdk/src/tools/code-action.ts:20",
+        "sdk/src/run.ts:3024",
+        "cli/src/components/tools/semantic-edit-tools.tsx:186"
+      ],
+      "strengths": [
+        "Thin SDK wrappers use one apply core and the same coordinator/receipts as text edits.",
+        "prepareRename gates nonexistent identifiers; only organize imports is accepted for code_action v1.",
+        "Source reads honor injected filesystem and read containment; edits are deduped, overlap-checked and reverse-spliced."
+      ],
+      "gaps": [
+        "Version/preimage loss causes stale write acceptance (F2).",
+        "Missing operations/failed peers can leave interfaces half-renamed (F6).",
+        "Malformed numeric positions mutate wrong bytes (F9).",
+        "Generic target-language cooperation is not validated by this edit path alone; provider/schema/ABI consumer task coverage remains unproven here."
+      ],
+      "states": {
+        "loading": "Language service/multiplexer is lazy; tool dispatch is real in SDK/base2.",
+        "failure": "Typed unavailable/server error, failed per-file splices and compact apply failures; partial service failures currently permit mutation.",
+        "empty": "No applicable edits is an error; command-only organize-imports actions are skipped.",
+        "cancellation": "Apply receives run signal; service request cancellation is delegated to LSP lifecycle and not exercised by these probes.",
+        "retry": "Fresh semantic operation needed after stale/unavailable response; no exact preimage hash currently survives.",
+        "permission": "Read containment and canonical apply path policy; plan-mode policy defects are separate ownership.",
+        "positions": "Model lines are 1-based, characters 0-based; default UTF-16 JS units are compatible, but validation and encoding negotiation evidence are incomplete.",
+        "assuranceNotes": "Fake framed LSP peer plus real multiplexer, service, apply core and temp broker; no real language-server build/test task."
+      }
+    },
+    {
+      "id": "structural-rewrite",
+      "name": "Comment-aware symbol rewrite and capability-bound text ranges",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          "common/src/tools/params/tool/edit-transaction.ts:255",
+          "common/src/tools/list.ts:130"
+        ],
+        "implementation": [
+          "packages/agent-runtime/src/structural-read.ts:76",
+          "packages/agent-runtime/src/structural-read.ts:356",
+          "packages/agent-runtime/src/process-edit-transaction.ts:1260"
+        ],
+        "consumer": [
+          "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts:31",
+          "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:952"
+        ],
+        "tests": [
+          "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts:431"
+        ],
+        "docs": [
+          "docs/deterministic-edit-system.md:404",
+          "docs/agents-and-tools.md:1077"
+        ]
+      },
+      "evidence": [
+        "packages/agent-runtime/src/structural-read.ts:76",
+        "packages/agent-runtime/src/structural-read.ts:356",
+        "packages/agent-runtime/src/process-edit-transaction.ts:1260",
+        "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts:31",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts:952"
+      ],
+      "strengths": [
+        "AST-backed slices include contiguous preceding // or block documentation and mint exact span capabilities.",
+        "Heuristic fallback observations are read-only and require an exact range read for authority.",
+        "Occurrence ambiguity and same-transaction changed symbol bytes are refused."
+      ],
+      "gaps": [
+        "Localized canonical rewrite normalizes EOL (F8).",
+        "Foreign-language parser/grammar availability is separately owned by pair07; Python/Rust/Go fixture tests do not prove all installed language assets or semantic refactors.",
+        "Python indentation preservation depends on supplied source; preceding Python # comments/decorators are not covered by the inspected C-style comment extension."
+      ],
+      "states": {
+        "loading": "Parses current source or falls back to a regex projection.",
+        "failure": "Missing/ambiguous occurrence, parse failures, wrong-span/stale capability, prior overlapping mutation produce recovery errors.",
+        "empty": "Missing symbols return explicit refusal.",
+        "cancellation": "Pure preflight has no abort seam; client apply uses coordinator.",
+        "retry": "Read symbol slice or exact range; use fresh token and occurrence rather than guessing.",
+        "permission": "Strict standalone path does not treat internally minted anchor as prior model read authority.",
+        "foreign-language": "Brace heuristics and Python indentation are shallow fallback; no cross-language interface propagation follows from a structural symbol replacement."
+      }
+    },
+    {
+      "id": "external-editor-concurrency",
+      "name": "Workspace mutation observers and external-editor invalidation",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          "cli/src/utils/create-run-config.ts:221",
+          "sdk/src/run.ts:3184"
+        ],
+        "implementation": [
+          "cli/src/utils/index-workspace-watcher.ts:95",
+          "cli/src/utils/index-workspace-watcher.ts:110",
+          "sdk/src/run.ts:3189"
+        ],
+        "consumer": [
+          "cli/src/utils/create-run-config.ts:281",
+          "sdk/src/run.ts:3234"
+        ],
+        "tests": [
+          "cli/src/utils/__tests__/index-workspace-watcher.test.ts:31",
+          "sdk/src/__tests__/run-mutation-dispatch.test.ts:333"
+        ],
+        "docs": [
+          "docs/architecture.md:53",
+          "docs/agents-and-tools.md:1219"
+        ]
+      },
+      "evidence": [
+        "cli/src/utils/index-workspace-watcher.ts:95",
+        "cli/src/utils/index-workspace-watcher.ts:110",
+        "sdk/src/run.ts:3189",
+        "cli/src/utils/create-run-config.ts:281",
+        "sdk/src/run.ts:3234"
+      ],
+      "strengths": [
+        "Confirmed SDK deltas carry precise paths/revision; unknown terminal/custom/MCP effects conservatively mark the index stale.",
+        "External watcher debounces for 75 ms, marks ambiguity stale, supports bounded Linux worker watching, and limits watched roots.",
+        "SDK applies post-mutation LSP sync and closes deleted files; observer failure has a coarse invalidation fallback."
+      ],
+      "gaps": [
+        "Watchers observe rather than exclude external writers; unobserved subtrees rely on age sweeps.",
+        "Confirmed-action truth can be false in F3, and semantic read-to-commit interval is unguarded in F2.",
+        "A headless SDK host has no default CLI watcher in the inspected run path; host integration remains necessary.",
+        "Mutation delta/watch classification was not exercised against live editor or OpenTUI in this audit."
+      ],
+      "states": {
+        "loading": "CLI starts watcher when indexing enabled; recursive watcher or worker-pool strategy is platform-dependent.",
+        "failure": "Worker crash/unrecognized event marks stale; spawn/watch failures retain sweeps and explicit mutation deltas.",
+        "empty": "No changed/deleted paths produces no delta.",
+        "cancellation": "Watcher close cancels debounce and releases handles; live shutdown behavior was not measured.",
+        "retry": "Index integrity sweeps provide later reconciliation; mutation retry uses fresh hash/capability guards.",
+        "permission": "Observation carries no OS exclusion authority; cooperative CAS explicitly excludes arbitrary editors from its guarantee.",
+        "consumer": "Revision/snapshot advance and LSP sync depend on getConfirmedAppliedActionsV1, so F3 is a truth boundary defect."
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "06-F1",
+      "title": "Stale-lock recovery can remove a fresh live broker lock and admit two successful CAS writers",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/workspace-mutation-broker.ts",
+          "line": 601,
+          "detail": "After asynchronous canRecoverLock, the stale breaker recursively removes the current lock path without a generation-safe takeover."
+        },
+        {
+          "path": "sdk/src/services/workspace-mutation-broker.ts",
+          "line": 267,
+          "detail": "Exact-byte beforeHash equality is trusted under that workspace lock before staging and replacement."
+        },
+        {
+          "path": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+          "line": 284,
+          "detail": "The stale-lock test checks dead versus live owners sequentially, not competing breakers and lock reacquisition."
+        }
+      ],
+      "trigger": "B decides an old lock is stale; A removes the old generation and acquires a fresh live lock before B reaches fs.rm.",
+      "consequence": "A and B both return applied=true for the same expected original hash, and A overwrites the bytes B successfully committed. The bounded public-API probe observed B revision 2 completing before A revision 1.",
+      "suggestedFix": "Serialize stale recovery with a recovery claim honored by all acquisitions and perform generation-safe takeover; never remove the current lock from a prior asynchronous stale decision. Use an OS-backed lock if portable primitives cannot supply the necessary invariant.",
+      "acceptanceProbe": "Run two writers/breakers with deterministic pauses at stale decision and staging. Exactly one commit against a shared original hash may succeed; a fresh live lock must remain owned and no receipt may claim an overwritten successful CAS.",
+      "probeEvidence": [
+        "evidence/06-broker-lock-probe.ts",
+        "evidence/06-broker-lock-probe.json"
+      ],
+      "inference": [
+        "The probe used two broker instances in one process and internal DI to widen existing awaits. Shared filesystem locking makes the same interleaving applicable across processes; its spontaneous frequency was not measured."
+      ]
+    },
+    {
+      "id": "06-F2",
+      "title": "Semantic edits discard document versions and the splice preimage before conditional commit",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1057,
+          "detail": "WorkspaceEdit normalization intentionally ignores textDocument.version."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1318,
+          "detail": "rename returns only the flattened changesByUri map."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 350,
+          "detail": "The service reads disk text and returns only path/newContent for the splice."
+        },
+        {
+          "path": "sdk/src/tools/semantic-edit-apply.ts",
+          "line": 136,
+          "detail": "The apply core forwards unguarded full-file contents without expectedHash; its comment incorrectly claims the later snapshot protects the service-read interval."
+        },
+        {
+          "path": "sdk/src/tools/change-file.ts",
+          "line": 998,
+          "detail": "The coordinator derives a new beforeContent snapshot after the service splice."
+        }
+      ],
+      "trigger": "A file changes after the language-service splice but before changeFiles prepares, or a server WorkspaceEdit names a document version that differs from the open document.",
+      "consequence": "The later CAS protects the newly read file while committing content derived from older bytes. The external append in the fixture disappeared and applied=true was returned. A protocol fixture with didOpen version 1 and WorkspaceEdit version 999 also applied without a stale-version error.",
+      "suggestedFix": "Retain a versioned per-document exact preimage through WorkspaceEdit normalization, service splicing and the apply core; bind the coordinator to that exact hash rather than a newly adopted snapshot.",
+      "acceptanceProbe": "Pause between service read and apply; append external text or change only EOL/BOM bytes. Reject without writes and preserve the external bytes. Reject a mismatched documentChanges version before any splice or mutation.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:semanticStale",
+        "evidence/06-workspace-edit-probe.json:stale-document-version"
+      ],
+      "inference": []
+    },
+    {
+      "id": "06-F3",
+      "title": "A rejected commit followed by rollback conflict is promoted to a confirmed applied action",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/change-file.ts",
+          "line": 687,
+          "detail": "The in-progress action enters committed before the adapter result is known."
+        },
+        {
+          "path": "sdk/src/tools/filesystem-authority.ts",
+          "line": 569,
+          "detail": "Failure receipts snapshot whatever bytes exist now, including an external writer's state."
+        },
+        {
+          "path": "common/src/tools/results/filesystem.ts",
+          "line": 1130,
+          "detail": "Every rollback_failed receipt action becomes outcome=applied, regardless of whether the forward commit applied."
+        },
+        {
+          "path": "common/src/tools/results/filesystem.ts",
+          "line": 1105,
+          "detail": "The confirmed-action selector accepts applied actions from rollback_incomplete results."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 3184,
+          "detail": "The selected actions drive workspace journal, LSP sync and mutation observers."
+        }
+      ],
+      "trigger": "An external writer wins immediately before the forward conditionalCommit, and rollback rejects because the target is not the transaction's proposed after-content.",
+      "consequence": "Both adapter calls returned applied=false in the probe, but the resulting action and getConfirmedAppliedActionsV1 reported applied. The SDK can attribute unrelated external bytes to an agent mutation and advance its evidence using false positive authority.",
+      "suggestedFix": "Record forward-commit evidence separately from rollback attempts. Unknown or externally diverged rollback state must not become confirmed applied; carry observed hashes as uncertain state requiring invalidation rather than success proof.",
+      "acceptanceProbe": "Inject an external write before CAS and reject both forward and rollback calls. Preserve the external bytes, return zero confirmed applied actions, and ensure SDK/runtime observers cannot publish the intended edit as committed.",
+      "probeEvidence": [
+        "evidence/06-mutation-truth-probe.ts",
+        "evidence/06-mutation-truth-probe.json"
+      ],
+      "inference": []
+    },
+    {
+      "id": "06-F4",
+      "title": "Startup transaction recovery overwrites divergent bytes without establishing transaction ownership",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 161,
+          "detail": "Intent entries retain beforeHash/beforeBytes but no expected after-state."
+        },
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 435,
+          "detail": "Divergence is merely current text != preimage text."
+        },
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 1249,
+          "detail": "A mixed transaction reverts every divergent path."
+        },
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 1367,
+          "detail": "The production restoration callback uses unconditional unlink/writeFile."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 968,
+          "detail": "Actual run initialization invokes this recovery callback with the run filesystem."
+        }
+      ],
+      "trigger": "An interrupted multi-file intent has at least one untouched path and one path whose current bytes belong to an external writer rather than the transaction.",
+      "consequence": "The fixture external content was replaced by the old preimage and recovery returned ok=true. A read failure also falls back to unconditional restoration, so insufficient evidence weakens rather than strengthens the ownership check.",
+      "suggestedFix": "Persist planned after-hashes/action receipts and recover only bytes proven transaction-owned through conditional primitives. Preserve unknown or external state as unresolved; divergence from a preimage is not a commit/ownership proof.",
+      "acceptanceProbe": "Crash/fault after one action, then externally change that path and leave another path at its preimage. Recovery must preserve external bytes and report unresolved state. Repeat for created files, moves, read failures and all-diverged but unrecognized states.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:recoveryExternal"
+      ],
+      "inference": [
+        "No OS process was killed in this audit; durable tx_begin plus controlled fixture state reproduced the production startup restoration logic."
+      ]
+    },
+    {
+      "id": "06-F5",
+      "title": "Failed startup rollback is terminally aborted and excluded from later recovery",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 1263,
+          "detail": "A tx_abort marker is appended even when a restoration threw."
+        },
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 1161,
+          "detail": "Only transactions whose last event is tx_begin are eligible for another recovery."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 965,
+          "detail": "The once-per-process key is set before attempting recovery; structured recovery failure is not inspected."
+        }
+      ],
+      "trigger": "Restoring an interrupted transaction fails transiently, such as a write permission or I/O error.",
+      "consequence": "The injected restore failure returned ok=false with unchanged divergent bytes, yet a subsequent recoverInterruptedTransactions returned an empty list because tx_abort had resolved it. The normal SDK startup also suppresses another in-process attempt.",
+      "suggestedFix": "Persist recovery_required/rollback_incomplete as nonterminal, keep unfinished path ownership evidence, and set the recovery-performed key only on a conclusive successful result. Surface unresolved workspace state to mutation callers.",
+      "acceptanceProbe": "Fail one recovery write, then restore filesystem availability. A later recovery must retry and finish the remaining paths; a process restart must still see the unresolved intent. Do not silently proceed as if recovery completed.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:recoveryFailure"
+      ],
+      "inference": []
+    },
+    {
+      "id": "06-F6",
+      "title": "Incomplete semantic WorkspaceEdits commit a subset and can report full apply",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1171,
+          "detail": "Unsupported resource operations are recorded as skipped during normalization."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1318,
+          "detail": "rename drops skipped diagnostics and resource-operation metadata."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 418,
+          "detail": "Successful per-file splices are retained even if peers fail."
+        },
+        {
+          "path": "sdk/src/tools/semantic-edit-apply.ts",
+          "line": 94,
+          "detail": "applied mirrors the subset coordinator outcome; service failures do not make it false."
+        },
+        {
+          "path": "cli/src/components/tools/semantic-edit-tools.tsx",
+          "line": 91,
+          "detail": "The UI may display partial when an error survived, but cannot undo a broken semantic operation."
+        }
+      ],
+      "trigger": "One consumer edit has an invalid/overlapping/unreadable range, or a rename WorkspaceEdit includes an unsupported RenameFile/DeleteFile/resource operation alongside usable text edits.",
+      "consequence": "The declaration fixture changed foo to bar while its consumer retained foo, and the tool returned applied=true plus an error. In a real multiplexer protocol fixture, the requested file rename was omitted entirely and text edits applied with no error.",
+      "suggestedFix": "Preserve every normalized operation and refusal reason. For rename/refactor, reject the entire edit before mutation when any required member cannot apply; translate supported lifecycle operations into the canonical coordinator. Explicitly label any intentionally supported partial mode.",
+      "acceptanceProbe": "Rename a declaration and consumers with one failed member and with a resource rename. Either apply the complete WorkspaceEdit or leave all files untouched with structured unavailable/error details; applied=true must mean the requested operation completed.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:partialRename",
+        "evidence/06-workspace-edit-probe.json:omitted-resource-operation"
+      ],
+      "inference": []
+    },
+    {
+      "id": "06-F7",
+      "title": "UTF-8 BOM stripping breaks exact preimages and causes permanently stale edits",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/read-files.ts",
+          "line": 297,
+          "detail": "Default UTF-8 TextDecoder strips the BOM."
+        },
+        {
+          "path": "sdk/src/tools/change-file.ts",
+          "line": 958,
+          "detail": "Transaction preimages use the same BOM-stripping decoder."
+        },
+        {
+          "path": "sdk/src/tools/change-file.ts",
+          "line": 1156,
+          "detail": "The conditional expected hash is reconstructed from decoded beforeContent."
+        },
+        {
+          "path": "sdk/src/services/workspace-mutation-broker.ts",
+          "line": 258,
+          "detail": "The default broker compares the hash of original raw bytes."
+        }
+      ],
+      "trigger": "A supported UTF-8 source file begins with EF BB BF and is read, then edited through the normal transaction coordinator.",
+      "consequence": "The read returns ok with authority over BOM-stripped text. The coordinator's reconstructed preimage hash does not match the raw file, so commit is refused indefinitely even after rereading. The untouched fixture was reported rollback_incomplete; the false applied action is separately covered by F3.",
+      "suggestedFix": "Retain original bytes/BOM metadata as the authoritative preimage and decode losslessly for text edits. Keep normalized content freshness separate from the raw hash used for CAS, receipts and recovery.",
+      "acceptanceProbe": "Read and edit a BOM+CRLF file through the default SDK path, including create/edit/delete/move and rollback. Preserve BOM, untouched bytes, mode and final-newline state, and issue matching exact receipts without a stale loop.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:bom"
+      ],
+      "inference": []
+    },
+    {
+      "id": "06-F8",
+      "title": "Scoped range and symbol transaction edits normalize unrelated CRLF bytes to LF",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+          "line": 1241,
+          "detail": "replace_range constructs output from the whole LF-normalized snapshot."
+        },
+        {
+          "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+          "line": 1319,
+          "detail": "rewrite_symbol also splits normalized whole-file text and joins with LF."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+          "line": 1395,
+          "detail": "The real runtime forwards the prepared EOL-changing patch through the canonical SDK coordinator."
+        },
+        {
+          "path": "packages/agent-runtime/src/process-str-replace.ts",
+          "line": 991,
+          "detail": "The separate str_replace implementation restores original per-line endings."
+        },
+        {
+          "path": "packages/agent-runtime/src/__tests__/process-str-replace.test.ts",
+          "line": 89,
+          "detail": "Mixed EOL preservation tests exercise str_replace, not all canonical edit variants."
+        }
+      ],
+      "trigger": "A capability authorizes one line or symbol of a CRLF/mixed-EOL source and edit_transaction applies replace_range/rewrite_symbol.",
+      "consequence": "A real broker-backed one-line range edit changed all three CRLF terminators to LF while returning applied. Bytes outside the authorized text span changed; existing str_replace preservation does not cover the other variants.",
+      "suggestedFix": "Share a lossless splice/EOL preservation implementation across every localized transaction variant; use normalized text only for matching and coordinates, not as the whole-file output base.",
+      "acceptanceProbe": "Exercise every localized variant on CRLF, mixed LF/CRLF, BOM, astral Unicode and no-final-newline fixtures. Assert byte equality outside the selected span after commit and after rollback.",
+      "probeEvidence": [
+        "evidence/06-text-preservation-probe.json:rangePreservation"
+      ],
+      "inference": [
+        "rewrite_symbol shares the directly inspected normalization but only replace_range was executed in the bounded probe."
+      ]
+    },
+    {
+      "id": "06-F9",
+      "title": "Server edit ranges accept negative, fractional and reversed coordinates",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1095,
+          "detail": "Normalization checks only typeof number, not safe integer/nonnegative/ordered bounds."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 262,
+          "detail": "Offset validation has an upper bound but no character lower bound or integer check."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 388,
+          "detail": "The splice assumes startOffset <= endOffset and JavaScript slice coerces fractional offsets."
+        }
+      ],
+      "trigger": "A malformed language-server WorkspaceEdit contains negative/fractional characters or an end before its start; CRLF boundary disagreement is also accepted up to the carriage return.",
+      "consequence": "Negative coordinates on line 2 edited bytes in line 1. A reversed range duplicated text; fractional coordinates were silently truncated. The full multiplexer/service/apply probe confirmed negative server positions can reach disk with applied=true.",
+      "suggestedFix": "Validate finite safe integer coordinates, nonnegative characters/lines, start <= end, line-content bounds excluding CRLF, and a supported negotiated position encoding before splicing.",
+      "acceptanceProbe": "Reject negative, fractional, nonfinite, reversed, overshooting and CRLF-terminator ranges without writes. Test valid UTF-16 astral positions and explicitly reject/convert unsupported UTF-8/UTF-32 encodings.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:malformedRanges",
+        "evidence/06-workspace-edit-probe.json:raw-negative-position"
+      ],
+      "inference": [
+        "Valid default LSP UTF-16 coordinates match JavaScript string units. No compliant-server UTF-8/UTF-32 negotiation or cross-language live position task was exercised."
+      ]
+    },
+    {
+      "id": "06-F10",
+      "title": "Supported multi-file preimages exceed the intent log cap and silently lose crash recovery",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/actions.ts",
+          "line": 17,
+          "detail": "A transaction permits 16 MiB/file and 64 MiB rollback state."
+        },
+        {
+          "path": "sdk/src/tools/transaction-intent-log.ts",
+          "line": 128,
+          "detail": "The default complete intent log cap is 8 MiB, including serialized preimages."
+        },
+        {
+          "path": "sdk/src/tools/change-file.ts",
+          "line": 658,
+          "detail": "Failed tx_begin logs a warning and proceeds with mutation without a durable preimage."
+        },
+        {
+          "path": "sdk/src/__tests__/change-file.test.ts",
+          "line": 1014,
+          "detail": "The current test explicitly expects commit success after an intent-log failure."
+        }
+      ],
+      "trigger": "A valid multi-file transaction has a serialized preimage larger than the default 8 MiB log cap, or logging cannot persist the intent.",
+      "consequence": "The 9 MiB+small-file fixture committed both files, returned applied, and emitted neither an intent log nor a transactionId. Durability is reduced to in-memory rollback without an explicit tool result degradation.",
+      "suggestedFix": "Align mutation admission with durable preimage capacity and fail before the first commit when required durability cannot be recorded. Any optional nondurable mode should be explicit in the public result and caller policy.",
+      "acceptanceProbe": "Submit 8/9 MiB aggregate preimages and escaping-heavy text under default limits. If the durable intent cannot fit or fsync fails, assert no file changes; otherwise kill/fault between commits and recover the complete group.",
+      "probeEvidence": [
+        "evidence/06-edit-probes.json:intentSize"
+      ],
+      "inference": [
+        "Crash midway after the observed missing intent would have no group preimage to recover; this consequence follows statically and was not measured by killing a process."
+      ]
+    },
+    {
+      "id": "06-F11",
+      "title": "Bounded text ranges allocate an entire unbroken line even when maxBytes is tiny",
+      "severity": "MEDIUM",
+      "domains": [
+        "performance",
+        "error-handling",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/node-filesystem.ts",
+          "line": 147,
+          "detail": "Every scanned line accumulates currentParts irrespective of requested range or truncation."
+        },
+        {
+          "path": "sdk/src/tools/node-filesystem.ts",
+          "line": 152,
+          "detail": "The full line is concatenated before finishLine checks the return budget."
+        },
+        {
+          "path": "sdk/src/tools/node-filesystem.ts",
+          "line": 162,
+          "detail": "The final unterminated line is also concatenated without a bound."
+        },
+        {
+          "path": "sdk/src/tools/read-files.ts",
+          "line": 375,
+          "detail": "Oversized reads delegate to this bounded-text capability."
+        }
+      ],
+      "trigger": "An oversized file contains a large single line before, inside or after the requested range.",
+      "consequence": "A 24 MiB fixture with maxBytes=1024 returned zero bytes but performed a 24 MiB Buffer.concat. The return payload is bounded; reader working memory grows with the longest scanned line and can undermine observation availability.",
+      "suggestedFix": "Count newlines without retaining irrelevant or over-budget lines; cap the pending selected line to the allowed budget and discard the rest while continuing bounded metadata counting. Add cancellable read capability support where needed.",
+      "acceptanceProbe": "Read a very long selected/unselected line with a 1 KiB budget and instrument peak buffered/concatenated bytes. Bound memory by request budget plus fixed chunk overhead; maintain correct complete/totalLines metadata and close the stream on cancellation.",
+      "probeEvidence": [
+        "evidence/06-text-preservation-probe.json:boundedReadMemory"
+      ],
+      "inference": [
+        "The probe instrumented Buffer.concat in a disposable process; it is not an RSS, latency or throughput benchmark. Larger-file exhaustion risk follows from the unbounded allocation."
+      ]
+    },
+    {
+      "id": "06-F12",
+      "title": "Broker receipt recovery can follow a replaced parent symlink outside the workspace",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/workspace-mutation-broker.ts",
+          "line": 918,
+          "detail": "Recovery absoluteFromRelative checks lexical containment only."
+        },
+        {
+          "path": "sdk/src/services/workspace-mutation-broker.ts",
+          "line": 689,
+          "detail": "Recovered delete reads and unlinks the persisted staging path without checking its current canonical parent."
+        },
+        {
+          "path": "sdk/src/services/workspace-mutation-broker.ts",
+          "line": 899,
+          "detail": "Ordinary mutation resolvePath does check the canonical parent, unlike recovery."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 938,
+          "detail": "Default broker construction performs this pending-receipt recovery at real run startup."
+        }
+      ],
+      "trigger": "A legitimate pending receipt survives a partial mutation; its original directory is moved outside the workspace and the former parent is replaced with a symlink to that directory.",
+      "consequence": "Fresh broker startup unlinked a tombstone outside its own root and finalized recovered_committed in the fixture. No receipt tampering was needed. Recovery has a weaker path authority than normal commits.",
+      "suggestedFix": "Reauthorize every recovered source, destination and staging path against current canonical containment and ownership; preserve unresolved receipts when path identity changed. Use anchored handles/native path primitives when the boundary requires exclusion of external races.",
+      "acceptanceProbe": "For pending commit/delete/move receipts, replace a parent directory with a symlink to an outside fixture before recovery. Do not read, unlink or replace outside bytes; retain a recovery_required receipt with an actionable error.",
+      "probeEvidence": [
+        "evidence/06-broker-recovery-containment-probe.ts",
+        "evidence/06-broker-recovery-containment-probe.json"
+      ],
+      "inference": []
+    }
+  ],
+  "domainAssessment": {
+    "security": "Authenticated cap.v3, mandatory path/sensitive filtering, exact action contracts and mode-0600 broker/intent artifacts are valuable enforced controls. F12 proves recovery can cross its canonical workspace boundary via parent replacement. Cooperative authority is not an OS sandbox or arbitrary-editor exclusion. No credential/private-value reads or vulnerability database scan occurred.",
+    "correctness": "Normal read authority, pure preflight and ordinary CAS paths are well structured, but F1-F9/F12 expose concrete failures in takeover, stale semantic application, recovery, truth, BOM, EOL, partial refactors and positions. Probe outcomes, not green inventory or historical prose, determine these conclusions.",
+    "state-mutation": "Per-path leases and guarded reverse rollback are present. Group state ownership is not retained across recovery or semantic boundaries; failed restores are terminalized. External observations cannot close the unguarded service interval or stale-lock takeover race.",
+    "error-handling": "Typed per-selector/refusal/recovery outputs and bounded lock/commit-marker retry exist. Intent failures are fail-open, failed startup recovery continues and is not retried, and malformed/missing semantic members can become partial effects without a truthful aggregate contract.",
+    "performance": "Unique read snapshots, bounded snapshot preparation, reanchor work budgets, receipt retention and watcher root caps are useful. F11 experimentally isolates a full-line allocation despite a 1 KiB return budget. Other service-splice scaling and index sweep latency remain unmeasured.",
+    "dependency-hygiene": "The inspected mutation implementations primarily use Node filesystem/crypto APIs and the declared pinned diff 8.0.3 in SDK and agent-runtime manifests. Bun is pinned to 1.3.5 in repo metadata while probes used installed 1.3.14. No undeclared mutation dependency was established in this slice; no full lockfile/CVE or isolated package-install audit is claimed. Grammar assets belong to pair07.",
+    "test-coverage": "Representative tests cover strict authorization, CRLF str_replace, ordinary cross-process CAS, cancellation/conditional rollback, narrowed preflight recovery and semantic wrappers. The sampled tests miss competing stale breakers, uncommitted-action truth, source-snapshot preservation, BOM, all edit-variant EOL fidelity, recovery retry/ownership, symlink-replaced recovery parents and malformed server positions. Some tests explicitly pin fail-open durability or version omission. Six bounded probe programs recorded 17 scenarios; no full package/CLI suite was run.",
+    "api-contract": "Public FileMutationResultV1/CommitReceiptV1 schemas correlate action identities/hashes and preserve compatibility; capability-only provider edits keep the copy/paste contract small. F2/F3/F6/F7/F8/F9/F10 demonstrate runtime contract gaps: ignored document versions, false applied truth, missing operations, non-exact text preimages, invalid positions and unreported durability downgrade. JS UTF-16 semantics are valid for default LSP encoding, not evidence of arbitrary foreign encoding support."
+  },
+  "coverageLimits": [
+    "All 18 required picker ranges (15 unique primary files, 4314 selected lines) were inspected. Adjacent files/tests/docs are explicitly sampled by readRanges; structuralReceipt is an inspection receipt, not full-line coverage or a correctness guarantee.",
+    "Native query_index/read_files/read_subtree audit tools are repository code and were not exposed in this session. Discovery used the pinned picker, rg and exact numbered reads. No native retrieval tool call is claimed.",
+    "Six disposable probe programs completed under installed Bun 1.3.14, recording 17 scenarios against bounded temp fixtures, real broker/coordinator code, injected filesystem failures and a framed fake LSP peer. No source fixes, private values or real user file mutations occurred.",
+    "Broker takeover used two instances in one process and deterministic DI delays at existing await boundaries, not a measured spontaneous cross-process stress rate. Recovery faults simulated persisted interrupted state; no power-loss or killed-process experiment was performed.",
+    "No full package/CLI suite, OpenTUI live rendering, Windows filesystem test, real language-server build/test task, held-out polyglot interface benchmark, RSS/latency benchmark, lockfile/CVE scan or isolated SDK install was performed.",
+    "Language registry/parser assets/server lifecycle and semantic navigation/diagnostics/build-target quality belong to pair07; provider/orchestration and OS sandbox/plan-mode policy defects remain separate ownership. Ancillary base2 disclosure reads establish real consumer wiring, not a new policy finding.",
+    "The inspected LSP boundary uses JS UTF-16 units, consistent with default compliant LSP encoding. Astral/CRLF mixed-boundary coverage and explicit alternate encoding negotiation remain limited; unsupported encoding should not be advertised as semantic support."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "06-W1",
+      "title": "Repair shared mutation authority and truthful effect receipts",
+      "findingIds": [
+        "06-F1",
+        "06-F3",
+        "06-F12"
+      ],
+      "sourceAnchors": [
+        "sdk/src/services/workspace-mutation-broker.ts:601",
+        "common/src/tools/results/filesystem.ts:1130",
+        "sdk/src/run.ts:3184"
+      ],
+      "intendedBehavior": "Only a writer holding the current generation may commit; receipts distinguish attempted, applied and uncertain external effects; recovery cannot escape canonical workspace ownership.",
+      "smallestScope": [
+        "broker lock/recovery protocol",
+        "canonical receipt outcome mapping",
+        "SDK mutation observer integration",
+        "deterministic competing-owner and path-replacement tests"
+      ],
+      "prerequisites": [],
+      "languageDecision": "Repair TS authority and shared contracts first. Consider a native lock/path primitive only if portable filesystem operations cannot establish the declared invariant.",
+      "acceptanceProbes": [
+        "06-F1 acceptanceProbe",
+        "06-F3 acceptanceProbe",
+        "06-F12 acceptanceProbe"
+      ],
+      "regressionChecks": [
+        "ordinary cross-process CAS",
+        "exclusive create/no-clobber move",
+        "conditional rollback/external bytes preservation"
+      ],
+      "completionEvidence": "Exactly one successful CAS from the same preimage, no fresh-generation deletion, no false confirmed actions, no outside-root recovery effect.",
+      "stopDeferRule": "Do not graduate cooperative authority while any deterministic same-preimage dual success or false-positive applied action remains."
+    },
+    {
+      "id": "06-W2",
+      "title": "Make group recovery ownership-bound, retryable and durably admitted",
+      "findingIds": [
+        "06-F4",
+        "06-F5",
+        "06-F10"
+      ],
+      "sourceAnchors": [
+        "sdk/src/tools/transaction-intent-log.ts:1249",
+        "sdk/src/tools/transaction-intent-log.ts:1263",
+        "sdk/src/tools/change-file.ts:658",
+        "sdk/src/run.ts:965"
+      ],
+      "intendedBehavior": "Persist before/expected-after evidence, restore only transaction-owned states, retain unresolved paths after failure, and reject mutations whose required durable preimage cannot fit.",
+      "smallestScope": [
+        "intent entry/terminal event schema",
+        "startup state/retry integration",
+        "conditional restoration primitives",
+        "coordinator admission versus log budget"
+      ],
+      "prerequisites": [
+        "06-W1"
+      ],
+      "languageDecision": "Keep one TS-owned transaction protocol; no port supplies missing ownership evidence by itself.",
+      "acceptanceProbes": [
+        "06-F4 acceptanceProbe",
+        "06-F5 acceptanceProbe",
+        "06-F10 acceptanceProbe"
+      ],
+      "regressionChecks": [
+        "live sibling/PID-token protection",
+        "lost commit marker ambiguity",
+        "mode restoration",
+        "retention preserving pending work"
+      ],
+      "completionEvidence": "Faulted/killed group reconciles from exact receipts, external bytes remain unchanged, failed recovery stays visible and retryable, and supported durable admission never silently degrades.",
+      "stopDeferRule": "Unknown effects remain unresolved; do not guess applied or abort completion solely from preimage divergence."
+    },
+    {
+      "id": "06-W3",
+      "title": "Unify lossless UTF-8 preimages and scoped byte preservation",
+      "findingIds": [
+        "06-F7",
+        "06-F8"
+      ],
+      "sourceAnchors": [
+        "sdk/src/tools/read-files.ts:297",
+        "sdk/src/tools/change-file.ts:958",
+        "packages/agent-runtime/src/process-edit-transaction.ts:1241"
+      ],
+      "intendedBehavior": "Use exact original bytes for CAS/recovery and preserve BOM/EOL/untouched bytes across all localized edit variants.",
+      "smallestScope": [
+        "shared byte/text snapshot representation",
+        "BOM-aware decoder",
+        "shared localized splice/EOL renderer",
+        "variant fidelity matrix"
+      ],
+      "prerequisites": [
+        "06-W1"
+      ],
+      "languageDecision": "TS Buffer/Uint8Array can repair current UTF-8 workloads immediately; defer new encoding/native implementations until a declared workload needs them.",
+      "acceptanceProbes": [
+        "06-F7 acceptanceProbe",
+        "06-F8 acceptanceProbe"
+      ],
+      "regressionChecks": [
+        "str_replace mixed EOL",
+        "whole-file versus scoped authority",
+        "final empty line coordinates",
+        "mode/hash receipts"
+      ],
+      "completionEvidence": "Matrix commits and rollback prove byte equality outside target spans across BOM, CRLF/LF, astral text and missing final newline.",
+      "stopDeferRule": "Unsupported encodings must be explicitly refused; never report exact preimages after lossy decode."
+    },
+    {
+      "id": "06-W4",
+      "title": "Preserve complete versioned semantic WorkspaceEdit contracts",
+      "findingIds": [
+        "06-F2",
+        "06-F6",
+        "06-F9"
+      ],
+      "sourceAnchors": [
+        "sdk/src/services/lsp-multiplexer.ts:1064",
+        "sdk/src/services/language-intelligence.ts:350",
+        "sdk/src/tools/semantic-edit-apply.ts:136"
+      ],
+      "intendedBehavior": "A semantic operation is applied against its own exact/versioned preimage, validates every range, and completes all required text/resource members or changes nothing.",
+      "smallestScope": [
+        "versioned normalized edit protocol",
+        "position validation/default UTF-16 plus explicit encoding negotiation",
+        "service preimage propagation",
+        "semantic-to-canonical lifecycle translation/refusal"
+      ],
+      "prerequisites": [
+        "06-W1",
+        "06-W3"
+      ],
+      "languageDecision": "Integrate existing language servers through a versioned TS boundary; choose native/foreign analyzer implementations only for measured capability gaps, not fixture extensions.",
+      "acceptanceProbes": [
+        "06-F2 acceptanceProbe",
+        "06-F6 acceptanceProbe",
+        "06-F9 acceptanceProbe"
+      ],
+      "regressionChecks": [
+        "unavailable/prepareRename/empty action",
+        "overlap/dedupe",
+        "injected filesystem containment",
+        "compact receipt journal/UI propagation"
+      ],
+      "completionEvidence": "Real supported server task renames an interface and all consumers under concurrent writer injection; source versions/hashes and full operation receipts match, then build/test validation succeeds.",
+      "stopDeferRule": "If an operation/encoding is unsupported, refuse the whole semantic edit with a typed reason; a flattened subset is not completion."
+    },
+    {
+      "id": "06-W5",
+      "title": "Make oversized observations memory-bounded and cancellable",
+      "findingIds": [
+        "06-F11"
+      ],
+      "sourceAnchors": [
+        "sdk/src/tools/node-filesystem.ts:147",
+        "sdk/src/tools/read-files.ts:375"
+      ],
+      "intendedBehavior": "Bound working memory independently of longest line/file size while preserving honest line counts/completeness and closing in-flight reads.",
+      "smallestScope": [
+        "streaming range line counter",
+        "selected-line budget/discard state",
+        "optional cancellation capability",
+        "instrumented long-line and abort probes"
+      ],
+      "prerequisites": [],
+      "languageDecision": "Repair the TS stream algorithm first; benchmark before proposing a native reader.",
+      "acceptanceProbes": [
+        "06-F11 acceptanceProbe"
+      ],
+      "regressionChecks": [
+        "distant oversized selectors",
+        "complete-only anchors",
+        "line-count/final-newline behavior",
+        "unsupported adapter refusal"
+      ],
+      "completionEvidence": "Buffered bytes remain bounded by configured budget plus fixed chunk overhead, cancellation closes the stream, and no partial observation mints authority.",
+      "stopDeferRule": "Do not claim bounded read availability solely from bounded output; publish memory/latency envelopes for the chosen workload."
+    }
+  ],
+  "probeExecutions": [
+    {
+      "script": "evidence/06-edit-probes.ts",
+      "result": "evidence/06-edit-probes.json",
+      "exitCode": 0,
+      "environment": "Bun 1.3.14; owned /tmp fixtures only"
+    },
+    {
+      "script": "evidence/06-mutation-truth-probe.ts",
+      "result": "evidence/06-mutation-truth-probe.json",
+      "exitCode": 0,
+      "environment": "Bun 1.3.14; owned /tmp fixtures only"
+    },
+    {
+      "script": "evidence/06-workspace-edit-probe.ts",
+      "result": "evidence/06-workspace-edit-probe.json",
+      "exitCode": 0,
+      "environment": "Bun 1.3.14; owned /tmp fixtures only"
+    },
+    {
+      "script": "evidence/06-text-preservation-probe.ts",
+      "result": "evidence/06-text-preservation-probe.json",
+      "exitCode": 0,
+      "environment": "Bun 1.3.14; owned /tmp fixtures only"
+    },
+    {
+      "script": "evidence/06-broker-lock-probe.ts",
+      "result": "evidence/06-broker-lock-probe.json",
+      "exitCode": 0,
+      "environment": "Bun 1.3.14; owned /tmp fixtures only"
+    },
+    {
+      "script": "evidence/06-broker-recovery-containment-probe.ts",
+      "result": "evidence/06-broker-recovery-containment-probe.json",
+      "exitCode": 0,
+      "environment": "Bun 1.3.14; owned /tmp fixtures only"
+    }
+  ],
+  "summary": {
+    "findings": 12,
+    "high": 7,
+    "medium": 5,
+    "capabilities": 8,
+    "inspectedFiles": 57,
+    "inspectedRanges": 92,
+    "inspectedLines": 15005,
+    "topConclusions": [
+      "The body has real authenticated read authority and a shared mutation coordinator, but its CAS takeover and applied-receipt truth can fail even for cooperating writers.",
+      "Semantic and restart-recovery paths lose version/preimage/ownership information, so a model cannot rely on reported completion to imply a complete, lossless interface edit."
+    ]
+  }
+}

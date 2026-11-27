@@ -11,6 +11,21 @@ import type { SkillDefinition, SkillsMap } from '@codebuff/common/types/skill'
 
 let skillsCache: SkillsMap = {}
 let projectSkillsTrusted = true
+let registryRoot: string | null = null
+let loadGeneration = 0
+
+interface SkillRegistryLoadDeps {
+  getRoot: () => string
+  loadSkills: typeof sdkLoadSkills
+}
+const defaultLoadDeps: SkillRegistryLoadDeps = {
+  getRoot: () => getProjectRoot() || process.cwd(),
+  loadSkills: sdkLoadSkills,
+}
+
+export function invalidateSkillRegistryLoads(): void {
+  loadGeneration++
+}
 
 /**
  * Initialize the skill registry by loading skills via the SDK.
@@ -20,21 +35,33 @@ let projectSkillsTrusted = true
  * - ~/.agents/skills/ (global)
  * - {projectRoot}/.agents/skills/ (project, overrides global)
  */
-export async function initializeSkillRegistry(options?: {
-  trustProjectSkills?: boolean
-}): Promise<void> {
-  const cwd = getProjectRoot() || process.cwd()
+export async function initializeSkillRegistry(
+  options?: {
+    trustProjectSkills?: boolean
+  },
+  injectedDeps: Partial<SkillRegistryLoadDeps> = {},
+): Promise<void> {
+  const deps = { ...defaultLoadDeps, ...injectedDeps }
+  const cwd = deps.getRoot()
+  const generation = ++loadGeneration
+  const trustProjectSkills = options?.trustProjectSkills ?? true
+  const ownsLoad = () => generation === loadGeneration && cwd === deps.getRoot()
+  if (registryRoot !== cwd || projectSkillsTrusted !== trustProjectSkills)
+    skillsCache = {}
+  registryRoot = cwd
+  projectSkillsTrusted = trustProjectSkills
 
   try {
-    projectSkillsTrusted = options?.trustProjectSkills ?? true
     // Load skills from both global (~/.agents/skills) and project directories
     // The SDK handles merging, with project skills overriding global ones
-    skillsCache = await sdkLoadSkills({
+    const loaded = await deps.loadSkills({
       cwd,
-      includeProjectSkills: projectSkillsTrusted,
+      includeProjectSkills: trustProjectSkills,
       verbose: false,
     })
+    if (ownsLoad()) skillsCache = loaded
   } catch (error) {
+    if (!ownsLoad()) return
     logger.warn({ error }, 'Failed to load skills')
     skillsCache = {}
   }
@@ -100,6 +127,8 @@ export function getLoadedSkillsMessage(): string | null {
  * Clear cached skills. Intended for test scenarios.
  */
 export function __resetSkillRegistryForTests(): void {
+  invalidateSkillRegistryLoads()
+  registryRoot = null
   skillsCache = {}
   projectSkillsTrusted = true
 }

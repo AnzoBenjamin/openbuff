@@ -57,10 +57,47 @@ export interface UseChatStreamingReturn {
   setStreamStatus: (status: StreamStatus) => void
 
   // Queue management
+  interruptStreaming: (controller: AbortController | null | undefined) => void
   queuedMessages: QueuedMessage[]
+  queueError: string | null
+  attachmentRemovalCount: number
+  queueAttachmentNotice: string | null
+  hasQueuedAttachmentReads: ReturnType<
+    typeof useMessageQueue
+  >['hasQueuedAttachmentReads']
+  getQueuedAttachmentRevision: ReturnType<
+    typeof useMessageQueue
+  >['getQueuedAttachmentRevision']
+  updateQueuedAttachment: ReturnType<
+    typeof useMessageQueue
+  >['updateQueuedAttachment']
+  cancelQueuedAttachmentRetry: ReturnType<
+    typeof useMessageQueue
+  >['cancelQueuedAttachmentRetry']
+  removeQueuedAttachment: ReturnType<
+    typeof useMessageQueue
+  >['removeQueuedAttachment']
+  undoQueuedAttachmentRemoval: ReturnType<
+    typeof useMessageQueue
+  >['undoQueuedAttachmentRemoval']
+  updateQueuedMessage: (
+    id: string,
+    update: Partial<Pick<QueuedMessage, 'content' | 'agentMode'>>,
+  ) => boolean
+  removeQueuedMessage: (id: string) => QueuedMessage | undefined
+  moveQueuedMessage: (id: string, direction: -1 | 1) => void
+  undoQueueRemoval: () => number
+  queueRemovalCount: number
+  cancelQueuedMessages: (ids?: readonly string[]) => QueuedMessage[]
   queuePaused: boolean
   streamMessageIdRef: MutableRefObject<string | null>
-  addToQueue: (message: string, attachments?: PendingAttachment[]) => void
+  getPromptTurnState: ReturnType<typeof useMessageQueue>['getPromptTurnState']
+  addToQueue: (
+    message: string,
+    attachments: PendingAttachment[],
+    agentMode: AgentMode,
+  ) => void
+  parkRejectedPrompt: ReturnType<typeof useMessageQueue>['parkRejectedPrompt']
   stopStreaming: () => void
   setCanProcessQueue: (value: boolean | ((prev: boolean) => boolean)) => void
   pauseQueue: () => void
@@ -84,7 +121,6 @@ export interface UseChatStreamingReturn {
 
   // Exit handling
   handleCtrlC: () => true
-  ensureQueueActiveBeforeSubmit: () => boolean
   nextCtrlCWillExit: boolean
 }
 
@@ -144,10 +180,27 @@ export function useChatStreaming({
   // Message queue
   const {
     queuedMessages,
+    queueError,
+    attachmentRemovalCount,
+    queueAttachmentNotice,
+    hasQueuedAttachmentReads,
+    getQueuedAttachmentRevision,
+    updateQueuedAttachment,
+    cancelQueuedAttachmentRetry,
+    removeQueuedAttachment,
+    undoQueuedAttachmentRemoval,
+    queueRemovalCount,
+    cancelQueuedMessages,
+    updateQueuedMessage,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    undoQueueRemoval,
     streamStatus,
     queuePaused,
     streamMessageIdRef,
+    getPromptTurnState,
     addToQueue,
+    parkRejectedPrompt,
     stopStreaming,
     setStreamStatus,
     setCanProcessQueue,
@@ -157,7 +210,7 @@ export function useChatStreaming({
     isQueuePausedRef,
     isProcessingQueueRef,
   } = useMessageQueue(
-    (message: QueuedMessage) => {
+    (message: QueuedMessage, admission) => {
       const send = sendMessageRef.current
       if (!send) {
         // The send handler ref is not yet wired up (e.g. before the chat
@@ -166,8 +219,7 @@ export function useChatStreaming({
         // Log and reject so the queue layer surfaces the failure instead of
         // pretending the send succeeded.
         logger.warn(
-          { content: message.content },
-          '[chat-streaming] sendMessageRef.current is undefined; message dropped.',
+          '[chat-streaming] Send handler is not initialized; retaining the queued prompt.',
         )
         return Promise.reject(
           new Error(
@@ -175,14 +227,28 @@ export function useChatStreaming({
           ),
         )
       }
-      return send({
-        content: message.content,
-        agentMode,
-        attachments: message.attachments,
-      })
+      return send(
+        {
+          content: message.content,
+          agentMode: message.agentMode,
+          attachments: message.attachments,
+        },
+        admission,
+      )
     },
     isChainInProgressRef,
     activeAgentStreamsRef,
+  )
+
+  const interruptStreaming = useCallback(
+    (controller: AbortController | null | undefined) => {
+      // Pause before abort listeners can synchronously settle a turn and release
+      // its queue gate. Do not rely on the last render's queue length: an enqueue
+      // may already have updated the queue ref in this same input batch.
+      pauseQueue()
+      controller?.abort()
+    },
+    [pauseQueue],
   )
 
   // Queue UI
@@ -195,6 +261,7 @@ export function useChatStreaming({
   } = useQueueUi({
     queuePaused,
     queuedMessages,
+    queueRemovalCount,
     separatorWidth,
     terminalWidth,
   })
@@ -206,10 +273,10 @@ export function useChatStreaming({
   })
 
   // Queue controls
-  const { handleCtrlC, ensureQueueActiveBeforeSubmit } = useQueueControls({
+  const { handleCtrlC } = useQueueControls({
     queuePaused,
     queuedCount,
-    clearQueue,
+    clearQueue: cancelQueuedMessages,
     resumeQueue,
     inputHasText: Boolean(inputValue),
     baseHandleCtrlC,
@@ -235,10 +302,28 @@ export function useChatStreaming({
     setStreamStatus,
 
     // Queue management
+    interruptStreaming,
     queuedMessages,
+    queueError,
+    attachmentRemovalCount,
+    queueAttachmentNotice,
+    hasQueuedAttachmentReads,
+    getQueuedAttachmentRevision,
+    updateQueuedAttachment,
+    cancelQueuedAttachmentRetry,
+    removeQueuedAttachment,
+    undoQueuedAttachmentRemoval,
+    queueRemovalCount,
+    cancelQueuedMessages,
+    updateQueuedMessage,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    undoQueueRemoval,
     queuePaused,
     streamMessageIdRef,
+    getPromptTurnState,
     addToQueue,
+    parkRejectedPrompt,
     stopStreaming,
     setCanProcessQueue,
     pauseQueue,
@@ -256,7 +341,6 @@ export function useChatStreaming({
 
     // Exit handling
     handleCtrlC,
-    ensureQueueActiveBeforeSubmit,
     nextCtrlCWillExit,
   }
 }

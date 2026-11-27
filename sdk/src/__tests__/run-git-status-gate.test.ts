@@ -1,9 +1,8 @@
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
 import { OpenbuffClient } from '../client'
+import { beginSdkCallback, createSdkCallbackFixture } from './sdk-callback-fixture'
 import * as databaseModule from '../impl/database'
 import { applyGitStatusGate } from '../run'
 
@@ -155,8 +154,13 @@ describe('applyGitStatusGate', () => {
 // A git_status override produces the built-in observation shape
 // ({branch?, status, diff?, truncated?}) that the gate recognizes.
 describe('git_status per-turn change-gating (run integration)', () => {
+  let fixture: ReturnType<typeof createSdkCallbackFixture>
+  beforeEach(() => {
+    fixture = createSdkCallbackFixture('run-git-status-gate')
+  })
   afterEach(() => {
     mock.restore()
+    fixture.close()
   })
 
   const mockDatabase = () => {
@@ -180,8 +184,9 @@ describe('git_status per-turn change-gating (run integration)', () => {
 
   const makeClient = (gitStatusImpl: () => ToolResultOutput[]) =>
     new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/repo',
+      cwd: fixture.cwd,
       handleEvent: () => {},
       overrideTools: {
         git_status: async () => gitStatusImpl(),
@@ -194,8 +199,9 @@ describe('git_status per-turn change-gating (run integration)', () => {
     const results: ToolResultOutput[][] = []
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: CallMainPromptParams) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const { sessionState, request: requestToolCall } = callback
 
         results.push(
           (
@@ -261,8 +267,9 @@ describe('git_status per-turn change-gating (run integration)', () => {
     const results: ToolResultOutput[][] = []
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: CallMainPromptParams) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const { sessionState, request: requestToolCall } = callback
 
         results.push(
           (
@@ -319,8 +326,9 @@ describe('git_status per-turn change-gating (run integration)', () => {
     const runResults: ToolResultOutput[][][] = []
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: CallMainPromptParams) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const { sessionState, request: requestToolCall } = callback
 
         const outputs: ToolResultOutput[][] = []
         outputs.push(

@@ -257,6 +257,9 @@ export async function callMainPrompt(
         type: 'finish',
         agentId: sessionState.mainAgentState.agentType ?? undefined,
         totalCost: sessionState.mainAgentState.creditsUsed,
+        runOutcome: sessionState.mainAgentState.runOutcome,
+        taskAcceptance: sessionState.mainAgentState.taskAcceptance,
+        actionOutcomes: sessionState.mainAgentState.actionOutcomes,
       },
     },
   })

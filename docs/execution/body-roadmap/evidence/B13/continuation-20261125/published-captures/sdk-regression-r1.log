@@ -1,0 +1,160 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b13-memory-restart.test.ts:
+Using environment: test
+(pass) B13 actual tool outputs → three production compactions → SQLite → fresh SDK first request and original pages [4132.53ms]
+
+sdk/src/__tests__/context-archive-reader.test.ts:
+(pass) B13 host-bound archive body reader > authenticates actors/tasks and never passes peer-selected authority to storage [1.49ms]
+(pass) B13 host-bound archive body reader > withholds strict-reader and edited-branch canonical archive bytes [0.31ms]
+(pass) B13 host-bound archive body reader > rejects wrong source/value/hash/range and preserves typed expiry [0.47ms]
+
+sdk/src/__tests__/run-state-targeted-copy.test.ts:
+Using environment: test
+(pass) withMessageHistory targeted copy > gives root, sessionState, and mainAgentState fresh identities and installs the new history [2.57ms]
+(pass) withMessageHistory targeted copy > shares copy-on-write memory but owns mutable runtime controls [0.42ms]
+(pass) withMessageHistory targeted copy > mutating a copy-on-write nested node after the copy does not corrupt either side [0.33ms]
+(pass) withMessageHistory targeted copy > copies gate controls before a prior run is frozen [0.35ms]
+(pass) withMessageHistory targeted copy > the shared nested nodes cross the targeted-copy boundary deep-frozen, so an in-place write cannot alias state across runs [0.45ms]
+(pass) applyOverridesToSessionState targeted copy > owns mutable controls without cloning transcript bodies (frozen base: %s) [8.33ms]
+(pass) applyOverridesToSessionState targeted copy > owns mutable controls without cloning transcript bodies (frozen base: %s) [0.69ms]
+(pass) applyOverridesToSessionState targeted copy > gate bookkeeping remains writable if the previous state is frozen after resuming [0.47ms]
+(pass) applyOverridesToSessionState targeted copy > returns a fresh root/fileContext/mainAgentState without mutating the base state [0.67ms]
+
+sdk/src/__tests__/memory-v2-child-authority.test.ts:
+Using environment: test
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 unavailable [169.69ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 throws [73.29ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 invalid [57.06ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 empty [69.76ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 unavailable [67.96ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 throws [63.24ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 invalid [64.09ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 empty [66.05ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 unavailable [65.46ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 throws [84.17ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 invalid [70.52ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 empty [56.97ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 unavailable [49.58ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 throws [58.49ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 invalid [57.31ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 empty [72.06ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 unavailable [1182.70ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 throws [1176.68ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 invalid [1157.70ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 empty [1109.93ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 unavailable [959.35ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 throws [956.16ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 invalid [933.24ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 empty [904.10ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 unavailable [906.02ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 throws [900.08ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 invalid [931.46ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 empty [881.78ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 unavailable [922.16ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 throws [894.62ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 invalid [983.35ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 empty [909.65ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: json-v1, supervised=false [48.35ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: shadow-v2, supervised=false [48.54ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: default-config, supervised=false [54.52ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: legacy-shadow, supervised=false [50.12ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: no-config, supervised=false [44.07ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: invalid-authority, supervised=false [41.44ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: json-v1, supervised=true [972.57ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: shadow-v2, supervised=true [888.44ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: default-config, supervised=true [918.65ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: legacy-shadow, supervised=true [895.33ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: no-config, supervised=true [993.30ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: invalid-authority, supervised=true [889.11ms]
+(pass) B12 real SDK child memory source selection > legacy inject selection is captured before setup awaits and cannot be changed by the caller [42.01ms]
+(pass) authenticated parent-mediated child memory selection > real socket resolution binds the full registered task and rejects parent/peer/task substitution [14.83ms]
+
+sdk/src/__tests__/memory-v2-roundtrip.test.ts:
+Using environment: test
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed retains explicit own fact, decision and rationale across a new process [1240.62ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed retains explicit own fact, decision and rationale across a new process [1209.92ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled retains explicit own fact, decision and rationale across a new process [1160.58ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed precommit terminal checkpoint reconciles unchanged identities after reopen [1202.85ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1140.96ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed precommit terminal checkpoint reconciles unchanged identities after reopen [1091.43ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1092.68ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled precommit terminal checkpoint reconciles unchanged identities after reopen [1054.95ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled lost-ack terminal checkpoint reconciles unchanged identities after reopen [1095.09ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > caller cancellation does not settle the SDK before its terminal memory append [71.11ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > genuinely captured ranked facts exceed 12k while the complete high-ranked claim survives [1260.71ms]
+
+sdk/src/__tests__/native-tool-observation.test.ts:
+Using environment: test
+(pass) host-owned native observation wiring and correlation > getAgentRuntimeImpl conditionally carries the same optional callback [0.32ms]
+(pass) host-owned native observation wiring and correlation > no Memory V2 configuration installs no observer; unavailable repository still installs coordinator degradation [0.42ms]
+(pass) host-owned native observation wiring and correlation > forwards a valid correlated completion exactly once as native, never as MCP or canonical verification [2.36ms]
+(pass) host-owned native observation wiring and correlation > completed metadata can correlate an already-cancelled actual signal without execution reauthorization [0.81ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"actor":{"runId":"sibling-run","rootRunId":"root-run","agentId":"actual-child"}} [0.55ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"actor":{"runId":"child-run","rootRunId":"root-run","agentId":"root-agent"}} [0.15ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"sibling-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.11ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"foreign-root","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.11ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"other-attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.08ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"forged-basis","workspaceSnapshotId":"snapshot"}} [0.08ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"other-snapshot"}} [0.08ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":4},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.07ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"forged-hash","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.07ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"callId":"other-call"} [0.10ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"userInputId":"sibling-input"} [0.07ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"toolName":"read_files"} [0.08ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"input":{"text":"A substituted claim because it is not the registered input","kind":"decision","evidenceSelectors":["src/storage.ts"]}} [0.12ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"signal":{}} [0.22ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"output":[{"type":"json","value":{"text":"Use SQLite because decisions must survive process restarts","kind":"decision","evidenceSelectors":["src/storage.ts"],"evidenceCount":"invalid"}}]} [0.84ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"output":[{"type":"json","value":{"errorMessage":"local record failed"}}]} [0.30ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"output":[{"type":"json","value":{"text":"Use SQLite because decisions must survive process restarts","kind":"decision","evidenceSelectors":["src/storage.ts"],"message":"Incomplete record","evidenceCount":1,"errorMessage":"failed record"}}]} [0.11ms]
+(pass) host-owned native observation wiring and correlation > requires private actor/action registration and a record_decision start, not just a plausible descriptor [0.68ms]
+(pass) host-owned native observation wiring and correlation > handler verifiedAt claims are stripped, not forwarded as canonical verification [0.45ms]
+(pass) host-owned native observation wiring and correlation > an unavailable repository keeps honest coordinator degradation while the observer remains installed [0.75ms]
+(pass) host-owned native observation wiring and correlation > isolates coordinator failures and keeps capture input/output separate from runtime result objects [0.43ms]
+(pass) completed-observation coordinator bookkeeping > an active prepared turn accepts completed native metadata after cancellation without verification [8.82ms]
+(pass) completed-observation coordinator bookkeeping > ordinary cancellation-sensitive captures are unchanged [1.03ms]
+(pass) completed-observation coordinator bookkeeping > a replaced preparation generation cannot append a late completed observation into the next turn [3.11ms]
+(pass) completed-observation coordinator bookkeeping > a finished turn still rejects late completed metadata [2.66ms]
+
+sdk/src/__tests__/supervised-native-tool-observation.test.ts:
+Using environment: test
+(pass) supervised completed native observation transport > the real socket RPC awaits the host observer, with the authenticated actor signal [32.05ms]
+(pass) supervised completed native observation transport > validated input hash correlation tolerates native defaults/trim without changing the original action basis [3.50ms]
+(pass) supervised completed native observation transport > cancelled metadata retains the authenticated cancelled host signal while subsequent dispatch stays refused [3.78ms]
+(pass) supervised completed native observation transport > sibling/root, actor/action, call, input and task substitution are refused even after cancellation [4.91ms]
+(pass) supervised completed native observation transport > a missing parent hook is an explicit awaited RPC refusal, not a silent successful notification [1.07ms]
+(pass) supervised completed native observation transport > a timed-out awaited host hook releases RPC occupancy and observes its late rejection [2008.73ms]
+(pass) supervised completed native observation transport > a real supervised child local handler notifies the authenticated parent before its native UI result [918.51ms]
+
+sdk/src/__tests__/strict-project-read-actors.test.ts:
+Using environment: test
+(pass) SDK admission and scoped strict read attribution > static opt-in denies sensitive/temp reads despite actor/root/policy tool-param tampering [115.87ms]
+(pass) SDK admission and scoped strict read attribution > restored template JSON cannot discard admission strictness or select a different root [71.85ms]
+(pass) SDK admission and scoped strict read attribution > parent strictness inherits to a non-opt-in child (in process) [54.82ms]
+(pass) SDK admission and scoped strict read attribution > parent strictness inherits to a non-opt-in child (real supervised process) [1057.56ms]
+(pass) SDK admission and scoped strict read attribution > fresh root discovery uses the guarded read view instead of loading hard-linked knowledge [59.12ms]
+(pass) SDK admission and scoped strict read attribution > optional reads and metadata tools use the same strict actor view [97.46ms]
+(pass) SDK admission and scoped strict read attribution > strict children do not globally switch their non-opt-in parent to project mode [46.58ms]
+(pass) SDK admission and scoped strict read attribution > non-opt-in unrestricted control ignores forged strictness in restored JSON [66.51ms]
+(pass) SDK admission and scoped strict read attribution > unguarded search/index/control readers and cached repository source refuse before dispatch [31.68ms]
+
+sdk/src/__tests__/strict-project-read-skills.test.ts:
+Using environment: test
+(pass) strict root skill bootstrap read boundary > explicit outside skills are withheld on fresh strict startup, ordinary control unchanged [126.27ms]
+(pass) strict root skill bootstrap read boundary > strict continuation removes inherited outside skill bytes without disk fallback [41.59ms]
+(pass) strict root skill bootstrap read boundary > a hard-linked project skill is not loaded through raw bootstrap [21.24ms]
+
+sdk/src/__tests__/strict-project-read-registry.test.ts:
+Using environment: test
+(pass) parent-owned supervised read registry > real guarded reads reject root/sibling/issuer/identity substitution and retain parent cancellation [14.21ms]
+
+sdk/src/__tests__/repository-intelligence-knowledge.test.ts:
+Using environment: test
+(pass) durable knowledge before actor execution > a stalled source attestation cannot block the first actor context indefinitely [88.89ms]
+(pass) durable knowledge before actor execution > two real fresh SDK runs and transcript-isolated children recall a real persisted fact before handleSteps [427.47ms]
+(pass) durable knowledge before actor execution > fresh actors reuse unchanged dependencies across workspace revisions and reread a changed source [92.11ms]
+
+ 122 pass
+ 0 fail
+ 1195 expect() calls
+Ran 122 tests across 11 files. [48.04s]

@@ -1,0 +1,677 @@
+{
+  "shardId": "07-languages",
+  "question": "Where are target-language profiles and open/generic capabilities, grammar/parser/query assets, import/symbol/SCIP semantics, LSP roots/lifecycle/document sync/navigation/diagnostic delta, actual compiler/build/test-target discovery and cross-language contract boundaries wired?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "common",
+    "packages",
+    "sdk",
+    "cli",
+    "docs",
+    ".github"
+  ],
+  "selectedFiles": [
+    {
+      "path": "common/src/util/language-capabilities.ts",
+      "from": 1,
+      "to": 588,
+      "reason": "Canonical target-language IDs, extensions/manifests, bundled idioms, display-only tooling metadata, launchable tool specs and validation-stage contract. Compare generic/unknown-language behavior with finite supported-language IDs and the actual consumers below."
+    },
+    {
+      "path": "common/src/util/language-profiles.ts",
+      "from": 267,
+      "to": 364,
+      "reason": "Task/path scoping, stable registry-order profile selection, repository fallback and no-language empty prompt. Real template consumer is strings.ts 184-188, which supplies task text and maxProfiles."
+    },
+    {
+      "path": "packages/code-map/src/languages.ts",
+      "from": 146,
+      "to": 620,
+      "reason": "Development/package/binary WASM and tag-query resolution, trusted API versus environment override, initialization retry, parser/language/query memoization, import-query fallback, legacy binary repair and public unavailable/syntax-check behavior."
+    },
+    {
+      "path": "packages/code-map/__tests__/all-language-wasm.test.ts",
+      "from": 1,
+      "to": 54,
+      "reason": "Packaged parser/query availability assertions and package-source setup. Inspect against root evidence logs and distinguish this development fixture's package-only asset lookup from SDK build repair and installed-binary repair paths."
+    },
+    {
+      "path": "packages/code-map/src/structure.ts",
+      "from": 827,
+      "to": 1084,
+      "reason": "Actual structural parser and symbol/call-site extraction lifecycle, no-grammar/null versus empty symbols, captures/AST definitions, type/modifier/doc fields, syntax state and tree cleanup. PHP/GDScript failure fixtures are secondary references."
+    },
+    {
+      "path": "packages/indexer/src/import-resolution.ts",
+      "from": 1,
+      "to": 413,
+      "reason": "Shared import extraction plus concrete per-ecosystem resolution for TS aliases, Python packages, Rust crate/self/super imports, Go module identity, JVM package and PHP namespace declarations; ambiguous/external import behavior and file-graph boundary."
+    },
+    {
+      "path": "packages/indexer/src/scip-ingest.ts",
+      "from": 235,
+      "to": 430,
+      "reason": "Precise symbol-to-file edge derivation, definition-bit/local-symbol handling, deterministic duplicate semantics, document/occurrence/range input validation and safe relative-path rules. The actual subprocess and CLI adoption consumers are secondary references."
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 263,
+      "to": 697,
+      "reason": "Initialize handshake, framed JSON-RPC requests, pending/frame limits and timeouts, server-originated message handling, didOpen/didChange/didClose and connection-local versions, process crash/stop and marker-based cached root resolution."
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 785,
+      "to": 1056,
+      "reason": "Registry language/spec routing, unsupported/no-server/TCP distinctions, bounded server pool and eviction, single-flight cold starts, crash restart/give-up behavior, disposal during startup, on-demand document open and query request bridge. WorkspaceEdit normalization begins after this slice and belongs to pair06."
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 498,
+      "to": 735,
+      "reason": "Real injected-filesystem/spawner service factory, containment-checked on-demand document open, sync-version limits, typed unavailable/error conversion, definition/references/hover/workspace-symbol query consumers. Mutation splice/WorkspaceEdit sections are excluded."
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 938,
+      "to": 1025,
+      "reason": "Production post-mutation document synchronization and delete close path, already-built service guard, file/language/size/count bounds, parallel disk reads, per-path version tracking, per-path failure policy and disposal. The SDK run consumer is verified at run.ts 3234."
+    },
+    {
+      "path": "sdk/src/services/diagnostic-delta.ts",
+      "from": 131,
+      "to": 494,
+      "reason": "Language-to-real-command dispatch, bounded capture through injected runner, parser handoff, strict/tolerant delta identity, pre-edit baseline versus no-op observer semantics, apply/rollback failures and reject-on-new-error/fix-it output."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1540,
+      "to": 2280,
+      "reason": "Affected test conventions, deepest workspace ownership, test-impact tiers and confidence, manifest-confirmed Cargo package names and JS test scripts, optional reverse-dependency seam, inferred real build/test command candidates and async build-target discovery. Tool version and manifest discovery are secondary slices."
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 508,
+      "to": 553,
+      "reason": "Published SDK WASM copying: package candidates, C# asset rename, pinned local/binary-repair source reuse, required-asset failure and checksum manifest. Read bundle/query treatment and SDK package manifest as adjacent contract evidence."
+    },
+    {
+      "path": "cli/scripts/build-binary.ts",
+      "from": 626,
+      "to": 689,
+      "reason": "CLI binary layout: core runtime WASM and every language grammar as siblings, SHA-256 manifest, tag-query directory copying and standalone smoke boundary. Trace the release tar step rather than assuming build output is installed output."
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 451,
+      "to": 473,
+      "reason": "Real matrix release archive consumer of cli/bin: explicitly assembled binary/WASM/manifest/legacy file list and uploaded artifact. Compare with builder query directory output and Windows tar branch 638-656."
+    },
+    {
+      "path": "sdk/src/__tests__/lsp-real-server.test.ts",
+      "from": 1,
+      "to": 124,
+      "reason": "Availability-gated real clangd fixture and definition resolution through the on-demand didOpen seam, complementing mock protocol tests. The remaining rename/code-action fixtures are pair06's mutation scope."
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 101,
+      "to": 130,
+      "reason": "Documented grammar ecosystems, immutable repair versus unavailable behavior, SDK/binary source distinctions and language-aware conservative import graph responsibilities."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "common/src/util/language-profiles.ts",
+      "from": 1,
+      "to": 266,
+      "reason": "Extension/manifest lookup, unsupported path detection, family separation for TS versus JS and C versus C++, regex scoping setup."
+    },
+    {
+      "path": "common/src/util/language-capability-manifest.ts",
+      "from": 1,
+      "to": 105,
+      "reason": "Public serialized manifest version/schema, closed language-key shape and registry deep-clone API contract."
+    },
+    {
+      "path": "common/src/util/__tests__/language-profiles.test.ts",
+      "from": 144,
+      "to": 377,
+      "reason": "Unsupported/hidden paths, case sensitivity, GDScript and focused task/path versus repository profile tests."
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/strings.ts",
+      "from": 181,
+      "to": 188,
+      "reason": "Verified real prompt consumer: task text, maxProfiles=3 and engine guidance concatenation."
+    },
+    {
+      "path": "packages/code-map/src/languages.ts",
+      "from": 1,
+      "to": 145,
+      "reason": "Concrete grammar and query table, runtime-loader interface and imports."
+    },
+    {
+      "path": "packages/code-map/src/init-node.ts",
+      "from": 1,
+      "to": 110,
+      "reason": "Core tree-sitter runtime initialization contract: shared process-env/global publication, embedded binary bytes, SDK/package/sibling path fallback."
+    },
+    {
+      "path": "packages/code-map/src/grammar-wasm-repair.ts",
+      "from": 1,
+      "to": 404,
+      "reason": "Immutable GDScript ABI/build provenance and all asset pins, checksum verification, bounded download/retry and atomic repair source resolver. Read only if asset availability or release verification remains uncertain; no fetch is authorized."
+    },
+    {
+      "path": "packages/code-map/src/parse.ts",
+      "from": 734,
+      "to": 817,
+      "reason": "Parser/query consumption, AST import captures, symbols/calls and resource cleanup before scoring."
+    },
+    {
+      "path": "packages/code-map/src/parse.ts",
+      "from": 878,
+      "to": 929,
+      "reason": "Same-language raw-name caller-edge contract and explicit bridge requirement for cross-language edges."
+    },
+    {
+      "path": "packages/code-map/src/structure.ts",
+      "from": 243,
+      "to": 378,
+      "reason": "Target-language call-site selection and the shared family boundary before the primary structural extraction slice."
+    },
+    {
+      "path": "packages/code-map/src/__tests__/structure.test.ts",
+      "from": 385,
+      "to": 499,
+      "reason": "Exact PHP/Swift/Kotlin and GDScript structure fixtures cited in existing root test logs; compare absent grammar, query rejection and actual extraction rather than merging the failure causes."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1244,
+      "to": 1278,
+      "reason": "Actual import-resolution-to-graph edge consumer."
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1389,
+      "to": 1514,
+      "reason": "Actual same-language call graph and AST-import versus line fallback consumers."
+    },
+    {
+      "path": "packages/indexer/src/scip-ingest.ts",
+      "from": 1,
+      "to": 234,
+      "reason": "Opaque external/local symbol and input contracts, precise-versus-heuristic merge/dedupe limits and query accelerator invalidation."
+    },
+    {
+      "path": "packages/indexer/src/scip-runner.ts",
+      "from": 647,
+      "to": 796,
+      "reason": "Opt-in real indexer discovery/execution, bounded concurrency and one-pass merged snapshot output."
+    },
+    {
+      "path": "cli/src/commands/index-command.ts",
+      "from": 277,
+      "to": 359,
+      "reason": "Verified /index scip entrypoint and real subprocess invocation, status/failure rendering, unavailable hint and snapshot-checked live index adoption."
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1390,
+      "to": 1454,
+      "reason": "Hover/document/workspace symbol query routes, contextual warm server selection, sync didOpen/change/close and pool disposal without WorkspaceEdit normalization."
+    },
+    {
+      "path": "sdk/src/__tests__/lsp-multiplexer.test.ts",
+      "from": 191,
+      "to": 589,
+      "reason": "Unsupported/no-server/TCP, startup/request/crash/pool and warm workspace-symbol routing contracts; avoid later mutation normalization fixtures."
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 789,
+      "to": 1086,
+      "reason": "Document sync bytes, monotonic versions, file bounds, cold-service behavior, close/delete and bounded-version-map behavior."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 24,
+      "to": 82,
+      "reason": "Environment inspection output contract and actual discovered manifest/lockfile names."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 289,
+      "to": 425,
+      "reason": "Per-ecosystem workspace manager inference, nearest lockfile/wrapper selection and unknown confidence."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 603,
+      "to": 823,
+      "reason": "Real executable version probes, timeout/byte limits and cached bounded tool availability collection."
+    },
+    {
+      "path": "sdk/src/tools/get-affected-tests.ts",
+      "from": 1,
+      "to": 46,
+      "reason": "Verified tool consumer of convention/impact discovery and explicit current reverse-dependency graph seam."
+    },
+    {
+      "path": "sdk/src/tools/get-build-targets.ts",
+      "from": 1,
+      "to": 34,
+      "reason": "Verified public get_build_targets consumer of async workspace target discovery and reported targets shape."
+    },
+    {
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "to": 148,
+      "reason": "Actual validation executor delegates to configured file-change hooks, attests worktree identity before/after, and exposes skipped/reduced versus passed/full assurance."
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1663,
+      "to": 1738,
+      "reason": "Actual diagnostic delta hook consumer for already-changed files, failure propagation and observable rejection."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1123,
+      "to": 1135,
+      "reason": "Verified real per-run lazy language service construction with this run's filesystem and spawn."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1429,
+      "to": 1465,
+      "reason": "Verified pre-mutation diagnostic baseline capture and per-call hook wrapper; mutation application remains pair06's responsibility."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2982,
+      "to": 3022,
+      "reason": "Verified tool dispatch for targeted validation, environment/affected tests and definition/references/hover/workspace symbols."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3102,
+      "to": 3110,
+      "reason": "Verified get_build_targets production SDK dispatch."
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 28,
+      "to": 148,
+      "reason": "ESM/CJS bundle externals, .scm loader and published type/build pipeline adjacent to WASM copying."
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93,
+      "reason": "Published dist/exports contract, external runtime dependencies versus dev-only grammar package and Node runtime requirements."
+    },
+    {
+      "path": "sdk/test/tree-sitter-queries/test-query-files.js",
+      "from": 1,
+      "to": 85,
+      "reason": "Packaged SDK query file fixture/expectations; resolve its current packaging assumption against the builder before treating it as integration evidence."
+    },
+    {
+      "path": "cli/src/pre-init/tree-sitter-wasm.ts",
+      "from": 1,
+      "to": 116,
+      "reason": "Actual CLI early core-WASM publication and grammar-directory environment setup before eagerly imported SDK parser construction."
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 638,
+      "to": 655,
+      "reason": "Windows release archive branch to compare with the primary matrix archive."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 152,
+      "to": 178,
+      "reason": "User-facing profile detection, bundled idioms, focused language scoping and prompt consumer guidance."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "target-language-profiles",
+      "name": "Target language detection, generic fallback and model guidance",
+      "trace": [
+        "common/src/util/language-capabilities.ts",
+        "common/src/util/language-profiles.ts",
+        "common/src/util/language-capability-manifest.ts",
+        "packages/agent-runtime/src/templates/strings.ts"
+      ],
+      "inspect": [
+        "finite profile/tool metadata versus generic file/terminal capabilities",
+        "unsupported extensions/manifests and unknown result shape",
+        "explicit task/path scope, stable order and production profile cap",
+        "versioned public manifest and real prompt use"
+      ],
+      "tests": [
+        "common/src/util/__tests__/language-profiles.test.ts",
+        "common/src/util/__tests__/language-capability-manifest.test.ts"
+      ]
+    },
+    {
+      "id": "grammar-query-packaging",
+      "name": "Parser and query availability across development, SDK and release installations",
+      "trace": [
+        "packages/code-map/src/languages.ts",
+        "packages/code-map/src/init-node.ts",
+        "packages/code-map/src/grammar-wasm-repair.ts",
+        "sdk/scripts/build.ts",
+        "sdk/package.json",
+        "cli/scripts/build-binary.ts",
+        ".github/workflows/cli-release-build.yml",
+        "cli/release/index.js",
+        "cli/src/pre-init/tree-sitter-wasm.ts"
+      ],
+      "inspect": [
+        "runtime core WASM versus individual grammar versus query files",
+        "package lookup, SDK dist, sibling release archive and installed wrapper paths",
+        "GDScript immutable asset/ABI source and pinned repair",
+        "unavailable grammar versus disabled query versus empty symbol extraction",
+        "existing PHP/GDScript structure and packaged-asset failures with exact environment"
+      ],
+      "tests": [
+        "packages/code-map/__tests__/all-language-wasm.test.ts",
+        "packages/code-map/__tests__/grammar-wasm-repair.test.ts",
+        "packages/code-map/src/__tests__/structure.test.ts",
+        "sdk/test/tree-sitter-queries/test-query-files.js"
+      ]
+    },
+    {
+      "id": "structural-language-semantics",
+      "name": "Polyglot symbols, imports and same-language call boundaries",
+      "trace": [
+        "packages/code-map/src/structure.ts",
+        "packages/code-map/src/parse.ts",
+        "packages/indexer/src/import-resolution.ts",
+        "packages/indexer/src/metadata-indexer.ts"
+      ],
+      "inspect": [
+        "definitions versus references and language-specific AST captures",
+        "unsupported/no grammar/parse error/empty semantics",
+        "TS/JS and C/C++ family separation",
+        "declared package/module/namespace resolution versus ambiguous/external specifiers",
+        "AST captures to regex fallback and real graph consumers"
+      ],
+      "tests": [
+        "packages/code-map/src/__tests__/structure.test.ts",
+        "packages/indexer/src/import-resolution.test.ts",
+        "packages/indexer/src/call-navigation.test.ts"
+      ]
+    },
+    {
+      "id": "precise-cross-language-reference-contract",
+      "name": "SCIP precise references and cross-language bridge boundaries",
+      "trace": [
+        "packages/code-map/src/parse.ts",
+        "packages/indexer/src/scip-ingest.ts",
+        "packages/indexer/src/scip-runner.ts",
+        "cli/src/commands/index-command.ts"
+      ],
+      "inspect": [
+        "opaque symbol scheme, local/external definitions and file-level edges",
+        "same-language raw-name restriction and explicit bridge evidence",
+        "argv/timeout/worker/dump boundaries of real indexer invocation",
+        "opt-in CLI entrypoint and snapshot-checked adoption",
+        "public payload confidence and heuristic coexistence; generated schema/FFI references only if actual implementation is found"
+      ],
+      "tests": [
+        "packages/indexer/src/scip-ingest.test.ts",
+        "packages/indexer/src/scip-runner.test.ts",
+        "cli/src/commands/__tests__/index-command.test.ts"
+      ]
+    },
+    {
+      "id": "lsp-navigation-lifecycle",
+      "name": "Real language-server roots, launch, navigation and failure lifecycle",
+      "trace": [
+        "common/src/util/language-capabilities.ts",
+        "sdk/src/services/lsp-multiplexer.ts",
+        "sdk/src/services/language-intelligence.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "root-marker order and nearest/nested project ownership",
+        "stdio server selection and unsupported/no-spec/TCP distinctions",
+        "initialize capabilities and actual server response shapes",
+        "pool limits, cold-start concurrency, framing, request timeout, crash restart and disposal",
+        "definition/references/hover/workspace-symbol real consumer and typed empty/unavailable/error shapes",
+        "injected filesystem containment and honest assurance from clangd fixture versus mocks"
+      ],
+      "tests": [
+        "sdk/src/__tests__/lsp-multiplexer.test.ts",
+        "sdk/src/__tests__/language-intelligence.test.ts",
+        "sdk/src/__tests__/lsp-real-server.test.ts"
+      ]
+    },
+    {
+      "id": "lsp-document-sync",
+      "name": "Post-mutation language-server document truth",
+      "trace": [
+        "sdk/src/run.ts",
+        "sdk/src/services/language-intelligence.ts",
+        "sdk/src/services/lsp-multiplexer.ts"
+      ],
+      "inspect": [
+        "on-demand didOpen and later disk-byte didChange",
+        "version map versus connection restart/eviction lifecycle",
+        "file count/size bounds, errors and missing/deleted/recreated documents",
+        "close behavior and service/pool disposal",
+        "WorkspaceEdit mutation version/range/resource validation is pair06, not this capability"
+      ],
+      "tests": [
+        "sdk/src/__tests__/language-intelligence.test.ts",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts"
+      ]
+    },
+    {
+      "id": "compiler-build-test-discovery",
+      "name": "Installed compiler tools, workspace build commands and test targets",
+      "trace": [
+        "sdk/src/services/harness-intelligence.ts",
+        "sdk/src/tools/get-build-targets.ts",
+        "sdk/src/tools/get-affected-tests.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "actual installed executable/version probes versus declarative tooling names",
+        "ecosystem manager, lockfile, wrapper and nearest-workspace inference",
+        "real Cargo manifest package names, JS scripts and available build/test command candidates",
+        "convention, graph and build-tool tiers and confidence",
+        "unknown/absent/unreadable manifest states, cancellation and asynchronous discovery",
+        "target-project language coverage versus generic configured commands"
+      ],
+      "tests": [
+        "sdk/src/__tests__/harness-intelligence.test.ts"
+      ]
+    },
+    {
+      "id": "targeted-validation-execution",
+      "name": "Execution and attestation of target-project validation",
+      "trace": [
+        "sdk/src/tools/run-targeted-validation.ts",
+        "sdk/src/tools/file-change-hooks.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "command discovery versus actual configured-hook execution",
+        "attested worktree snapshot and concurrent drift/re-attestation failure",
+        "passed/full, skipped/reduced and failed/none evidence",
+        "language/compiler/test failures, empty hooks, denied permissions and cancellation",
+        "artifact-kind payload and real gate consumer"
+      ],
+      "tests": [
+        "sdk/src/__tests__/run-targeted-validation.test.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-targeted-validation.test.ts"
+      ]
+    },
+    {
+      "id": "diagnostic-delta",
+      "name": "Compiler diagnostics and reject-only-on-new-errors integration",
+      "trace": [
+        "sdk/src/services/diagnostic-delta.ts",
+        "sdk/src/tools/language-diagnostics.ts",
+        "sdk/src/tools/file-change-hooks.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "actual per-language command coverage and working directory",
+        "stderr/stdout structured versus plain parsing and missing tool behavior",
+        "pre-edit baseline captured before real mutation versus observer no-op capture",
+        "strict/tolerant identity, repeat diagnostics and severity filters",
+        "partial/empty captures, bounded counts, cancellation, runner failures and rollback reporting"
+      ],
+      "tests": [
+        "sdk/src/__tests__/language-diagnostics.test.ts",
+        "sdk/src/__tests__/diagnostic-delta.test.ts"
+      ]
+    }
+  ],
+  "searchCoverage": {
+    "primarySections": 18,
+    "primaryUniqueFiles": 16,
+    "primaryLines": 4507,
+    "inventoryFiles": 3056,
+    "retrieval": "Read pinned INVENTORY.json, language-capability and command/release results from persisted RETRIEVAL.json, AUDIT-CONTRACT.md and pair06 picks. Native query_index/read_files/read_subtree are not exposed in this Codex session; discovery used rg and exact sed reads. This artifact selects source, not conclusions.",
+    "rootsSearched": [
+      "common/src",
+      "packages/code-map/src",
+      "packages/code-map/__tests__",
+      "packages/indexer/src",
+      "packages/agent-runtime/src/templates",
+      "sdk/src",
+      "sdk/scripts",
+      "sdk/test",
+      "cli/src",
+      "cli/scripts",
+      "cli/release",
+      ".github/workflows",
+      "docs"
+    ],
+    "queries": [
+      "SupportedLanguageId/LanguageCapability/getLanguageToolSpecs/getLanguageFamily/selectLanguageProfiles",
+      "grammar WASM/parser/query resolution/init/retry/source checksum",
+      "SCIP opaque symbol_roles/local symbols/precise edges/opt-in adoption",
+      "LSP rootMarkers/initialize/framing/startup/request timeout/restart/LRU/dispose",
+      "didOpen/didChange/didClose/syncMutatedFiles/on-demand open",
+      "diagnostic baseline/captureCommands/strict tolerant delta/preflight/hooks",
+      "get_build_targets/get_affected_tests/run_targeted_validation/compiler tool version probe",
+      "ESM CJS .scm bundling/SDK dist/binary siblings/release archive/installed sibling management",
+      "cross-language raw-name guard/OpenAPI/protobuf/gRPC/FFI/explicit contract bridges"
+    ],
+    "docsRead": [
+      "agents/patterns/audit-codebase.md",
+      "docs/architecture.md 101-137",
+      "docs/agents-and-tools.md 152-178",
+      "AUDIT-CONTRACT.md"
+    ],
+    "verifiedConsumerReads": [
+      {
+        "path": "packages/agent-runtime/src/templates/strings.ts",
+        "from": 174,
+        "to": 202,
+        "detail": "Real profile rendering uses task text and maxProfiles=3."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1123,
+        "to": 1137,
+        "detail": "Real per-run service receives resolved filesystem and spawn."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 1429,
+        "to": 1468,
+        "detail": "Real pre-mutation baseline and per-call diagnostic hook wrapper."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 2981,
+        "to": 3024,
+        "detail": "Real dispatch for targeted validation, environment/affected tests and navigation."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 3088,
+        "to": 3117,
+        "detail": "Real get_build_targets dispatch."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 3226,
+        "to": 3244,
+        "detail": "Confirmed-mutation consumer forwards source paths/deletes to language service sync; mutation application is pair06."
+      },
+      {
+        "path": "sdk/src/tools/get-affected-tests.ts",
+        "from": 1,
+        "to": 46,
+        "detail": "Actual convention/test-impact consumer with current graph seam stated in output."
+      },
+      {
+        "path": "cli/src/commands/index-command.ts",
+        "from": 289,
+        "to": 359,
+        "detail": "Actual /index scip runner, failure/status rendering and snapshot-checked adoption."
+      },
+      {
+        "path": ".github/workflows/cli-release-build.yml",
+        "from": 451,
+        "to": 482,
+        "detail": "Actual matrix release archive membership."
+      },
+      {
+        "path": ".github/workflows/cli-release-build.yml",
+        "from": 635,
+        "to": 655,
+        "detail": "Actual Windows release archive membership."
+      }
+    ],
+    "existingTestEvidence": [
+      {
+        "path": "/tmp/openbuff-body-review-2026-11-05/evidence/code-map-tests.log",
+        "detail": "Root run: 154 pass / 4 fail. Specific failures are packaged GDScript asset setup, PHP/Swift/Kotlin structure fixture at the PHP assertion, and two GDScript structure fixtures. This is existing root evidence, not a picker-run test."
+      },
+      {
+        "path": "/tmp/openbuff-body-review-2026-11-05/evidence/code-map-structure-alone.log",
+        "detail": "Root isolated run: 17 pass / 3 fail at PHP and two GDScript structure fixtures. Read against runtime/package/repair paths; do not relabel as generic network or FFI failures."
+      }
+    ],
+    "sampling": "18 required bounded sections are the primary auditor slice. Secondary ranges are adaptive references for unresolved asset, compiler, consumer, schema or failure-state questions. Exact discovery reads and symbol/test searches are not a claim of full-line audit. No tests, source mutations, external API calls or private configuration reads were performed by this picker.",
+    "excluded": [
+      "WorkspaceEdit mutation versions, resource operations, range validation, semantic edit splice/commit and mutation authority belong to pair06.",
+      "Indexer ranking/retrieval/cache audit remains with its assigned shard; this pair traces target-language import/symbol/SCIP contract semantics.",
+      "Terminal execution sandbox/approval policy belongs to its assigned execution shard; compiler and validation callsites are traced only for language coverage and observability.",
+      "Native sidecar ABI/service supervisor implementation belongs to its implementation/runtime shard; this pair covers target-project language contract bridges.",
+      "Credentials/private configuration, source changes and test execution are excluded.",
+      "cli/release/index.js is current installed-wrapper context omitted by the pinned inventory; read context only and exclude it from structuralReceipt.files."
+    ],
+    "remainingQuestions": [
+      "Registry language names and metadata do not themselves establish working parser/LSP/compiler availability; inspect actual source paths and state shapes.",
+      "Development installed grammar packages, SDK dist asset copying, binary repair and installed release artifacts must be assessed separately.",
+      "Determine what concrete bridge evidence can connect target-language contracts across files; do not invent an edge from a shared raw symbol name.",
+      "Command candidates and convention tests must be traced to actual validation execution and reported assurance.",
+      "Do not treat real-server skip conditions or permissive unavailable-shape acceptance as multi-language end-to-end assurance."
+    ]
+  },
+  "contextFiles": [
+    {
+      "path": "cli/release/index.js",
+      "from": 22,
+      "to": 118,
+      "reason": "Installed npm wrapper's managed sibling enumeration and required WASM/checksum-manifest validation; compare installed query-directory lifecycle with build/archive files.",
+      "inventoryStatus": "omitted from pinned inventory",
+      "receiptInstruction": "Current release-wrapper source may be read for installed-asset context, but exclude this path from structuralReceipt.files because it is not in INVENTORY.json."
+    }
+  ]
+}

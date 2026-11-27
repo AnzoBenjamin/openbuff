@@ -58,13 +58,5 @@ export const useQueueControls = ({
     ],
   )
 
-  const ensureQueueActiveBeforeSubmit = useCallback(() => {
-    if (queuePaused) {
-      resumeQueue()
-      return true
-    }
-    return false
-  }, [queuePaused, resumeQueue])
-
-  return { handleCtrlC, ensureQueueActiveBeforeSubmit }
+  return { handleCtrlC }
 }

@@ -1,0 +1,32 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+Using environment: test
+56 |   expect([...(result.sessionState?.mainAgentState.memoryV2EmittedObservationIds ?? [])].sort()).toEqual(['observation:b14-a', 'observation:b14-b'])
+57 |   const events = await repository.listEvents({ limit: 1000 })
+58 |   if (events.status === 'error') throw new Error(events.error.message)
+59 |   const reuse = events.events.filter(event => event.eventType === 'observation.reused').map(event => event.payload as { ignored: Array<{ observationId: string; mechanism: string }> })
+60 |   expect(reuse.flatMap(event => event.ignored), JSON.stringify({ receipt: result.sessionState?.mainAgentState.memoryUsageTurn,
+61 |     live: result.sessionState?.mainAgentState.memoryReuse, context: result.sessionState?.mainAgentState.memoryV2Context })).toEqual(selected === 'a' ? [{ observationId: 'observation:b14-a', mechanism: 'reread-despite' }] : [])
+                                                                                                                                 ^
+error: {"context":{"schemaVersion":2,"userInputId":"18zbj1eg7ny","queryId":"query:980808418452aa79992150902d4d46572c24b6a90710b1cb324ee0ce71c7478c","taskId":"task:e6cbb46e9b6ab7a28cd903cc921f967a790ef0ffb4aeee18428cb3d93fb7d891","result":{"schemaVersion":2,"queryId":"query:980808418452aa79992150902d4d46572c24b6a90710b1cb324ee0ce71c7478c","projectId":"project:b14-usage","generatedAt":"2143-12-22T05:10:43.000Z","matchedTasks":[],"verifiedKnowledge":[],"reusableDiscovery":[{"observation":{"observationId":"observation:b14-b","taskId":"task:old","kind":"fact","summary":"Routing B14 source b evidence","detail":"The routing B14 source b value stays one.","confidence":0.9,"evidence":[{"artifact":{"artifactId":"artifact:b","location":"src/b.ts","classification":{"kind":"source","generated":false,"sensitivity":"internal","labels":[]}},"selector":{"kind":"file","path":"src/b.ts"},"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"capturedAt":"2026-11-25T20:06:54.325Z","contentDigest":"sha256:3dc54dad6aedd7f04839a816c4f2f3c659f3f2fd471af6669072b2bf387cb935","excerpt":"export const b = 1"}],"selectors":[{"kind":"file","path":"src/b.ts"}],"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"tags":["routing"],"observedAt":"2026-11-25T20:06:54.325Z"},"reuseGuidance":"Unverified fact; verify supporting selectors before reuse.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."}]},{"observation":{"observationId":"observation:b14-a","taskId":"task:old","kind":"fact","summary":"Routing B14 source a evidence","detail":"The routing B14 source a value stays one.","confidence":0.9,"evidence":[{"artifact":{"artifactId":"artifact:a","location":"src/a.ts","classification":{"kind":"source","generated":false,"sensitivity":"internal","labels":[]}},"selector":{"kind":"file","path":"src/a.ts"},"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"capturedAt":"2026-11-25T20:06:54.325Z","contentDigest":"sha256:a3b135bcfeaabda5d6780642cf256059889ad4649c9ba4f7a4d5d6e83a68b402","excerpt":"export const a = 1"}],"selectors":[{"kind":"file","path":"src/a.ts"}],"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"tags":["routing"],"observedAt":"2026-11-25T20:06:54.325Z"},"reuseGuidance":"Unverified fact; verify supporting selectors before reuse.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."}]}],"rereadRequired":[{"observationId":"observation:b14-b","selector":{"kind":"file","path":"src/b.ts"},"reason":"never-verified","detail":"This selector requires verification in the current workspace context.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]},{"observationId":"observation:b14-a","selector":{"kind":"file","path":"src/a.ts"},"reason":"never-verified","detail":"This selector requires verification in the current workspace context.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]}],"historicalContext":[],"currentCoverage":[],"degradation":{"state":"none"},"rankingReasons":[{"category":"reusableDiscovery","targetId":"observation:b14-b","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."}]},{"category":"reusableDiscovery","targetId":"observation:b14-a","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."}]},{"category":"rereadRequired","targetId":"observation:b14-b","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]},{"category":"rereadRequired","targetId":"observation:b14-a","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]}]}}}
+
+- [
+-   {
+-     "mechanism": "reread-despite",
+-     "observationId": "observation:b14-a",
+-   },
+- ]
++ []
+
+- Expected  - 6
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/b14-memory-usage.test.ts:61:125)
+(fail) B14 actual SDK request and native read a persists only the matching emitted-source efficiency signal [210.98ms]
+(pass) B14 actual SDK request and native read c persists only the matching emitted-source efficiency signal [73.49ms]
+
+ 1 pass
+ 1 fail
+ 23 expect() calls
+Ran 2 tests across 1 file. [966.00ms]

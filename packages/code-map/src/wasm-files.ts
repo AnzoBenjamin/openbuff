@@ -1,4 +1,5 @@
 export const WASM_FILES = {
+  'tree-sitter-c.wasm': 'tree-sitter-c.wasm',
   'tree-sitter-c-sharp.wasm': 'tree-sitter-c-sharp.wasm',
   'tree-sitter-cpp.wasm': 'tree-sitter-cpp.wasm',
   'tree-sitter-go.wasm': 'tree-sitter-go.wasm',

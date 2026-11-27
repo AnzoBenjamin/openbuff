@@ -2,12 +2,21 @@ import { HandleStepsYieldValueSchema } from '@codebuff/common/types/agent-templa
 import { selectSpecialistReviewers } from '@codebuff/common/agents/specialist-risk-router'
 import { planDiscoveryBatch } from './orchestration/discovery-coordinator'
 import { createGateTelemetryRecorder } from './orchestration/gate-telemetry-sink'
-import { transitionBase2Gate } from './orchestration/workflow-engine'
-import { getErrorObject } from '@codebuff/common/util/error'
+import {
+  transitionBase2Gate,
+  transitionBase2GateSafe,
+} from './orchestration/workflow-engine'
+import { getErrorObject, isAbortError } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 
-import { executeToolCall } from './tools/tool-executor'
+import { toolNames } from '@codebuff/common/tools/constants'
+import { getAdvertisedExternalToolDefinitions } from './tools/prompts'
+import { executeCustomToolCall, executeToolCall } from './tools/tool-executor'
 import { parseTextWithToolCalls } from './util/parse-tool-calls-from-text'
+import {
+  MISSING_TOOL_NAME_GUIDANCE,
+  MISSING_TOOL_NAME_REASON,
+} from './util/tool-name-key'
 import { getEffectiveAgentToolNames } from './util/agent-tool-names'
 import {
   getModelContextMessageLimit,
@@ -15,7 +24,11 @@ import {
 } from './util/context-pruning'
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
 import { isContextPrunerAgentId } from './util/context-pruner-identity'
+import { inlineCompactionOutcome } from './util/programmatic-compaction-outcome'
+import type { RuntimeSemanticCompactionOutcome } from './util/runtime-semantic-compaction'
 import { createWarnLatch } from './util/warn-latch'
+import { withSystemTags } from './util/messages'
+import { beginProgrammaticReplayObservation, type ProgrammaticReplayRecorder } from './util/programmatic-replay-observation'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
@@ -43,6 +56,7 @@ import type {
 } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * Cap on how many DISTINCT base2 template ids the blank-projectRoot warning
@@ -67,6 +81,16 @@ class AgentRunContextRegistry {
   // distinct agent runs (which would otherwise silently resume each other's
   // generator).
   private readonly runIdToOwnerAgentId = new Map<string, string>()
+  // P2-T2-DESIGN §5 (replay requires reproducible ids): per-run ordered
+  // consumption counts for the replay short-circuit. Keyed by
+  // `${toolName}\u0000${occurrenceScopeInput}`-style strings built in
+  // executeSingleToolCall; the value is the number of journaled tool_call
+  // matches already consumed for that key, so the same tool called twice with
+  // an identical input in one run resolves deterministically in seq order.
+  private readonly runIdToReplayConsumed = new Map<
+    string,
+    Map<string, number>
+  >()
   // Latch for the "base2 run has no projectRoot" warning (a missing root makes
   // the gate-telemetry sink a silent no-op), keyed by template id so a second,
   // differently-misconfigured base2 variant stays diagnosable. Registry-owned
@@ -113,11 +137,28 @@ class AgentRunContextRegistry {
     return this.missingBase2ProjectRootWarnLatch.shouldWarn(templateId)
   }
 
+  /**
+   * Ordered replay consumption for one (runId, toolName+input) key: returns
+   * the occurrence index this dispatch should consume, then increments it.
+   * Registry-owned so clearRun/clearAll cannot leak replay state across runs.
+   */
+  nextReplayOccurrence(runId: string, key: string): number {
+    let counters = this.runIdToReplayConsumed.get(runId)
+    if (!counters) {
+      counters = new Map()
+      this.runIdToReplayConsumed.set(runId, counters)
+    }
+    const occurrence = counters.get(key) ?? 0
+    counters.set(key, occurrence + 1)
+    return occurrence
+  }
+
   /** Per-run teardown: drop the generator, STEP_ALL latch, and owner mapping. */
   clearRun(runId: string): void {
     delete this.runIdToGenerator[runId]
     this.runIdToStepAll.delete(runId)
     this.runIdToOwnerAgentId.delete(runId)
+    this.runIdToReplayConsumed.delete(runId)
   }
 
   /** Process-wide teardown: drop every run's state. */
@@ -127,11 +168,13 @@ class AgentRunContextRegistry {
     }
     this.runIdToStepAll.clear()
     this.runIdToOwnerAgentId.clear()
+    this.runIdToReplayConsumed.clear()
     this.missingBase2ProjectRootWarnLatch.clear()
   }
 }
 
 const agentRunContextRegistry = new AgentRunContextRegistry()
+const replayObservationByGenerator = new WeakMap<StepGenerator, ProgrammaticReplayRecorder>()
 
 // Function to clear the generator cache for testing purposes. Also re-arms the
 // per-template-id "base2 run has no projectRoot" warning latch, so tests
@@ -190,6 +233,8 @@ export async function runProgrammaticStep(
     logger: Logger
     nResponses?: string[]
     onResponseChunk: (chunk: string | PrintModeEvent) => void
+    /** Internal telemetry for generator-driven inline pruner attempts. */
+    onCompactionOutcome?: (outcome: RuntimeSemanticCompactionOutcome) => void
     prompt: string | undefined
     repoId: string | undefined
     repoUrl: string | undefined
@@ -240,6 +285,7 @@ export async function runProgrammaticStep(
   endTurn: boolean
   stepNumber: number
   generateN?: number
+  hitStepCap?: boolean
 }> {
   const {
     agentState,
@@ -265,7 +311,12 @@ export async function runProgrammaticStep(
   } = params
   let { stepNumber } = params
 
-  if (!template.handleSteps) {
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
+
+  const program = template.handleSteps
+  if (!program) {
     throw new Error('No step handler found for agent template ' + template.id)
   }
 
@@ -352,7 +403,7 @@ export async function runProgrammaticStep(
     // in-process from code the caller already trusted, not deserialized from
     // a stored string.
     if (
-      typeof template.handleSteps === 'string' &&
+      typeof program === 'string' &&
       template.executionSource !== undefined &&
       !TRUSTED_STRING_HANDLE_STEPS_EXECUTION_SOURCES.has(
         template.executionSource,
@@ -362,12 +413,6 @@ export async function runProgrammaticStep(
         `Executable handleSteps are disabled for agent ${template.id} loaded from executionSource '${template.executionSource}'. Install and explicitly trust the agent locally, or publish it as a prompt-only agent.`,
       )
     }
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const generatorFn =
-      typeof template.handleSteps === 'string'
-        ? new Function(`return (${template.handleSteps})`)()
-        : template.handleSteps
-
     // The context-pruner generator is serialized and cannot import runtime
     // helpers. Inject the authoritative model-aware policy so production does
     // not depend on a second copy of the budget arithmetic embedded in the
@@ -439,6 +484,7 @@ export async function runProgrammaticStep(
               selectSpecialistReviewers,
               planDiscoveryBatch,
               transitionBase2Gate,
+              transitionBase2GateSafe,
               // Durable JSONL sink for base2's gate telemetry. Injected here
               // because handleSteps is serialized and cannot import it. The
               // key is dropped entirely without a projectRoot — base2
@@ -460,7 +506,23 @@ export async function runProgrammaticStep(
           }
         : toolCallParams
 
-    // Initialize native generator
+    const observation = params.journalWriter?.captureProgrammaticReplay === true
+      ? await beginProgrammaticReplayObservation({
+          writer: params.journalWriter,
+          runId: agentState.runId,
+          agentId: agentState.agentId,
+          templateId: template.id,
+          stepNumber,
+          program,
+          runtimeSource: Function.prototype.toString.call(runProgrammaticStep),
+          configuration: template.programmaticConfig ?? null,
+          input: { prompt: prompt ?? null, params: generatorParams ?? null },
+        })
+      : undefined
+    if (params.journalWriter?.captureProgrammaticReplay) params.signal.throwIfAborted()
+    // Observe the exact retained source before materializing it.
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const generatorFn = typeof program === 'string' ? new Function(`return (${program})`)() : program
     const initializedGenerator = generatorFn({
       agentState,
       prompt,
@@ -469,6 +531,7 @@ export async function runProgrammaticStep(
       config: template.programmaticConfig,
     })
     generator = initializedGenerator
+    if (observation) replayObservationByGenerator.set(initializedGenerator, observation)
     agentRunContextRegistry.setGenerator(
       agentState.runId,
       initializedGenerator,
@@ -486,7 +549,7 @@ export async function runProgrammaticStep(
     }
   }
 
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
 
   // Initialize state for tool execution
   const toolCalls: CodebuffToolCall[] = []
@@ -511,6 +574,9 @@ export async function runProgrammaticStep(
     },
     readAuthorizationHashesByPath: {
       ...(agentState.readAuthorizationHashesByPath ?? {}),
+    },
+    rawReadAuthorizationHashesByPath: {
+      ...(agentState.rawReadAuthorizationHashesByPath ?? {}),
     },
     // `projectRoot` is '' only when the caller omitted `fileContext`, and that
     // fails closed rather than widening anchor scoping: an empty projectId
@@ -553,11 +619,23 @@ export async function runProgrammaticStep(
   let creditsBefore = agentState.directCreditsUsed
   let childrenBefore = agentState.childRunIds.length
 
+  const retainedObservation = replayObservationByGenerator.get(generator!)
+  const observation = retainedObservation && retainedObservation.runId === agentState.runId &&
+    retainedObservation.agentId === agentState.agentId &&
+    retainedObservation.writer === params.journalWriter && params.journalWriter?.captureProgrammaticReplay
+    ? retainedObservation
+    : undefined
   let programmaticIterations = 0
 
   try {
     // Execute tools synchronously as the generator yields them
     do {
+      params.signal.throwIfAborted()
+      if (agentState.runOutcome) {
+        flushProgrammaticToolResultContext()
+        endTurn = true
+        break
+      }
       if (programmaticIterations++ >= MAX_PROGRAMMATIC_TOOL_CALLS) {
         throw new Error(
           `handleSteps for agent ${template.id} exceeded ${MAX_PROGRAMMATIC_TOOL_CALLS} iterations ` +
@@ -569,30 +647,51 @@ export async function runProgrammaticStep(
       creditsBefore = agentState.directCreditsUsed
       childrenBefore = agentState.childRunIds.length
 
+      const nextInput = { toolResult: toolResult ?? [], stepsComplete, hitStepCap, nResponses }
+      if (observation) {
+        await observation.beforeNext(stepNumber, nextInput)
+        params.signal.throwIfAborted()
+      }
       const result = generator!.next({
         agentState: getPublicAgentState(
           agentState as AgentState & Required<Pick<AgentState, 'runId'>>,
         ),
-        toolResult: toolResult ?? [],
-        stepsComplete,
-        hitStepCap,
-        nResponses,
+        ...nextInput,
       })
+      // A generator can catch its own cancellation or return naturally after
+      // an awaited tool aborts. Its return is not authority to complete the run.
+      params.signal.throwIfAborted()
 
       if (result.done) {
+        if (observation) {
+          await observation.returned(stepNumber, result.value)
+          params.signal.throwIfAborted()
+        }
         endTurn = true
         break
+      }
+
+      // A generator may settle the result of its last permitted STEP, but
+      // newly yielded work cannot bypass an exhausted inference-step limit.
+      // The loop records and streams the single authoritative stop.
+      if (agentState.stepsRemaining === 0) {
+        return { agentState, endTurn: false, stepNumber, hitStepCap: true }
       }
 
       // Validate the yield value from handleSteps
       const parseResult = HandleStepsYieldValueSchema.safeParse(result.value)
       if (!parseResult.success) {
+        if (observation) await observation.gap(stepNumber, 'invalid_yield')
         throw new Error(
           `Invalid yield value from handleSteps in agent ${template.id}: ${parseResult.error.message}. ` +
             `Received: ${JSON.stringify(result.value)}`,
         )
       }
 
+      if (observation) {
+        await observation.yielded(stepNumber, result.value)
+        params.signal.throwIfAborted()
+      }
       if (result.value === 'STEP') {
         flushProgrammaticToolResultContext()
         break
@@ -623,6 +722,15 @@ export async function runProgrammaticStep(
             addProgrammaticToolResultContext,
             onResponseChunk,
           })
+        } else {
+          // Zero segments (e.g. a whitespace-only STEP_TEXT) executed
+          // nothing: reset toolResult so generator.next() receives the
+          // results of exactly the previous yield, per the StepGenerator
+          // contract. Leaving the prior iteration's results in place
+          // replayed stale output for a yield that ran no tools (reviewer
+          // advisory: stale toolResult fed to generator.next() on a
+          // zero-segment STEP_TEXT).
+          toolResult = []
         }
         continue
       }
@@ -641,6 +749,9 @@ export async function runProgrammaticStep(
 
       toolResult = await executeSingleToolCall(toolCall, {
         ...params,
+        // A single generator drive can yield more than one tool. Journal
+        // each attempt at the current step, not the drive's entry step.
+        stepNumber,
         agentContext,
         agentStepId,
         agentTemplate: template,
@@ -653,6 +764,7 @@ export async function runProgrammaticStep(
         addProgrammaticToolResultContext,
         onResponseChunk,
       })
+      params.signal.throwIfAborted()
 
       if (agentState.runId) {
         await addAgentStep({
@@ -667,6 +779,30 @@ export async function runProgrammaticStep(
         })
       } else {
         logger.error('No runId found for agent state after finishing agent run')
+      }
+
+      // P2-T2 slice 1: journal the step boundary + one spawn event per newly
+      // spawned child run (P2-T2-DESIGN §2). Additive and guarded on runId.
+      if (agentState.runId && params.journalWriter) {
+        const newChildRunIds = agentState.childRunIds.slice(childrenBefore)
+        params.journalWriter.append(agentState.runId, {
+          eventType: 'step_boundary',
+          stepNumber,
+          correlation: agentStepId,
+          payload: {
+            status: 'completed',
+            terminal: false,
+            childRunIds: newChildRunIds,
+          },
+        })
+        for (const childRunId of newChildRunIds) {
+          params.journalWriter.append(agentState.runId, {
+            eventType: 'spawn',
+            stepNumber,
+            correlation: childRunId,
+            payload: { childRunId },
+          })
+        }
       }
       stepNumber++
 
@@ -683,11 +819,20 @@ export async function runProgrammaticStep(
       generateN,
     }
   } catch (error) {
+    if (observation) await observation.gap(stepNumber, 'exception')
     endTurn = true
 
     const errorMessage = `Error executing handleSteps for agent ${template.id}: ${
       error instanceof Error ? error.message : 'Unknown error'
     }`
+    // A terminal generator failure is not a normal generator return. Keep
+    // any partial output and tool results, but carry the authoritative run
+    // termination to the loop and receipt consumers.
+    agentState.runOutcome ??= {
+      termination:
+        params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
+      cause: { code: 'programmatic_execution_error', message: errorMessage },
+    }
     logger.error(
       { error: getErrorObject(error), template: template.id },
       errorMessage,
@@ -748,6 +893,9 @@ export async function runProgrammaticStep(
     agentState.readAuthorizationHashesByPath = {
       ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
     }
+    agentState.rawReadAuthorizationHashesByPath = {
+      ...(fileProcessingState.rawReadAuthorizationHashesByPath ?? {}),
+    }
     agentState.confirmedPostEditAnchorsByPath = {
       ...(fileProcessingState.confirmedPostEditAnchorsByPath ?? {}),
     }
@@ -783,6 +931,7 @@ export const getPublicAgentState = (
     systemPrompt,
     toolDefinitions,
     contextTokenCount,
+    repositoryContext: agentState.repositoryContext ? structuredClone(agentState.repositoryContext) : undefined,
   }
 }
 
@@ -853,7 +1002,11 @@ type ExecuteToolCallsArrayParams = Omit<
 > & {
   agentState: AgentState
   addProgrammaticToolResultContext?: (message: Message) => void
+  onCompactionOutcome?: (outcome: RuntimeSemanticCompactionOutcome) => void
   onResponseChunk: (chunk: string | PrintModeEvent) => void
+  // P2-T2: real step index from runProgrammaticStep's params (both internal
+  // call sites spread {...params}, so the parent value flows through).
+  stepNumber: number
 }
 
 /**
@@ -866,6 +1019,28 @@ async function executeSingleToolCall(
   toolCallToExecute: ToolCallToExecute,
   params: ExecuteToolCallsArrayParams,
 ): Promise<ToolResultOutput[] | undefined> {
+  const prunerCall =
+    toolCallToExecute.toolName === 'spawn_agent_inline' &&
+    typeof toolCallToExecute.input.agent_type === 'string' &&
+    isContextPrunerAgentId(toolCallToExecute.input.agent_type)
+  if (!prunerCall) return executeSingleToolCallInner(toolCallToExecute, params)
+  try {
+    const output = await executeSingleToolCallInner(toolCallToExecute, params)
+    params.onCompactionOutcome?.(inlineCompactionOutcome(output))
+    return output
+  } catch (error) {
+    params.onCompactionOutcome?.({
+      outcome: 'failed',
+      reason: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    })
+    throw error
+  }
+}
+
+async function executeSingleToolCallInner(
+  toolCallToExecute: ToolCallToExecute,
+  params: ExecuteToolCallsArrayParams,
+): Promise<ToolResultOutput[] | undefined> {
   const {
     addProgrammaticToolResultContext,
     agentTemplate,
@@ -874,6 +1049,25 @@ async function executeSingleToolCall(
     toolResults,
   } = params
 
+  const published = getAdvertisedExternalToolDefinitions(params.tools)
+  const definition = Object.hasOwn(published ?? {}, toolCallToExecute.toolName)
+    ? published![toolCallToExecute.toolName]
+    : Object.hasOwn(
+          params.fileContext.customToolDefinitions ?? {},
+          toolCallToExecute.toolName,
+        )
+      ? params.fileContext.customToolDefinitions[toolCallToExecute.toolName]
+      : undefined
+  const canonicalName =
+    definition?.identity?.kind === 'custom'
+      ? definition.identity.toolName
+      : definition?.identity?.kind === 'mcp'
+        ? `${definition.identity.serverName}/${definition.identity.toolName}`
+        : undefined
+  const declaredNames = [
+    ...getEffectiveAgentToolNames(agentTemplate),
+    ...(agentTemplate.programmaticToolNames ?? []),
+  ]
   const programmaticToolAllowed =
     PROGRAMMATIC_CONTEXT_MANAGEMENT_TOOLS.has(toolCallToExecute.toolName) ||
     getEffectiveAgentToolNames(agentTemplate).includes(
@@ -881,7 +1075,8 @@ async function executeSingleToolCall(
     ) ||
     (agentTemplate.programmaticToolNames ?? []).includes(
       toolCallToExecute.toolName,
-    )
+    ) ||
+    (canonicalName !== undefined && declaredNames.includes(canonicalName))
   if (!programmaticToolAllowed) {
     throw new Error(
       `Programmatic tool ${toolCallToExecute.toolName} is not available for agent ${agentTemplate.id}. ` +
@@ -889,7 +1084,11 @@ async function executeSingleToolCall(
     )
   }
 
-  const toolCallId = crypto.randomUUID()
+  const idGen = params.idGen ?? realIdGen
+  const toolCallId = idGen.uuid()
+
+  // This is live dispatch. The journal records evidence; a historical result
+  // with equal input is not authority to substitute for this invocation.
   const includeStructuredToolCall = toolCallToExecute.includeToolCall === true
   const excludeToolFromMessageHistory = !includeStructuredToolCall
 
@@ -921,8 +1120,14 @@ async function executeSingleToolCall(
   }
 
   const toolResultsToAddToMessageHistory: ToolMessage[] = []
-  // Execute the tool call
-  await executeToolCall({
+
+  // Programmatic calls share the native/custom authorities and journal
+  // boundary used by model dispatch.
+  const execute = toolNames.includes(toolCallToExecute.toolName as any)
+    ? executeToolCall
+    : executeCustomToolCall
+  const firstInvocationResult = toolResults.length
+  await execute({
     ...params,
     toolName: toolCallToExecute.toolName as any,
     input: toolCallToExecute.input,
@@ -1001,8 +1206,9 @@ async function executeSingleToolCall(
   agentState.messageHistory = [...agentState.messageHistory]
   agentState.messageHistory.push(...toolResultsToAddToMessageHistory)
 
-  // Get the latest tool result
-  const latestToolResult = toolResults[toolResults.length - 1]?.content
+  // Only this invocation can supply its generator result.
+  const latestToolResult = toolResults.slice(firstInvocationResult)
+    .findLast(result => result.toolCallId === toolCallId)?.content
 
   if (
     toolCallToExecute.includeToolCall === undefined &&
@@ -1039,6 +1245,7 @@ async function executeSegmentsArray(
   let toolResults: ToolResultOutput[] = []
 
   for (const segment of segments) {
+    params.signal.throwIfAborted()
     if (segment.type === 'text') {
       // Add text as an assistant message
       agentState.messageHistory = [...agentState.messageHistory]
@@ -1047,10 +1254,35 @@ async function executeSegmentsArray(
       // Stream assistant text
       onResponseChunk(segment.text)
     } else if (segment.type === 'parse_error') {
-      onResponseChunk({ type: 'error', message: segment.message })
+      // Compose the same excerpt-annotated message the streaming emission
+      // boundary (tool-stream-parser emitParserErrors) builds, and persist it
+      // into the transcript too: streaming it alone leaves a silent hole in
+      // the model's own history where the tool call was, so it cannot
+      // self-correct the malformed JSON on the next turn. Follows this file's
+      // readonly messageHistory convention (recreate the array, then push).
+      // .agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md
+      let message =
+        segment.rawExcerpt !== undefined
+          ? `${segment.message}\n\nOriginal tool call input (excerpt): ${segment.rawExcerpt}`
+          : segment.message
+      if (
+        segment.message ===
+        `Ignored codebuff_tool_call content because ${MISSING_TOOL_NAME_REASON}`
+      ) {
+        message += `\n\n${MISSING_TOOL_NAME_GUIDANCE}`
+      }
+      onResponseChunk({ type: 'error', message })
+      agentState.messageHistory = [...agentState.messageHistory]
+      agentState.messageHistory.push(
+        userMessage({
+          content: withSystemTags(message),
+          tags: ['TOOL_CALL_ERROR'],
+        }),
+      )
     } else {
       // Handle tool call segment
       const toolResult = await executeSingleToolCall(segment, params)
+      params.signal.throwIfAborted()
       if (toolResult) {
         toolResults.push(...toolResult)
       }

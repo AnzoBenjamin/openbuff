@@ -1,0 +1,97 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+Using environment: test
+56 |   expect([...(result.sessionState?.mainAgentState.memoryV2EmittedObservationIds ?? [])].sort()).toEqual(['observation:b14-a', 'observation:b14-b'])
+57 |   const events = await repository.listEvents({ limit: 1000 })
+58 |   if (events.status === 'error') throw new Error(events.error.message)
+59 |   const reuse = events.events.filter(event => event.eventType === 'observation.reused').map(event => event.payload as { ignored: Array<{ observationId: string; mechanism: string }> })
+60 |   expect(reuse.flatMap(event => event.ignored), JSON.stringify({ receipt: result.sessionState?.mainAgentState.memoryUsageTurn,
+61 |     live: result.sessionState?.mainAgentState.memoryReuse, context: result.sessionState?.mainAgentState.memoryV2Context })).toEqual(selected === 'a' ? [{ observationId: 'observation:b14-a', mechanism: 'reread-despite' }] : [])
+                                                                                                                                 ^
+error: {"context":{"schemaVersion":2,"userInputId":"3wgrc3p9a2o","queryId":"query:f1d0bf84ddf4273cad1dc0ec1b8c784e551f8dda3314e090b884a64d55cd9faa","taskId":"task:ba997dfc0688c5f1ff149284d80852a762d2bccc344c24991a0bdd540dab66ab","result":{"schemaVersion":2,"queryId":"query:f1d0bf84ddf4273cad1dc0ec1b8c784e551f8dda3314e090b884a64d55cd9faa","projectId":"project:b14-usage","generatedAt":"2143-12-22T05:10:43.000Z","matchedTasks":[],"verifiedKnowledge":[],"reusableDiscovery":[{"observation":{"observationId":"observation:b14-b","taskId":"task:old","kind":"fact","summary":"Routing B14 source b evidence","detail":"The routing B14 source b value stays one.","confidence":0.9,"evidence":[{"artifact":{"artifactId":"artifact:b","location":"src/b.ts","classification":{"kind":"source","generated":false,"sensitivity":"internal","labels":[]}},"selector":{"kind":"file","path":"src/b.ts"},"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"capturedAt":"2026-11-25T20:07:51.475Z","contentDigest":"sha256:3dc54dad6aedd7f04839a816c4f2f3c659f3f2fd471af6669072b2bf387cb935","excerpt":"export const b = 1"}],"selectors":[{"kind":"file","path":"src/b.ts"}],"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"tags":["routing"],"observedAt":"2026-11-25T20:07:51.475Z"},"reuseGuidance":"Unverified fact; verify supporting selectors before reuse.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."}]},{"observation":{"observationId":"observation:b14-a","taskId":"task:old","kind":"fact","summary":"Routing B14 source a evidence","detail":"The routing B14 source a value stays one.","confidence":0.9,"evidence":[{"artifact":{"artifactId":"artifact:a","location":"src/a.ts","classification":{"kind":"source","generated":false,"sensitivity":"internal","labels":[]}},"selector":{"kind":"file","path":"src/a.ts"},"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"capturedAt":"2026-11-25T20:07:51.475Z","contentDigest":"sha256:a3b135bcfeaabda5d6780642cf256059889ad4649c9ba4f7a4d5d6e83a68b402","excerpt":"export const a = 1"}],"selectors":[{"kind":"file","path":"src/a.ts"}],"provenance":{"origin":"repository","recordedBy":"fixture","sourceEventIds":[],"metadata":{}},"tags":["routing"],"observedAt":"2026-11-25T20:07:51.475Z"},"reuseGuidance":"Unverified fact; verify supporting selectors before reuse.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."}]}],"rereadRequired":[{"observationId":"observation:b14-b","selector":{"kind":"file","path":"src/b.ts"},"reason":"never-verified","detail":"This selector requires verification in the current workspace context.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]},{"observationId":"observation:b14-a","selector":{"kind":"file","path":"src/a.ts"},"reason":"never-verified","detail":"This selector requires verification in the current workspace context.","score":0.25,"reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]}],"historicalContext":[],"currentCoverage":[],"degradation":{"state":"none"},"rankingReasons":[{"category":"reusableDiscovery","targetId":"observation:b14-b","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."}]},{"category":"reusableDiscovery","targetId":"observation:b14-a","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."}]},{"category":"rereadRequired","targetId":"observation:b14-b","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 3."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]},{"category":"rereadRequired","targetId":"observation:b14-a","reasons":[{"code":"lexical-match","contribution":0.24,"detail":"4 lexical token match(es)."},{"code":"recency","contribution":0.01,"detail":"Canonical source sequence 1."},{"code":"stale-evidence","contribution":-0.2,"detail":"Current evidence is unavailable."}]}]}}}
+
+- [
+-   {
+-     "mechanism": "reread-despite",
+-     "observationId": "observation:b14-a",
+-   },
+- ]
++ []
+
+- Expected  - 6
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/b14-memory-usage.test.ts:61:125)
+(fail) B14 actual SDK request and native read a persists only the matching emitted-source efficiency signal [217.96ms]
+(pass) B14 actual SDK request and native read c persists only the matching emitted-source efficiency signal [83.38ms]
+
+sdk/src/services/memory-v2/__tests__/coordinator.test.ts:
+(pass) Memory V2 event factory > derives stable, source-isolated IDs from trusted identity fields [0.09ms]
+(pass) MemoryV2Coordinator lifecycle > explicit authority wins over legacy mode and json-v1 performs no V2 operations [0.19ms]
+(pass) MemoryV2Coordinator lifecycle > invalid runtime authority safely selects json-v1 and performs no V2 work [0.21ms]
+(pass) MemoryV2Coordinator lifecycle > explicit opt-in without a repository remains active with empty context [0.10ms]
+(pass) MemoryV2Coordinator lifecycle > isolates fresh tasks and reuses an interrupted persisted turn [1.34ms]
+(pass) MemoryV2Coordinator lifecycle > passes reconciled workspace state and injects only successful inject-mode results [1.91ms]
+(pass) MemoryV2Coordinator lifecycle > bounds rejected query failures and keeps opt-in fail-closed [0.70ms]
+(pass) MemoryV2Coordinator lifecycle > bounds failed query failures and keeps opt-in fail-closed [0.20ms]
+(pass) MemoryV2Coordinator lifecycle > bounds throw query failures and keeps opt-in fail-closed [0.19ms]
+(pass) MemoryV2Coordinator lifecycle > bounds invalid query failures and keeps opt-in fail-closed [0.34ms]
+(pass) MemoryV2Coordinator lifecycle > rejects a mismatched query project and keeps opt-in fail-closed [0.65ms]
+(pass) MemoryV2Coordinator lifecycle > treats resource-budget retrieval degradation as fail-closed [1.39ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow rejected query failure non-fatal [0.64ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow failed query failure non-fatal [0.23ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow throw query failure non-fatal [0.18ms]
+(pass) MemoryV2Coordinator lifecycle > keeps shadow invalid query failure non-fatal [0.22ms]
+(pass) MemoryV2Coordinator lifecycle > computes match parity from migration source item counts [0.57ms]
+(pass) MemoryV2Coordinator lifecycle > computes v1-ahead parity from migration source item counts [0.08ms]
+(pass) MemoryV2Coordinator lifecycle > computes v2-ahead parity from migration source item counts [0.11ms]
+(pass) MemoryV2Coordinator lifecycle > computes unavailable parity from migration source item counts [0.05ms]
+(pass) MemoryV2Coordinator lifecycle > extracts summed source counts and one direct safe truncated-field count [0.09ms]
+(pass) MemoryV2Coordinator lifecycle > rebases retryable append conflicts and retries the same deterministic batch at most twice [5.10ms]
+(pass) MemoryV2Coordinator lifecycle > serializes concurrent captures in invocation order with exact cursor chaining through terminal append [2.41ms]
+(pass) MemoryV2Coordinator lifecycle > serializes concurrent captures, advances cursors, and finishes once [1.73ms]
+(pass) MemoryV2Coordinator lifecycle > parks a failed terminal append and later commits the unchanged decision [1.02ms]
+(pass) MemoryV2Coordinator lifecycle > records completed terminal lifecycle status [0.81ms]
+(pass) MemoryV2Coordinator lifecycle > records failed terminal lifecycle status [0.47ms]
+(pass) MemoryV2Coordinator lifecycle > records cancelled terminal lifecycle status [0.56ms]
+(pass) MemoryV2Coordinator lifecycle > captures only recognized successful native structured metadata with bounded paths [1.36ms]
+(pass) MemoryV2Coordinator lifecycle > filters private memory, generated, dependency, binary, secret, log, and build paths [1.35ms]
+(pass) MemoryV2Coordinator lifecycle > captures only confirmed mutation actions [4.13ms]
+(pass) MemoryV2Coordinator lifecycle > append failure keeps opt-in fail-closed and remains non-fatal in shadow [0.80ms]
+(pass) MemoryV2Coordinator lifecycle > rejects a mismatched query id without context or parity [3.86ms]
+(pass) MemoryV2Coordinator lifecycle > replays persisted terminal data before a new lifecycle [1.76ms]
+(pass) MemoryV2Coordinator lifecycle > emits coverage.recorded events from evaluate_audit_coverage results [1.82ms]
+(pass) MemoryV2Coordinator lifecycle > captures chunk selectors from read line-ranges with file fallback [2.26ms]
+(pass) MemoryV2Coordinator lifecycle > captures chunk selectors from query_index hits and enqueues chunk verifies best-effort [1.92ms]
+(pass) MemoryV2Coordinator lifecycle > swallows chunk verify throws best-effort and ignores invalid digests [1.50ms]
+(pass) MemoryV2Coordinator lifecycle > fails closed when conflict tail export cannot produce a valid page [2.96ms]
+(pass) MemoryV2Coordinator lifecycle > clears a CAS conflict by deriving the raw tail from a skipped future-type row [1.22ms]
+(pass) MemoryV2Coordinator lifecycle > classifies decision tools deterministically [0.34ms]
+(pass) MemoryV2Coordinator lifecycle > records decision-classified tool output as kind=decision [0.85ms]
+(pass) MemoryV2Coordinator lifecycle > records record_decision tool output as kind=decision with evidence selectors [1.60ms]
+(pass) MemoryV2Coordinator lifecycle > stores explicit decision text so the captured observation reaches a later compiled prompt [1.59ms]
+(pass) MemoryV2Coordinator lifecycle > redacts recognized secrets before persisting explicit decision text and excerpts [1.19ms]
+(pass) MemoryV2Coordinator lifecycle > records record_decision constraint kind echoed in output as kind=constraint [0.88ms]
+(pass) MemoryV2Coordinator lifecycle > reinforces an existing claim instead of recording a duplicate decision [1.41ms]
+(pass) MemoryV2Coordinator lifecycle > records observation.recorded with claimId metadata when the dedup projection is missing [0.92ms]
+(pass) MemoryV2Coordinator lifecycle > falls back to observation.recorded when the dedup lookup fails [0.86ms]
+(pass) MemoryV2Coordinator lifecycle > emits claim.superseded drafts and one observation.reused citation for echoed supersedes [2.29ms]
+(pass) MemoryV2Coordinator lifecycle > skips supersede drafts when store validation fails: retracted [0.97ms]
+(pass) MemoryV2Coordinator lifecycle > skips supersede drafts when store validation fails: foreign-task [0.60ms]
+(pass) MemoryV2Coordinator lifecycle > skips supersede drafts when store validation fails: error [0.60ms]
+(pass) MemoryV2Coordinator lifecycle > records constraint-classified think_deeply output as kind=constraint [0.97ms]
+(pass) MemoryV2Coordinator playbook context > installs seeded playbooks into agentState.playbookContext during prepareTurn [0.90ms]
+(pass) MemoryV2Coordinator playbook context > clears playbookContext when the turn degrades [0.50ms]
+(pass) MemoryV2Coordinator playbook context > clears playbookContext on the json-v1 authority path without repository playbook work [0.18ms]
+(pass) MemoryV2Coordinator playbook context > installs an empty playbookContext and completes the turn when listPlaybooks throws [0.46ms]
+(pass) MemoryV2Coordinator usage correlation (P4) > appends one batched observation.reused event and clears the snapshot [0.91ms]
+(pass) MemoryV2Coordinator usage correlation (P4) > stale queryId or missing receipt appends no usage event [0.93ms]
+
+1 tests failed:
+(fail) B14 actual SDK request and native read a persists only the matching emitted-source efficiency signal [217.96ms]
+
+ 61 pass
+ 1 fail
+ 307 expect() calls
+Ran 62 tests across 2 files. [1069.00ms]

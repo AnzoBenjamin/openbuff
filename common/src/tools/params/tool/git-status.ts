@@ -1,6 +1,7 @@
 import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
 
 import type { $ToolParams } from '../../constants'
 
@@ -72,6 +73,7 @@ export const gitStatusParams = {
       }),
       z.object({
         errorMessage: z.string(),
+        executionRefusal: executionRefusalSchema.optional(),
       }),
       // Suppressed variant: the per-turn change-gate (applyGitStatusGate)
       // swaps the full observation for this payload when the worktree is

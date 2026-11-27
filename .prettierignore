@@ -1,0 +1,5 @@
+# These records bind their exact bytes in independent review and acceptance seals.
+.agents/sessions/body-capability-review-2026-11-05/**
+docs/execution/body-roadmap/evidence/**
+# Generated model catalog is formatter-independent and hash-checked by its generator/test.
+sdk/src/generated/models-dev-capabilities.generated.ts

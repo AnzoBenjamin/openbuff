@@ -93,7 +93,47 @@ describe('handleGlob memory-first', () => {
     mock.restore()
   })
 
-  test('skips the client call on full cover and serves a receipt output', async () => {
+  test('probe: glob("Dockerfile", cwd:"src") with only src/auth/login.ts in memory hits the filesystem and returns no match', async () => {
+    // read-search-01 negative case. Before the fix, memory "covered" cwd
+    // `src` and the handler returned src/auth/login.ts as a Dockerfile match.
+    const agentState = buildVerifiedState(['src/auth/login.ts'])
+    const toolCall = buildToolCall({ pattern: 'Dockerfile', cwd: 'src' })
+    const filesystemResult = [
+      {
+        type: 'json',
+        value: {
+          files: [],
+          count: 0,
+          message: 'Found 0 file(s) matching pattern "Dockerfile"',
+        },
+      },
+    ] as unknown as CodebuffToolOutput<'glob'>
+    const seen: Array<ClientToolCall<'glob'>> = []
+    const { output: returned } = await invoke({
+      agentState,
+      output: filesystemResult,
+      toolCall,
+      onClientCall: (call) => {
+        seen.push(call)
+      },
+    })
+    expect(seen).toHaveLength(1)
+    expect(seen[0].input).toEqual(toolCall.input)
+    expect(returned).toEqual(filesystemResult)
+    const value = (
+      returned as unknown as Array<{ value: { files: string[]; message: string } }>
+    )[0].value
+    expect(value.files).not.toContain('src/auth/login.ts')
+    expect(value.message).not.toContain('verified memory')
+    expect(agentState.memoryReuse?.skip ?? 0).toBe(0)
+    expect(agentState.memoryReuse?.byTool?.[0]).toMatchObject({
+      tool: 'glob',
+      decision: 'full',
+      reason: 'exhaustive-tool',
+    })
+  })
+
+  test('full memory cover of cwd still issues the real call', async () => {
     const agentState = buildVerifiedState(['src/auth/login.ts'])
     const toolCall = buildToolCall({ cwd: 'src/auth/login.ts' })
     let clientCalls = 0
@@ -106,13 +146,8 @@ describe('handleGlob memory-first', () => {
         clientCalls += 1
       },
     })
-    expect(clientCalls).toBe(0)
-    const value = (
-      returned as unknown as Array<{ type: string; value: Record<string, unknown> }>
-    )[0].value as { files: string[]; count: number; message: string }
-    expect(Array.isArray(value.files)).toBe(true)
-    expect(value.files).toContain('src/auth/login.ts')
-    expect(value.message).toContain('verified memory')
+    expect(clientCalls).toBe(1)
+    expect(returned).toEqual(output)
     expect(agentState.discoveryCoverage).toBeDefined()
   })
 

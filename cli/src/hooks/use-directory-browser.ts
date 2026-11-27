@@ -1,102 +1,157 @@
-import { existsSync, statSync } from 'fs'
+import { realpathSync, statSync } from 'fs'
 import os from 'os'
 import path from 'path'
-
 import { useCallback, useEffect, useState } from 'react'
-
 import {
-  getDirectoriesAsync,
+  readDirectoryListing,
   hasGitDirectoryAsync,
+  type DirectoryEntry,
 } from '../utils/directory-browser'
 
-import type { DirectoryEntry } from '../utils/directory-browser'
-
 export interface UseDirectoryBrowserOptions {
-  /** Initial path to browse from (defaults to home directory) */
   initialPath?: string
+  dependencies?: {
+    list: typeof readDirectoryListing
+    git: typeof hasGitDirectoryAsync
+    canonical: (value: string) => string
+    isDirectory: (value: string) => boolean
+  }
 }
-
+const DEFAULT_DEPENDENCIES = {
+  list: readDirectoryListing,
+  git: hasGitDirectoryAsync,
+  canonical: realpathSync,
+  isDirectory: (value: string) => statSync(value).isDirectory(),
+}
 export interface UseDirectoryBrowserReturn {
-  /** Current directory path */
   currentPath: string
-  /** Set the current directory path */
-  setCurrentPath: (path: string) => void
-  /** List of directory entries in the current path */
+  setCurrentPath: (value: string) => void
   directories: DirectoryEntry[]
-  /** Whether current directory is a git repository */
   isGitRepo: boolean
-  /** Expand ~ to home directory */
-  expandPath: (inputPath: string) => string
-  /** Try to navigate to a typed path, returns true if successful */
-  tryNavigateToPath: (inputPath: string) => boolean
-  /** Navigate to a directory entry */
+  loadState: 'loading' | 'ready' | 'partial' | 'error'
+  error: string | undefined
+  retry: () => void
+  clearError: () => void
+  expandPath: (value: string) => string
+  tryNavigateToPath: (value: string) => boolean
   navigateToDirectory: (entry: DirectoryEntry) => void
 }
 
-/**
- * Hook for directory browsing state and navigation.
- * Provides current path state, directory listing, git detection,
- * and navigation utilities.
- */
 export function useDirectoryBrowser({
   initialPath,
+  dependencies = DEFAULT_DEPENDENCIES,
 }: UseDirectoryBrowserOptions = {}): UseDirectoryBrowserReturn {
-  const [currentPath, setCurrentPath] = useState(initialPath ?? os.homedir())
-  const [directories, setDirectories] = useState<DirectoryEntry[]>([])
+  const [currentPath, updateCurrentPath] = useState(initialPath ?? os.homedir())
+  const [listing, setListing] = useState<{
+    path: string
+    entries: DirectoryEntry[]
+    state: 'loading' | 'ready' | 'partial' | 'error'
+    error?: string
+  }>({ path: currentPath, entries: [], state: 'loading' })
+  const [navigationError, setNavigationError] = useState<string>()
   const [isGitRepo, setIsGitRepo] = useState(false)
-
+  const [revision, setRevision] = useState(0)
   useEffect(() => {
-    let cancelled = false
-    void Promise.all([
-      getDirectoriesAsync(currentPath),
-      hasGitDirectoryAsync(currentPath),
-    ]).then(([nextDirectories, nextIsGitRepo]) => {
-      if (cancelled) return
-      setDirectories(nextDirectories)
-      setIsGitRepo(nextIsGitRepo)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [currentPath])
-
-  // Expand ~ to home directory
-  const expandPath = useCallback((inputPath: string): string => {
-    if (inputPath.startsWith('~')) {
-      return path.join(os.homedir(), inputPath.slice(1))
-    }
-    return inputPath
-  }, [])
-
-  // Try to navigate to a typed path
-  const tryNavigateToPath = useCallback(
-    (inputPath: string): boolean => {
-      const expandedPath = expandPath(inputPath.trim())
-      try {
-        if (existsSync(expandedPath) && statSync(expandedPath).isDirectory()) {
-          setCurrentPath(expandedPath)
-          return true
-        }
-      } catch {
-        // Path doesn't exist or can't be accessed
-      }
-      return false
-    },
-    [expandPath],
+    const controller = new AbortController()
+    setListing({ path: currentPath, entries: [], state: 'loading' })
+    setIsGitRepo(false)
+    void dependencies
+      .list(currentPath, {
+        signal: controller.signal,
+        onEntries: (entries) => {
+          if (!controller.signal.aborted)
+            setListing({ path: currentPath, entries, state: 'partial' })
+        },
+      })
+      .then((result) => {
+        if (!controller.signal.aborted)
+          setListing({
+            path: currentPath,
+            entries: result.entries,
+            state: result.state,
+            error: result.omitted
+              ? `${result.omitted} entries could not be read`
+              : undefined,
+          })
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          setListing({
+            path: currentPath,
+            entries: [],
+            state: 'error',
+            error: error instanceof Error ? error.message : String(error),
+          })
+      })
+    void dependencies
+      .git(currentPath)
+      .then((value) => {
+        if (!controller.signal.aborted) setIsGitRepo(value)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [currentPath, revision, dependencies])
+  const expandPath = useCallback(
+    (value: string) =>
+      value === '~' || value.startsWith('~/') || value.startsWith('~\\')
+        ? path.join(os.homedir(), value.slice(1))
+        : value,
+    [],
   )
-
-  // Navigate to a directory entry
-  const navigateToDirectory = useCallback((entry: DirectoryEntry) => {
-    setCurrentPath(entry.path)
-  }, [])
-
+  const setCurrentPath = useCallback(
+    (value: string) => {
+      try {
+        const candidate = path.resolve(currentPath, expandPath(value.trim()))
+        if (!dependencies.isDirectory(candidate))
+          throw new Error('This path is not a directory.')
+        updateCurrentPath(dependencies.canonical(candidate))
+        setNavigationError(undefined)
+      } catch (error) {
+        setNavigationError(
+          `Could not open ${value}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    },
+    [currentPath, dependencies, expandPath],
+  )
+  const tryNavigateToPath = useCallback(
+    (value: string) => {
+      try {
+        const candidate = path.resolve(currentPath, expandPath(value.trim()))
+        if (!dependencies.isDirectory(candidate))
+          throw new Error('This path is not a directory.')
+        updateCurrentPath(dependencies.canonical(candidate))
+        setNavigationError(undefined)
+        return true
+      } catch (error) {
+        setNavigationError(
+          `Could not open ${value}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        return false
+      }
+    },
+    [currentPath, dependencies, expandPath],
+  )
+  const currentListing =
+    listing.path === currentPath
+      ? listing
+      : { entries: [], state: 'loading' as const, error: undefined }
   return {
     currentPath,
     setCurrentPath,
-    directories,
+    directories: currentListing.entries,
     isGitRepo,
+    loadState: currentListing.state,
+    error: navigationError ?? currentListing.error,
+    retry: () => {
+      setNavigationError(undefined)
+      setRevision((value) => value + 1)
+    },
+    clearError: () => setNavigationError(undefined),
     expandPath,
     tryNavigateToPath,
-    navigateToDirectory,
+    navigateToDirectory: (entry) => {
+      setCurrentPath(entry.path)
+    },
   }
 }

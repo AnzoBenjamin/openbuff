@@ -15,6 +15,10 @@ import {
 } from './edit-read-state'
 import { processStrReplace } from '../../../process-str-replace'
 import {
+  getExactContentHash,
+  getObservationContentHash,
+} from '@codebuff/common/util/content-hash'
+import {
   preflightValidateSyntax,
   formatPreflightErrorMessage,
 } from '../../../util/preflight-syntax-validation'
@@ -375,13 +379,19 @@ export const handleStrReplace = (async (
         preflightSyntaxError: false,
       }
     })
-    .then((fileProcessingResult) => {
+    .then(async (fileProcessingResult) => {
       const result = {
         ...fileProcessingResult,
         toolCallId: toolCall.toolCallId,
+        ...(latestContent === null
+          ? {}
+          : {
+              expectedHash: getObservationContentHash(latestContent),
+              expectedRawHash: getExactContentHash(latestContent),
+            }),
       }
       if (!('error' in fileProcessingResult)) {
-        const syntaxValidation = preflightValidateSyntax(
+        const syntaxValidation = await preflightValidateSyntax(
           path,
           fileProcessingResult.content,
         )

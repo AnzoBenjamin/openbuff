@@ -1,0 +1,23 @@
+{
+  "scope": "B12 live-source mutation finding only",
+  "verdict": "Previously confirmed live-source mutation finding is closed by static verification; no remaining confirmed defect in this scoped fix",
+  "reviewMode": "Static read-only source verification; this JSON is the only artifact written",
+  "sourceHashes": {
+    "packages/agent-runtime/src/run-agent-step.ts": "11090733ec5bbd6a9a7ae5a68eb42a37bb9ebce149edc3e6c1732419f2be1ae2",
+    "packages/agent-runtime/src/__tests__/memory-v2-child-authority.test.ts": "2e26d24cc27e0f9ae8c02360e8b1857ca1f5b0dbd9bd9ce0b912cc732dc37452"
+  },
+  "verifiedSourceBehavior": [
+    "loopAgentSteps.hasCorrelatedV2Authority uses captured selectedMemoryAuthority whenever it is defined",
+    "Host sqlite-v2-opt-in suppresses compiled V1 even after live memoryAuthority replacement",
+    "Host json-v1 cannot be inverted to V2 through live memoryAuthority replacement",
+    "Mutable authority fields are consulted only for the unwired legacy path",
+    "V2 content remains separately schema-validated and correlated to the current input",
+    "Both new regression cases replace the live memoryAuthority before STEP and assert the actual loop's provider messages"
+  ],
+  "testRunsPerformed": 0,
+  "reportedRedOrPassingResultsIndependentlyReverified": false,
+  "sourceEditsPerformed": false,
+  "broaderAuditPerformed": false,
+  "formalAcceptance": false,
+  "formalAcceptanceBlocker": "Missing historical B02 receipt"
+}

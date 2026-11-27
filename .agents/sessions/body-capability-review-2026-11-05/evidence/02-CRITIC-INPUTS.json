@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "review": "CRITIC-REVIEW.md",
+  "verdict": "APPROVED",
+  "inputs": [
+    {
+      "reviewedFile": "PLAN-DRAFT.md",
+      "exactCapture": "evidence/02-CRITIC-PLAN-DRAFT.md.txt",
+      "bytes": 135234,
+      "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+    },
+    {
+      "reviewedFile": "SPEC.md",
+      "exactCapture": "evidence/02-CRITIC-SPEC.md.txt",
+      "bytes": 38927,
+      "sha256": "4354e0932a9c33e4fc6b931d8099c1ceaf2669eac226e05406b502bd8c6c8c10"
+    },
+    {
+      "reviewedFile": "OLD-TASK-MIGRATION.md",
+      "exactCapture": "evidence/02-CRITIC-OLD-TASK-MIGRATION.md.txt",
+      "bytes": 43248,
+      "sha256": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1"
+    },
+    {
+      "reviewedFile": "CAPABILITIES.md",
+      "exactCapture": "evidence/02-CRITIC-CAPABILITIES.md.txt",
+      "bytes": 38406,
+      "sha256": "f5953baaded163f3268db9c3ab516806c5eb7a688b601f865424d13cc17c3265"
+    }
+  ],
+  "qualification": "Exact reviewed input bytes before publication link/name transformations; these are planning inputs, not product acceptance evidence."
+}

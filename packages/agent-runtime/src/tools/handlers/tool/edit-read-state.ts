@@ -37,7 +37,11 @@ export function markEditRequiresFreshRead(params: {
   if (revokeReadAuthorization) {
     delete fileProcessingState.readAuthorizationsByPath?.[path]
     delete fileProcessingState.readAuthorizationHashesByPath?.[path]
+    delete fileProcessingState.rawReadAuthorizationHashesByPath?.[path]
     delete fileProcessingState.modelVisibleReadAuthorizationHashesByPath?.[path]
+    delete fileProcessingState.modelVisibleRawReadAuthorizationHashesByPath?.[
+      path
+    ]
     delete fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
   }
 }

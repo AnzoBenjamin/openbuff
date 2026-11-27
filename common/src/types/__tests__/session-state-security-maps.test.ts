@@ -6,20 +6,35 @@ import {
   type AgentState,
   type ConfirmedPostEditAnchor,
 } from '../session-state'
+import { captureTextDocument, getRawReadBasis } from '../../util/byte-text'
+import {
+  decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
+} from '../../util/content-hash'
 
-const validContentHash = `sha256:${'a'.repeat(64)}`
-const validCapability = [
-  'cap.v3.1.4',
-  'A'.repeat(43),
-  'B'.repeat(43),
-  'C'.repeat(43),
-].join('.')
+const document = captureTextDocument('\uFEFFone\r\ntwo\nthree\n')
+const validContentHash = document.observationHash
+const validRawHash = document.rawHash
+const rawBasis = getRawReadBasis(document, 1, 4, 'whole')
+const scope = {
+  projectId: 'project:demo',
+  path: 'src/edited.ts',
+  runId: 'run:1',
+}
+const validCapability = encodeReadCapabilityToken({
+  startLine: 1,
+  endLine: 4,
+  hash: validContentHash,
+  scope,
+  rawBasis,
+})
 
 const validAnchor: ConfirmedPostEditAnchor = {
   startLine: 1,
   endLine: 4,
   contentHash: validContentHash,
   readCapability: validCapability,
+  rawBasis,
 }
 
 /**
@@ -36,6 +51,7 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
       ...getInitialAgentState(),
       readAuthorizationsByPath: 'forged-authority-map',
       readAuthorizationHashesByPath: ['not', 'an', 'object'],
+      rawReadAuthorizationHashesByPath: 42,
       confirmedPostEditAnchorsByPath: 42,
     })
 
@@ -43,6 +59,7 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
 
     expect(sanitized.readAuthorizationsByPath).toBeUndefined()
     expect(sanitized.readAuthorizationHashesByPath).toBeUndefined()
+    expect(sanitized.rawReadAuthorizationHashesByPath).toBeUndefined()
     expect(sanitized.confirmedPostEditAnchorsByPath).toBeUndefined()
   })
 
@@ -61,6 +78,11 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
         'src/wrong-prefix.ts': `md5:${'b'.repeat(64)}`,
         '': validContentHash,
       },
+      rawReadAuthorizationHashesByPath: {
+        'src/read.ts': validRawHash,
+        'src/fake.ts': 'normalized-hash',
+        '': validRawHash,
+      },
       confirmedPostEditAnchorsByPath: {
         'src/edited.ts': validAnchor,
         'src/missing-hash.ts': {
@@ -71,11 +93,18 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
         'src/cap-v2.ts': {
           ...validAnchor,
           readCapability: validAnchor.readCapability.replace(
-            'cap.v3.',
+            'cap.v4.',
             'cap.v2.',
           ),
         },
         'src/inverted-bounds.ts': { ...validAnchor, startLine: 5, endLine: 4 },
+        'src/invalid-basis.ts': {
+          ...validAnchor,
+          rawBasis: {
+            ...rawBasis,
+            endByteExclusive: rawBasis.documentBytes + 1,
+          },
+        },
       },
     })
 
@@ -89,6 +118,9 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
     expect(sanitized.readAuthorizationHashesByPath).toEqual({
       'src/read.ts': validContentHash,
     })
+    expect(sanitized.rawReadAuthorizationHashesByPath).toEqual({
+      'src/read.ts': validRawHash,
+    })
     // Anchors missing contentHash, carrying a cap.v2-prefixed capability, or
     // with endLine < startLine are stripped from the anchor map.
     expect(sanitized.confirmedPostEditAnchorsByPath).toEqual({
@@ -100,6 +132,7 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
     const state = getInitialAgentState()
     state.readAuthorizationsByPath = { 'src/read.ts': true }
     state.readAuthorizationHashesByPath = { 'src/read.ts': validContentHash }
+    state.rawReadAuthorizationHashesByPath = { 'src/read.ts': validRawHash }
     state.confirmedPostEditAnchorsByPath = {
       'src/edited.ts': {
         ...validAnchor,
@@ -110,6 +143,7 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
     const expectedMaps = {
       readAuthorizationsByPath: state.readAuthorizationsByPath,
       readAuthorizationHashesByPath: state.readAuthorizationHashesByPath,
+      rawReadAuthorizationHashesByPath: state.rawReadAuthorizationHashesByPath,
       confirmedPostEditAnchorsByPath: state.confirmedPostEditAnchorsByPath,
     }
 
@@ -121,6 +155,9 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
     )
     expect(sanitized.readAuthorizationHashesByPath).toEqual(
       expectedMaps.readAuthorizationHashesByPath,
+    )
+    expect(sanitized.rawReadAuthorizationHashesByPath).toEqual(
+      expectedMaps.rawReadAuthorizationHashesByPath,
     )
     expect(sanitized.confirmedPostEditAnchorsByPath).toEqual(
       expectedMaps.confirmedPostEditAnchorsByPath,
@@ -141,5 +178,34 @@ describe('sanitizeAgentStateSecurityMaps (M2-T3 restore boundary)', () => {
     sanitizeAgentStateSecurityMaps(state)
 
     expect(state).toEqual(snapshotBefore)
+  })
+
+  test('legacy v3 data remains parseable without creating a raw basis', () => {
+    const readCapability = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 4,
+      hash: validContentHash,
+      scope,
+    })
+    const state = asRestoredAgentState({
+      ...getInitialAgentState(),
+      confirmedPostEditAnchorsByPath: {
+        'src/edited.ts': {
+          startLine: 1,
+          endLine: 4,
+          contentHash: validContentHash,
+          readCapability,
+        },
+      },
+    })
+    const anchor =
+      sanitizeAgentStateSecurityMaps(state).confirmedPostEditAnchorsByPath?.[
+        'src/edited.ts'
+      ]!
+    expect(anchor.rawBasis).toBeUndefined()
+    const decoded = decodeReadCapabilityToken(anchor.readCapability)
+    if (typeof decoded === 'string') throw new Error(decoded)
+    expect(decoded.tokenVersion).toBe('v3')
+    expect(decoded.rawBasis).toBeUndefined()
   })
 })

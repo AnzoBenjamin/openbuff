@@ -213,6 +213,13 @@ export const ToolCallItem = ({
     (availableWidth ?? 80) - toggleIndent - (dense ? 0 : toggleIndent),
   )
   const showCollapsedPreview = rawCollapsedPreviewText.length > 0
+  const headerText = `${toggleLabel}${name}${titleSuffix ? ` ${titleSuffix}` : ''}${isStreaming ? ' running' : ''}`
+  const inlinePreview =
+    isCollapsed &&
+    showCollapsedPreview &&
+    !/[\r\n]/.test(rawCollapsedPreviewText) &&
+    stringWidth(`${headerText} · ${rawCollapsedPreviewText}`) <=
+      (availableWidth ?? 80)
 
   return (
     <box style={{ ...boundedColumnStyle, gap: 0 }}>
@@ -260,11 +267,22 @@ export const ToolCallItem = ({
                 {' running'}
               </span>
             ) : null}
+            {inlinePreview ? (
+              <>
+                <span fg={theme.muted}>{' · '}</span>
+                <span
+                  fg={isStreaming ? theme.foreground : theme.muted}
+                  attributes={getAttributes()}
+                >
+                  {rawCollapsedPreviewText}
+                </span>
+              </>
+            ) : null}
           </text>
         </Button>
 
         {isCollapsed ? (
-          showCollapsedPreview ? (
+          showCollapsedPreview && !inlinePreview ? (
             <box
               style={{
                 paddingLeft: 0,

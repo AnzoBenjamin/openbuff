@@ -1,35 +1,19 @@
 #!/usr/bin/env node
 
-// Print welcome message
-console.log('\n')
-console.log('🎉 Welcome to Openbuff!')
-console.log('\n')
-console.log('To get started:')
-console.log('  1. cd to your project directory')
-console.log('  2. Run: openbuff')
-console.log('\n')
-console.log('Example:')
-console.log('  $ cd ~/my-project')
-console.log('  $ openbuff')
-console.log('\n')
-console.log('Requirements:')
-console.log('  macOS Intel: version 11 or newer')
-console.log('  macOS Apple Silicon: version 11 or newer')
-console.log(
-  '  Windows: Git for Windows (Git Bash) or WSL is required for terminal tools',
+console.error(
+  [
+    '\nOpenbuff installed · local-first, bring your own API key.',
+    'Start in your project: cd ~/my-project && openbuff',
+    'In chat, run /provider to configure your provider and model.',
+    ...(process.platform === 'win32'
+      ? [
+          'Windows terminal tools need Git Bash or WSL; use OPENBUFF_GIT_BASH_PATH for a custom Bash path.',
+        ]
+      : []),
+    ...(process.platform === 'darwin' ? ['Requires macOS 11 or newer.'] : []),
+    'If openbuff is missing, restart your shell and check your npm global bin PATH.',
+    'Command directory: openbuff --help',
+    'Installation help: https://github.com/AnzoBenjamin/openbuff#installation',
+    '',
+  ].join('\n'),
 )
-console.log(
-  '           Override with OPENBUFF_GIT_BASH_PATH when bash.exe is elsewhere',
-)
-console.log('\n')
-console.log('If your shell says "command not found":')
-console.log(
-  '  Restart the shell, then verify your npm global bin directory is on PATH.',
-)
-console.log('  On macOS/Linux, that directory is usually <npm prefix>/bin.')
-console.log('  Check the install prefix with: npm config get prefix')
-console.log('\n')
-console.log(
-  'For more information, visit: https://github.com/AnzoBenjamin/openbuff',
-)
-console.log('\n')

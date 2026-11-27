@@ -1,29 +1,24 @@
 import { describe, test, expect } from 'bun:test'
 
-/**
- * Tests for the handleImageCommand argument parsing behavior.
- *
- * These tests verify the parsing logic independently of the actual
- * validateAndAddImage implementation by testing the parsing function directly.
- */
-
-// Extract the parsing logic that handleImageCommand uses
-// New simplified implementation: split on whitespace
-function parseImageCommandArgs(args: string): {
-  imagePath: string | null
-  message: string
-} {
-  const [imagePath, ...rest] = args.trim().split(/\s+/)
-
-  if (!imagePath) {
-    return { imagePath: null, message: '' }
-  }
-
-  return { imagePath, message: rest.join(' ') }
-}
+import { parseImageCommandArgs } from '../image'
 
 describe('handleImageCommand parsing', () => {
   describe('argument parsing', () => {
+    test('quoted paths and trailing instruction are retained exactly', () => {
+      expect(
+        parseImageCommandArgs('"./screen shots/界面.png" review  this'),
+      ).toEqual({
+        imagePath: './screen shots/界面.png',
+        message: 'review  this',
+      })
+      expect(parseImageCommandArgs("'./screen shots/a.png' explain")).toEqual({
+        imagePath: './screen shots/a.png',
+        message: 'explain',
+      })
+      expect(() => parseImageCommandArgs('"unfinished path.png')).toThrow(
+        'Close the path quote',
+      )
+    })
     test('parses image path only', () => {
       const result = parseImageCommandArgs('./screenshot.png')
       expect(result.imagePath).toBe('./screenshot.png')

@@ -1,0 +1,112 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/native-tool-observation.test.ts:
+Using environment: dev
+(pass) host-owned native observation wiring and correlation > getAgentRuntimeImpl conditionally carries the same optional callback [3.98ms]
+(pass) host-owned native observation wiring and correlation > no Memory V2 configuration installs no observer; unavailable repository still installs coordinator degradation [2.88ms]
+(pass) host-owned native observation wiring and correlation > forwards a valid correlated completion exactly once as native, never as MCP or canonical verification [9.34ms]
+(pass) host-owned native observation wiring and correlation > completed metadata can correlate an already-cancelled actual signal without execution reauthorization [1.90ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"actor":{"runId":"sibling-run","rootRunId":"root-run","agentId":"actual-child"}} [0.68ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"actor":{"runId":"child-run","rootRunId":"root-run","agentId":"root-agent"}} [0.50ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"sibling-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.89ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"foreign-root","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.70ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"other-attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.52ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"forged-basis","workspaceSnapshotId":"snapshot"}} [10.08ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"other-snapshot"}} [0.78ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"sha256:53ede7a89b2a435e68e046bade16afe78d5e35535f34b110e9ea7fb2e3e047f5","workspaceRevision":4},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.54ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"executionIdentity":{"runId":"child-run","rootRunId":"root-run","agentId":"actual-child","actionId":"call","attemptId":"attempt","basis":{"inputHash":"forged-hash","workspaceRevision":3},"basisId":"sha256:e83be7ca28a39c9ace645113b9be3e7c22611b1f56856b30361b17de2cc8cf43","workspaceSnapshotId":"snapshot"}} [0.41ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"callId":"other-call"} [0.44ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"userInputId":"sibling-input"} [0.37ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"toolName":"read_files"} [0.34ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"input":{"text":"A substituted claim because it is not the registered input","kind":"decision","evidenceSelectors":["src/storage.ts"]}} [0.47ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"signal":{}} [1.00ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"output":[{"type":"json","value":{"text":"Use SQLite because decisions must survive process restarts","kind":"decision","evidenceSelectors":["src/storage.ts"],"evidenceCount":"invalid"}}]} [2.39ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"output":[{"type":"json","value":{"errorMessage":"local record failed"}}]} [0.68ms]
+(pass) host-owned native observation wiring and correlation > rejects completion substitution {"output":[{"type":"json","value":{"text":"Use SQLite because decisions must survive process restarts","kind":"decision","evidenceSelectors":["src/storage.ts"],"message":"Incomplete record","evidenceCount":1,"errorMessage":"failed record"}}]} [0.45ms]
+(pass) host-owned native observation wiring and correlation > requires private actor/action registration and a record_decision start, not just a plausible descriptor [2.92ms]
+(pass) host-owned native observation wiring and correlation > handler verifiedAt claims are stripped, not forwarded as canonical verification [0.89ms]
+(pass) host-owned native observation wiring and correlation > an unavailable repository keeps honest coordinator degradation while the observer remains installed [4.85ms]
+(pass) host-owned native observation wiring and correlation > isolates coordinator failures and keeps capture input/output separate from runtime result objects [1.07ms]
+(pass) completed-observation coordinator bookkeeping > an active prepared turn accepts completed native metadata after cancellation without verification [26.89ms]
+(pass) completed-observation coordinator bookkeeping > ordinary cancellation-sensitive captures are unchanged [1.06ms]
+(pass) completed-observation coordinator bookkeeping > a replaced preparation generation cannot append a late completed observation into the next turn [3.47ms]
+(pass) completed-observation coordinator bookkeeping > a finished turn still rejects late completed metadata [6.85ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/supervised-native-tool-observation.test.ts:
+Using environment: dev
+(pass) supervised completed native observation transport > the real socket RPC awaits the host observer, with the authenticated actor signal [29.69ms]
+(pass) supervised completed native observation transport > validated input hash correlation tolerates native defaults/trim without changing the original action basis [5.01ms]
+(pass) supervised completed native observation transport > cancelled metadata retains the authenticated cancelled host signal while subsequent dispatch stays refused [4.49ms]
+(pass) supervised completed native observation transport > sibling/root, actor/action, call, input and task substitution are refused even after cancellation [8.23ms]
+(pass) supervised completed native observation transport > a missing parent hook is an explicit awaited RPC refusal, not a silent successful notification [0.97ms]
+(pass) supervised completed native observation transport > a timed-out awaited host hook releases RPC occupancy and observes its late rejection [2006.33ms]
+(pass) supervised completed native observation transport > a real supervised child local handler notifies the authenticated parent before its native UI result [1663.22ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/supervised-execution-identity.test.ts:
+Using environment: dev
+(pass) supervised descendant authority with real host registries > ordinary descendants retain the tighter original action deadline and request cancellation [15.10ms]
+(pass) supervised descendant authority with real host registries > infrastructure descendants inherit their authenticated actor-operation cap and exhausted actions dispatch nothing [26.79ms]
+(pass) supervised descendant authority with real host registries > descriptive descendants cannot fall back to outer authority when authenticated lookups are absent [1.93ms]
+(pass) parent-scoped supervised execution identity > workspace snapshots cross the bridge only for registered child actors, without renewing actions [2.07ms]
+(pass) parent-scoped supervised execution identity > initial supervised host-operation child uses the captured actor and context without a fabricated B02 attempt [0.26ms]
+(pass) parent-scoped supervised execution identity > local runtime registers actual actor IDs and registered parent ancestry [0.84ms]
+(pass) parent-scoped supervised execution identity > child awaits the existing nonce-preserving bridge round trip before using registered action [1.59ms]
+(pass) parent-scoped supervised execution identity > host-issued run registration carries exact parent context and accepts registered descendants only [0.54ms]
+(pass) parent-scoped supervised execution identity > supervised infrastructure descendants retain the original scoped context and reject descriptive spoofing [0.38ms]
+(pass) parent-scoped supervised execution identity > requires acknowledged action and validates original and forwarded inputs separately [0.62ms]
+(pass) parent-scoped supervised execution identity > rejects sibling/root actor descriptors and parent cancellation for tools and MCP [0.44ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-project-trust.test.ts:
+Using environment: dev
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-Iq9lPI/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-Iq9lPI/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-Iq9lPI/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-Iq9lPI/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > trustProjectConfig=%s reaches the session and skill dispatch [201.93ms]
+(pass) actual SDK run project trust intake > trustProjectConfig=%s reaches the session and skill dispatch [45.31ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-Hi0J2O/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-Hi0J2O/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-Hi0J2O/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-Hi0J2O/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > trustProjectConfig=%s reaches the session and skill dispatch [45.78ms]
+(pass) actual SDK run project trust intake > a CLI process grant reaches a real SDK run [42.04ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-302Zzg/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-302Zzg/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-302Zzg/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-302Zzg/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > an explicit SDK refusal wins over stored, process and environment grants [42.02ms]
+(pass) actual SDK run project trust intake > an explicit SDK grant wins over a stored refusal [49.62ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-CbmlEd/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-CbmlEd/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-CbmlEd/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-CbmlEd/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > an explicit host snapshot with trust=%s is authoritative over ambient and run-option decisions [34.06ms]
+(pass) actual SDK run project trust intake > an explicit host snapshot with trust=%s is authoritative over ambient and run-option decisions [37.80ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-URFRyV/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-URFRyV/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-URFRyV/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-URFRyV/home/.claude/skills/project-only'
+(pass) actual SDK continued-run trust refresh > changing openbuff.json invalidates a stored grant and removes old project skills from the continued session [77.94ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-ETThRH/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-ETThRH/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-ETThRH/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-ETThRH/home/.claude/skills/project-only'
+(pass) actual SDK continued-run trust refresh > changing .agents/mcp.json invalidates a stored grant and removes old project skills from the continued session [59.67ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-kBPk92/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-kBPk92/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-kBPk92/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-kBPk92/home/.claude/skills/project-only'
+(pass) actual SDK continued-run trust refresh > revoking trust for a continued run does not mutate its previously trusted checkpoint [46.88ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-state-home-policy.test.ts:
+Using environment: dev
+(pass) null home knowledge performs no filesystem or ambient-home lookup [3.00ms]
+(pass) explicit home knowledge reads only selected real bytes without ambient fallback [4.43ms]
+(pass) explicit home skills retain home and project precedence without probing ambient home [5.90ms]
+(pass) null home and disabled global skills retain project skills without any home search [2.12ms]
+(pass) an explicit skills directory remains authoritative with home and global discovery disabled [2.00ms]
+(pass) omitted standalone home preserves legacy discovery through an owned ambient-home substitute [1.53ms]
+(pass) initial state uses selected home and project skills while caller knowledge wins [24.98ms]
+(pass) initial state with no home retains explicit caller knowledge and project skills [2.16ms]
+(pass) continued isolated state discards previous automatic home inputs and reloads project skills [4.54ms]
+(pass) continued selected home replaces old home knowledge and preserves explicit override precedence [3.69ms]
+(pass) generateInitialRunState forwards selected home and global skill policy [1.80ms]
+(pass) actual SDK fresh and continued runs consume their captured home and global policies [145.99ms]
+(pass) actual SDK fresh and continued relative skills resolve against captured invocation cwd [70.20ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:
+Using environment: dev
+(pass) strict root skill bootstrap read boundary > explicit outside skills are withheld on fresh strict startup, ordinary control unchanged [229.51ms]
+(pass) strict root skill bootstrap read boundary > strict continuation removes inherited outside skill bytes without disk fallback [76.94ms]
+(pass) strict root skill bootstrap read boundary > a hard-linked project skill is not loaded through raw bootstrap [42.92ms]
+
+ 74 pass
+ 0 fail
+ 391 expect() calls
+Ran 74 tests across 6 files. [9.45s]

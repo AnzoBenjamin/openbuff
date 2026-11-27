@@ -1,0 +1,74 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/impl/__tests__/b09-cost-precision.test.ts:
+1 | import { describe, expect, test } from 'bun:test'
+2 | import { computeCostCentsFromUsage } from '../llm'
+3 | const pricing = { inputPerMillionTokens: 3, outputPerMillionTokens: 15 }
+4 | describe('B09 cost precision and unknown data', () => {
+5 |   test('preserves sub-cent configured prices without per-request rounding', () => {
+6 |     expect(computeCostCentsFromUsage({ usage: { inputTokens: 1, outputTokens: 1 }, pricing })).toBeCloseTo(.0018, 12)
+                                                                                                   ^
+error: expect(received).toBeCloseTo(expected, precision)
+
+Expected: 0.0018
+Received: 0
+
+Expected precision: 12
+Expected difference: < 0.0000000000005
+Received difference: 0.0018
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/b09-cost-precision.test.ts:6:96)
+(fail) B09 cost precision and unknown data > preserves sub-cent configured prices without per-request rounding [0.28ms]
+ 6 |     expect(computeCostCentsFromUsage({ usage: { inputTokens: 1, outputTokens: 1 }, pricing })).toBeCloseTo(.0018, 12)
+ 7 |   })
+ 8 |   test('missing or malformed counts never become a zero-cost completed request', () => {
+ 9 |     for (const usage of [{}, { inputTokens: 3 }, { inputTokens: -1, outputTokens: 0 }, { inputTokens: 1.5, outputTokens: 0 },
+10 |       { inputTokens: NaN, outputTokens: 0 }, { inputTokens: 1, outputTokens: 0, cachedInputTokens: 2 }])
+11 |       expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
+                                                                 ^
+error: expect(received).toBeUndefined()
+
+Received: 0
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/b09-cost-precision.test.ts:11:61)
+(fail) B09 cost precision and unknown data > missing or malformed counts never become a zero-cost completed request [0.12ms]
+ 9 |     for (const usage of [{}, { inputTokens: 3 }, { inputTokens: -1, outputTokens: 0 }, { inputTokens: 1.5, outputTokens: 0 },
+10 |       { inputTokens: NaN, outputTokens: 0 }, { inputTokens: 1, outputTokens: 0, cachedInputTokens: 2 }])
+11 |       expect(computeCostCentsFromUsage({ usage, pricing })).toBeUndefined()
+12 |   })
+13 |   test('positive unpriced components and non-USD currency do not fabricate USD totals', () => {
+14 |     expect(computeCostCentsFromUsage({ usage: { inputTokens: 1, outputTokens: 1 }, pricing: { inputPerMillionTokens: 3 } })).toBeUndefined()
+                                                                                                                                  ^
+error: expect(received).toBeUndefined()
+
+Received: 0
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/b09-cost-precision.test.ts:14:126)
+(fail) B09 cost precision and unknown data > positive unpriced components and non-USD currency do not fabricate USD totals [0.05ms]
+
+sdk/src/__tests__/b09-cost-wire.test.ts:
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=false [29.98ms]
+19 |   try {
+20 |     for await (const _chunk of promptAiSdkStream({ apiKey: 'fixture', runId: 'b09', clientSessionId: 'b09', fingerprintId: 'b09', userInputId: 'b09', agentId: 'fixture', userId: undefined,
+21 |       messages: [userMessage({ content: 'hello' })], signal: new AbortController().signal, logger: silentLogger, trackEvent() {}, sendAction() {},
+22 |       onCostCalculated: async cost => { costs.push(cost) }, maxRetries: 0 } as Parameters<typeof promptAiSdkStream>[0], { providerContext: context })) {}
+23 |     expect(requests).toHaveLength(1)
+24 |     expect(costs).toEqual([21])
+                       ^
+error: expect(received).toEqual(expected)
+
+- [
+-   21,
+- ]
++ []
+
+- Expected  - 3
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/b09-cost-wire.test.ts:24:19)
+(fail) B09 real compatible late usage produces exactly21cents with metadata stripping=true [6.40ms]
+
+ 1 pass
+ 4 fail
+ 7 expect() calls
+Ran 5 tests across 2 files. [459.00ms]

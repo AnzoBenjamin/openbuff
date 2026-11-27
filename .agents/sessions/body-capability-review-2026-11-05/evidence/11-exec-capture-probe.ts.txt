@@ -1,0 +1,8 @@
+import { exec, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+const observations = []
+for (const encoding of ['utf8', 'utf-8']) {
+  observations.push({ encoding, ...await promisify(exec)('/bin/echo dummy-probe', { encoding: encoding as any }) })
+  observations.push({ encoding, ...await promisify(execFile)('/bin/echo', ['dummy-probe'], { encoding: encoding as any }) })
+}
+console.log(JSON.stringify(observations, null, 2))

@@ -1,6 +1,11 @@
 import { AttachmentCard } from './attachment-card'
 import { useTheme } from '../hooks/use-theme'
 import { getFileAttachmentContextMetadata } from '../utils/pending-attachments'
+import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
+import { fitAttachmentName } from '../utils/attachment-names'
+import { createAttachmentDocument } from '../utils/attachment-document'
+import { createTextDocument } from '../utils/output-document'
+import { useOutputReaderStore } from '../state/output-reader-store'
 
 import type { FileAttachment } from '../types/chat'
 import type { PendingFileAttachment } from '../types/store'
@@ -12,42 +17,58 @@ const FILE_ICON_LINES = ['   ┌───╮', '   │ ≡ │', '   └──�
 
 const FOLDER_ICON_LINES = ['  ╭──╮   ', '  │  ╰──╮', '  ╰─────╯']
 
-const truncateFilename = (filename: string): string => {
-  if (filename.length <= MAX_FILENAME_LENGTH) return filename
-  // Find extension — ignore leading dot (dotfiles like .gitignore)
-  const lastDot = filename.lastIndexOf('.')
-  const hasExtension = lastDot > 0
-  const ext = hasExtension ? filename.slice(lastDot) : ''
-  const baseName = hasExtension ? filename.slice(0, lastDot) : filename
-  const maxBaseLength = MAX_FILENAME_LENGTH - ext.length - 1 // -1 for ellipsis
-  if (maxBaseLength <= 0)
-    return filename.slice(0, MAX_FILENAME_LENGTH - 1) + '…'
-  return baseName.slice(0, maxBaseLength) + '…' + ext
-}
-
 interface FileAttachmentCardProps {
   attachment: PendingFileAttachment | FileAttachment
   onRemove?: () => void
   showRemoveButton?: boolean
+  onInspect?: () => void
+  onRetry?: () => void
 }
 
 export const FileAttachmentCard = ({
   attachment,
   onRemove,
   showRemoveButton = true,
+  onInspect,
+  onRetry,
 }: FileAttachmentCardProps) => {
   const theme = useTheme()
+  const { terminalWidth } = useTerminalDimensions()
+  const width = Math.max(4, Math.min(FILE_CARD_WIDTH, terminalWidth - 10))
   const iconLines = attachment.isDirectory ? FOLDER_ICON_LINES : FILE_ICON_LINES
-  const truncatedName = truncateFilename(attachment.filename)
+  const truncatedName = fitAttachmentName(
+    attachment.filename,
+    Math.min(MAX_FILENAME_LENGTH, width - 4),
+  )
   const status = 'status' in attachment ? attachment.status : undefined
   const context = getFileAttachmentContextMetadata(attachment)
   const isIncomplete = context.completeness !== 'full'
 
   return (
     <AttachmentCard
-      width={FILE_CARD_WIDTH}
+      width={width}
       onRemove={onRemove}
       showRemoveButton={showRemoveButton}
+      onRetry={onRetry}
+      onInspect={
+        onInspect ??
+        (() =>
+          useOutputReaderStore
+            .getState()
+            .open({
+              document:
+                'content' in attachment
+                  ? createAttachmentDocument(attachment)
+                  : createTextDocument({
+                      id: `file-attachment:${attachment.path}`,
+                      title: attachment.filename,
+                      text: `File: ${attachment.filename}\nPath: ${attachment.path}\n${attachment.note ?? ''}`,
+                      availability: 'limited',
+                      notice:
+                        'Only attachment metadata was retained; file contents are unavailable in this capture.',
+                    }),
+            }))
+      }
     >
       {/* ASCII art icon area */}
       <box

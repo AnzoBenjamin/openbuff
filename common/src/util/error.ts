@@ -560,7 +560,7 @@ function safeStringify(value: unknown, maxLength = 10000): string | undefined {
 
 export function getErrorObject(
   error: unknown,
-  options: { includeRawError?: boolean } = {},
+  options: { includeRawError?: boolean; includeRequestBody?: boolean } = {},
 ): ErrorObject {
   if (error instanceof Error) {
     const extError = error as Error & Partial<ExtendedErrorProperties>
@@ -576,6 +576,7 @@ export function getErrorObject(
     // M1-T5: request bodies carry prompt/messages, so secrets are redacted.
     let requestBodyValues: string | undefined
     if (
+      options.includeRequestBody !== false &&
       extError.requestBodyValues !== undefined &&
       typeof extError.requestBodyValues === 'object'
     ) {

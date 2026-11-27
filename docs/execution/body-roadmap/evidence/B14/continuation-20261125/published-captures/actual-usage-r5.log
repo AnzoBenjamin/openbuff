@@ -1,0 +1,11 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+Using environment: test
+(pass) B14 actual SDK request and native read a persists only the matching emitted-source efficiency signal [255.39ms]
+(pass) B14 actual SDK request and native read c persists only the matching emitted-source efficiency signal [118.07ms]
+
+ 2 pass
+ 0 fail
+ 26 expect() calls
+Ran 2 tests across 1 file. [1059.00ms]

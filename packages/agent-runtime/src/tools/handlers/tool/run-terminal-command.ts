@@ -1,4 +1,9 @@
 import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
+import {
+  PLAN_MODE_READ_ONLY_ERROR_CODE,
+  isPlanLineage,
+  recordPlanLineageJob,
+} from '../../plan-mode-guard'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -29,17 +34,20 @@ export const handleRunTerminalCommand = (async ({
     toolCall: ClientToolCall<ToolName>,
   ) => Promise<CodebuffToolOutput<ToolName>>
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
+  const planLineage = isPlanLineage(agentTemplate)
+  const permissionProfile = resolveTerminalPermissionProfile(agentTemplate)
   const clientToolCall: ClientToolCall<ToolName> = {
     toolName: 'run_terminal_command',
     toolCallId: toolCall.toolCallId,
     input: {
       command: toolCall.input.command,
       mode: 'assistant',
-      // All agents run with the full-access terminal profile: the terminal
-      // command policy is intentionally not enforced per-agent (temp access,
-      // path traversal, sed, and shell wrappers are allowed). High-impact
-      // action approval (e.g. force push) is a separate gate and still applies.
-      permission_profile: 'full-access',      allowed_paths: Array.isArray(spawnParams?.owned_paths)
+      // The template's declaration, never model input. The SDK binds plan
+      // terminal actions to a native-only read-only request and refuses them
+      // without verified OS enforcement. Non-plan declarations retain their
+      // existing lexical ceilings; see sdk/src/tools/terminal-profile-bound.ts.
+      permission_profile: permissionProfile,
+      allowed_paths: Array.isArray(spawnParams?.owned_paths)
         ? spawnParams.owned_paths.filter(
             (value): value is string => typeof value === 'string',
           )
@@ -58,5 +66,73 @@ export const handleRunTerminalCommand = (async ({
     },
   }
   await previousToolCallFinished
-  return { output: await requestClientToolCall(clientToolCall) }
+  const output = await requestClientToolCall(clientToolCall)
+  if (!planLineage) return { output }
+  return {
+    output: annotatePlanLineageOutput({
+      output,
+      clientSessionId,
+      agentState,
+    }),
+  }
 }) satisfies CodebuffToolHandlerFunction<ToolName>
+
+type TerminalPermissionProfile = NonNullable<
+  ClientToolCall<ToolName>['input']['permission_profile']
+>
+
+/**
+ * The profile forwarded to the host: `read-only` in plan lineage, otherwise
+ * the template's declared profile. Agents that declare none keep the previous
+ * `full-access` default, so default execute-mode behaviour is unchanged.
+ */
+export function resolveTerminalPermissionProfile(
+  agentTemplate: Pick<
+    AgentTemplate,
+    'programmaticConfig' | 'terminalPermissionProfile'
+  >,
+): TerminalPermissionProfile {
+  if (isPlanLineage(agentTemplate)) return 'read-only'
+  return agentTemplate.terminalPermissionProfile ?? 'full-access'
+}
+
+/**
+ * Plan-lineage post-processing: policy/enforcement refusals get the typed
+ * `plan_mode_read_only` code, and a started background job is recorded so the
+ * lineage may later kill it.
+ */
+function annotatePlanLineageOutput(params: {
+  output: CodebuffToolOutput<ToolName>
+  clientSessionId: string
+  agentState: AgentState
+}): CodebuffToolOutput<ToolName> {
+  const { output, clientSessionId, agentState } = params
+  return output.map((part) => {
+    if (part.type !== 'json' || !part.value || typeof part.value !== 'object')
+      return part
+    const value = part.value as Record<string, unknown>
+    if (typeof value.jobId === 'string') {
+      recordPlanLineageJob({ clientSessionId, agentState, jobId: value.jobId })
+    }
+    const refusal = value.executionRefusal as { reason?: string } | undefined
+    if (
+      value.permissionDenied !== true &&
+      !['denied', 'unavailable', 'invalid-context'].includes(
+        refusal?.reason ?? '',
+      )
+    )
+      return part
+    if (value.errorCode === PLAN_MODE_READ_ONLY_ERROR_CODE) return part
+    const message =
+      typeof value.errorMessage === 'string' ? value.errorMessage : ''
+    return {
+      ...part,
+      value: {
+        ...value,
+        errorCode: PLAN_MODE_READ_ONLY_ERROR_CODE,
+        errorMessage:
+          `${PLAN_MODE_READ_ONLY_ERROR_CODE}: plan mode runs terminal commands read-only. ${message}`.trim(),
+      },
+    }
+  }) as CodebuffToolOutput<ToolName>
+}

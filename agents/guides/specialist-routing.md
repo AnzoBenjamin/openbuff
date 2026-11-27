@@ -87,13 +87,17 @@ spawn security-reviewer
   params.snapshot_fingerprint: "<stable fingerprint value to echo>"  # schema-required on every spawn; no v3 pattern is imposed, so a manual caller supplies its own stable value
 ```
 
-```text
-# batching routed specialists (runtime-owned aux step)
-spawn_agents [
-  { id: "perf", agent: "performance-specialist", params: { snapshot_id: "v3:<64-hex>" } },
-  { id: "rel",  agent: "reliability-reviewer",   params: { snapshot_id: "v3:<64-hex>" } }
-]
+```json
+{
+  "agents": [
+    { "agent_type": "performance-specialist", "params": { "snapshot_id": "v3:<64-hex>" } },
+    { "agent_type": "reliability-reviewer", "params": { "snapshot_id": "v3:<64-hex>" } }
+  ]
+}
 ```
+
+This illustrates a runtime-owned auxiliary spawn. Manual spawns must follow the
+individual specialist contracts above and must not invent gate-owned tokens.
 
 ## Compaction recovery
 

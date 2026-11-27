@@ -10,6 +10,9 @@ export const finishBashCommand = (id: string): void => {
   activeBashControllers.delete(id)
 }
 
+export const hasActiveBashCommands = (): boolean =>
+  activeBashControllers.size > 0
+
 export const cancelBashCommand = (id: string): boolean => {
   const controller = activeBashControllers.get(id)
   if (!controller) return false

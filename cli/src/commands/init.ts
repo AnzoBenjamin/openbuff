@@ -1,10 +1,12 @@
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
+  statSync,
 } from 'fs'
 import path from 'path'
 
@@ -58,10 +60,15 @@ const COMMON_TYPE_FILES = [
   },
 ]
 
-export function handleInitializationFlowLocally(): {
+export function handleInitializationFlowLocally(
+  options: { projectRoot?: string } = {},
+): {
   postUserMessage: PostUserMessageFn
+  status: 'complete' | 'failed'
+  messages: string[]
 } {
-  const projectRoot = getProjectRoot()
+  const projectRoot = options.projectRoot ?? getProjectRoot()
+  let status: 'complete' | 'failed' = 'complete'
   const knowledgePath = path.join(projectRoot, PRIMARY_KNOWLEDGE_FILE_NAME)
   const messages: string[] = []
   const createdFiles: string[] = []
@@ -94,6 +101,19 @@ export function handleInitializationFlowLocally(): {
   }
 
   try {
+    // A project may contain symlinked agent directories. Initializing it is
+    // not permission to write starter types into another directory.
+    for (const outputDirectory of [
+      path.join(projectRoot, '.agents'),
+      path.join(projectRoot, '.agents', 'types'),
+    ]) {
+      if (
+        lstatSync(outputDirectory, { throwIfNoEntry: false })?.isSymbolicLink()
+      )
+        throw new Error(
+          'Refusing to initialize through a symlinked .agents or .agents/types directory.',
+        )
+    }
     if (existsSync(knowledgePath)) {
       messages.push(`📋 \`${PRIMARY_KNOWLEDGE_FILE_NAME}\` already exists.`)
     } else {
@@ -141,6 +161,7 @@ export function handleInitializationFlowLocally(): {
       messages.push(`✅ Copied \`.agents/types/${fileName}\``)
     }
   } catch (error) {
+    status = 'failed'
     rollback()
     messages.length = 0
     messages.push(
@@ -155,5 +176,33 @@ export function handleInitializationFlowLocally(): {
     ...prev,
     ...messages.map((message) => getSystemMessage(message)),
   ]
-  return { postUserMessage }
+  return { postUserMessage, status, messages }
+}
+
+/** Root init is local-only and never enters the SDK/provider startup lifecycle. */
+export function runInitCommand(
+  args: { cwd?: string },
+  deps: {
+    writeStdout?: (text: string) => void
+    writeStderr?: (text: string) => void
+  } = {},
+): number {
+  const writeStdout =
+    deps.writeStdout ?? ((text: string) => process.stdout.write(text))
+  const writeStderr =
+    deps.writeStderr ?? ((text: string) => process.stderr.write(text))
+  try {
+    const projectRoot = path.resolve(args.cwd ?? process.cwd())
+    if (!statSync(projectRoot).isDirectory())
+      throw new Error('The selected project path is not a directory.')
+    const result = handleInitializationFlowLocally({ projectRoot })
+    const write = result.status === 'complete' ? writeStdout : writeStderr
+    write(result.messages.join('\n') + '\n')
+    return result.status === 'complete' ? 0 : 1
+  } catch (error) {
+    writeStderr(
+      `openbuff init: ${error instanceof Error ? error.message : String(error)}\n`,
+    )
+    return 1
+  }
 }

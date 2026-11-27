@@ -489,6 +489,7 @@ describe('editor agent', () => {
             changedFiles: [],
             blockedReason:
               'no edit_transaction was submitted; no file changes were produced.',
+            failureStage: 'no_edit_transaction',
             requirementsAddressed: [],
             acceptanceCriteriaAddressed: [],
             findingsAddressed: [],
@@ -624,6 +625,172 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.blockedReason).toContain(
         'edit_transaction was attempted but no edit committed',
       )
+      expect((result.value as any).input.output.failureStage).toBe(
+        'edit_transaction_uncommitted',
+      )
+    })
+
+    test('categorizes malformed transaction input without calling it a no-edit run', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: noopLogger as any,
+        params: {},
+      })
+      generator.next()
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'text',
+                text: 'The edit call failed: edits must be a real JSON array, not serialized.',
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.failureStage).toBe(
+        'invalid_edit_transaction_input',
+      )
+    })
+
+    test('bounds repeated identical recovery directives and reports exhaustion', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: noopLogger as any,
+        params: {},
+      })
+      generator.next()
+
+      const failedState = createMockAgentState([
+        {
+          role: 'tool',
+          toolName: 'edit_transaction',
+          content: [
+            {
+              type: 'json',
+              value: {
+                errorMessage: 'Atomic transaction aborted.',
+                requiresFreshRead: true,
+                errorCode: 'no_match',
+                recovery: {
+                  paths: ['src/live.ts', 'src/live.test.ts'],
+                  preferredStrategy: 'replace_range',
+                },
+              },
+            },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'I will retry.' }],
+        },
+      ])
+
+      const recovery = generator.next({
+        agentState: failedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect(recovery.value).toEqual({
+        toolName: 'add_message',
+        input: {
+          role: 'user',
+          content: expect.stringContaining('<editor_recovery>'),
+        },
+        includeToolCall: false,
+      })
+      expect((recovery.value as any).input.content).toContain('src/live.ts')
+      expect((recovery.value as any).input.content).toContain(
+        'real JSON array',
+      )
+
+      expect(
+        generator.next({
+          agentState: failedState,
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      // A second directive is allowed for a provider that stopped prematurely.
+      const secondRecovery = generator.next({
+        agentState: failedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((secondRecovery.value as any).toolName).toBe('add_message')
+      expect((secondRecovery.value as any).input.content).toContain(
+        '<editor_recovery>',
+      )
+
+      expect(
+        generator.next({
+          agentState: failedState,
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      const thirdRecovery = generator.next({
+        agentState: failedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((thirdRecovery.value as any).toolName).toBe('add_message')
+      generator.next({ agentState: failedState, toolResult: undefined, stepsComplete: false })
+
+      // The fourth identical continuation stops even without a step cap.
+      const finalReceipt = generator.next({
+        agentState: failedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((finalReceipt.value as any).input.output.failureStage).toBe(
+        'edit_recovery_exhausted',
+      )
+      expect((finalReceipt.value as any).input.output.recovery).toEqual({
+        paths: ['src/live.ts', 'src/live.test.ts'],
+        preferredStrategy: 'replace_range',
+        errorCode: 'no_match',
+        attempts: 3,
+      })
+    })
+
+    test('directs a retry after a successful required recovery read', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]), logger: noopLogger as any, params: {},
+      })
+      generator.next()
+      const state = createMockAgentState([
+        { role: 'tool', toolName: 'edit_transaction', content: [{ type: 'json', value: {
+          requiresFreshRead: true, recovery: { paths: ['src/live.ts'] },
+        } }] },
+        { role: 'tool', toolName: 'read_files', content: [{ type: 'json', value: {
+          results: [{ path: 'src/live.ts', status: 'ok', editAnchor: { readCapability: 'cap.v3.fresh' } }],
+        } }] },
+      ])
+      const result = generator.next({ agentState: state, toolResult: undefined, stepsComplete: true })
+      const directive = (result.value as any).input.content
+      expect(directive).toContain('Required reads are complete or unnecessary')
+      expect(directive).not.toContain('Read the exact current source for:')
+    })
+
+    test('does not require a read when structured recovery says it is unnecessary', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]), logger: noopLogger as any, params: {},
+      })
+      generator.next()
+      const state = createMockAgentState([{ role: 'tool', toolName: 'edit_transaction', content: [{
+        type: 'json', value: { recovery: { paths: ['src/live.ts'], requiresFreshRead: false } },
+      }] }])
+      const result = generator.next({ agentState: state, toolResult: undefined, stepsComplete: true })
+      expect((result.value as any).input.content).toContain('Required reads are complete or unnecessary')
     })
 
     test('includes Attempted paths from extractAttemptedEditFiles in blockedReason', () => {
@@ -1230,6 +1397,14 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.findingsAddressed).toEqual([
         'repair-finding',
       ])
+      expect((result.value as any).input.output.mutationReceipts).toEqual([
+        {
+          operationId: 'repair-finding',
+          receiptId: 'repair-finding:receipt',
+          paths: ['src/repaired.ts'],
+          actionIds: ['repair'],
+        },
+      ])
     })
 
     test('works with empty initial message history', () => {
@@ -1314,10 +1489,72 @@ describe('editor agent', () => {
           { type: 'text' as const, text: 'Subsequent editor activity' },
         ],
       }
-      const result = generator.next({
+      const actionRequired = generator.next({
         agentState: createMockAgentState([...preReadMessages, editorMessage]),
         toolResult: undefined,
         stepsComplete: true,
+      })
+      expect((actionRequired.value as any).toolName).toBe('add_message')
+      expect((actionRequired.value as any).input.content).toContain(
+        '<editor_action_required>',
+      )
+
+      const controlMessage = {
+        role: 'user' as const,
+        content: (actionRequired.value as any).input.content,
+      }
+      expect(
+        generator.next({
+          agentState: createMockAgentState([
+            ...preReadMessages,
+            editorMessage,
+            controlMessage,
+          ]),
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      // Continuations are unlimited: a second stepsComplete with still-no
+      // edits yields ANOTHER action-required directive, not the receipt.
+      const secondActionRequired = generator.next({
+        agentState: createMockAgentState([
+          ...preReadMessages,
+          editorMessage,
+          controlMessage,
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((secondActionRequired.value as any).toolName).toBe('add_message')
+      expect((secondActionRequired.value as any).input.content).toContain(
+        '<editor_action_required>',
+      )
+
+      expect(
+        generator.next({
+          agentState: createMockAgentState([
+            ...preReadMessages,
+            editorMessage,
+            controlMessage,
+          ]),
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      // The receipt is reached only when the run stopped at the explicit step
+      // cap (hitStepCap: true), which the generator must honor by breaking out
+      // of the continuation loop.
+      const result = generator.next({
+        agentState: createMockAgentState([
+          ...preReadMessages,
+          editorMessage,
+          controlMessage,
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+        hitStepCap: true,
       })
 
       expect((result.value as any).input.output.messages).toEqual([

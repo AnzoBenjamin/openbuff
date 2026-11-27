@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { discoveryCoverageV1Schema } from '@codebuff/common/types/discovery-coverage'
 
 import type { DiscoveryCoverageV1 } from '@codebuff/common/types/discovery-coverage'
@@ -127,7 +128,10 @@ function extractCandidateSymbols(value: unknown): Map<string, string[]> {
       }
       if (typeof item !== 'object') return
       const record = item as Record<string, unknown>
-      if (typeof record['path'] === 'string' && record['symbols'] !== undefined) {
+      if (
+        typeof record['path'] === 'string' &&
+        record['symbols'] !== undefined
+      ) {
         addSymbols(record['path'], record['symbols'])
       }
       for (const nested of Object.values(record)) visit(nested, depth + 1)
@@ -155,11 +159,9 @@ export function getVerifiedMemoryExcerpts(
   const excerpts: VerifiedExcerpt[] = []
   try {
     if (!agentState || typeof agentState !== 'object') return excerpts
-    const memoryV2Context = (
-      agentState as { memoryV2Context?: unknown }
-    ).memoryV2Context
-    if (!memoryV2Context || typeof memoryV2Context !== 'object')
-      return excerpts
+    const memoryV2Context = (agentState as { memoryV2Context?: unknown })
+      .memoryV2Context
+    if (!memoryV2Context || typeof memoryV2Context !== 'object') return excerpts
     const contextRecord = memoryV2Context as Record<string, unknown>
     const resultRecord =
       contextRecord['result'] && typeof contextRecord['result'] === 'object'
@@ -254,10 +256,7 @@ export function getVerifiedMemoryExcerpts(
             }
           }
           const directSnapshot = evidenceRecord['workspaceSnapshotId']
-          if (
-            typeof directSnapshot === 'string' &&
-            directSnapshot.length > 0
-          ) {
+          if (typeof directSnapshot === 'string' && directSnapshot.length > 0) {
             workspaceSnapshotId = directSnapshot.slice(0, 256)
           } else {
             const entrySnapshot = entryRecord['workspaceSnapshotId']
@@ -290,11 +289,9 @@ export function getVerifiedMemoryPaths(
   const verified = new Set<string>()
   try {
     if (!agentState || typeof agentState !== 'object') return verified
-    const memoryV2Context = (
-      agentState as { memoryV2Context?: unknown }
-    ).memoryV2Context
-    if (!memoryV2Context || typeof memoryV2Context !== 'object')
-      return verified
+    const memoryV2Context = (agentState as { memoryV2Context?: unknown })
+      .memoryV2Context
+    if (!memoryV2Context || typeof memoryV2Context !== 'object') return verified
     const contextRecord = memoryV2Context as Record<string, unknown>
     const resultRecord =
       contextRecord['result'] && typeof contextRecord['result'] === 'object'
@@ -464,8 +461,7 @@ export function planDiscoveryBatch(params: {
     revision: (params.existing?.revision ?? -1) + 1,
     workspaceRevision: params.workspaceRevision,
     queryHash,
-    indexSnapshotId:
-      params.indexSnapshotId ?? params.existing?.indexSnapshotId,
+    indexSnapshotId: params.indexSnapshotId ?? params.existing?.indexSnapshotId,
     workspaceSnapshotId: params.workspaceSnapshotId,
     candidates: mergedCandidates.slice(-512),
     shards: params.existing?.shards ?? [],
@@ -509,6 +505,8 @@ export function claimDiscoveryShard(params: {
   workspaceRevision?: number
   taskId?: string
   workspaceSnapshotId?: string
+  /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+  now?: number
 }): { state: DiscoveryCoverageV1; shardKey: string } {
   const question =
     params.question.trim() ||
@@ -526,11 +524,12 @@ export function claimDiscoveryShard(params: {
   const duplicate = existing.shards.find(
     (shard) =>
       shard.key === shardKey &&
-      (shard.status === 'active' || (
-        shard.status === 'completed' &&
-        shard.taskId === params.taskId &&
-        (!params.workspaceSnapshotId || !existing.workspaceSnapshotId || params.workspaceSnapshotId === existing.workspaceSnapshotId)
-      )),
+      (shard.status === 'active' ||
+        (shard.status === 'completed' &&
+          shard.taskId === params.taskId &&
+          (!params.workspaceSnapshotId ||
+            !existing.workspaceSnapshotId ||
+            params.workspaceSnapshotId === existing.workspaceSnapshotId))),
   )
   if (duplicate) {
     throw new Error(
@@ -540,7 +539,8 @@ export function claimDiscoveryShard(params: {
   const state = discoveryCoverageV1Schema.parse({
     ...existing,
     revision: existing.revision + 1,
-    workspaceSnapshotId: params.workspaceSnapshotId ?? existing.workspaceSnapshotId,
+    workspaceSnapshotId:
+      params.workspaceSnapshotId ?? existing.workspaceSnapshotId,
     shards: [
       ...existing.shards,
       {
@@ -549,7 +549,7 @@ export function claimDiscoveryShard(params: {
         question,
         taskId: params.taskId,
         status: 'active',
-        assignedAt: Date.now(),
+        assignedAt: params.now ?? realClock.now(),
       },
     ].slice(-256),
   })
@@ -579,6 +579,30 @@ export type MemoryCoverEvaluation = {
   reason?: string
 }
 
+function memoryReuseReceipt(agentState: {
+  memoryReuse?: MemoryReuseReceiptV1
+}): MemoryReuseReceiptV1 {
+  return (agentState.memoryReuse ??= {
+    schemaVersion: 1,
+    turnId: '',
+    skip: 0,
+    narrow: 0,
+    full: 0,
+    recordsServed: 0,
+    gapsRemaining: 0,
+    recordedDecisions: 0,
+    conceptExpanded: 0,
+    byTool: [],
+  })
+}
+
+/** Count accepted new decisions without inventing a discovery/read outcome. */
+export function recordMemoryDecision(agentState: {
+  memoryReuse?: MemoryReuseReceiptV1
+}): void {
+  memoryReuseReceipt(agentState).recordedDecisions += 1
+}
+
 /**
  * Best-effort memory-first cover check. Never throws: any unexpected input
  * falls through to `{ decision: 'full' }` so callers proceed with a full read.
@@ -588,6 +612,48 @@ export type MemoryCoverEvaluation = {
  * be proven stale). Index-snapshot mismatch is stale when both sides carry one.
  */
 export function evaluateMemoryCover(params: {
+  excerpts?: VerifiedExcerpt[] | null
+  pathPrefixes?: string[] | null
+  query?: string | null
+  unresolvedGaps?: string[] | null
+  workspaceRevision?: number
+  workspaceSnapshotId?: string
+  indexSnapshotId?: string
+  existingIndexSnapshotId?: string
+  /**
+   * The caller answers an "all X" question (glob, list_directory,
+   * code_search, find_files_matching_content). A handful of memory excerpts
+   * can never prove that every match is known, and the prefix check below
+   * never matches the pattern against the served paths. For these callers
+   * the result is always `full`; any covering excerpts are returned only as
+   * hints (reason `exhaustive-tool`) and must not replace the real call.
+   */
+  exhaustive?: boolean
+}): MemoryCoverEvaluation {
+  const evaluation = evaluateMemoryCoverInner(params)
+  if (params.exhaustive === true && evaluation.decision !== 'full') {
+    return {
+      decision: 'full',
+      coveringExcerpts: evaluation.coveringExcerpts,
+      remainingGaps: [],
+      reason: 'exhaustive-tool',
+    }
+  }
+  return evaluation
+}
+
+/**
+ * Tools whose result claims to enumerate every match. Memory must never
+ * short-circuit them (read-search-01).
+ */
+export const EXHAUSTIVE_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
+  'glob',
+  'list_directory',
+  'code_search',
+  'find_files_matching_content',
+])
+
+function evaluateMemoryCoverInner(params: {
   excerpts?: VerifiedExcerpt[] | null
   pathPrefixes?: string[] | null
   query?: string | null
@@ -643,14 +709,6 @@ export function evaluateMemoryCover(params: {
         if (fresh.length >= 32) break
       } catch {
         continue
-      }
-    }
-    if (fresh.length === 0) {
-      return {
-        decision: 'full',
-        coveringExcerpts: [],
-        remainingGaps: [],
-        reason: 'missing-cover',
       }
     }
     const normalizeList = (list: unknown, cap: number): string[] => {
@@ -713,6 +771,14 @@ export function evaluateMemoryCover(params: {
         coveringExcerpts: [],
         remainingGaps: [],
         reason: 'no-scope',
+      }
+    }
+    if (fresh.length === 0) {
+      return {
+        decision: 'full',
+        coveringExcerpts: [],
+        remainingGaps: targets.slice(0, 128),
+        reason: 'missing-cover',
       }
     }
     const coveredPaths = new Set(fresh.map((entry) => entry.path))
@@ -783,24 +849,15 @@ export function recordMemoryReuse(
     served: number
     gaps: number
     recordedDecisions?: number
+    reason?: string
+    observedReads?: NonNullable<
+      MemoryReuseReceiptV1['byTool']
+    >[number]['observedReads']
     coveredStableChunkIds?: string[]
   },
 ): void {
   try {
-    const receipt =
-      agentState.memoryReuse ??
-      (agentState.memoryReuse = {
-        schemaVersion: 1,
-        turnId: '',
-        skip: 0,
-        narrow: 0,
-        full: 0,
-        recordsServed: 0,
-        gapsRemaining: 0,
-        recordedDecisions: 0,
-        conceptExpanded: 0,
-        byTool: [],
-      })
+    const receipt = memoryReuseReceipt(agentState)
     if (entry.decision === 'skip') receipt.skip += 1
     else if (entry.decision === 'narrow') receipt.narrow += 1
     else receipt.full += 1
@@ -808,7 +865,10 @@ export function recordMemoryReuse(
       receipt.recordsServed += Math.max(0, Math.trunc(entry.served))
     }
     receipt.gapsRemaining += Math.max(0, Math.trunc(entry.gaps))
-    receipt.recordedDecisions += Math.max(0, Math.trunc(entry.recordedDecisions ?? 0))
+    receipt.recordedDecisions += Math.max(
+      0,
+      Math.trunc(entry.recordedDecisions ?? 0),
+    )
     if (receipt.byTool && receipt.byTool.length < 32) {
       const chunks = Array.isArray(entry.coveredStableChunkIds)
         ? [
@@ -830,6 +890,10 @@ export function recordMemoryReuse(
         decision: entry.decision,
         served: Math.max(0, Math.trunc(entry.served)),
         gaps: Math.max(0, Math.trunc(entry.gaps)),
+        ...(entry.reason ? { reason: entry.reason.slice(0, 64) } : {}),
+        ...(entry.observedReads?.length
+          ? { observedReads: entry.observedReads.slice(0, 32) }
+          : {}),
         ...(chunks && chunks.length > 0
           ? { coveredStableChunkIds: chunks }
           : {}),
@@ -853,6 +917,8 @@ export function tryClaimDiscoveryShard(params: {
   workspaceRevision?: number
   taskId?: string
   workspaceSnapshotId?: string
+  /** Injectable wall-clock (P2-T1); forwarded to claimDiscoveryShard. */
+  now?: number
 }): {
   state: DiscoveryCoverageV1
   shardKey: string
@@ -860,7 +926,11 @@ export function tryClaimDiscoveryShard(params: {
 } {
   try {
     const claimed = claimDiscoveryShard(params)
-    return { state: claimed.state, shardKey: claimed.shardKey, duplicate: false }
+    return {
+      state: claimed.state,
+      shardKey: claimed.shardKey,
+      duplicate: false,
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (!message.includes('Duplicate discovery shard')) throw error
@@ -885,6 +955,8 @@ export function completeDiscoveryShard(params: {
   existing?: DiscoveryCoverageV1
   shardKey?: string
   status: 'completed' | 'failed' | 'interrupted'
+  /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+  now?: number
 }): DiscoveryCoverageV1 | undefined {
   if (!params.existing || !params.shardKey) return params.existing
   return discoveryCoverageV1Schema.parse({
@@ -892,7 +964,11 @@ export function completeDiscoveryShard(params: {
     revision: params.existing.revision + 1,
     shards: params.existing.shards.map((shard) =>
       shard.key === params.shardKey
-        ? { ...shard, status: params.status, completedAt: Date.now() }
+        ? {
+            ...shard,
+            status: params.status,
+            completedAt: params.now ?? realClock.now(),
+          }
         : shard,
     ),
   })
@@ -937,12 +1013,13 @@ export function recordDiscoveryResult(params: {
  */
 export function reconcileInterruptedDiscoveryShards(
   existing?: DiscoveryCoverageV1,
+  now?: number,
 ): DiscoveryCoverageV1 | undefined {
   const hasActiveShard = existing?.shards.some(
     (shard) => shard.status === 'active',
   )
   if (!existing || !hasActiveShard) return existing
-  const completedAt = Date.now()
+  const completedAt = now ?? realClock.now()
   return discoveryCoverageV1Schema.parse({
     ...existing,
     revision: existing.revision + 1,

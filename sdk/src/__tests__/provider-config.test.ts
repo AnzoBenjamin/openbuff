@@ -4,16 +4,113 @@ import path from 'path'
 
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 
+import type { SpendingPolicy } from '@codebuff/common/types/request-admission'
+
 import {
   PROVIDER_CONFIG_ENV_VAR,
   clearProviderConfigCacheForTest,
   loadProviderConfigSync,
   providerConfigFileSchema,
   resolveContextWindowTokens,
+  resolveConfiguredProviderModel,
   writeProviderConfigFile,
 } from '../provider-config'
 
 const originalEnv = { ...process.env }
+
+test('reasoning replay defaults for IFM and can be configured for other endpoints', () => {
+  function resolve(baseURL: string, reasoningReplay?: 'required' | 'none') {
+    const config = providerConfigFileSchema.parse({
+      providers: {
+        example: {
+          baseURL,
+          models: ['model'],
+          ...(reasoningReplay && { compatibility: { reasoningReplay } }),
+        },
+      },
+    })
+    return resolveConfiguredProviderModel({
+      model: 'example/model',
+      loadedConfig: { config, sourceFilePaths: [] },
+      env: {},
+    })?.compatibility.reasoningReplay
+  }
+  expect(resolve('https://api.ifm.ai/v1')).toBe('required')
+  expect(resolve('https://api.ifm.ai/v1', 'none')).toBe('none')
+  expect(resolve('https://example.com/v1')).toBeUndefined()
+  expect(resolve('https://example.com/v1', 'required')).toBe('required')
+  expect(resolve('https://api.ifm.ai.example.com/v1')).toBeUndefined()
+})
+test('preserves compatible usage negotiation and cache pricing fields', () => {
+  const config = providerConfigFileSchema.parse({
+    providers: {
+      example: {
+        type: 'openai-compatible',
+        baseURL: 'https://example.com/v1',
+        models: ['model'],
+        compatibility: { includeUsage: true },
+        defaultCapabilities: {
+          pricing: {
+            inputPerMillionTokens: 3,
+            outputPerMillionTokens: 15,
+            cachedInputPerMillionTokens: 0.3,
+            cacheWriteInputPerMillionTokens: 3.75,
+            currency: 'USD',
+          },
+        },
+      },
+    },
+  })
+  const provider = config.providers.example
+  if (provider.type !== 'openai-compatible')
+    throw new Error('Expected an OpenAI-compatible fixture provider')
+  expect(provider.compatibility.includeUsage).toBe(true)
+  expect(provider.defaultCapabilities?.pricing).toEqual({
+    inputPerMillionTokens: 3,
+    outputPerMillionTokens: 15,
+    cachedInputPerMillionTokens: 0.3,
+    cacheWriteInputPerMillionTokens: 3.75,
+    currency: 'USD',
+  })
+})
+
+test('validates strict, estimated, and uncapped request spending policies', () => {
+  const valid = [
+    { mode: 'uncapped' },
+    { mode: 'strict-capped', capCents: 25, currency: 'USD' },
+    {
+      mode: 'estimated-capped',
+      capCents: 25,
+      currency: 'USD',
+      estimator: {
+        id: 'conservative-v1',
+        reservationCents: 2.5,
+        maxConcurrentAttempts: 2,
+      },
+    },
+  ] satisfies SpendingPolicy[]
+  for (const spending of valid) {
+    const parsed = providerConfigFileSchema.parse({ spending })
+    expect(parsed.spending).toEqual(spending)
+  }
+  for (const spending of [
+    { mode: 'strict-capped', capCents: 1, currency: 'EUR' },
+    { mode: 'strict-capped', capCents: -1, currency: 'USD' },
+    { mode: 'estimated-capped', capCents: 1, currency: 'USD' },
+    {
+      mode: 'estimated-capped',
+      capCents: 1,
+      currency: 'USD',
+      estimator: {
+        id: 'bad',
+        reservationCents: 0,
+        maxConcurrentAttempts: 0,
+      },
+    },
+  ])
+    expect(providerConfigFileSchema.safeParse({ spending }).success).toBe(false)
+})
+
 const originalCwd = process.cwd()
 
 function resetEnv() {
@@ -93,10 +190,7 @@ describe('provider-config fragment reactivity', () => {
       'openbuff.d',
       'late.json',
     )
-    fs.writeFileSync(
-      latePath,
-      JSON.stringify({ defaultModel: 'local/late' }),
-    )
+    fs.writeFileSync(latePath, JSON.stringify({ defaultModel: 'local/late' }))
 
     const second = loadProviderConfigSync()
     expect(second.config.defaultModel).toBe('local/late')
@@ -120,6 +214,36 @@ describe('provider-config fragment reactivity', () => {
     const second = loadProviderConfigSync()
     expect(second.config.defaultModel).toBeUndefined()
     expect(second.sourceFilePaths).not.toContain(removablePath)
+  })
+
+  test('keeps semantic indexing from its fragment when later files omit indexing', () => {
+    const { configPath, fragmentDir } = setupFragmentConfig()
+    fs.writeFileSync(
+      path.join(fragmentDir, 'indexing.json'),
+      JSON.stringify({
+        indexing: { semantic: { enabled: true, model: 'local/embedding' } },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(fragmentDir, 'later.json'),
+      JSON.stringify({ defaultModel: 'local/chat' }),
+    )
+    const loaded = loadProviderConfigSync()
+    expect(loaded.config.indexing.semantic).toMatchObject({
+      enabled: true,
+      model: 'local/embedding',
+    })
+    expect(loaded.sourceFiles?.indexing).toBe(
+      path.join(fragmentDir, 'indexing.json'),
+    )
+    // A deliberate declaration in the parent still wins.
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ indexing: { semantic: { enabled: false } } }),
+    )
+    expect(loadProviderConfigSync().config.indexing.semantic.enabled).toBe(
+      false,
+    )
   })
 })
 
@@ -405,9 +529,9 @@ describe('provider config atomic write crash safety', () => {
         )
 
         // The surviving backup was reported so the user can recover it.
-        expect(
-          logged.some((line) => line.includes('preserving backup')),
-        ).toBe(true)
+        expect(logged.some((line) => line.includes('preserving backup'))).toBe(
+          true,
+        )
       } finally {
         console.error = originalConsoleError
         restoreRename()

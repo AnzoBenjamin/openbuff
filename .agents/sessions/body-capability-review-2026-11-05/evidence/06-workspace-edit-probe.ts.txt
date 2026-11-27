@@ -1,0 +1,69 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createLspMultiplexer } from '/home/ben/Code/CLI/openbuff/sdk/src/services/lsp-multiplexer.ts'
+import { createLanguageIntelligence } from '/home/ben/Code/CLI/openbuff/sdk/src/services/language-intelligence.ts'
+import { applySemanticEdit } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/semantic-edit-apply.ts'
+import { WorkspaceMutationBroker } from '/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts'
+import { createNodeFileSystem } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/node-filesystem.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = await fs.mkdtemp(path.join(evidenceDir, '06-workspace-edit-fixture-'))
+const cwd = path.join(fixtureRoot, 'workspace')
+await fs.mkdir(cwd)
+const broker = await WorkspaceMutationBroker.create({ cwd, stateDir: path.join(fixtureRoot, 'state') })
+const filesystem = createNodeFileSystem({ mutationBroker: broker })
+const target = path.join(cwd, 'a.ts')
+const uri = `file://${target}`
+
+function peer(rawEdit: unknown) {
+  const listeners: Array<(chunk: Buffer) => void> = []
+  const requests: unknown[] = []
+  let buffer = Buffer.alloc(0)
+  const child = {
+    pid: 4242,
+    stdin: {
+      write(chunk: string) {
+        buffer = Buffer.concat([buffer, Buffer.from(chunk)])
+        for (;;) {
+          const headerEnd = buffer.indexOf('\r\n\r\n')
+          if (headerEnd === -1) return
+          const length = Number(/Content-Length:\s*(\d+)/i.exec(buffer.subarray(0, headerEnd).toString())?.[1])
+          if (buffer.length < headerEnd + 4 + length) return
+          const message = JSON.parse(buffer.subarray(headerEnd + 4, headerEnd + 4 + length).toString())
+          buffer = buffer.subarray(headerEnd + 4 + length)
+          requests.push(message)
+          if (typeof message.id !== 'number') continue
+          const result = message.method === 'initialize' ? { capabilities: {} } : message.method === 'textDocument/prepareRename' ? { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } } : message.method === 'textDocument/rename' ? rawEdit : null
+          const body = JSON.stringify({ jsonrpc: '2.0', id: message.id, result })
+          const framed = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+          listeners.forEach((listener) => listener(framed))
+        }
+      },
+      end() {},
+    },
+    stdout: { on(_event: string, listener: (chunk: Buffer) => void) { listeners.push(listener) } },
+    on() {},
+    kill() {},
+  }
+  return { child: child as any, requests }
+}
+
+const cases = [
+  { name: 'stale-document-version', edit: { documentChanges: [{ textDocument: { uri, version: 999 }, edits: [{ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } }, newText: 'bar' }] }] } },
+  { name: 'omitted-resource-operation', edit: { documentChanges: [{ kind: 'rename', oldUri: uri, newUri: `file://${path.join(cwd, 'renamed.ts')}` }, { textDocument: { uri, version: 1 }, edits: [{ range: { start: { line: 0, character: 6 }, end: { line: 0, character: 9 } }, newText: 'bar' }] }] } },
+  { name: 'raw-negative-position', edit: { changes: { [uri]: [{ range: { start: { line: 1, character: -3 }, end: { line: 1, character: -1 } }, newText: 'X' }] } } },
+]
+const outcomes: unknown[] = []
+for (const c of cases) {
+  await fs.writeFile(target, 'const foo = 1\nsecond\n')
+  const remote = peer(c.edit)
+  const mux = createLspMultiplexer({ spawner: () => remote.child, rootResolver: () => cwd, openFile: async () => fs.readFile(target, 'utf8') })
+  const service = createLanguageIntelligence({ cwd, fs: filesystem, multiplexer: mux })
+  const result = await service.renameSymbol({ path: 'a.ts', line: 1, character: 6, new_name: 'bar' })
+  const applied = await applySemanticEdit(result[0].value, { cwd, fs: filesystem })
+  outcomes.push({ name: c.name, rawEdit: c.edit, openedDocument: (remote.requests as any[]).find((r) => r.method === 'textDocument/didOpen')?.params, serviceValue: result[0].value, output: applied.output[0]?.value, final: await fs.readFile(target, 'utf8'), renamedFileExists: await fs.stat(path.join(cwd, 'renamed.ts')).then(() => true, () => false) })
+  await service.dispose()
+}
+const report = { fixtureRoot, outcomes }
+await fs.writeFile(path.join(evidenceDir, '06-workspace-edit-probe.json'), `${JSON.stringify(report, null, 2)}\n`)
+console.log(JSON.stringify(report, null, 2))

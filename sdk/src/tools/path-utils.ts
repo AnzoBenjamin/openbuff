@@ -1,4 +1,5 @@
 import path from 'path'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 
 import {
   isOwnedTempPath,
@@ -8,6 +9,7 @@ import {
   resolveProjectPathForFileSystemRead,
   resolveProjectPathForRead,
   type ContainedProjectPath,
+  type HostReadPolicy,
 } from '@codebuff/common/util/project-path-containment'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -18,8 +20,9 @@ import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
  * Absolute POSIX paths are allowed through; containment is enforced by
  * resolveProjectPath*.
  */
-export function isSafeProjectRelativePath(input: string): boolean {
+export function isSafeProjectRelativePath(input: string, policyToken?: object): boolean {
   if (!input || input.includes('\0')) return false
+  if (hasFilesystemSandbox(policyToken)) return true
   // Reject Windows drive / UNC forms (ambiguous for portable project-relative policy).
   if (
     /^[a-zA-Z]:[\\/]/.test(input) ||
@@ -237,8 +240,9 @@ export async function resolveFilePathForFileSystemOperation(
 export function resolveFilePathForReadOperation(
   projectRoot: string,
   input: string,
+  readPolicy?: HostReadPolicy,
 ): ResolvedOperationPath | null {
-  const resolved = resolveProjectPathForRead(projectRoot, input)
+  const resolved = resolveProjectPathForRead(projectRoot, input, readPolicy)
   if (!resolved) return null
   return { ...resolved, operationPath: resolved.realFullPath }
 }

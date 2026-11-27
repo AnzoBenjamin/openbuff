@@ -1,20 +1,50 @@
+import { createValidationReceiptRegistry } from './services/validation-receipts'
+import {
+  buildContextArchiveBodyReader,
+  buildContextArchiveSearchReader,
+} from './services/context-archive-reader'
+import {
+  RepositoryIntelligenceService,
+  createRepositoryIntelligenceSource,
+  createVirtualRepositoryIntelligenceSource,
+} from './services/repository-intelligence'
+import type { RepositoryIntelligenceSource } from '@codebuff/common/types/contracts/repository-intelligence'
+import { classifyTerminalProcedureActions } from './services/harness-enforcement'
 import path from 'path'
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 
 import { callMainPrompt } from '@codebuff/agent-runtime/main-prompt'
+import { nativeToolObservationInputHash } from '@codebuff/agent-runtime/tools/tool-executor'
+import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 import {
   buildUserMessageContent,
   withSystemTags,
 } from '@codebuff/agent-runtime/util/messages'
 import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
+import { unverifiedRunReplayRefusal } from '@codebuff/agent-runtime/util/run-journal'
+import { READ_PLAN_TEMPLATE_ID } from '@codebuff/agent-runtime/util/read-plan-replay'
+import { takeReadPlanExecution, type ReadPlanExecution } from './services/replayable-reads'
 import {
-  getMCPClient,
-  listMCPTools,
-  callMCPTool,
+  getMCPClientCacheKey,
+  resolveMCPConfigOrigin,
+  propagateMCPConfigOrigins,
 } from '@codebuff/common/mcp/client'
+import {
+  bindMcpSession,
+  resolveMcpHostBinding,
+} from '@codebuff/common/mcp/provenance'
+import { selectExternalToolPaths } from '@codebuff/common/tools/external-tool'
+import {
+  getScopedReadPolicyAliases,
+  isSafeProjectRelativePath,
+  resolveFilePathForFileSystemReadOperation,
+} from './tools/path-utils'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
 import { toolNames } from '@codebuff/common/tools/constants'
+import { toolMetadata } from '@codebuff/common/tools/metadata'
 import {
   fileMutationResultV1Schema,
+  buildReadFilesResultV1,
   getConfirmedAppliedActionsV1,
   type CommitReceiptV1,
   type FileMutationResultV1,
@@ -22,36 +52,112 @@ import {
 import {
   clientToolCallSchema,
   clientToolNames,
+  toolParams,
 } from '@codebuff/common/tools/list'
 import { parseJsonBounded } from '@codebuff/common/tools/params/utils'
+import { executionRefusalSchema } from '@codebuff/common/tools/params/execution-refusal'
 import { AgentOutputSchema } from '@codebuff/common/types/session-state'
+import type { JSONValue } from '@codebuff/common/types/json'
+import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 import { extractApiErrorDetails } from '@codebuff/common/util/error'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
-import { ensureExternalReadRootsConfigured } from '@codebuff/common/util/project-path-containment'
+import { hashActionInput } from '@codebuff/common/util/action-outcomes'
+import { jsonSchemaToZod } from '@codebuff/common/util/json-schema'
+import {
+  captureRootDeadline,
+  isExecutionDeadlineSignal,
+  readOnlyPlanExecutionProfile,
+} from '@codebuff/common/util/execution-context'
 import { stableHash } from '@codebuff/common/util/stable-hash'
+import { captureRunOutputSchema } from '@codebuff/common/util/run-output-schema'
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 import { cloneDeep } from 'lodash'
 
 import { getErrorStatusCode } from './error-utils'
 import { createJobUpdateForwarder } from './job-update-forwarder'
-import { getHarnessStateDir, getConfigDir } from './credentials'
+import { createRunMcpExecution } from './services/run-mcp-execution'
+import { createExecutionScopeRegistry } from './services/execution-scope-registry'
+import { createActionWorkspaceBasis } from './services/action-workspace-basis'
+import type {
+  ActionWorkspaceBasis,
+  ConfirmedWorkspaceTransition,
+} from './services/action-workspace-basis'
 import { getAgentRuntimeImpl } from './impl/agent-runtime'
-import { loadProviderConfigSync } from './provider-config'
+import {
+  captureAmbientHostInputs,
+  getCapturedProviderConfig,
+  loadHostConfigSnapshot,
+  nodeConfigReadFs,
+  withRunModelOverride,
+} from './host-config'
+import {
+  createHostExecutionServices,
+  defaultExecutionProfile,
+  executionClock,
+} from './host-execution'
+import {
+  bindHostFileSystem,
+  hasGuardedProjectReads,
+  isStrictProjectReadToolSupported,
+} from './services/host-filesystem'
+import {
+  deriveProjectOnlyReadPolicy,
+  isProjectOnlyReadPolicy,
+  type HostReadPolicy,
+} from '@codebuff/common/util/project-path-containment'
+import {
+  executionLimitMs,
+  refusalForSignal,
+  ExecutionRefusalError,
+  isExecutionRefusalError,
+  joinNodeScopeCleanup,
+} from './services/execution-launch'
+import { joinNativeScopeCleanup } from './services/native-exec'
+import type { NativeHostExecution } from './services/native-host-execution'
+import { configureHostExecution } from './services/configured-host-execution'
 import { initialSessionState, applyOverridesToSessionState } from './run-state'
 import {
   codebuffFsToNodePromises,
   saveMergedTaskMemory,
 } from './services/task-memory-store'
 import { WorkspaceJournalService } from './services/workspace-journal'
-import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
+import {
+  WorkspaceMutationBroker,
+  WorkspaceMutationBrokerRecoveryError,
+} from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
+import {
+  createRequestAdmissionStore,
+  spendingPolicySchema,
+} from './services/request-admission-store'
+import type {
+  RequestAdmissionStore,
+  SpendingPolicy,
+} from '@codebuff/common/types/request-admission'
+import {
+  captureDiagnosticObservation,
+  type DiagnosticCapture,
+} from './services/diagnostic-delta'
+import {
+  createDiagnosticCommandRunner,
+  createDiagnosticDeltaHook,
+} from './services/diagnostic-delta-runner'
+import {
+  diagnosticFileSet,
+  diagnosticPostimageMatches,
+} from './services/diagnostic-baseline'
 import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
-import type { MemoryV2ClientConfig } from './services/memory-v2/types'
+import { finishMemoryV2Turn } from './services/memory-v2/finish-turn'
+import {
+  getEffectiveMemoryAuthority,
+  type MemoryAuthorityMode,
+  type MemoryV2ClientConfig,
+} from './services/memory-v2/types'
 import {
   HarnessApprovalService,
-  evaluateHarnessActionPolicy,
+  hashCommand,
 } from './services/harness-enforcement'
 import type {
   HarnessApprovalMode,
@@ -72,11 +178,19 @@ import { readImages } from './tools/read-image'
 import { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
 import {
   browserLogs,
+  chromeSandboxArgs,
+  resolveChromeExecutable,
   stopBrowserSessionsByOwner,
   type BrowserSessionOwner,
 } from './tools/browser-logs'
 import { replaceRange } from './tools/replace-range'
 import { runTerminalCommand } from './tools/run-terminal-command'
+import {
+  captureTerminalTimeoutPolicy,
+  resolveTerminalTimeout,
+} from './services/terminal-timeout-policy'
+import type { TerminalTimeoutPolicy } from './services/terminal-timeout-policy'
+import { refuseByDeclaredTerminalProfile } from './tools/terminal-profile-bound'
 import { checkJob } from './tools/check-job'
 import { killJob } from './tools/kill-job'
 import { readLogs } from './tools/read-logs'
@@ -88,22 +202,47 @@ import { runTargetedValidation } from './tools/run-targeted-validation'
 import { inspectEnvironment } from './tools/inspect-environment'
 import { getAffectedTests } from './tools/get-affected-tests'
 import { getBuildTargets } from './tools/get-build-targets'
+import { findReferences } from './tools/find-references'
+import { goToDefinition } from './tools/go-to-definition'
+import { hoverType } from './tools/hover-type'
+import { workspaceSymbol } from './tools/workspace-symbol'
+import { renameSymbol } from './tools/rename-symbol'
+import { codeAction } from './tools/code-action'
+import { extractSymbol } from './tools/extract-symbol'
+import {
+  createLanguageIntelligence,
+  type LanguageIntelligenceService,
+} from './services/language-intelligence'
 import {
   evaluateAuditCoverageTool,
   inspectCodebaseStructureTool,
   inspectFeatureCompletenessTool,
 } from './tools/audit-intelligence'
 import { gitBranch } from './tools/git-branch'
-import { runFileChangeHooks } from './tools/file-change-hooks'
+import {
+  isDiagnosticPreflightEnabled,
+  runFileChangeHooks,
+  type DiagnosticDeltaHook,
+} from './tools/file-change-hooks'
 import {
   findFileMutationResult,
   writeAuditFindings,
 } from './tools/write-audit-findings'
 import { createNodeFileSystem } from './tools/node-filesystem'
+import {
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  type TransactionIntentLog,
+} from './tools/transaction-intent-log'
 import type { FilesystemAuthorityPolicy } from './tools/filesystem-authority'
 
-import type { CustomToolDefinition } from './custom-tool'
+import type {
+  CustomToolDefinition,
+  CustomToolExecutionContext,
+} from './custom-tool'
 import type { RunState } from './run-state'
+import { projectRunOutcomes } from './run-state'
+import type { RunOutcome } from '@codebuff/common/types/run-outcome'
 import type { FileFilter } from './tools/read-files'
 import type { FileLineRange } from '@codebuff/common/types/contracts/client'
 import type { ReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
@@ -123,10 +262,17 @@ import type {
   TextPart,
   ToolResultOutput,
 } from '@codebuff/common/types/messages/content-part'
+import type { PlaybookGateOutcomeEvent } from '@codebuff/common/types/memory-playbook'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionState } from '@codebuff/common/types/session-state'
 import type { JobOwner } from '@codebuff/common/util/job-registry'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import { listJobs } from './tools/list-jobs'
@@ -135,6 +281,105 @@ import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
 import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
 import { getSystemProcessEnv } from './env'
 import { spawn as nodeSpawn } from 'node:child_process'
+import type {
+  AgentRuntimeDeps,
+  JournalReader,
+  JournalWriter,
+} from '@codebuff/common/types/contracts/agent-runtime'
+import { createRunResumeDriver } from './services/run-resume-driver'
+import type {
+  CapturedCredentialPort,
+  HostConfigurationInputs,
+  HostConfigSnapshot,
+} from './host-config'
+import type { ConfigReadFs } from './provider-config'
+import type {
+  ExecutionScope,
+  HostExecutionOptions,
+  RunHostServices,
+} from './host-execution'
+import type {
+  BoundResourceFactory,
+  ExecutionAdapterContext,
+  LaunchEvent,
+  PolicyInput,
+  ProfileRequest,
+  Result,
+  RootDeadlineSeed,
+} from '@codebuff/common/types/contracts/execution-context'
+import type { MediatedMcpRequest } from '@codebuff/common/mcp/request'
+import type { CapturedHookConfiguration } from './tools/file-change-hooks'
+import type {
+  ExecutionActor,
+  ToolExecutionIdentity,
+} from '@codebuff/common/types/contracts/client'
+
+/**
+ * Audit fix (D): tool calls whose receipt can contain file actions — the same
+ * set that reaches handleToolCall's post-commit mutation block (the change-
+ * file tools plus the compact-receipt tools). rename_symbol, code_action,
+ * and extract_symbol ride the same compact-receipt channel as
+ * write_audit_findings, so they are baseline-captured too. Mirrors the
+ * toolName list the override receipt guard uses there.
+ */
+const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'str_replace',
+  'create_plan',
+  'edit_transaction',
+  'replace_range',
+  'write_audit_findings',
+  'rename_symbol',
+  'code_action',
+  'extract_symbol',
+])
+
+const RECOVERY_GATED_MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  ...DIAGNOSTIC_BASELINE_TOOL_NAMES,
+  'edit_3d_asset',
+])
+
+/**
+ * Audit fix (D): bounded file list for the pre-edit baseline capture — the
+ * paths a mutating tool call targets, derived from its input WITHOUT any
+ * schema change. Each tool input carries at most a few paths, so the list is
+ * bounded by construction; supportedDiagnosticFiles filters it further before
+ * capture, and an empty output means no capture runs at all.
+ */
+function diagnosticBaselineFiles(toolName: string, input: unknown): string[] {
+  const record = (input ?? {}) as Record<string, unknown>
+  switch (toolName) {
+    case 'write_file':
+    case 'str_replace':
+    case 'create_plan':
+    case 'replace_range':
+    // rename_symbol, code_action, and extract_symbol are single-`path`
+    // mutating tools that reach the same post-commit mutation block via the
+    // compact-receipt channel, so they get the same `input.path` baseline
+    // branch. (extract_symbol's destination is a NEW file, so it needs no
+    // pre-edit baseline.)
+    case 'rename_symbol':
+    case 'code_action':
+    case 'extract_symbol': {
+      const file = typeof record.path === 'string' ? record.path : undefined
+      return file ? [file] : []
+    }
+    case 'edit_transaction': {
+      const edits = Array.isArray(record.edits) ? record.edits : []
+      const files = new Set<string>()
+      for (const edit of edits) {
+        if (!edit || typeof edit !== 'object') continue
+        const editPath = (edit as { path?: unknown }).path
+        if (typeof editPath === 'string' && editPath !== '') {
+          files.add(editPath)
+        }
+      }
+      return [...files]
+    }
+    default:
+      return []
+  }
+}
 
 /**
  * Stable trusted background-job ownership seed for THIS client session.
@@ -185,6 +430,7 @@ const wrapContentForUserMessage = (
 export type OverrideExecutionContextV1 = {
   abiVersion: 'v1'
   signal: AbortSignal
+  execution?: ExecutionAdapterContext
 }
 
 export type OverrideDescriptor<TInput, TV0Output, TV1Output = TV0Output> =
@@ -225,17 +471,60 @@ export type OpenbuffClientOptions = {
   /** Optional directory path to load skills from. Skills found here will be available to the `skill` tool. */
   skillsDir?: string
   projectFiles?: Record<string, string>
+  /** Use paths to defer repository-wide symbol parsing to retrieval tools. Defaults to symbols. */
+  projectContextMode?: 'paths' | 'symbols'
   knowledgeFiles?: Record<string, string>
+  /** Explicit user knowledge, merged after files selected by the captured home policy. */
+  userKnowledgeFiles?: Record<string, string>
   agentDefinitions?: AgentDefinition[]
+  /**
+   * Host-supplied MCP servers to attach to the agent being run. They are
+   * merged (by object REFERENCE, never cloned) into the resolved agent
+   * template's `mcpServers` after the session state is built, so the run
+   * loop's getMCPToolData picks them up. Callers that need these treated as
+   * untrusted (e.g. the serve bridge, for client-advertised servers) mark them
+   * with markAllMCPConfigOrigins BEFORE passing them here; run() never
+   * re-marks or clones them, so the identity-keyed origin marks survive to
+   * resolveMCPConfigOrigin.
+   */
+  mcpServers?: Record<string, MCPConfig>
   maxAgentSteps?: number
-  env?: Record<string, string>
+  /** (Optional) Cap on how many times the agent retries a structured set_output after ending its turn without one. Omit for unlimited retries (bounded by maxAgentSteps). */
+  maxMissingOutputRetries?: number
+  env?: Record<string, string | undefined>
+  /** Whether terminal commands inherit the host process environment. Defaults
+   * to true. False uses only env (then applies the credential scrub). This
+   * controls child commands; it does not isolate SDK/provider execution. */
+  inheritEnv?: boolean
+  /** Complete host-only inputs. Child env overrides do not change provider configuration. */
+  hostConfiguration?: HostConfigurationInputs
+  /**
+   * N02 project trust. true/false is the host's explicit decision for the
+   * project's openbuff.json/openbuff.d, project skills and .agents/mcp.json;
+   * omitted uses the decision stored for this project path + config hash in
+   * the Openbuff config dir (untrusted when none matches). Untrusted project
+   * config can only tighten policy. Ignored when hostConfiguration is given
+   * (set hostConfiguration.trust.projectConfig instead).
+   */
+  trustProjectConfig?: boolean
+  /** Synchronous configuration reader; explicit injection never uses another reader. */
+  configReadFs?: ConfigReadFs
+  /** Private provider credential service for this run. */
+  credentials?: CapturedCredentialPort
+  /** Selected process policy and required backend capabilities. */
+  executionProfile?: ProfileRequest
+  /** Verified host-native installation, calibration, and runtime mount roster. */
+  nativeExecution?: NativeHostExecution
+  /** Secret-free execution phase observations. */
+  recordExecution?: (event: LaunchEvent) => void
   /** Harness control-plane state root. Defaults to the Openbuff config directory. */
   harnessStateDir?: string
   /** Pre-created, exact-scope approval receipt IDs available to this run.
    * Receipts are matched and consumed atomically only for the high-impact
    * action, workspace, root run, and current snapshot they authorize. */
   approvalReceiptIds?: string[]
-  /** Approval behavior for classified terminal effects. Defaults to balanced. */
+  /** Approval behavior for classified terminal effects. Overrides loaded
+   * configuration; defaults to the configured mode, then balanced. */
   approvalMode?: HarnessApprovalMode
   /** Host callback used to pause the current run for an exact approval. */
   requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
@@ -286,11 +575,13 @@ export type OpenbuffClientOptions = {
   }) => boolean | Promise<boolean>
 
   fsSource?: Source<CodebuffFileSystem>
-  spawnSource?: Source<CodebuffSpawn>
+  spawnSource?: CodebuffSpawn | Promise<CodebuffSpawn>
   logger?: Logger
 
   /** Runtime-neutral Memory V2 configuration. Authority defaults from legacy mode (shadow when omitted). */
   memoryV2?: MemoryV2ClientConfig
+  /** Host-prepared discovery for every actor. Supply an embedded source for virtual projects. */
+  repositoryIntelligence?: RepositoryIntelligenceSource | false
 
   /** Overall wall-clock timeout for a single run, in milliseconds. When set,
    *  the returned promise settles with an error RunState if the run has not
@@ -299,6 +590,39 @@ export type OpenbuffClientOptions = {
    *  unref'd so it won't keep a host process alive on its own; it still fires
    *  while the event loop is busy with the active run. */
   runTimeoutMs?: number
+  /** Host-only defaults/caps for terminal execution; per-run settings override client/config policy. */
+  terminalTimeoutPolicy?: TerminalTimeoutPolicy
+
+  /** Same-process, clock-scoped parent deadline captured before asynchronous host
+   * setup. This structural seed is not an authentication token. A relative
+   * runTimeoutMs may narrow it; another SDK clock instance is refused. */
+  runDeadline?: RootDeadlineSeed
+
+  /**
+   * P1-T3 backend seam. Optional pluggable execution backend for
+   * `OpenbuffClient.run()`. When omitted, the in-process backend (today's
+   * `run()`) is used and behavior is byte-identical to before. Supplying a
+   * backend (e.g. `AcpRemoteBackend`) routes the run through it instead, so a
+   * host can attach to a live `openbuff serve` session. Additive-optional.
+   */
+  backend?: import('./client/backend').ClientBackend
+
+  /** P2-T2: append-only run-journal writer (see createRunJournal in
+   *  @codebuff/agent-runtime/util/run-journal). Threaded into the agent
+   *  runtime deps so the run loop journals tool_call/tool_result/step
+   *  boundaries for crash-safe resume. Additive-optional: a run without it
+   *  is byte-identical to today (no journaling occurs). */
+  journalWriter?: JournalWriter
+
+  /** P2-T2: run-journal reader threaded into the agent runtime deps so the
+   *  existing guarded block in runAgentStep classifies/replays interrupted
+   *  prior work, and so the §4c replay short-circuit reuses journaled tool
+   *  results (keyed deterministically by toolName+input per P2-T2-DESIGN §5,
+   *  never by the freshly-minted toolCallId). Additive-optional. */
+  journalReader?: JournalReader
+
+  /** Optional durable provider-request admission store. Capped policies fail closed when neither this nor a harness state directory is available. */
+  requestAdmissionStore?: RequestAdmissionStore
 }
 
 export type FilesystemMutationEvent = {
@@ -337,6 +661,10 @@ export type MessageContent = TextContent | ImageContent
 export type RunOptions = {
   agent: string | AgentDefinition
   prompt: string
+  /** Primary model for this run and its descendants; configured failover remains available. Never persists to the next turn. */
+  model?: string
+  /** Root-only JSON object result contract for this run. Does not persist to templates or descendants. */
+  outputSchema?: Record<string, unknown>
   /** Content array for multimodal messages (text + images) */
   content?: MessageContent[]
   params?: Record<string, any>
@@ -344,6 +672,8 @@ export type RunOptions = {
   extraToolResults?: ToolMessage[]
   signal?: AbortSignal
   costMode?: string
+  /** Root-shared provider request policy. Explicit run policy overrides captured config; omitted defaults to config/legacy root cap/uncapped. */
+  spending?: SpendingPolicy
   /** Extra key/values merged into each LLM request's `codebuff_metadata`.
    *  Used by hosts (e.g. the CLI) to forward client-scoped identifiers or
    *  provider-routing metadata that downstream adapters read from the request body. */
@@ -358,12 +688,39 @@ export type RunOptions = {
    *  the run. */
   onCheckpoint?: (agentState: SessionState['mainAgentState']) => void
 
-  /** P2-3: When true, the user prompt is already present in
-   *  `previousRun.sessionState.mainAgentState.messageHistory` (restored from a
-   *  checkpoint), so the main agent loop must NOT re-append a USER_PROMPT
-   *  message. The CLI sets this when it detects a valid checkpoint for the
-   *  current turn and resumes from it. */
+  /** Request exact interrupted-turn replay. Unverified prefixes are refused;
+   * a separate turn using `previousRun` does not implicitly replay effects. */
   resumeInterruptedTurn?: boolean
+}
+
+function executionRefusalFromError(error: unknown): {
+  executionRefusal?: import('@codebuff/common/tools/params/execution-refusal').ExecutionRefusal
+} {
+  const value =
+    error && typeof error === 'object' && 'executionRefusal' in error
+      ? error.executionRefusal
+      : undefined
+  const parsed = executionRefusalSchema.safeParse(value)
+  return parsed.success ? { executionRefusal: parsed.data } : {}
+}
+
+function mcpProtocolError(error: McpError): {
+  mcpError?: { code: number; data?: JSONValue }
+} {
+  if (!Number.isFinite(error.code)) return {}
+  try {
+    const serialized = JSON.stringify(error.data)
+    return {
+      mcpError: {
+        code: error.code,
+        ...(serialized === undefined
+          ? {}
+          : { data: JSON.parse(serialized) as JSONValue }),
+      },
+    }
+  } catch {
+    return { mcpError: { code: error.code } }
+  }
 }
 
 const createAbortError = (signal?: AbortSignal) => {
@@ -447,10 +804,12 @@ async function executeOverride<TInput, TV0Output, TV1Output>({
   override,
   input,
   signal,
+  executionContext,
 }: {
   override: OverrideDescriptor<TInput, TV0Output, TV1Output>
   input: TInput
   signal: AbortSignal
+  executionContext?: ExecutionAdapterContext
 }): Promise<TV0Output | TV1Output> {
   if (signal.aborted) {
     throw createAbortError(signal)
@@ -461,7 +820,11 @@ async function executeOverride<TInput, TV0Output, TV1Output>({
       return override(input)
     }
     if (override.version === 'v1') {
-      return override.execute(input, { abiVersion: 'v1', signal })
+      return override.execute(input, {
+        abiVersion: 'v1',
+        signal,
+        execution: executionContext,
+      })
     }
     return override.execute(input)
   })()
@@ -565,184 +928,739 @@ type RunExecutionOptions = RunOptions &
   }
 type RunReturnType = RunState
 
+/**
+ * P3-T10: guards the once-per-process registration of the bundled exact
+ * token providers (registerBundledExactTokenProviders in
+ * @codebuff/agent-runtime/util/exact-token-providers). Flipped only once a
+ * run actually finds the OPENBUFF_EXACT_TOKENS gate ON, so flag-off runs
+ * leave it false — a later run that turns the gate on still registers —
+ * while consecutive gated runs never repeat the dynamic import. The
+ * provider module is itself idempotent; this guard only avoids redundant
+ * import attempts.
+ */
+let exactTokenProvidersRegistrationAttempted = false
+
+/** Capture a same-process deadline before awaiting host/client setup. */
+export function captureRunDeadline(
+  timeoutMs: number,
+): Result<RootDeadlineSeed> {
+  if (typeof timeoutMs !== 'number')
+    return {
+      ok: false,
+      reason: 'invalid-context',
+      cause: 'Run deadline duration must be a number',
+    }
+  const limit = executionLimitMs(timeoutMs)
+  return limit.ok
+    ? captureRootDeadline({ clock: executionClock, limit: limit.value })
+    : limit
+}
+
 export async function run(options: RunExecutionOptions): Promise<RunState> {
+  const admittedMemoryV2 =
+    options.memoryV2 && Object.freeze({ ...options.memoryV2 })
+  const memoryAuthorityMode = admittedMemoryV2
+    ? getEffectiveMemoryAuthority(admittedMemoryV2).requested
+    : undefined
+  // Only authoritative supplied/static definitions at admission can opt in.
+  // Neither resumed template JSON, later caller mutation nor model params is read.
+  const admittedReadModes = new Map(
+    [
+      ...(options.agentDefinitions ?? []),
+      ...(typeof options.agent === 'string' ? [] : [options.agent]),
+    ].map((definition) => [
+      definition.id,
+      definition.programmaticConfig?.strictProjectReads === true,
+    ]),
+  )
+  const strictProjectReadTemplateIds = new Set(
+    [...admittedReadModes].flatMap(([id, strict]) => (strict ? [id] : [])),
+  )
+  const rootStrictProjectReads = strictProjectReadTemplateIds.has(
+    typeof options.agent === 'string' ? options.agent : options.agent.id,
+  )
+  options = Object.freeze({
+    ...options,
+    memoryV2: admittedMemoryV2,
+    spending: options.spending && Object.freeze(cloneDeep(options.spending)),
+    terminalTimeoutPolicy:
+      options.terminalTimeoutPolicy &&
+      Object.freeze({ ...options.terminalTimeoutPolicy }),
+    env: options.env && Object.freeze({ ...options.env }),
+    executionProfile:
+      options.executionProfile &&
+      Object.freeze({
+        ...options.executionProfile,
+        required: Object.freeze([...options.executionProfile.required]),
+        ...(options.executionProfile.optional
+          ? { optional: Object.freeze([...options.executionProfile.optional]) }
+          : {}),
+      }),
+  })
   const { signal } = options
 
   if (signal?.aborted) {
     const abortError = createAbortError(signal)
-    return {
-      sessionState: options.previousRun?.sessionState,
-      output: {
-        type: 'error',
-        message: abortError.message,
+    return projectRunOutcomes(
+      {
+        sessionState: options.previousRun?.sessionState,
+        output: {
+          type: 'error',
+          message: abortError.message,
+        },
       },
-    }
+      {
+        runOutcome: {
+          termination: 'cancelled',
+          cause: { code: 'run_cancelled', message: abortError.message },
+        },
+        taskAcceptance: { status: 'unknown' },
+      },
+    )
   }
 
-  return runOnce(options)
+  const readPlan = takeReadPlanExecution(options.agent)
+  if (!readPlan && (typeof options.agent === 'string' ? options.agent : options.agent.id) === READ_PLAN_TEMPLATE_ID) {
+    const message = 'Select the read adapter through runReplayableReads.'
+    return projectRunOutcomes({ output: { type: 'error', message } }, {
+      runOutcome: { termination: 'failed', cause: { code: 'replay_unavailable', message } },
+    })
+  }
+
+  if (options.resumeInterruptedTurn) {
+    const previous = options.previousRun
+    const refusal = unverifiedRunReplayRefusal(
+      options.journalReader,
+      previous?.sessionState?.mainAgentState.runId,
+    )
+    // Diagnose the retained checkpoint without loading its generator,
+    // acquiring resources, or refreshing its spending/identity snapshot.
+    return projectRunOutcomes({
+      sessionState: previous?.sessionState ? cloneDeep(previous.sessionState) : undefined,
+      requestAdmission: previous?.requestAdmission ? cloneDeep(previous.requestAdmission) : undefined,
+      output: { type: 'error', message: refusal.message },
+    }, {
+      runOutcome: { termination: 'failed', cause: { code: refusal.code, message: refusal.message } },
+      taskAcceptance: { status: 'unknown' },
+    })
+  }
+
+  const limit = executionLimitMs(options.runTimeoutMs)
+  const clock = options.nativeExecution?.clock ?? executionClock
+  const parent = options.runDeadline
+  const parentShapeValid =
+    parent === undefined ||
+    (parent !== null &&
+      typeof parent === 'object' &&
+      parent.deadline !== null &&
+      typeof parent.deadline === 'object' &&
+      (parent.deadline.kind === 'finite' ||
+        parent.deadline.kind === 'unbounded'))
+  const capturedBoundary = !parentShapeValid
+    ? {
+        ok: false as const,
+        reason: 'invalid-context' as const,
+        cause: 'Invalid run deadline seed',
+      }
+    : limit.ok
+      ? captureRootDeadline({
+          clock,
+          limit: limit.value,
+          existingParent: parent,
+        })
+      : limit
+  const boundary =
+    capturedBoundary.ok &&
+    capturedBoundary.value.deadline.kind === 'finite' &&
+    capturedBoundary.value.deadline.expiresAtMs <=
+      capturedBoundary.value.sampledAtMs
+      ? {
+          ok: false as const,
+          reason: 'deadline-exhausted' as const,
+          cause: 'Run deadline exhausted before setup',
+        }
+      : capturedBoundary
+  const refusalState = (
+    message: string,
+    termination: RunOutcome['termination'],
+    code: string,
+    sessionState = options.previousRun?.sessionState,
+  ) =>
+    projectRunOutcomes(
+      {
+        sessionState: sessionState ? cloneDeep(sessionState) : undefined,
+        output: { type: 'error', message },
+      },
+      {
+        runOutcome: { termination, cause: { code, message } },
+        taskAcceptance: { status: 'unknown' },
+      },
+    )
+  if (!boundary.ok)
+    return refusalState(
+      boundary.cause,
+      boundary.reason === 'deadline-exhausted'
+        ? 'deadline_exhausted'
+        : 'failed',
+      `execution_${boundary.reason}`,
+    )
+  let runOutputSchema: Record<string, unknown> | undefined
+  try {
+    if (options.outputSchema !== undefined)
+      runOutputSchema = captureRunOutputSchema(options.outputSchema).schema
+  } catch (error) {
+    return refusalState(
+      error instanceof Error ? error.message : 'Invalid run output schema',
+      'failed',
+      'output_schema_unavailable',
+    )
+  }
+  const timeoutPolicy = captureTerminalTimeoutPolicy(
+    options.terminalTimeoutPolicy,
+  )
+  if (!timeoutPolicy.ok)
+    return refusalState(
+      timeoutPolicy.cause,
+      'failed',
+      'execution_invalid_context',
+    )
+  // Capture the absolute root deadline before this synchronous configuration read.
+  const requestedRoot = path.resolve(options.cwd ?? '.')
+  const inputs =
+    options.hostConfiguration ??
+    captureAmbientHostInputs({
+      cwd: requestedRoot,
+      projectRoot: requestedRoot,
+      ...(options.trustProjectConfig === undefined
+        ? {}
+        : {
+            projectTrust: options.trustProjectConfig
+              ? ('trusted' as const)
+              : ('untrusted' as const),
+          }),
+    })
+  const captured = loadHostConfigSnapshot({
+    inputs,
+    fs: options.configReadFs ?? nodeConfigReadFs,
+  })
+  if (captured.status !== 'complete')
+    return refusalState(
+      captured.cause,
+      'failed',
+      'host_configuration_unavailable',
+    )
+  const selectedModel = withRunModelOverride(captured.snapshot, options.model)
+  if (selectedModel.status !== 'complete')
+    return refusalState(selectedModel.cause, 'failed', 'run_model_unavailable')
+  const snapshot = selectedModel.snapshot
+  if (
+    options.cwd !== undefined &&
+    requestedRoot !== snapshot.inputs.projectRoot
+  )
+    return refusalState(
+      'Run cwd differs from the captured project root',
+      'failed',
+      'execution_invalid_context',
+    )
+  const configured = await configureHostExecution({
+    snapshot,
+    clock,
+    boundary: boundary.value,
+    signal,
+    profile: options.executionProfile,
+    nativeExecution: options.nativeExecution,
+    spawnSource: options.spawnSource,
+  })
+  if (!configured.ok) {
+    const result = refusalState(
+      configured.cause,
+      configured.reason === 'deadline-exhausted'
+        ? 'deadline_exhausted'
+        : configured.reason === 'cancelled'
+          ? 'cancelled'
+          : 'failed',
+      `execution_${configured.reason}`,
+    )
+    return 'cleanup' in configured && configured.cleanup.length
+      ? { ...result, executionCleanup: configured.cleanup }
+      : result
+  }
+  const configuredExecution = configured.value
+  let spawn: CodebuffSpawn = (command, args = [], spawnOptions) =>
+    nodeSpawn(command, [...args], spawnOptions ?? {})
+  let approvalResolver: HostExecutionOptions['resolveApprovalContext']
+  let basisResolver: HostExecutionOptions['isCurrentBasis']
+  let basisMismatchResolver: HostExecutionOptions['describeBasisMismatch']
+  let activeSession: SessionState | undefined
+  let activeRequestAdmission:
+    | { store: RequestAdmissionStore; authorityId: string }
+    | undefined
+  let cancellationReady = false
+  const completion = new AbortController()
+  let disposeMcp: (() => Promise<void>) | undefined
+  const detachedSettlements = new Set<Promise<unknown>>()
+  const retainDetachedAgent = (settled: Promise<unknown>) => {
+    detachedSettlements.add(settled)
+    const release = () => { detachedSettlements.delete(settled) }
+    void settled.then(release, release)
+  }
+  const services = createHostExecutionServices({
+    snapshot,
+    clock,
+    boundary: boundary.value,
+    nativeExecution: configuredExecution.nativeExecution,
+    childInheritanceEnvironment: { ...snapshot.inputs.environment },
+    env: options.env ? { ...options.env } : {},
+    inheritEnv: options.inheritEnv,
+    signal: signal
+      ? AbortSignal.any([signal, completion.signal])
+      : completion.signal,
+    profile: configuredExecution.profile,
+    terminalTimeoutPolicy: timeoutPolicy.value,
+    spawn: (command, args, spawnOptions) => spawn(command, args, spawnOptions),
+    credentials: options.credentials,
+    record: options.recordExecution,
+    approvalMode: options.approvalMode,
+    requestApproval: options.requestApproval,
+    resolveApprovalContext: (input) =>
+      approvalResolver?.(input) ?? Promise.resolve(undefined),
+    isCurrentBasis: (correlation) =>
+      correlation.kind !== 'action' || basisResolver?.(correlation) === true,
+    describeBasisMismatch: (correlation) =>
+      basisMismatchResolver?.(correlation) ?? 'Action basis changed',
+  })
+  if (!services.ok) {
+    configuredExecution.close()
+    const result = refusalState(
+      services.cause,
+      services.reason === 'deadline-exhausted'
+        ? 'deadline_exhausted'
+        : services.reason === 'cancelled'
+          ? 'cancelled'
+          : 'failed',
+      `execution_${services.reason}`,
+    )
+    return configuredExecution.cleanup.length
+      ? { ...result, executionCleanup: configuredExecution.cleanup }
+      : result
+  }
+  const hostServices = services.value
+  let finalizedRootOutcome: RunOutcome | undefined
+  const resolveRootOutcome = (outcome: RunOutcome): RunOutcome => {
+    if (finalizedRootOutcome) return finalizedRootOutcome
+    const remaining = hostServices.execution.remainingMs(
+      hostServices.rootLifetime,
+    )
+    // An action's timer can fire before the root's timer in the same turn.
+    // Consult the registered root deadline; caller cancellation keeps priority.
+    const exhausted = hostServices.rootSignal.aborted
+      ? isExecutionDeadlineSignal(hostServices.rootSignal)
+      : remaining.ok
+        ? remaining.value === 0
+        : remaining.reason === 'deadline-exhausted'
+    if (hostServices.rootSignal.aborted || exhausted) {
+      const message = exhausted
+        ? options.runTimeoutMs === undefined
+          ? 'Run deadline exhausted'
+          : `Run timed out after ${options.runTimeoutMs}ms`
+        : createAbortError(hostServices.rootSignal).message
+      outcome = {
+        termination: exhausted ? 'deadline_exhausted' : 'cancelled',
+        cause: {
+          code: exhausted ? 'run_deadline_exhausted' : 'run_cancelled',
+          message,
+        },
+      }
+    }
+    // Freeze selection before the runtime publishes its terminal journal event.
+    finalizedRootOutcome = outcome
+    return outcome
+  }
+  // Workspace discovery stays opt-in; session metadata uses the captured root.
+  const capturedOptions = {
+    ...options,
+    outputSchema: runOutputSchema,
+    executionProfile: configuredExecution.profile,
+    nativeExecution: configuredExecution.nativeExecution,
+    ...(configuredExecution.spawn
+      ? { spawnSource: configuredExecution.spawn }
+      : {}),
+    approvalMode: hostServices.approvalMode,
+    cwd:
+      options.cwd !== undefined || options.hostConfiguration !== undefined
+        ? snapshot.inputs.projectRoot
+        : undefined,
+    skillsDir:
+      options.skillsDir === undefined
+        ? undefined
+        : path.resolve(snapshot.inputs.invocationCwd, options.skillsDir),
+    env: options.env ? { ...options.env } : undefined,
+    signal: hostServices.rootSignal,
+  }
+  let result: RunState | undefined
+  let executionCleanup: NonNullable<RunState['executionCleanup']> = []
+  const finishResources = async () => {
+    completion.abort(new Error('Run execution scope completed'))
+    const firstEvent = hostServices.events[0]
+    const hostContextId = firstEvent
+      ? 'facts' in firstEvent
+        ? firstEvent.facts.hostContextId
+        : firstEvent.hostContextId
+      : ''
+    const cleanup = (
+      await Promise.all([
+        joinNodeScopeCleanup(hostContextId),
+        joinNativeScopeCleanup(hostContextId),
+      ])
+    ).flat()
+    executionCleanup = Object.freeze([
+      ...configuredExecution.cleanup,
+      ...cleanup,
+    ])
+    configuredExecution.close()
+    if (cleanup.some((result) => result.status !== 'complete')) {
+      options.logger?.warn(
+        { cleanup },
+        'Run-owned process cleanup remains unconfirmed',
+      )
+    }
+    try {
+      await disposeMcp?.()
+    } catch (error) {
+      options.logger?.warn({ error }, 'Run-owned MCP cleanup failed')
+    }
+  }
+  try {
+    const execution = withFilesystemSandbox(
+      snapshot.sandboxPolicy,
+      () =>
+        runOnce(capturedOptions, {
+          readPlan,
+          snapshot,
+          hostServices,
+          memoryAuthorityMode,
+          strictProjectReadTemplateIds,
+          rootStrictProjectReads,
+          setSpawn: (value) => {
+            spawn = value
+          },
+          profileExplicitlySelected: configuredExecution.profile !== undefined,
+          setApprovalResolver: (value) => {
+            approvalResolver = value
+          },
+          setBasisResolver: (value, describe) => {
+            basisResolver = value
+            basisMismatchResolver = describe
+          },
+          onSessionReady: (value) => {
+            activeSession = value
+          },
+          onRequestAdmissionReady: (value) => {
+            activeRequestAdmission = value
+          },
+          onCancellationReady: () => {
+            cancellationReady = true
+          },
+          onMcpReady: (value) => {
+            disposeMcp = value
+          },
+          retainDetachedAgent,
+          resolveRunOutcome: ({ ancestorRunIds, outcome }) =>
+            ancestorRunIds.length === 0 ? resolveRootOutcome(outcome) : outcome,
+        }),
+      {
+        projectRoot: snapshot.inputs.projectRoot,
+        readPolicyToken: hostServices.readPolicy,
+      },
+    )
+    result = await raceAgainstAbort(execution, hostServices.rootSignal).catch(
+      async (error) => {
+        if (!hostServices.rootSignal.aborted || !cancellationReady) throw error
+        // Startup dependencies remain abortable. Once the runtime owns
+        // cancellation, wait for its tools, callbacks and cleanup to settle so
+        // the public result retains their final history and action outcomes.
+        const state = await execution
+        const runOutcome = resolveRootOutcome(
+          state.runOutcome ?? { termination: 'cancelled' },
+        )
+        const interrupted =
+          runOutcome.termination === 'cancelled' ||
+          runOutcome.termination === 'deadline_exhausted'
+        return projectRunOutcomes(
+          {
+            ...state,
+            ...(interrupted
+              ? {
+                  output: {
+                    type: 'error' as const,
+                    message:
+                      runOutcome.cause?.message ?? 'Run cancelled by user',
+                  },
+                }
+              : {}),
+          },
+          {
+            runOutcome,
+            ...(interrupted
+              ? { taskAcceptance: { status: 'unknown' as const } }
+              : {}),
+          },
+        )
+      },
+    )
+  } catch (error) {
+    const exhausted = isExecutionDeadlineSignal(hostServices.rootSignal)
+    const message = exhausted
+      ? options.runTimeoutMs === undefined
+        ? 'Run deadline exhausted'
+        : `Run timed out after ${options.runTimeoutMs}ms`
+      : error instanceof Error
+        ? error.message
+        : String(error)
+    result = refusalState(
+      message,
+      exhausted
+        ? 'deadline_exhausted'
+        : hostServices.rootSignal.aborted
+          ? 'cancelled'
+          : 'failed',
+      exhausted
+        ? 'run_deadline_exhausted'
+        : hostServices.rootSignal.aborted
+          ? 'run_cancelled'
+          : 'run_setup_failed',
+      activeSession,
+    )
+  } finally {
+    if (result?.runOutcome?.termination === 'completed' && !hostServices.rootSignal.aborted && detachedSettlements.size) {
+      // The turn and its journal caller may finish, but a journal-owned child
+      // still uses the captured host resources. The original caller signal
+      // and deadline remain effective; normal completion is not cancellation.
+      executionCleanup = Object.freeze([...configuredExecution.cleanup])
+      void (async () => {
+        while (detachedSettlements.size) await Promise.allSettled([...detachedSettlements])
+        await finishResources()
+      })().catch(error => options.logger?.warn({ error }, 'Detached agent resources failed to close'))
+    } else {
+      await finishResources()
+    }
+  }
+  if (activeRequestAdmission) {
+    try {
+      result = {
+        ...result,
+        requestAdmission: activeRequestAdmission.store.snapshot(
+          activeRequestAdmission.authorityId,
+        ),
+      }
+    } catch (error) {
+      const message = `Request admission snapshot is unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+      result = projectRunOutcomes(
+        {
+          ...result,
+          output: { type: 'error', message },
+        },
+        {
+          runOutcome: {
+            termination: 'failed',
+            cause: { code: 'request_admission_unavailable', message },
+          },
+          taskAcceptance: { status: 'unknown' },
+        },
+      )
+    }
+  }
+  return executionCleanup.length ? { ...result, executionCleanup } : result
 }
 
-async function runOnce({
-  apiKey,
-  fingerprintId,
+type RunHostBootstrap = {
+  readPlan?: ReadPlanExecution
+  memoryAuthorityMode?: MemoryAuthorityMode
+  retainDetachedAgent: NonNullable<AgentRuntimeDeps['retainDetachedAgent']>
+  resolveRunOutcome: NonNullable<AgentRuntimeDeps['resolveRunOutcome']>
+  snapshot: HostConfigSnapshot
+  hostServices: RunHostServices
+  profileExplicitlySelected: boolean
+  strictProjectReadTemplateIds: ReadonlySet<string>
+  rootStrictProjectReads: boolean
+  setSpawn(spawn: CodebuffSpawn): void
+  setApprovalResolver(
+    resolver: NonNullable<HostExecutionOptions['resolveApprovalContext']>,
+  ): void
+  setBasisResolver(
+    resolver: NonNullable<HostExecutionOptions['isCurrentBasis']>,
+    describe?: HostExecutionOptions['describeBasisMismatch'],
+  ): void
+  onSessionReady(state: SessionState): void
+  onRequestAdmissionReady(value: {
+    store: RequestAdmissionStore
+    authorityId: string
+  }): void
+  onCancellationReady(): void
+  onMcpReady(dispose: () => Promise<void>): void
+}
 
-  cwd,
-  skillsDir,
-  projectFiles,
-  knowledgeFiles,
-  agentDefinitions,
-  maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
-  env,
-  harnessStateDir,
-  approvalReceiptIds = [],
-  approvalMode = 'balanced',
-  requestApproval,
-  runTimeoutMs,
+async function runOnce(
+  {
+    apiKey,
+    fingerprintId,
 
-  handleEvent,
-  handleStreamChunk,
+    cwd,
+    skillsDir,
+    projectFiles,
+    projectContextMode,
+    knowledgeFiles,
+    userKnowledgeFiles,
+    agentDefinitions,
+    mcpServers,
+    maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
+    // No default: omitted means unlimited missing-output retries, mirroring
+    // the runtime knob's undefined → unlimited contract.
+    maxMissingOutputRetries,
+    env,
+    inheritEnv = true,
+    harnessStateDir,
+    approvalReceiptIds = [],
+    approvalMode = 'balanced',
+    requestApproval,
+    runTimeoutMs,
 
-  fileFilter,
-  filesystemPolicy,
-  overrideTools,
-  customToolDefinitions,
-  onFilesChanged,
-  onFilesystemMutation,
-  verifyExternalMutation,
+    handleEvent,
+    handleStreamChunk,
 
-  fsSource,
-  spawnSource,
-  logger,
-  memoryV2,
+    fileFilter,
+    filesystemPolicy,
+    overrideTools,
+    customToolDefinitions,
+    onFilesChanged,
+    onFilesystemMutation,
+    verifyExternalMutation,
 
-  agent,
-  prompt,
-  content,
-  params,
-  previousRun,
-  extraToolResults,
-  signal,
-  costMode,
-  extraCodebuffMetadata,
-  onCheckpoint,
-  resumeInterruptedTurn,
-}: RunExecutionOptions): Promise<RunState> {
-  const resolvedHarnessStateDir = harnessStateDir ?? getHarnessStateDir(env)
-  // Read-only external root allowlist. Configured HERE, strictly before any
-  // tool can dispatch, so the first read of an allowlisted path in a process
-  // cannot fail confusingly while later ones succeed. Two sources:
-  //   1. the openbuff config directory, which is what makes "read my logs/state
-  //      from the config dir" work by default (sensitive files there, notably
-  //      credentials.json, stay refused by the resolver itself);
-  //   2. absolute `readableRoots` entries from openbuff.json, subject to the
-  //      ER-1 trust gate below (only roots declared by a config file inside the
-  //      config dir are registered without an explicit opt-in). Relative
-  //      entries are dropped rather than guessed: that config may be a global
-  //      file loaded from an unrelated directory, so anchoring to process.cwd()
-  //      could allowlist something the user never intended.
-  // Best-effort: if this block throws (e.g. a malformed config), no external
-  // roots are configured and every read outside the project stays refused.
-  try {
-    // loadProviderConfigSync is module-cached but still on a hot path; called
-    // exactly once per run here, never per path or per tool.
-    const loadedProviderConfig = loadProviderConfigSync(env ? { env } : {})
-    const loadedReadableRoots = loadedProviderConfig.config.readableRoots
-    const readableRootsSources =
-      loadedProviderConfig.readableRootsSources ?? {}
-    const configDir = getConfigDir(env)
-    // ER-1 trust gate. `readableRoots` is the only config key that grants
-    // filesystem authority rather than influencing model routing, so a value
-    // supplied by a cloned repository must not silently allowlist directories
-    // like `~/.config/gh` or `~/.docker`: config resolution includes
-    // `<cwd>/openbuff.json` (the first ancestor entry), and a non-empty
-    // project value WINS the merge. A repo-supplied value therefore needs the
-    // same explicit acknowledgement this codebase already requires for
-    // ancestor `apiKeyEnv` providers.
-    //
-    // TRUSTED: the root's declaring config file lives inside the openbuff
-    //   config dir (user-owned). Always registered.
-    // UNTRUSTED: declared anywhere else (project or ancestor `openbuff.json`),
-    //   or with no recorded provenance at all — fail CLOSED and drop it unless
-    //   the user opted in.
-    //
-    // The opt-in env var is read through the same accessor
-    // `getAncestorProviderConfigPaths` uses for
-    // OPENBUFF_TRUST_ANCESTOR_CONFIG, so both trust switches behave alike.
-    const trustProjectReadableRoots =
-      (getSystemProcessEnv().OPENBUFF_TRUST_PROJECT_READABLE_ROOTS ?? '') ===
-      '1'
-    const {
-      trusted: trustedReadableRoots,
-      untrustedCount: untrustedRootCount,
-    } = selectTrustedReadableRoots({
-      roots: loadedReadableRoots,
-      sources: readableRootsSources,
-      configDir,
-      trustProjectRoots: trustProjectReadableRoots,
-    })
-    if (untrustedRootCount > 0) {
-      // Counts only, never the raw paths: a user's home-directory paths are
-      // mildly sensitive and this log may be shared.
-      logger?.warn(
-        {
-          untrustedRootCount,
-          trustedRootCount: trustedReadableRoots.length,
-        },
-        'Ignored readableRoots entries that were not declared by a config file ' +
-          'inside the openbuff config directory (a project or ancestor ' +
-          'openbuff.json, or an entry with no recorded provenance). A ' +
-          'repository-supplied allowlist can expose credential directories ' +
-          'outside the project. Set ' +
-          'OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1 to acknowledge and register ' +
-          'them.',
-      )
+    fsSource,
+    spawnSource,
+    logger,
+    memoryV2,
+    repositoryIntelligence,
+    journalWriter,
+    journalReader,
+    requestAdmissionStore,
+
+    agent,
+    outputSchema,
+    prompt,
+    content,
+    params,
+    previousRun,
+    extraToolResults,
+    signal,
+    costMode,
+    spending,
+    extraCodebuffMetadata,
+    onCheckpoint,
+    resumeInterruptedTurn,
+  }: RunExecutionOptions,
+  host: RunHostBootstrap,
+): Promise<RunState> {
+  const { snapshot, hostServices } = host
+  const selectedMemoryAuthority = host.memoryAuthorityMode
+  const contextCwd = snapshot.inputs.projectRoot
+  const hostEnvironment = snapshot.inputs.environment
+  const homeDir =
+    snapshot.inputs.home.kind === 'path'
+      ? path.resolve(snapshot.inputs.invocationCwd, snapshot.inputs.home.path)
+      : null
+  const includeGlobalSkills = snapshot.inputs.globals.kind === 'directory'
+  // N02: project skills reach fileContext only for a trusted project.
+  const includeProjectSkills =
+    snapshot.loaded.projectTrust?.status === 'trusted'
+  const loadedProviderConfig = getCapturedProviderConfig(snapshot)
+  const capturedHookConfiguration: CapturedHookConfiguration = Object.freeze({
+    autoFileChangeHooks:
+      loadedProviderConfig.config.autoFileChangeHooks === true,
+    fileChangeHooks: Object.freeze(
+      loadedProviderConfig.config.fileChangeHooks.map((hook) =>
+        Object.freeze({ ...hook }),
+      ),
+    ),
+  })
+  const diagnosticPreflightEnabled =
+    isDiagnosticPreflightEnabled(hostEnvironment)
+  // P3-T10: register the bundled OpenAI-family exact tokenizers when the
+  // OPENBUFF_EXACT_TOKENS gate is on. This is the FIRST thing the run does
+  // so no token count in the run can precede registration, and the dynamic
+  // import below is the ONLY import of the provider module — and therefore
+  // of tiktoken's WASM — so a flag-off run never loads it and token counting
+  // stays byte-identical (the gpt-tokenizer estimator). The gate uses the
+  // same truthy-set rule as the counter's per-call gate in
+  // @codebuff/agent-runtime/util/token-counter and is read from the raw
+  // process env through the same accessor the other OPENBUFF_* trust flags
+  // use, so the seam and the counter agree on when the providers are live.
+  // Once-per-process via the module-level guard; a registration failure is
+  // logged and degrades to the estimator (the seam's own fallback) instead
+  // of failing the run.
+  if (!exactTokenProvidersRegistrationAttempted) {
+    const exactTokensEnv = hostEnvironment.OPENBUFF_EXACT_TOKENS
+    if (
+      exactTokensEnv !== undefined &&
+      /^(1|true|yes|on)$/i.test(exactTokensEnv.trim())
+    ) {
+      exactTokenProvidersRegistrationAttempted = true
+      try {
+        const { registerBundledExactTokenProviders } =
+          await import('@codebuff/agent-runtime/util/exact-token-providers')
+        registerBundledExactTokenProviders()
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Exact token provider registration failed; keeping the estimator',
+        )
+      }
     }
-    const externalReadResult = ensureExternalReadRootsConfigured(
-      [
-        // The config dir root is seeded by the runtime, not by config, so it is
-        // always trusted and stays unconditional. Narrowing it is out of scope.
-        configDir,
-        ...trustedReadableRoots,
-      ],
-      // ER-5: the registry is process-global but `cwd` is per-run, so the
-      // boundary is tagged with the project it belongs to. Without an owner, a
-      // second project configured in the same process (after
-      // `switchProjectContext`) looks identical to a mid-run attempt to
-      // re-point the boundary: the strict primitive would refuse it, leaving
-      // project A's roots readable while project B's own allowlist never
-      // applied. Supplying the owner makes a genuine switch REPLACE the
-      // boundary instead, which is strictly safer.
-      cwd,
-    )
-    if (externalReadResult.status === 'refused-changed') {
-      // Counts only, never the raw paths: a user's home-directory paths are
-      // mildly sensitive and this log may be shared.
-      logger?.warn(
-        {
-          effectiveRootCount: externalReadResult.roots.length,
-          attemptedRootCount: externalReadResult.attempted.length,
-        },
-        'External read roots changed since process start; keeping the boundary configured earlier in this process. Restart openbuff to apply the new readableRoots.',
-      )
-    }
-  } catch (error) {
-    logger?.warn(
-      { error },
-      'External read roots could not be configured; reads outside the project stay refused for this run',
-    )
   }
+  const resolvedHarnessStateDir =
+    harnessStateDir !== undefined
+      ? path.resolve(snapshot.inputs.invocationCwd, harnessStateDir)
+      : snapshot.configDir
+        ? path.join(snapshot.configDir, 'state', 'harness')
+        : undefined
+  let spawn: CodebuffSpawn
+  if (spawnSource !== undefined) {
+    spawn = await raceAgainstAbort(
+      Promise.resolve(spawnSource),
+      hostServices.rootSignal,
+    )
+    if (typeof spawn !== 'function')
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Injected spawn dependency is not callable',
+      })
+  } else {
+    spawn = (command, args = [], spawnOptions) =>
+      nodeSpawn(command, [...args], spawnOptions ?? {})
+  }
+  host.setSpawn(spawn)
+  hostServices.rootSignal.throwIfAborted()
   let fs: CodebuffFileSystem
+  let brokerRecoveryBlocked = false
   if (fsSource !== undefined) {
     const fsSourceValue = typeof fsSource === 'function' ? fsSource() : fsSource
     fs = await fsSourceValue
-  } else if (cwd) {
+  } else if (cwd && resolvedHarnessStateDir) {
     try {
       const mutationBroker = await WorkspaceMutationBroker.create({
         cwd,
         stateDir: resolvedHarnessStateDir,
+        executionContext: hostServices.bootstrap,
+        sandboxPolicy: snapshot.sandboxPolicy,
       })
       fs = createNodeFileSystem({ mutationBroker })
     } catch (error) {
+      if (isExecutionRefusalError(error)) throw error
+      brokerRecoveryBlocked =
+        error instanceof WorkspaceMutationBrokerRecoveryError
       logger?.warn(
         { error },
         'Workspace mutation broker unavailable; guarded mutations will fail closed',
@@ -752,33 +1670,157 @@ async function runOnce({
   } else {
     fs = createNodeFileSystem()
   }
-  let spawn: CodebuffSpawn
-  if (spawnSource) {
-    const spawnSourceValue = await spawnSource
-    spawn = spawnSourceValue as CodebuffSpawn
-  } else {
-    spawn = nodeSpawn as CodebuffSpawn
+  hostServices.rootSignal.throwIfAborted()
+  fs = bindHostFileSystem(fs, hostServices.readPolicy)
+  const admittedRootReadPolicy = host.rootStrictProjectReads
+    ? deriveProjectOnlyReadPolicy(hostServices.readPolicy)
+    : hostServices.readPolicy
+  const admittedRootReadFileSystem =
+    admittedRootReadPolicy === fs.hostReadPolicy
+      ? fs
+      : bindHostFileSystem(fs, admittedRootReadPolicy)
+  const contextSpawn: CodebuffSpawn = host.rootStrictProjectReads
+    ? () => {
+        throw new Error(
+          'Strict project bootstrap process reads are unavailable',
+        )
+      }
+    : spawn
+
+  // Read-only work can continue if reconciliation is blocked. Never cache a
+  // clean result: an interrupted group can appear after startup, and a later
+  // tool call or run must be able to retry it.
+  let intentLog: TransactionIntentLog | undefined
+  if (cwd && resolvedHarnessStateDir) {
+    intentLog = createTransactionIntentLogForWorkspace({
+      stateDir: resolvedHarnessStateDir,
+      cwd,
+    })
+    if (!brokerRecoveryBlocked && !host.rootStrictProjectReads) {
+      try {
+        await recoverAndRevertInterruptedTransactions({
+          intentLog,
+          cwd,
+          fs,
+          logger,
+        })
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Transaction recovery could not finish at startup',
+        )
+      }
+    }
   }
+  // Audit fix (B): production diagnostic-delta preflight wiring. The runner
+  // executes diagnostic commands as argv arrays over this run's child-process
+  // seam (never a shell), and the injector is fail-open. The
+  // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check lives inside runFileChangeHooks,
+  // so passing the injector unconditionally keeps flag-off behavior
+  // byte-identical.
+  // One retained baseline per run, scoped to a confirmed mutation's postimage.
+  let diagnosticBaselineEpoch = 0
+  let pendingDiagnosticBaseline:
+    | {
+        capture: DiagnosticCapture
+        cwd: string
+        files: string[]
+        mutationCallId: string
+        workspaceRevision: number
+        workspaceSnapshotId: string
+        afterHashes: Record<string, string | null>
+        invalidReason?: string
+      }
+    | undefined
+  const diagnosticDeltaHook = createDiagnosticDeltaHook({
+    spawn,
+    deltaMode:
+      hostEnvironment.OPENBUFF_DIAGNOSTIC_DELTA_MODE?.toLowerCase() === 'strict'
+        ? 'strict'
+        : 'tolerant',
+    getBaseline: async ({ files, cwd: hookCwd, signal: hookSignal }) => {
+      const pending = pendingDiagnosticBaseline
+      if (!pending) return undefined
+      const workspace = sessionState.mainAgentState.workspaceState
+      const requested = diagnosticFileSet(hookCwd, files)
+      if (
+        !pending.invalidReason &&
+        (path.resolve(hookCwd) !== pending.cwd ||
+          workspace?.revision !== pending.workspaceRevision ||
+          workspace?.snapshotId !== pending.workspaceSnapshotId ||
+          requested.length !== pending.files.length ||
+          requested.some((file, index) => file !== pending.files[index]) ||
+          !(await diagnosticPostimageMatches({
+            fs,
+            hashes: pending.afterHashes,
+            signal: hookSignal,
+          })))
+      ) {
+        pending.invalidReason = 'baseline_postimage_or_scope_unverified'
+      }
+      if (pending.invalidReason) {
+        return {
+          ...pending.capture,
+          coverage: {
+            ...pending.capture.coverage,
+            status: 'unknown' as const,
+            unobservedFiles: [...pending.capture.coverage.requestedFiles],
+            reasons: [
+              ...pending.capture.coverage.reasons,
+              pending.invalidReason,
+            ],
+          },
+        }
+      }
+      return pending.capture
+    },
+  })
+  // Audit fix (D): the pre-edit baseline capture below runs through the SAME
+  // argv-array child-process seam (its own stateless adapter instance — the
+  // runner holds no state), bounded exactly like the hook's own captures.
+  const diagnosticBaselineRunner = createDiagnosticCommandRunner({ spawn })
   const preparedContent = wrapContentForUserMessage(content)
 
   // Per-run client session id (also the trusted process-job owner session).
-  const promptId = Math.random().toString(36).substring(2, 15)
+  const promptId = host.readPlan?.original?.userInputId ?? Math.random().toString(36).substring(2, 15)
 
   // Init session state
   let agentId
   if (typeof agent !== 'string') {
+    // cloneDeep, deliberately NOT the platform's structuredClone: an
+    // AgentDefinition carries non-cloneable members — notably the `handleSteps`
+    // generator function — and structuredClone throws DataCloneError on any
+    // function value, whereas cloneDeep copies the object graph and preserves
+    // them. lodash is therefore a deliberate RUNTIME dependency of this shipped
+    // module (declared in sdk/package.json dependencies), not a convenience
+    // import a built-in could replace.
     const clonedDefs = agentDefinitions ? cloneDeep(agentDefinitions) : []
+    clonedDefs.forEach((definition, index) => {
+      propagateMCPConfigOrigins(
+        agentDefinitions?.[index].mcpServers,
+        definition.mcpServers,
+      )
+    })
     agentDefinitions = [...clonedDefs, agent]
     agentId = agent.id
   } else {
     agentId = agent
   }
-  let workspaceJournal = cwd
-    ? await WorkspaceJournalService.create({
-        rootDir: resolvedHarnessStateDir,
-        cwd,
-      }).catch(() => undefined)
-    : undefined
+  let workspaceJournal =
+    cwd && resolvedHarnessStateDir
+      ? await WorkspaceJournalService.create({
+          rootDir: resolvedHarnessStateDir,
+          cwd,
+          executionContext: hostServices.bootstrap,
+        }).catch((error) => {
+          if (isExecutionRefusalError(error)) throw error
+          logger?.warn(
+            { error },
+            'Workspace journal unavailable; continuing without a persisted journal',
+          )
+          return undefined
+        })
+      : undefined
   // Moves recorded by prior sessions rebind persisted evidence paths during
   // task-memory hydration inside initialSessionState below.
   const persistedWorkspaceMoves = collectWorkspaceMoves(workspaceJournal)
@@ -790,29 +1832,192 @@ async function runOnce({
       cwd,
       previousRun.sessionState,
       {
+        contextCwd,
+        homeDir,
+        includeGlobalSkills,
+        includeProjectSkills,
+        skillsDir,
         knowledgeFiles,
+        userKnowledgeFiles,
         agentDefinitions,
         customToolDefinitions,
         projectFiles,
+        projectContextMode,
         maxAgentSteps,
       },
-      { fs, logger },
+      { fs: admittedRootReadFileSystem, logger },
     )
   } else {
     // No previous run, so create a fresh session state
+    const startup = hostServices.directOperation()
+    if (!startup.ok) throw new ExecutionRefusalError(startup)
     sessionState = await initialSessionState({
       cwd,
+      contextCwd,
+      homeDir,
+      includeGlobalSkills,
+      includeProjectSkills,
       skillsDir,
       knowledgeFiles,
+      userKnowledgeFiles,
       agentDefinitions,
       customToolDefinitions,
       projectFiles,
+      projectContextMode,
       maxAgentSteps,
-      fs,
-      spawn,
+      fs: admittedRootReadFileSystem,
+      spawn: contextSpawn,
+      executionContext: startup.value.executionContext,
       logger,
       workspaceMoves: persistedWorkspaceMoves,
     })
+  }
+  const mainAgentState = sessionState.mainAgentState
+  if (host.readPlan?.original) {
+    mainAgentState.agentId = host.readPlan.original.agentId
+  }
+  if (!resumeInterruptedTurn) {
+    mainAgentState.cacheInputTokens = 0
+    mainAgentState.cacheTotalInputTokens = 0
+    mainAgentState.cacheUsageComplete = true
+  } else {
+    // Older serialized checkpoints may predate cache-token aggregation.
+    const hasValidCacheInputTokens =
+      Number.isSafeInteger(mainAgentState.cacheInputTokens) &&
+      mainAgentState.cacheInputTokens >= 0
+    const hasValidCacheTotalInputTokens =
+      Number.isSafeInteger(mainAgentState.cacheTotalInputTokens) &&
+      mainAgentState.cacheTotalInputTokens >= 0
+    if (!hasValidCacheInputTokens) mainAgentState.cacheInputTokens = 0
+    if (!hasValidCacheTotalInputTokens) mainAgentState.cacheTotalInputTokens = 0
+    mainAgentState.cacheUsageComplete =
+      mainAgentState.cacheUsageComplete === true &&
+      hasValidCacheInputTokens &&
+      hasValidCacheTotalInputTokens &&
+      mainAgentState.cacheInputTokens <= mainAgentState.cacheTotalInputTokens
+  }
+  const rootTemplate = sessionState.fileContext.agentTemplates?.[agentId]
+  const legacyCostCap = rootTemplate?.maxCostCents
+  // The checkpoint replaces mainAgentState independently of the surrounding
+  // session object. On interrupted resume its root authority is therefore the
+  // freshest durable reference; the session-level copy may belong to an older
+  // completed turn.
+  const persistedAdmission = resumeInterruptedTurn
+    ? (mainAgentState.requestAdmission ?? sessionState.requestAdmission)
+    : undefined
+  const spendingCandidate: SpendingPolicy =
+    persistedAdmission?.policy ??
+    spending ??
+    loadedProviderConfig.config.spending ??
+    (typeof legacyCostCap === 'number' &&
+    Number.isFinite(legacyCostCap) &&
+    legacyCostCap >= 0
+      ? {
+          mode: 'strict-capped',
+          capCents: legacyCostCap,
+          currency: 'USD',
+        }
+      : { mode: 'uncapped' })
+  const spendingResult = spendingPolicySchema.safeParse(spendingCandidate)
+  if (!spendingResult.success)
+    throw new Error(
+      `Invalid request spending policy: ${spendingResult.error.message}`,
+    )
+  const selectedSpendingPolicy = Object.freeze(
+    cloneDeep(spendingResult.data),
+  ) as SpendingPolicy
+  let activeRequestAdmissionStore: RequestAdmissionStore | undefined
+  if (selectedSpendingPolicy.mode === 'uncapped') {
+    delete sessionState.requestAdmission
+    delete mainAgentState.requestAdmission
+  } else {
+    activeRequestAdmissionStore =
+      requestAdmissionStore ??
+      (resolvedHarnessStateDir
+        ? createRequestAdmissionStore({
+            directory: path.join(resolvedHarnessStateDir, 'request-admission'),
+          })
+        : undefined)
+    if (!activeRequestAdmissionStore)
+      throw new Error(
+        'Capped request admission requires a durable store or harness state directory.',
+      )
+    const authorityId =
+      persistedAdmission?.authorityId ??
+      `request-admission:${fingerprintId}:${promptId}`
+    const admissionSnapshot = persistedAdmission
+      ? activeRequestAdmissionStore.recover({
+          authorityId,
+          policy: selectedSpendingPolicy,
+        })
+      : activeRequestAdmissionStore.initialize({
+          authorityId,
+          policy: selectedSpendingPolicy,
+        })
+    const reference = {
+      authorityId,
+      policy: selectedSpendingPolicy,
+      policyHash: admissionSnapshot.policyHash,
+    }
+    sessionState.requestAdmission = reference
+    mainAgentState.requestAdmission = reference
+    host.onRequestAdmissionReady({
+      store: activeRequestAdmissionStore,
+      authorityId,
+    })
+  }
+  // A continued turn must not inherit the previous turn's terminal verdict.
+  mainAgentState.runOutcome = undefined
+  mainAgentState.taskAcceptance = { status: 'unknown' }
+  host.onSessionReady(sessionState)
+  // Merge host-supplied configs after session construction, retaining the
+  // caller's origin marks. The host binding below snapshots each server and
+  // gives JSON continuations an opaque reference to that exact origin/config.
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    const targetTemplate = sessionState.fileContext.agentTemplates?.[agentId]
+    if (targetTemplate) {
+      targetTemplate.mcpServers = {
+        ...targetTemplate.mcpServers,
+        ...mcpServers,
+      }
+      // These replacements come from the host's explicit run options. Retire
+      // only their old references; retained JSON state still cannot retarget a
+      // bound config, and untouched siblings keep their original authority.
+      if (targetTemplate.mcpServerReferences) {
+        targetTemplate.mcpServerReferences = {
+          ...targetTemplate.mcpServerReferences,
+        }
+        for (const serverName of Object.keys(mcpServers))
+          delete targetTemplate.mcpServerReferences[serverName]
+      }
+    }
+  }
+  // A restored JSON context cannot select the expected project for authority
+  // checks. The host run's cwd supplies that identity.
+  const mcpProjectRoot = snapshot.inputs.projectRoot
+  sessionState.fileContext.projectRoot = mcpProjectRoot
+  const boundMcp = bindMcpSession({
+    projectRoot: mcpProjectRoot,
+    sessionReference: sessionState.fileContext.mcpSessionReference,
+    templates: sessionState.fileContext.agentTemplates,
+  })
+  sessionState.fileContext.agentTemplates = boundMcp.templates
+  sessionState.fileContext.mcpSessionReference = boundMcp.sessionReference
+  const resolveRunMcpConfig = (params: {
+    mcpConfig: MCPConfig
+    mcpReference?: string
+    mcpAgentId?: string
+    mcpServerName?: string
+  }): MCPConfig => {
+    if (!params.mcpReference) return params.mcpConfig
+    const sessionReference = sessionState.fileContext.mcpSessionReference
+    if (!sessionReference)
+      throw new Error('MCP host session reference is unavailable.')
+    return resolveMcpHostBinding({
+      ...params,
+      projectRoot: mcpProjectRoot,
+      sessionReference,
+    }).config
   }
   // Snapshot the hydrated task memory so post-run persistence can merge the
   // final memory into it. The runtime replaces this property rather than
@@ -829,12 +2034,635 @@ async function runOnce({
   // ownership survives across consecutive turns of the same client session.
   const trustedJobOwner: JobOwner = {
     clientSessionId: getTrustedSessionClientId(),
-    rootRunId:
-      sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
-    parentRunId:
-      sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
+    get rootRunId() {
+      return (
+        sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId
+      )
+    },
+    get parentRunId() {
+      return (
+        sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId
+      )
+    },
     parentAgentId: sessionState.mainAgentState.agentId,
   }
+  // Capture template mode once, before any model, generator or bridged child runs.
+  // A child's claimed template cannot discard its registered parent's plan lineage.
+  const planTemplateIds = new Set(
+    Object.entries(sessionState.fileContext.agentTemplates ?? {}).flatMap(
+      ([id, template]) =>
+        template.programmaticConfig?.planOnly === true ? [id, template.id] : [],
+    ),
+  )
+  const mainPlanOnly =
+    planTemplateIds.has(agentId) ||
+    (typeof agent !== 'string' && agent.programmaticConfig?.planOnly === true)
+  const registeredActors = new Map<
+    string,
+    {
+      actor: ExecutionActor
+      planOnly: boolean
+      readPolicy: HostReadPolicy
+      fileSystem: CodebuffFileSystem
+      agentType?: string
+      userInputId?: string
+      parentContext?: ExecutionAdapterContext
+      parentActor?: ExecutionActor
+      ancestors: readonly string[]
+    }
+  >()
+  const executionScopes = new Map<string, ExecutionScope>()
+  const actionContexts = new Map<string, ExecutionAdapterContext>()
+  const actionStarts = new Map<
+    string,
+    {
+      identity: ToolExecutionIdentity
+      toolName: string
+      context: ExecutionAdapterContext
+      scope: ExecutionScope
+      nativeObservation?: Readonly<{ inputHash?: string; signal: AbortSignal }>
+      planTerminalHostProfiles?: readonly ProfileRequest['policy'][]
+      workspaceBasis: ActionWorkspaceBasis
+    }
+  >()
+  const executionScopeRegistry = createExecutionScopeRegistry(
+    hostServices.execution,
+  )
+  const rememberExecutionScope = (
+    context: ExecutionAdapterContext,
+    scope: ExecutionScope,
+  ) => {
+    const registered = executionScopeRegistry.register(context.execution, scope)
+    if (!registered.ok) throw new ExecutionRefusalError(registered)
+  }
+  const internalOperationActors = new Map<string, ExecutionActor>()
+  const internalActorContexts = new Map<string, ExecutionAdapterContext>()
+  const actorKey = (actor: ExecutionActor) =>
+    JSON.stringify([actor.rootRunId, actor.runId, actor.agentId])
+  const actionKey = (identity: ToolExecutionIdentity) =>
+    JSON.stringify([
+      trustedJobOwner.clientSessionId,
+      identity.rootRunId,
+      identity.runId,
+      identity.agentId,
+      identity.actionId,
+      identity.attemptId,
+    ])
+  const correlationKey = (
+    correlation: Extract<
+      PolicyInput['facts']['correlation'],
+      { kind: 'action' }
+    >,
+  ) =>
+    JSON.stringify([
+      correlation.owner.clientSessionId,
+      correlation.owner.rootRunId,
+      correlation.owner.parentRunId,
+      correlation.owner.parentAgentId,
+      correlation.actionId,
+      correlation.attemptId,
+    ])
+  const registerExecutionActor: NonNullable<
+    Parameters<typeof getAgentRuntimeImpl>[0]['registerExecutionActor']
+  > = ({
+    actor,
+    agentType,
+    userInputId,
+    parentActor,
+    executionContext,
+    ancestorRunIds,
+  }) => {
+    if (
+      Object.values(actor).some(
+        (value) => typeof value !== 'string' || !value || value.includes('\0'),
+      )
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Invalid runtime actor registration',
+      })
+    const parent = parentActor
+      ? registeredActors.get(actorKey(parentActor))
+      : undefined
+    const expectedAncestors = parent
+      ? [...parent.ancestors, parent.actor.runId]
+      : []
+    if (
+      userInputId !== undefined &&
+      (typeof userInputId !== 'string' ||
+        userInputId.length > 4096 ||
+        (!parentActor && userInputId !== promptId) ||
+        (parentActor &&
+          parent?.userInputId &&
+          (!userInputId.startsWith(`${parent.userInputId}-`) ||
+            !userInputId.endsWith(actor.agentId))))
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Runtime actor task input does not match its parent turn',
+      })
+    if (
+      !Array.isArray(ancestorRunIds) ||
+      JSON.stringify(ancestorRunIds) !== JSON.stringify(expectedAncestors) ||
+      ancestorRunIds.includes(actor.runId)
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'stale-authority',
+        cause: 'Runtime actor ancestry does not match its registered parent',
+      })
+    if (parentActor) {
+      if (
+        !parent ||
+        actor.rootRunId !== parentActor.rootRunId ||
+        !executionContext
+      )
+        throw new ExecutionRefusalError({
+          ok: false,
+          reason: 'stale-authority',
+          cause: 'Runtime parent actor is unavailable',
+        })
+    } else if (
+      actor.rootRunId !== actor.runId ||
+      actor.agentId !== sessionState.mainAgentState.agentId ||
+      executionContext
+    ) {
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'stale-authority',
+        cause: 'Runtime root actor does not match this run',
+      })
+    }
+    if (executionContext) {
+      const registered = hostServices.execution.actionRegistration(
+        executionContext.execution,
+      )
+      if (!registered.ok) throw new ExecutionRefusalError(registered)
+      const correlation = registered.value.correlation
+      const source =
+        correlation.kind === 'action'
+          ? actionStarts.get(correlationKey(correlation))
+          : undefined
+      const operationActor =
+        correlation.kind === 'host-operation'
+          ? internalOperationActors.get(correlation.operationId)
+          : undefined
+      const contextActor =
+        source &&
+        correlation.kind === 'action' &&
+        source.identity.basisId === correlation.basisId
+          ? source.identity
+          : operationActor
+      if (
+        !contextActor ||
+        contextActor.rootRunId !== actor.rootRunId ||
+        !ancestorRunIds.includes(contextActor.runId)
+      )
+        throw new ExecutionRefusalError({
+          ok: false,
+          reason: 'stale-authority',
+          cause:
+            'Runtime parent context lacks registered action or internal-operation ancestry',
+        })
+    }
+    const key = actorKey(actor)
+    const existing = registeredActors.get(key)
+    if (
+      existing &&
+      (existing.userInputId !== userInputId ||
+        existing.agentType !== agentType ||
+        existing.parentContext?.execution !== executionContext?.execution ||
+        (existing.parentActor && actorKey(existing.parentActor)) !==
+          (parentActor && actorKey(parentActor)) ||
+        JSON.stringify(existing.ancestors) !== JSON.stringify(ancestorRunIds))
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'stale-authority',
+        cause: 'Runtime actor registration changed parent authority',
+      })
+    if (existing) return
+    if (
+      [...registeredActors.values()].some(
+        (value) =>
+          value.actor.runId === actor.runId ||
+          value.actor.agentId === actor.agentId,
+      )
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'stale-authority',
+        cause: 'Runtime actor identity is already registered',
+      })
+    const inheritedReadPolicy = parent?.readPolicy ?? admittedRootReadPolicy
+    const strictReads =
+      isProjectOnlyReadPolicy(inheritedReadPolicy) ||
+      (!parentActor && host.rootStrictProjectReads) ||
+      (agentType !== undefined &&
+        host.strictProjectReadTemplateIds.has(agentType))
+    const readPolicy = strictReads
+      ? deriveProjectOnlyReadPolicy(inheritedReadPolicy)
+      : inheritedReadPolicy
+    const fileSystem =
+      readPolicy === parent?.readPolicy
+        ? parent.fileSystem
+        : readPolicy === admittedRootReadFileSystem.hostReadPolicy
+          ? admittedRootReadFileSystem
+          : readPolicy === fs.hostReadPolicy
+            ? fs
+            : bindHostFileSystem(fs, readPolicy)
+    registeredActors.set(
+      key,
+      Object.freeze({
+        agentType,
+        readPolicy,
+        fileSystem,
+        planOnly:
+          parent?.planOnly === true ||
+          (!parentActor && mainPlanOnly) ||
+          (agentType !== undefined && planTemplateIds.has(agentType)),
+        userInputId,
+        actor: Object.freeze({ ...actor }),
+        parentActor: parentActor && Object.freeze({ ...parentActor }),
+        parentContext: executionContext,
+        ancestors: Object.freeze([...ancestorRunIds]),
+      }),
+    )
+  }
+  function fileSystemForActor(actor?: ExecutionActor): CodebuffFileSystem {
+    const registered = actor && registeredActors.get(actorKey(actor))
+    if (registered) return registered.fileSystem
+    if (
+      actor ||
+      [...registeredActors.values()].some((entry) =>
+        isProjectOnlyReadPolicy(entry.readPolicy),
+      )
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'unavailable',
+        cause:
+          'Filesystem reads require their registered runtime actor attribution',
+      })
+    return fs
+  }
+  const authorizeToolRead: NonNullable<
+    AgentRuntimeDeps['authorizeToolRead']
+  > = ({ identity, toolName }) => {
+    const registered = registeredActors.get(actorKey(identity))
+    const start = actionStarts.get(actionKey(identity))
+    contextForRegisteredAction(identity)
+    if (!registered || start?.toolName !== toolName)
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Read dispatch does not match its registered actor/action',
+      })
+    return !isProjectOnlyReadPolicy(registered.readPolicy) ||
+      isStrictProjectReadToolSupported(toolName)
+      ? { allowed: true }
+      : {
+          allowed: false,
+          reason: `strict_project_reads_unavailable: ${toolName} has no guarded project-only read contract. Use read_files, read_outline, glob or list_directory.`,
+        }
+  }
+  function scopeForActor(actor?: ExecutionActor): ExecutionScope {
+    if (!actor) return hostServices.directScope
+    const registeredActor = registeredActors.get(actorKey(actor))
+    const owner = {
+      clientSessionId: trustedJobOwner.clientSessionId,
+      rootRunId: actor.rootRunId,
+      parentRunId: actor.runId,
+      parentAgentId: actor.agentId,
+    }
+    if (
+      !registeredActor ||
+      Object.values(owner).some(
+        (value) => typeof value !== 'string' || !value || value.includes('\0'),
+      )
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'stale-authority',
+        cause: 'Runtime actor is outside this root run',
+      })
+    const key = JSON.stringify(owner)
+    let scope = executionScopes.get(key)
+    if (!scope) {
+      const registered = hostServices.registerRun(
+        owner,
+        registeredActor.parentContext,
+      )
+      if (!registered.ok) throw new ExecutionRefusalError(registered)
+      scope = registered.value
+      executionScopes.set(key, scope)
+    }
+    return scope
+  }
+  function contextForRegisteredAction(
+    identity: ToolExecutionIdentity,
+  ): ExecutionAdapterContext {
+    const start = actionStarts.get(actionKey(identity))
+    if (
+      !start ||
+      start.identity.basisId !== identity.basisId ||
+      start.identity.workspaceSnapshotId !== identity.workspaceSnapshotId ||
+      start.identity.basis.inputHash !== identity.basis.inputHash ||
+      start.identity.basis.workspaceRevision !==
+        identity.basis.workspaceRevision
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'stale-authority',
+        cause: 'Parent action is not registered under this exact B02 basis',
+      })
+    const registration = hostServices.execution.actionRegistration(
+      start.context.execution,
+    )
+    if (!registration.ok) throw new ExecutionRefusalError(registration)
+    return start.context
+  }
+  function contextForInternalActor(
+    actor: ExecutionActor,
+  ): ExecutionAdapterContext {
+    const key = actorKey(actor)
+    const existing = internalActorContexts.get(key)
+    if (existing) {
+      const registration = hostServices.execution.actionRegistration(
+        existing.execution,
+      )
+      if (!registration.ok) throw new ExecutionRefusalError(registration)
+      return existing
+    }
+    const scope = scopeForActor(actor)
+    const registered = scope.operation({ signal: runSignal })
+    if (!registered.ok) throw new ExecutionRefusalError(registered)
+    const context = registered.value
+    const registration = hostServices.execution.actionRegistration(
+      context.execution,
+    )
+    if (!registration.ok) throw new ExecutionRefusalError(registration)
+    if (registration.value.correlation.kind !== 'host-operation')
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause:
+          'Internal actor operation has no authenticated host-operation origin',
+      })
+    internalActorContexts.set(key, context)
+    internalOperationActors.set(
+      registration.value.correlation.operationId,
+      Object.freeze({ ...actor }),
+    )
+    rememberExecutionScope(context, scope)
+    return context
+  }
+  const processOptionsFor = (
+    toolName: string,
+    input: Record<string, any>,
+    actor?: ExecutionActor,
+  ) => {
+    const terminal = toolName === 'run_terminal_command'
+    const hooks =
+      toolName === 'run_file_change_hooks' ||
+      toolName === 'run_targeted_validation'
+    const processProfile = hostServices.profile
+    const hostProfile: ProfileRequest =
+      (terminal || hooks) &&
+      !host.profileExplicitlySelected &&
+      snapshot.sandboxPolicy.mode === 'unrestricted'
+        ? Object.freeze({ ...processProfile, policy: 'full-access' })
+        : processProfile
+    const registeredActor = actor && registeredActors.get(actorKey(actor))
+    const planTerminal =
+      terminal && (actor ? registeredActor?.planOnly === true : mainPlanOnly)
+    const parent = planTerminal ? registeredActor?.parentContext : undefined
+    const parentRegistration = parent
+      ? hostServices.execution.actionRegistration(parent.execution)
+      : undefined
+    if (parentRegistration && !parentRegistration.ok)
+      throw new ExecutionRefusalError(parentRegistration)
+    const inheritedProfile = parentRegistration?.ok
+      ? parentRegistration.value.bounds?.profile
+      : undefined
+    const profile = planTerminal
+      ? readOnlyPlanExecutionProfile({
+          ...hostProfile,
+          required: [
+            ...new Set([
+              ...hostProfile.required,
+              ...(inheritedProfile?.required ?? []),
+            ]),
+          ],
+          optional: [
+            ...new Set([
+              ...(hostProfile.optional ?? []),
+              ...(inheritedProfile?.optional ?? []),
+            ]),
+          ].filter(
+            (capability) =>
+              !hostProfile.required.includes(capability) &&
+              !inheritedProfile?.required.includes(capability),
+          ),
+        })
+      : hostProfile
+    const planTerminalHostProfiles = planTerminal
+      ? Object.freeze([
+          ...new Set([
+            hostProfile.policy,
+            ...(inheritedProfile ? [inheritedProfile.policy] : []),
+          ]),
+        ])
+      : undefined
+    const terminalTimeout = terminal
+      ? resolveTerminalTimeout(
+          typeof input.timeout_seconds === 'number'
+            ? input.timeout_seconds
+            : undefined,
+          input.process_type === 'BACKGROUND' ? 'BACKGROUND' : 'SYNC',
+          hostServices.terminalTimeoutPolicy,
+        )
+      : undefined
+    const limit = executionLimitMs(
+      terminalTimeout
+        ? terminalTimeout.localSeconds === -1
+          ? -1
+          : terminalTimeout.localSeconds * 1000
+        : undefined,
+    )
+    if (!limit.ok) throw new ExecutionRefusalError(limit)
+    return {
+      profile,
+      planTerminalHostProfiles,
+      limit: limit.value,
+      mode: 'assistant' as const,
+    }
+  }
+  const onExecutionActionStart: NonNullable<
+    Parameters<typeof getAgentRuntimeImpl>[0]['onExecutionActionStart']
+  > = (start) => {
+    const { identity, toolName } = start
+    const expectedBasis = hashActionInput('openbuff.execution-b02-basis.v1', {
+      basis: identity.basis,
+      workspaceSnapshotId: identity.workspaceSnapshotId ?? null,
+    })
+    if (
+      identity.basis.inputHash !== hashActionInput(toolName, start.input) ||
+      identity.basisId !== expectedBasis
+    )
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Runtime action basis does not match its original input',
+      })
+    const key = actionKey(identity)
+    const old = actionStarts.get(key)
+    if (old) {
+      if (
+        old.identity.basisId !== identity.basisId ||
+        old.toolName !== toolName
+      )
+        throw new ExecutionRefusalError({
+          ok: false,
+          reason: 'stale-authority',
+          cause: 'Runtime action identity changed basis',
+        })
+      return
+    }
+    const input =
+      typeof start.input === 'string'
+        ? parseJsonBounded(start.input)
+        : (start.input ?? {})
+    const options = processOptionsFor(
+      toolName,
+      input as Record<string, any>,
+      identity,
+    )
+    const scope = scopeForActor(identity)
+    const signal = AbortSignal.any([runSignal, start.signal])
+    const registered = scope.action({
+      actionId: identity.actionId,
+      attemptId: identity.attemptId,
+      basisId: identity.basisId,
+      signal,
+      limit: options.limit,
+      profile: options.profile,
+      mode: options.mode,
+    })
+    if (!registered.ok) throw new ExecutionRefusalError(registered)
+    const entry = {
+      identity: Object.freeze({
+        ...identity,
+        basis: Object.freeze({ ...identity.basis }),
+      }),
+      toolName,
+      nativeObservation:
+        toolName === 'record_decision'
+          ? {
+              inputHash: nativeToolObservationInputHash({
+                input: start.input,
+                callId: identity.actionId,
+                logger: logger ?? {
+                  debug() {},
+                  info() {},
+                  warn() {},
+                  error() {},
+                },
+              }),
+              signal: start.signal,
+            }
+          : undefined,
+      context: registered.value,
+      scope,
+      planTerminalHostProfiles: options.planTerminalHostProfiles,
+      workspaceBasis: createActionWorkspaceBasis(
+        identity,
+        sessionState.mainAgentState.workspaceState,
+      ),
+    }
+    actionStarts.set(key, entry)
+    actionContexts.set(key, registered.value)
+    rememberExecutionScope(registered.value, scope)
+  }
+  const refreshHostWorkspace = () => {
+    if (!workspaceJournal) return
+    try {
+      const persisted = workspaceJournal.read()
+      const current = sessionState.mainAgentState.workspaceState
+      if (
+        persisted.snapshotId !== current?.snapshotId ||
+        persisted.revision !== current?.revision
+      ) {
+        sessionState.mainAgentState.workspaceState = persisted
+        sessionState.mainAgentState.readAuthorizationsByPath = {}
+        sessionState.mainAgentState.readAuthorizationHashesByPath = {}
+        sessionState.mainAgentState.rawReadAuthorizationHashesByPath = {}
+        sessionState.mainAgentState.confirmedPostEditAnchorsByPath = {}
+      }
+    } catch (error) {
+      logger?.warn(
+        { error },
+        'Workspace journal read failed; retaining in-memory workspace state',
+      )
+      workspaceJournal = undefined
+    }
+  }
+  const synchronizeWorkspace: NonNullable<
+    AgentRuntimeDeps['synchronizeWorkspace']
+  > = (actor) => {
+    if (!registeredActors.has(actorKey(actor)))
+      throw new ExecutionRefusalError({
+        ok: false,
+        reason: 'invalid-context',
+        cause: 'Workspace synchronization requires a registered actor',
+      })
+    refreshHostWorkspace()
+    // A child receives descriptive state, never a replacement execution permit.
+    return sessionState.mainAgentState.workspaceState
+      ? structuredClone(sessionState.mainAgentState.workspaceState)
+      : undefined
+  }
+  host.setBasisResolver(
+    (correlation) => {
+      if (correlation.kind !== 'action') return true
+      refreshHostWorkspace()
+      const start = actionStarts.get(correlationKey(correlation))
+      return (
+        !!start &&
+        start.workspaceBasis.isCurrent(
+          correlation.basisId,
+          sessionState.mainAgentState.workspaceState,
+        )
+      )
+    },
+    (correlation) => {
+      const start =
+        correlation.kind === 'action'
+          ? actionStarts.get(correlationKey(correlation))
+          : undefined
+      return (
+        start?.workspaceBasis.describeMismatch(
+          sessionState.mainAgentState.workspaceState,
+        ) ?? 'Action basis changed: registered action unavailable'
+      )
+    },
+  )
+  const backgroundReceiver = hostServices.createBackgroundReceiver(
+    trustedJobOwner.clientSessionId,
+  )
+  if (!backgroundReceiver.ok)
+    throw new ExecutionRefusalError(backgroundReceiver)
+  const mcpExecution = createRunMcpExecution({
+    snapshot,
+    authority: hostServices.execution,
+    rootLifetime: hostServices.rootLifetime,
+    spawn,
+  })
+  host.onMcpReady(mcpExecution.dispose)
+  const capturedChromeSandboxArgs = Object.freeze(chromeSandboxArgs())
+  let capturedChromeExecutable: string | undefined
   // M5: forward this run's own live background-job activity to the host via
   // handleEvent. Subscribe once here (never inside a loop) and dispose on
   // every terminal path so the process-wide registry singleton never leaks
@@ -847,18 +2675,87 @@ async function runOnce({
         callbacksEnabled && !runSignal.aborted && !!handleEvent,
     }),
   )
-  const approvalService = new HarnessApprovalService(
-    new LocalHarnessStore(resolvedHarnessStateDir),
-  )
+  const approvalService = resolvedHarnessStateDir
+    ? new HarnessApprovalService(new LocalHarnessStore(resolvedHarnessStateDir))
+    : undefined
+  const actionApprovalIds = new Map<string, readonly string[]>()
+  host.setApprovalResolver(async (input: PolicyInput) => {
+    const state = sessionState.mainAgentState.workspaceState
+    const snapshotId = state?.snapshotId
+    if (!snapshotId || !workspaceJournal || !approvalService) return undefined
+    const context =
+      input.facts.correlation.kind === 'action'
+        ? actionContexts.get(correlationKey(input.facts.correlation))
+        : undefined
+    let branch: string | undefined, defaultBranch: string | undefined
+    if (
+      input.classification.effects.some((effect) => effect.action === 'push') &&
+      context
+    ) {
+      const observed = await inspectWorkspace({
+        cwd: snapshot.inputs.projectRoot,
+        signal: context.signal,
+        executionContext: context,
+      })
+      const value = observed[0]?.type === 'json' ? observed[0].value : undefined
+      if (value && 'branch' in value) {
+        branch = value.branch
+        defaultBranch = value.defaultBranch
+      }
+    }
+    return {
+      service: approvalService,
+      repositoryId: workspaceJournal.repositoryId,
+      workspaceId: workspaceJournal.workspaceId,
+      runId: trustedJobOwner.rootRunId,
+      snapshotId,
+      receiptIds:
+        input.facts.correlation.kind === 'action'
+          ? (actionApprovalIds.get(correlationKey(input.facts.correlation)) ??
+            approvalReceiptIds)
+          : approvalReceiptIds,
+      branch,
+      defaultBranch,
+      isCurrent: () =>
+        sessionState.mainAgentState.workspaceState?.snapshotId === snapshotId &&
+        !hostServices.rootSignal.aborted &&
+        !context?.signal?.aborted,
+    }
+  })
+  // P3-T2 (LI-01): lazily-built language-intelligence service shared across the
+  // four LSP read tools. Only constructed when a language-intelligence client
+  // tool actually fires, so a run that never uses them never spawns a server.
+  let languageIntelligenceService: LanguageIntelligenceService | undefined
+  const getLanguageIntelligence = (): LanguageIntelligenceService => {
+    languageIntelligenceService ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+      spawn,
+      // Audit fix (fs splice): the semantic-edit splice and post-commit LSP
+      // sync read through THIS run's filesystem, so a virtual-fs host
+      // (fsSource / hydration) is spliced from the same bytes the mutation
+      // broker commits — never raw host node disk.
+      fs,
+      readPolicy: hostServices.readPolicy,
+      resourceFactory: (spec, request) => {
+        const scope = executionScopeRegistry.resolve(request.execution)
+        return scope.ok ? scope.value.lspResources(spec, request) : scope
+      },
+    })
+    return languageIntelligenceService
+  }
   if (workspaceJournal) {
     try {
       const persistedWorkspace = workspaceJournal.read()
-      const currentRevision =
-        sessionState.mainAgentState.workspaceState?.revision ?? -1
-      if (persistedWorkspace.revision > currentRevision) {
+      // Restored chat state is a descriptive cache, including legacy synthetic
+      // revisions. The journal remains authoritative even when its revision is lower.
+      if (
+        persistedWorkspace.snapshotId !==
+        sessionState.mainAgentState.workspaceState?.snapshotId
+      ) {
         sessionState.mainAgentState.workspaceState = persistedWorkspace
         sessionState.mainAgentState.readAuthorizationsByPath = {}
         sessionState.mainAgentState.readAuthorizationHashesByPath = {}
+        sessionState.mainAgentState.rawReadAuthorizationHashesByPath = {}
         sessionState.mainAgentState.confirmedPostEditAnchorsByPath = {}
       }
     } catch (error) {
@@ -875,23 +2772,27 @@ async function runOnce({
   // timeout instead of extending it
   // (reliability:memory-preparation-is-outside-timeout).
   const timeoutAbortController = new AbortController()
-  const timeoutEnabled = typeof runTimeoutMs === 'number' && runTimeoutMs > 0
-  const runSignal = timeoutEnabled
-    ? signal
-      ? AbortSignal.any([signal, timeoutAbortController.signal])
-      : timeoutAbortController.signal
-    : (signal ?? timeoutAbortController.signal)
+  const runSignal = AbortSignal.any([
+    hostServices.rootSignal,
+    timeoutAbortController.signal,
+  ])
   let terminalRequested = false
   let callbacksEnabled = true
   let callbackQueue: Promise<void> = Promise.resolve()
   let callbackFailure: unknown
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let runDeadlineExceeded = false
+  const markRootDeadline = () => {
+    runDeadlineExceeded = isExecutionDeadlineSignal(hostServices.rootSignal)
+  }
+  hostServices.rootSignal.addEventListener('abort', markRootDeadline, {
+    once: true,
+  })
   let resolveTerminal: (value: RunReturnType) => void = () => {}
   const terminalPromise = new Promise<RunReturnType>((res) => {
     resolveTerminal = (value) => {
       if (terminalRequested) return
       terminalRequested = true
-      res(value)
+      res(projectRunOutcomes(value))
     }
   })
 
@@ -949,25 +2850,31 @@ async function runOnce({
     })
     return state
   }
-  function getCancelledRunState(message?: string): RunState {
+  function getCancelledRunState(
+    message?: string,
+    termination: RunOutcome['termination'] = runDeadlineExceeded
+      ? 'deadline_exhausted'
+      : 'cancelled',
+  ): RunState {
     message = message ?? 'Run cancelled by user.'
-    return {
-      sessionState: getCancelledSessionState(message),
-      output: {
-        type: 'error',
-        message,
+    return projectRunOutcomes(
+      {
+        sessionState: getCancelledSessionState(message),
+        output: {
+          type: 'error',
+          message,
+        },
       },
-    }
+      {
+        runOutcome: {
+          termination,
+          cause: { code: `run_${termination}`, message },
+        },
+      },
+    )
   }
 
-  if (timeoutEnabled) {
-    timeoutHandle = setTimeout(() => {
-      const message = `Run timed out after ${runTimeoutMs}ms`
-      abortRun(new Error(message))
-      resolveTerminal(getCancelledRunState(message))
-    }, runTimeoutMs)
-    timeoutHandle.unref?.()
-  }
+  host.onCancellationReady()
 
   // Race memory preparation against the run signal: an abort (user cancel or
   // run timeout) rejects here and the run proceeds through its normal
@@ -1000,7 +2907,6 @@ async function runOnce({
     const terminalState = await terminalPromise
     callbacksEnabled = false
     unsubscribeJobEvents()
-    if (timeoutHandle) clearTimeout(timeoutHandle)
     return terminalState
   }
 
@@ -1036,15 +2942,29 @@ async function runOnce({
     if (!callbacksEnabled || runSignal.aborted) {
       return
     }
-    const { agentId, agentType, chunk } = action
+    const { agentId, agentType, chunk, chunkKind, ancestorRunIds } = action
 
     if (handleStreamChunk && chunk) {
-      await handleStreamChunk({
-        type: 'subagent_chunk',
-        agentId,
-        agentType,
-        chunk,
-      })
+      if (chunkKind === 'reasoning') {
+        // Reasoning (thinking) delta from a subagent: emit the SAME
+        // reasoning_chunk stream event the root loop's onResponseChunk maps
+        // its reasoning_delta events to (ancestorRunIds is required in the
+        // CLI's reasoning_chunk shape, so a missing chain falls back to the
+        // root reasoning stream with []).
+        await handleStreamChunk({
+          type: 'reasoning_chunk',
+          agentId,
+          ancestorRunIds: ancestorRunIds ?? [],
+          chunk,
+        })
+      } else {
+        await handleStreamChunk({
+          type: 'subagent_chunk',
+          agentId,
+          agentType,
+          chunk,
+        })
+      }
     }
   }
 
@@ -1061,462 +2981,1444 @@ async function runOnce({
   // means no git_status observation has been emitted yet this turn, so the
   // first call always returns the full observation.
   let lastGitStatusFingerprint: string | null = null
-  const agentRuntimeImpl = getAgentRuntimeImpl({
+  // Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+  // Declared in this run closure (not module scope) so every run() call starts
+  // with a fresh approval scope and concurrent runs never share it. The FIRST
+  // client-origin call of each (server-config, tool) pair is gated behind the
+  // host approver; subsequent calls of the same tool this run run freely.
+  const approvedClientMcpTools = new Set<string>()
+  // P2-audit-fix-8: production crash-resume driver. Built exactly when a
+  // journal reader is wired (the same condition under which the runtime's
+  // loop-entry block builds the resume report) and threaded additively into
+  // the agent-runtime deps so loopAgentSteps' existing not-clean branch can
+  // ACT on the report: re-drive in-flight children (best-effort; recorded)
+  // and re-issue interrupted background intents with the durable respawnOf
+  // marker. Fail-open by contract; a run with no journalReader gets no
+  // resumeDriver field at all and stays byte-identical.
+  const resumeDriver = journalReader
+    ? createRunResumeDriver({ journalWriter, journalReader, logger })
+    : undefined
+  // Memory-overhaul P4 build-order item 2: wire the playbook-gate outcome
+  // producer against this run's Memory V2 repository, so gate verdicts reach
+  // the persisted effectiveness counters in production runs. The helper
+  // returns undefined — and the deps below then carry NO key at all — when
+  // no repository is configured or the store lacks the optional counter-fold
+  // member, so such a run stays byte-identical to an unwired one.
+  const onPlaybookGateOutcome = buildPlaybookGateOutcomeReporter(
+    memoryV2?.repository,
     logger,
-    apiKey,
-    handleStepsLogChunk: () => {
-      // Does nothing for now
-    },
-    requestToolCall: async ({
-      userInputId,
-      callId,
-      toolName,
-      input,
-      mcpConfig,
-      signal: toolSignal,
-    }) => {
-      if (runSignal.aborted || terminalRequested) {
-        throw createAbortError(runSignal)
-      }
-      if (toolName === 'run_terminal_command') {
-        const command = (input as { command?: unknown }).command
-        if (typeof command === 'string') {
-          const cloneMatch = command.match(
-            /^git clone --depth 1 'https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:\.git)?\/?' '(\/tmp\/librarian-[A-Za-z0-9._-]+-[0-9]+)'$/,
-          )
-          if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
-        }
-      }
-      const trustedCallId = callId ?? crypto.randomUUID()
-      const handled = await handleToolCall({
-        action: {
-          type: 'tool-call-request',
-          requestId: trustedCallId,
-          userInputId,
-          toolName,
-          input,
-          mcpConfig,
-        },
-        overrides: overrideTools ?? {},
-        onFilesChanged,
-        onFilesystemMutation,
-        verifyExternalMutation,
-        customToolDefinitions: customToolDefinitions
-          ? Object.fromEntries(
-              customToolDefinitions.map((def) => [def.toolName, def]),
+  )
+  const onNativeToolObservation = buildNativeToolObservationReporter({
+    coordinator: memoryV2Coordinator,
+    registeredActor: (actor) => registeredActors.get(actorKey(actor)),
+    registeredAction: (identity) => actionStarts.get(actionKey(identity)),
+    workspaceState: () => sessionState.mainAgentState.workspaceState,
+    logger,
+  })
+  const localDependencies =
+    (!fsSource && !projectFiles) ||
+    (repositoryIntelligence && repositoryIntelligence.locality === 'local')
+  const validationReceipts =
+    cwd && localDependencies
+      ? createValidationReceiptRegistry({
+          projectRoot: cwd,
+          workspaceId:
+            memoryV2?.projectId ?? workspaceJournal?.workspaceId ?? cwd,
+          environment: { ...hostEnvironment, ...env },
+          toolVersions: () => ({
+            runtime: process.versions.bun
+              ? `bun:${process.versions.bun}`
+              : `node:${process.version}`,
+          }),
+        })
+      : undefined
+  try {
+    const intelligence =
+      cwd && repositoryIntelligence !== false
+        ? new RepositoryIntelligenceService({
+            cwd,
+            fs,
+            memory: memoryV2,
+            source:
+              repositoryIntelligence ??
+              (projectFiles
+                ? createVirtualRepositoryIntelligenceSource(projectFiles)
+                : fsSource
+                  ? undefined
+                  : createRepositoryIntelligenceSource(
+                      cwd,
+                      loadedProviderConfig.config.indexing,
+                    )),
+            currentWorkspace: () => sessionState.mainAgentState.workspaceState,
+            validationEvidence: (actor) =>
+              validationReceipts?.evidence(actor) ?? Promise.resolve(undefined),
+          })
+        : undefined
+    const strictIntelligence = new Map<
+      CodebuffFileSystem,
+      RepositoryIntelligenceService
+    >()
+    const archiveReaderParams = {
+      repository: memoryV2?.repository,
+      allowProjectArchive:
+        sessionState.mainAgentState.contextArchiveHydration !==
+        'in-memory-only',
+      signal: runSignal,
+      registeredActor: (actor: ExecutionActor) => {
+        const registered = registeredActors.get(actorKey(actor))
+        return registered
+          ? {
+              actor: registered.actor,
+              userInputId: registered.userInputId,
+              strictProjectReads: isProjectOnlyReadPolicy(
+                registered.readPolicy,
+              ),
+            }
+          : undefined
+      },
+    }
+    const agentRuntimeImpl = getAgentRuntimeImpl({
+      requestAdmissionStore: activeRequestAdmissionStore,
+      spendingPolicy: selectedSpendingPolicy,
+      requestAdmissionAuthorityId: sessionState.requestAdmission?.authorityId,
+      readContextArchiveBodyPage: memoryV2
+        ? buildContextArchiveBodyReader(archiveReaderParams)
+        : undefined,
+      searchContextArchive: memoryV2
+        ? buildContextArchiveSearchReader(archiveReaderParams)
+        : undefined,
+      resolveMemoryAuthority:
+        selectedMemoryAuthority === undefined
+          ? undefined
+          : ({ actor, userInputId }) => {
+              const registered = registeredActors.get(actorKey(actor))
+              if (
+                !registered ||
+                !registered.userInputId ||
+                registered.userInputId !== userInputId
+              )
+                throw new Error(
+                  'Memory source selection does not match its registered actor/task',
+                )
+              return selectedMemoryAuthority
+            },
+      authorizeToolRead,
+      getFileSystemForActor: fileSystemForActor,
+      getPlaybookValidationEvidence: async (actor) => {
+        if (!registeredActors.has(actorKey(actor)))
+          throw new Error('Validation evidence actor is not registered')
+        return validationReceipts?.evidence(actor)
+      },
+      prepareRepositoryContext: intelligence
+        ? async (request) => {
+            const registered = registeredActors.get(actorKey(request.actor))
+            if (!registered)
+              throw new Error('Repository context actor is not registered')
+            if (
+              registered.userInputId !== undefined &&
+              request.userInputId !== registered.userInputId
             )
-          : {},
-        cwd,
-        fs,
-        fileFilter,
-        filesystemPolicy,
-        trustedJobOwner,
-        logger,
-        capabilityIssuer: cwd
-          ? {
-              projectId: cwd,
-              runId:
-                sessionState.mainAgentState.runId ??
-                sessionState.mainAgentState.agentId,
-            }
-          : undefined,
-        env,
-        harnessStateDir: resolvedHarnessStateDir,
-        approvalReceiptIds,
-        approvalMode,
-        requestApproval,
-        approvalService,
-        harnessWorkspaceIdentity: workspaceJournal
-          ? {
-              repositoryId: workspaceJournal.repositoryId,
-              workspaceId: workspaceJournal.workspaceId,
-            }
-          : undefined,
-        getWorkspaceState: () => sessionState.mainAgentState.workspaceState,
-        setWorkspaceState: (state) => {
-          sessionState.mainAgentState.workspaceState = state
-        },
-        advanceWorkspaceJournal: workspaceJournal
-          ? (change) =>
-              (() => {
-                if (!workspaceJournal) {
-                  return advanceWorkspaceState(
+              throw new Error(
+                'Repository context input does not match its registered actor',
+              )
+            if (
+              request.userInputId !== promptId &&
+              !request.userInputId.startsWith(`${promptId}-`)
+            )
+              throw new Error(
+                'Repository context input belongs to another root task',
+              )
+            let compiler = intelligence
+            if (isProjectOnlyReadPolicy(registered.readPolicy)) {
+              compiler = strictIntelligence.get(registered.fileSystem)!
+              if (!compiler) {
+                // Cached source/index bytes are not guarded observations. Keep
+                // memory/procedure authority separate and attest through the read view.
+                compiler = new RepositoryIntelligenceService({
+                  cwd: cwd!,
+                  fs: registered.fileSystem,
+                  memory: memoryV2,
+                  currentWorkspace: () =>
                     sessionState.mainAgentState.workspaceState,
-                    change,
-                  )
+                  validationEvidence: (actor) =>
+                    validationReceipts?.evidence(actor) ??
+                    Promise.resolve(undefined),
+                  source: {
+                    async query() {
+                      return {
+                        freshness: 'degraded',
+                        candidates: [],
+                        reasons: ['strict-project-read-index-unavailable'],
+                      }
+                    },
+                  },
+                })
+                strictIntelligence.set(registered.fileSystem, compiler)
+              }
+            }
+            return raceAgainstAbort(
+              compiler.prepare({
+                ...request,
+                agentType: registered.agentType ?? request.agentType,
+                userInputId: registered.userInputId ?? request.userInputId,
+                deadlineMs: Date.now() + 3_000,
+                signal: runSignal,
+              }),
+              runSignal,
+            )
+          }
+        : undefined,
+      classifyPlaybookTerminalActions: async (command) =>
+        classifyTerminalProcedureActions(command),
+      logger,
+      retainDetachedAgent: host.retainDetachedAgent,
+      resolveRunOutcome: host.resolveRunOutcome,
+      registerExecutionActor,
+      readPlanStepOffset: host.readPlan?.original ? runId =>
+        runId === host.readPlan!.original!.basis.runId ? host.readPlan!.completedBatches : 0 : undefined,
+      bindReadPlanRoot: host.readPlan ? async ({ agentId, userInputId, allocateRunId }) => {
+        const readPlan = host.readPlan!
+        await readPlan.verifyRoot()
+        runSignal.throwIfAborted()
+        if (readPlan.original) {
+          if (agentId !== readPlan.original.agentId || userInputId !== readPlan.original.userInputId) {
+            throw new Error('Read replay root identity does not match the claimed origin.')
+          }
+          return readPlan.original.basis.runId
+        }
+        const runId = await allocateRunId()
+        if (!runId || !userInputId) throw new Error('Cannot initialize read-plan actor identity.')
+        await readPlan.begin(runId, agentId, userInputId)
+        return runId
+      } : undefined,
+      onExecutionActionStart,
+      synchronizeWorkspace,
+      executionForAction: contextForRegisteredAction,
+      executionForActorOperation: contextForInternalActor,
+      supervisedExecutionForRequest: (request) => {
+        const origin = request.executionHostOperation
+        if (origin && request.executionIdentity)
+          throw new ExecutionRefusalError({
+            ok: false,
+            reason: 'invalid-context',
+            cause:
+              'Supervised launch cannot combine action and host-operation origins',
+          })
+        const actor = origin?.actor ?? request.executionIdentity
+        const registeredActor = actor && registeredActors.get(actorKey(actor))
+        if (
+          !actor ||
+          !registeredActor ||
+          JSON.stringify(request.ancestorRunIds) !==
+            JSON.stringify([...registeredActor.ancestors, actor.runId])
+        )
+          throw new ExecutionRefusalError({
+            ok: false,
+            reason: 'stale-authority',
+            cause:
+              'Supervised launch ancestry does not match its registered parent',
+          })
+        if (origin) {
+          if (
+            origin.purpose !== 'semantic-compaction' &&
+            origin.purpose !== 'snapshot-consolidation'
+          )
+            throw new ExecutionRefusalError({
+              ok: false,
+              reason: 'invalid-context',
+              cause: 'Supervised host-operation purpose is unavailable',
+            })
+          return contextForInternalActor(origin.actor)
+        }
+        return contextForRegisteredAction(request.executionIdentity!)
+      },
+      apiKey,
+      hostServices,
+      journalWriter,
+      journalReader,
+      ...(resumeDriver ? { resumeDriver } : {}),
+      ...(onPlaybookGateOutcome ? { onPlaybookGateOutcome } : {}),
+      ...(onNativeToolObservation ? { onNativeToolObservation } : {}),
+      handleStepsLogChunk: () => {
+        // Does nothing for now
+      },
+      requestToolCall: async ({
+        userInputId,
+        callId,
+        toolName,
+        input,
+        mcpConfig,
+        mcpReference,
+        mcpAgentId,
+        mcpServerName,
+        mcpCatalogGeneration,
+        signal: toolSignal,
+        executionIdentity,
+        executionRequestHash,
+      }) => {
+        if (runSignal.aborted || terminalRequested) {
+          throw createAbortError(runSignal)
+        }
+        const trustedCallId =
+          executionIdentity?.actionId ?? callId ?? crypto.randomUUID()
+        const parsedInput =
+          typeof input === 'string' ? parseJsonBounded(input) : input
+        const isEditBatch =
+          toolName === 'edit_transaction' && Array.isArray(parsedInput)
+        if (
+          !parsedInput ||
+          typeof parsedInput !== 'object' ||
+          (Array.isArray(parsedInput) && !isEditBatch)
+        )
+          throw new ExecutionRefusalError({
+            ok: false,
+            reason: 'invalid-context',
+            cause:
+              'Tool input must be an object or a prepared edit_transaction batch',
+          })
+        // The runtime forwards preflighted edits as the canonical CHANGES array.
+        // Execution options come from the registered action, not that edit batch.
+        const toolInput = isEditBatch
+          ? {}
+          : (parsedInput as Record<string, any>)
+        const processSignal = toolSignal
+          ? AbortSignal.any([runSignal, toolSignal])
+          : runSignal
+        const start = executionIdentity
+          ? actionStarts.get(actionKey(executionIdentity))
+          : undefined
+        const capturedExternalAlias =
+          Boolean(mcpConfig) ||
+          customToolDefinitions?.some(
+            (definition) => definition.toolName === toolName,
+          )
+        if (
+          executionIdentity &&
+          (!start ||
+            start.identity.basisId !== executionIdentity.basisId ||
+            (start.toolName !== toolName && !capturedExternalAlias) ||
+            executionRequestHash !== hashActionInput(toolName, input))
+        )
+          throw new ExecutionRefusalError({
+            ok: false,
+            reason: 'stale-authority',
+            cause:
+              'Tool request does not match a registered B02 action and exact forwarded input',
+          })
+        const actorFileSystem = fileSystemForActor(executionIdentity)
+        if (
+          isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
+          (!isStrictProjectReadToolSupported(toolName) ||
+            capturedExternalAlias ||
+            overrideTools?.[toolName as PublishedToolName] ||
+            !hasGuardedProjectReads(actorFileSystem))
+        )
+          return {
+            output: [
+              {
+                type: 'json',
+                value: {
+                  errorCode: 'strict_project_reads_unavailable',
+                  errorMessage: `strict_project_reads_unavailable: ${toolName} has no verified guarded project-only read view.`,
+                },
+              },
+            ],
+          }
+        const scope = start?.scope ?? hostServices.directScope
+        const planMode = executionIdentity
+          ? registeredActors.get(actorKey(executionIdentity))?.planOnly === true
+          : mainPlanOnly
+        const directOptions = processOptionsFor(
+          toolName,
+          toolInput,
+          executionIdentity,
+        )
+        const registered = start
+          ? { ok: true as const, value: start.context }
+          : scope.operation({
+              signal: processSignal,
+              limit: directOptions.limit,
+              profile: directOptions.profile,
+              mode:
+                toolName === 'run_terminal_command' &&
+                toolInput.mode === 'user' &&
+                !planMode
+                  ? 'user'
+                  : 'assistant',
+            })
+        if (!registered.ok) throw new ExecutionRefusalError(registered)
+        const executionContext = registered.value
+        rememberExecutionScope(executionContext, scope)
+        actionApprovalIds.set(
+          executionIdentity ? actionKey(executionIdentity) : trustedCallId,
+          Object.freeze([
+            ...new Set([
+              ...(typeof toolInput.approval_receipt_id === 'string'
+                ? [toolInput.approval_receipt_id]
+                : []),
+              ...approvalReceiptIds,
+            ]),
+          ]),
+        )
+        if (toolName === 'run_terminal_command') {
+          const command = (input as { command?: unknown }).command
+          if (typeof command === 'string') {
+            const cloneMatch = command.match(
+              /^git clone --depth 1 'https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:\.git)?\/?' '(\/tmp\/librarian-[A-Za-z0-9._-]+-[0-9]+)'$/,
+            )
+            if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
+          }
+        }
+        // Capture before the mutation and retain it only after confirmed effects.
+        // A later validation call must match its scope, revision and raw postimage.
+        const isMutatingToolCall = DIAGNOSTIC_BASELINE_TOOL_NAMES.has(toolName)
+        const canHaveUnknownEffects =
+          toolName === 'run_terminal_command' ||
+          Boolean(mcpConfig) ||
+          customToolDefinitions?.some(
+            (definition) => definition.toolName === toolName,
+          )
+        if (isMutatingToolCall || canHaveUnknownEffects) {
+          pendingDiagnosticBaseline = undefined
+          diagnosticBaselineEpoch += 1
+        }
+        const baselineEpochForCall = diagnosticBaselineEpoch
+        let diagnosticBaseline: DiagnosticCapture | undefined
+        if (isMutatingToolCall && cwd && diagnosticPreflightEnabled) {
+          let baselineFiles: string[] = []
+          try {
+            baselineFiles = diagnosticBaselineFiles(toolName, input)
+            if (baselineFiles.length > 0) {
+              diagnosticBaseline = await captureDiagnosticObservation({
+                files: baselineFiles,
+                cwd,
+                runCommand: diagnosticBaselineRunner,
+                env,
+                signal: executionContext.signal,
+                executionContext,
+                phase: 'baseline',
+              })
+            }
+          } catch {
+            // Mutation remains fail-open, but a failed capture is not a clean baseline.
+            if (baselineFiles.length > 0) {
+              diagnosticBaseline = {
+                diagnostics: [],
+                commands: [],
+                coverage: {
+                  status: 'unknown',
+                  requestedFiles: baselineFiles,
+                  observedFiles: [],
+                  unobservedFiles: baselineFiles,
+                  reasons: ['baseline_capture_failed'],
+                },
+              }
+            }
+          }
+        }
+        const trustedValidation =
+          !capturedExternalAlias &&
+          !overrideTools?.[toolName as keyof typeof overrideTools] &&
+          (toolName === 'run_terminal_command' ||
+            toolName === 'run_file_change_hooks') &&
+          executionIdentity
+        const validationAttempt =
+          trustedValidation && validationReceipts
+            ? await validationReceipts.begin({
+                command:
+                  toolName === 'run_file_change_hooks'
+                    ? 'run_file_change_hooks'
+                    : String(toolInput.command ?? ''),
+                cwd:
+                  typeof toolInput.starting_directory === 'string'
+                    ? path.resolve(cwd ?? '.', toolInput.starting_directory)
+                    : (cwd ?? '.'),
+                actor: executionIdentity,
+                ...(toolName === 'run_file_change_hooks'
+                  ? {
+                      validationKind: 'file-change-hooks' as const,
+                      nativeHookCommands:
+                        capturedHookConfiguration.fileChangeHooks.map(
+                          (hook) => hook.command,
+                        ),
+                    }
+                  : {}),
+              })
+            : undefined
+        let externalHandlerEntered = false
+        let handled:
+          | (Awaited<ReturnType<typeof handleToolCall>> & {
+              workspaceState?: WorkspaceStateV1
+            })
+          | undefined
+        try {
+          handled = await handleToolCall({
+            action: {
+              type: 'tool-call-request',
+              requestId: trustedCallId,
+              userInputId,
+              toolName,
+              input,
+              mcpConfig: mcpConfig
+                ? resolveRunMcpConfig({
+                    mcpConfig,
+                    mcpReference,
+                    mcpAgentId,
+                    mcpServerName,
+                  })
+                : undefined,
+              mcpReference,
+              mcpAgentId,
+              mcpServerName,
+              mcpCatalogGeneration,
+            },
+            overrides: overrideTools ?? {},
+            onUnscopedHandlerEntered: () => {
+              externalHandlerEntered = true
+            },
+            shouldObserveUnknownMutation: () =>
+              externalHandlerEntered ||
+              hostServices.hasObservedTargetStart(executionContext.execution),
+            onFilesChanged,
+            onConfirmedWorkspaceTransition: (transition) => {
+              start?.workspaceBasis.confirmTransition(transition)
+            },
+            onFilesystemMutation: async (event) => {
+              if (
+                diagnosticBaseline &&
+                cwd &&
+                baselineEpochForCall === diagnosticBaselineEpoch
+              ) {
+                const afterHashes: Record<string, string | null> = {}
+                for (const changed of event.actions) {
+                  afterHashes[path.resolve(cwd, changed.path)] =
+                    changed.action === 'delete' || changed.action === 'move'
+                      ? null
+                      : changed.afterHash
+                  if (changed.destinationPath)
+                    afterHashes[path.resolve(cwd, changed.destinationPath)] =
+                      changed.afterHash
                 }
-                try {
-                  return workspaceJournal.advance({
-                    runId:
-                      sessionState.mainAgentState.runId ??
-                      sessionState.mainAgentState.agentId,
+                const files = diagnosticFileSet(
+                  cwd,
+                  diagnosticBaseline.coverage.requestedFiles,
+                )
+                const changedFiles = Object.keys(afterHashes).sort()
+                if (
+                  files.length > 0 &&
+                  files.length <= 32 &&
+                  files.length === changedFiles.length &&
+                  files.every((file, index) => file === changedFiles[index])
+                ) {
+                  pendingDiagnosticBaseline = {
+                    capture: diagnosticBaseline,
+                    cwd: path.resolve(cwd),
+                    files,
+                    mutationCallId: trustedCallId,
+                    workspaceRevision: event.workspaceRevision,
+                    workspaceSnapshotId: event.workspaceSnapshotId,
+                    afterHashes,
+                  }
+                }
+              } else if (isMutatingToolCall) {
+                pendingDiagnosticBaseline = undefined
+              }
+              if (onFilesystemMutation) await onFilesystemMutation(event)
+              else await onFilesChanged?.()
+            },
+            verifyExternalMutation,
+            getLanguageIntelligence,
+            diagnosticDelta: diagnosticDeltaHook,
+            executionContext,
+            planMode,
+            terminalTimeoutPolicy: hostServices.terminalTimeoutPolicy,
+            planTerminalHostProfiles:
+              start?.planTerminalHostProfiles ??
+              directOptions.planTerminalHostProfiles,
+            resources: scope.resources,
+            capturedHookConfiguration,
+            diagnosticPreflightEnabled,
+            terminalShell: hostServices.terminalShell,
+            getTerminalLaunchMetadata: hostServices.getTerminalLaunchMetadata,
+            prepareTransferredLaunch: (target) =>
+              backgroundReceiver.value.prepareLaunch(executionContext, target),
+            resolveMcpRequest: (config) =>
+              mcpExecution.request(config, scope, executionContext),
+            getBrowserExecution: () => {
+              capturedChromeExecutable ??= resolveChromeExecutable(
+                hostEnvironment,
+                snapshot.inputs.platform as NodeJS.Platform,
+                existsSync,
+              )
+              return Object.freeze({
+                ...executionContext,
+                resources: scope.resources,
+                executablePath: capturedChromeExecutable,
+                sandboxArgs: capturedChromeSandboxArgs,
+              })
+            },
+            customToolDefinitions: customToolDefinitions
+              ? Object.fromEntries(
+                  customToolDefinitions.map((def) => [def.toolName, def]),
+                )
+              : {},
+            cwd,
+            fs: actorFileSystem,
+            fileFilter,
+            filesystemPolicy,
+            intentLog,
+            brokerRecoveryBlocked,
+            trustedJobOwner,
+            logger,
+            capabilityIssuer: cwd
+              ? {
+                  projectId: cwd,
+                  runId:
+                    executionIdentity?.runId ??
+                    sessionState.mainAgentState.runId ??
+                    sessionState.mainAgentState.agentId,
+                }
+              : undefined,
+            env,
+            inheritEnv,
+            harnessStateDir: resolvedHarnessStateDir,
+            approvalReceiptIds,
+            approvalMode,
+            requestApproval,
+            approvedClientMcpTools,
+            approvalService,
+            harnessWorkspaceIdentity: workspaceJournal
+              ? {
+                  repositoryId: workspaceJournal.repositoryId,
+                  workspaceId: workspaceJournal.workspaceId,
+                }
+              : undefined,
+            getWorkspaceState: () => sessionState.mainAgentState.workspaceState,
+            setWorkspaceState: (state) => {
+              sessionState.mainAgentState.workspaceState = state
+            },
+            advanceWorkspaceJournal: workspaceJournal
+              ? (change) =>
+                  (() => {
+                    if (!workspaceJournal) {
+                      return advanceWorkspaceState(
+                        sessionState.mainAgentState.workspaceState,
+                        change,
+                      )
+                    }
+                    try {
+                      return workspaceJournal.advance({
+                        runId:
+                          sessionState.mainAgentState.runId ??
+                          sessionState.mainAgentState.agentId,
+                        ...change,
+                      })
+                    } catch (error) {
+                      logger?.warn(
+                        { error },
+                        'Workspace journal write failed; continuing with in-memory workspace state',
+                      )
+                      workspaceJournal = undefined
+                      return advanceWorkspaceState(
+                        sessionState.mainAgentState.workspaceState,
+                        change,
+                      )
+                    }
+                  })()
+              : undefined,
+            signal: executionContext.signal,
+          })
+        } finally {
+          if (!handled && validationAttempt)
+            await validationReceipts?.complete(validationAttempt, {})
+          // Unknown effects are journaled by the host once the actual target may
+          // have started, including failed/cancelled processes. Pre-launch refusals
+          // cannot advance state. This also covers programmatic terminal calls.
+          const metadata = toolNames.includes(toolName as ToolName)
+            ? toolMetadata[toolName as ToolName]
+            : undefined
+          const unscoped =
+            capturedExternalAlias ||
+            toolName === 'run_terminal_command' ||
+            toolName === 'run_file_change_hooks' ||
+            toolName === 'run_targeted_validation' ||
+            (metadata?.scheduling === 'global' && metadata.kind === 'other')
+          if (
+            (unscoped &&
+              hostServices.hasObservedTargetStart(
+                executionContext.execution,
+              )) ||
+            (externalHandlerEntered && !handled?.canonicalReceipt)
+          ) {
+            const change = {
+              source: `sdk:unscoped:${toolName}`,
+              operationId: trustedCallId,
+              actions: [{ action: 'unknown' as const }],
+            }
+            let state: WorkspaceStateV1
+            try {
+              state = workspaceJournal
+                ? workspaceJournal.advance({
+                    runId: trustedJobOwner.rootRunId,
                     ...change,
                   })
-                } catch (error) {
-                  logger?.warn(
-                    { error },
-                    'Workspace journal write failed; continuing with in-memory workspace state',
-                  )
-                  workspaceJournal = undefined
-                  return advanceWorkspaceState(
+                : advanceWorkspaceState(
                     sessionState.mainAgentState.workspaceState,
                     change,
                   )
-                }
-              })()
-          : undefined,
-        signal: toolSignal ?? runSignal,
-      })
-      const directOverride =
-        toolName === 'read_files'
-          ? overrideTools?.read_files
-          : overrideTools?.[toolName as Exclude<PublishedToolName, 'read_files'>]
-      const fallbackWriteOverride =
-        (toolName === 'str_replace' || toolName === 'create_plan') &&
-        overrideTools?.write_file
-      await memoryV2Coordinator?.recordToolObservation({
-        toolName,
-        callId: trustedCallId,
-        userInputId,
-        input,
-        output: handled.output,
-        workspaceState: sessionState.mainAgentState.workspaceState,
-        native:
-          toolNames.includes(toolName as ToolName) &&
-          !customToolDefinitions?.some((definition) => definition.toolName === toolName) &&
-          !directOverride &&
-          !fallbackWriteOverride,
-        mcp: Boolean(mcpConfig),
-      })
-      // Intercept the single dispatch path (model- and agent-initiated calls
-      // alike) so an unchanged list_jobs digest doesn't re-inject the full
-      // table into the conversation every step. The gate owns the returned
-      // output; the per-turn fingerprint lives in this closure.
-      if (toolName === 'list_jobs') {
-        const gated = applyListJobsDigestGate(
-          lastListJobsFingerprint,
-          handled.output,
-        )
-        lastListJobsFingerprint = gated.nextFingerprint
-        return { ...handled, output: gated.output }
-      } else if (toolName === 'git_status') {
-        // This interception runs AFTER the tool executed (`handled.output`),
-        // so every git_status observation still runs; only its context
-        // encoding is compacted when the worktree is byte-identical.
-        const gated = applyGitStatusGate(
-          lastGitStatusFingerprint,
-          handled.output,
-        )
-        lastGitStatusFingerprint = gated.nextFingerprint
-        return { ...handled, output: gated.output }
-      }
-      return handled
-    },
-    requestMcpToolData: async ({ mcpConfig, toolNames }) => {
-      const mcpClientId = await getMCPClient(mcpConfig)
-      const listToolsResult = await listMCPTools(mcpClientId)
-      const tools = listToolsResult.tools
-      const filteredTools: typeof tools = []
-      for (const tool of tools) {
-        if (!toolNames) {
-          filteredTools.push(tool)
-          continue
+            } catch (error) {
+              logger?.warn(
+                { error },
+                'Unknown-effect journal write failed; retaining in-memory invalidation',
+              )
+              workspaceJournal = undefined
+              state = advanceWorkspaceState(
+                sessionState.mainAgentState.workspaceState,
+                change,
+              )
+            }
+            sessionState.mainAgentState.workspaceState = state
+            sessionState.mainAgentState.readAuthorizationsByPath = {}
+            sessionState.mainAgentState.readAuthorizationHashesByPath = {}
+            sessionState.mainAgentState.rawReadAuthorizationHashesByPath = {}
+            sessionState.mainAgentState.confirmedPostEditAnchorsByPath = {}
+          }
         }
-        if (toolNames.includes(tool.name)) {
-          filteredTools.push(tool)
-          continue
+        if (validationAttempt) {
+          const nativeValues =
+            handled?.output
+              .filter((item) => item.type === 'json')
+              .map((item) => item.value) ?? []
+          const nativeResult =
+            nativeValues.length === 1 &&
+            nativeValues[0] &&
+            typeof nativeValues[0] === 'object'
+              ? (nativeValues[0] as Record<string, unknown>)
+              : undefined
+          await validationReceipts?.complete(
+            validationAttempt,
+            toolName === 'run_file_change_hooks'
+              ? { nativeHooksOutput: handled?.output }
+              : {
+                  exitCode:
+                    nativeResult &&
+                    !nativeResult.executionRefusal &&
+                    !nativeResult.errorMessage &&
+                    nativeResult.process_type !== 'BACKGROUND'
+                      ? typeof nativeResult.exitCode === 'number'
+                        ? nativeResult.exitCode
+                        : undefined
+                      : undefined,
+                },
+          )
         }
-      }
-
-      return filteredTools
-    },
-    requestFiles: ({ filePaths, ranges, capabilityIssuer }) => {
-      if (runSignal.aborted || terminalRequested) {
-        throw createAbortError(runSignal)
-      }
-      return readFiles({
+        handled = {
+          ...handled,
+          workspaceState: sessionState.mainAgentState.workspaceState
+            ? structuredClone(sessionState.mainAgentState.workspaceState)
+            : undefined,
+        }
+        const directOverride =
+          toolName === 'read_files'
+            ? overrideTools?.read_files
+            : overrideTools?.[
+                toolName as Exclude<PublishedToolName, 'read_files'>
+              ]
+        const fallbackWriteOverride =
+          (toolName === 'str_replace' || toolName === 'create_plan') &&
+          overrideTools?.write_file
+        await memoryV2Coordinator?.recordToolObservation({
+          toolName,
+          callId: trustedCallId,
+          userInputId,
+          input,
+          output: handled.output,
+          workspaceState: sessionState.mainAgentState.workspaceState,
+          native:
+            toolNames.includes(toolName as ToolName) &&
+            !customToolDefinitions?.some(
+              (definition) => definition.toolName === toolName,
+            ) &&
+            !directOverride &&
+            !fallbackWriteOverride,
+          mcp: Boolean(mcpConfig),
+        })
+        // Intercept the single dispatch path (model- and agent-initiated calls
+        // alike) so an unchanged list_jobs digest doesn't re-inject the full
+        // table into the conversation every step. The gate owns the returned
+        // output; the per-turn fingerprint lives in this closure.
+        if (toolName === 'list_jobs') {
+          const gated = applyListJobsDigestGate(
+            lastListJobsFingerprint,
+            handled.output,
+          )
+          lastListJobsFingerprint = gated.nextFingerprint
+          return { ...handled, output: gated.output }
+        } else if (toolName === 'git_status') {
+          // This interception runs AFTER the tool executed (`handled.output`),
+          // so every git_status observation still runs; only its context
+          // encoding is compacted when the worktree is byte-identical.
+          const gated = applyGitStatusGate(
+            lastGitStatusFingerprint,
+            handled.output,
+          )
+          lastGitStatusFingerprint = gated.nextFingerprint
+          return { ...handled, output: gated.output }
+        }
+        return handled
+      },
+      requestMcpToolData: async (request) => {
+        if (
+          isProjectOnlyReadPolicy(
+            fileSystemForActor(request.executionActor).hostReadPolicy,
+          )
+        )
+          throw new Error(
+            'strict_project_reads_unavailable: MCP discovery has no guarded read contract',
+          )
+        const scope = scopeForActor(request.executionActor)
+        const signal = request.signal
+          ? AbortSignal.any([runSignal, request.signal])
+          : runSignal
+        const registered = scope.operation({
+          signal,
+          profile: hostServices.profile,
+          limit: { kind: 'finite', durationMs: 15_000 },
+        })
+        if (!registered.ok) throw new ExecutionRefusalError(registered)
+        const config = resolveRunMcpConfig(request)
+        const access = await mcpExecution.request(
+          config,
+          scope,
+          registered.value,
+        )
+        try {
+          const catalog = await access.listToolCatalog({
+            signal: registered.value.signal,
+          })
+          return {
+            ...catalog,
+            origin: resolveMCPConfigOrigin(config),
+            tools: request.toolNames
+              ? catalog.tools.filter((tool) =>
+                  request.toolNames!.includes(tool.name),
+                )
+              : catalog.tools,
+          }
+        } finally {
+          access.release()
+        }
+      },
+      requestFiles: ({
         filePaths,
         ranges,
-        override: overrideTools?.read_files,
-        fileFilter,
-        cwd,
-        fs,
-        signal: runSignal,
         capabilityIssuer,
-      })
-    },
-    requestOptionalFile: async ({ filePath }) => {
-      if (runSignal.aborted || terminalRequested) {
-        throw createAbortError(runSignal)
-      }
-      // File-editing tools (str_replace / write_file) validate and
-      // apply against this content, so it MUST be the full, untruncated file. The
-      // regular read_files rendering truncates large files at 100k chars for the
-      // model; using that here corrupts edit validation (e.g. a 4,499-line file
-      // appears to have only ~2,889 lines, rejecting valid basedOnRead anchors).
-      const override = overrideTools?.read_files
-      if (override) {
-        const raw = await executeOverride({
-          override,
-          input: { filePaths: [filePath] },
-          signal: runSignal,
-        })
-        const item = normalizeReadFilesOverrideResult({
-          filePaths: [filePath],
-          raw,
-        }).results[0]
+        executionActor,
+        executionIdentity,
+        signal: requestSignal,
+      }) => {
+        const actorFileSystem = fileSystemForActor(executionActor)
+        if (executionIdentity) {
+          contextForRegisteredAction(executionIdentity)
+          if (
+            !executionActor ||
+            actorKey(executionActor) !== actorKey(executionIdentity)
+          )
+            throw new Error(
+              'Read attribution does not match its registered action',
+            )
+        }
         if (
-          item?.selector === 'file' &&
-          item.status === 'ok' &&
-          item.complete &&
-          typeof item.content === 'string'
+          executionActor &&
+          capabilityIssuer &&
+          (capabilityIssuer.runId !== executionActor.runId ||
+            capabilityIssuer.projectId !== cwd)
+        )
+          throw new Error(
+            'Read issuer does not match its registered actor/project',
+          )
+        const readSignal = requestSignal
+          ? AbortSignal.any([runSignal, requestSignal])
+          : runSignal
+        if (readSignal.aborted || terminalRequested) {
+          throw createAbortError(readSignal)
+        }
+        if (
+          isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
+          (overrideTools?.read_files ||
+            !hasGuardedProjectReads(actorFileSystem))
         ) {
-          return item.content
+          return Promise.resolve(
+            buildReadFilesResultV1(
+              [
+                ...filePaths.map((path) => ({
+                  selector: 'file' as const,
+                  path,
+                })),
+                ...(ranges ?? []).map((range) => ({
+                  selector: 'range' as const,
+                  path: range.path,
+                })),
+              ].map((selector, requestIndex) => ({
+                ...selector,
+                requestIndex,
+                status: 'error' as const,
+                error: {
+                  code: 'unsupported' as const,
+                  message:
+                    'Strict project reads are unavailable for this adapter or override.',
+                  retryable: false,
+                },
+              })),
+            ),
+          )
         }
-        if (item?.status === 'error' && item.error.code === 'not_found') {
-          return null
-        }
-        const code = item?.status === 'error' ? item.error.code : 'too_large'
-        const message =
-          item?.status === 'error'
-            ? item.error.message
-            : 'The file was not returned as a complete editable snapshot.'
-        throw new Error(`read_files ${code}: ${message}`)
-      }
-      const read = await getFileForEditResult({
+        return readFiles({
+          filePaths,
+          ranges,
+          override: overrideTools?.read_files,
+          fileFilter,
+          cwd,
+          fs: actorFileSystem,
+          signal: readSignal,
+          capabilityIssuer,
+        })
+      },
+      requestOptionalFile: async ({
         filePath,
-        cwd: requireCwd(cwd, 'read_files'),
-        fs,
-        fileFilter,
-      })
-      if (read.status === 'found') return read.content
-      if (read.status === 'not_found') return null
-      throw new Error(`read_files ${read.status}: ${read.error.message}`)
-    },
-    fileSystem: fs,
-    fileFilter,
-    sendAction: ({ action }) => {
-      if (!callbacksEnabled || terminalRequested) {
-        return
-      }
-      if (action.type === 'action-error') {
-        return enqueueCallback(() => onError({ message: action.message }))
-      }
-      if (action.type === 'response-chunk') {
-        return enqueueCallback(() => onResponseChunk(action))
-      }
-      if (action.type === 'subagent-response-chunk') {
-        return enqueueCallback(() => onSubagentResponseChunk(action))
-      }
-      if (action.type === 'prompt-response') {
-        handlePromptResponse({
-          action,
-          resolve: resolveTerminal,
-          onError,
-          initialSessionState: sessionState,
+        executionActor,
+        executionIdentity,
+        signal: requestSignal,
+      }) => {
+        const actorFileSystem = fileSystemForActor(executionActor)
+        if (executionIdentity) {
+          contextForRegisteredAction(executionIdentity)
+          if (
+            !executionActor ||
+            actorKey(executionActor) !== actorKey(executionIdentity)
+          )
+            throw new Error(
+              'Read attribution does not match its registered action',
+            )
+        }
+        if (
+          isProjectOnlyReadPolicy(actorFileSystem.hostReadPolicy) &&
+          (overrideTools?.read_files ||
+            !hasGuardedProjectReads(actorFileSystem))
+        )
+          throw new Error(
+            'Strict project reads are unavailable for this adapter or override.',
+          )
+        const readSignal = requestSignal
+          ? AbortSignal.any([runSignal, requestSignal])
+          : runSignal
+        if (readSignal.aborted || terminalRequested) {
+          throw createAbortError(readSignal)
+        }
+        // File-editing tools (str_replace / write_file) validate and
+        // apply against this content, so it MUST be the full, untruncated file. The
+        // regular read_files rendering truncates large files at 100k chars for the
+        // model; using that here corrupts edit validation (e.g. a 4,499-line file
+        // appears to have only ~2,889 lines, rejecting valid basedOnRead anchors).
+        const override = overrideTools?.read_files
+        if (override) {
+          const raw = await executeOverride({
+            override,
+            input: { filePaths: [filePath] },
+            signal: readSignal,
+          })
+          const item = normalizeReadFilesOverrideResult({
+            filePaths: [filePath],
+            raw,
+          }).results[0]
+          if (
+            item?.selector === 'file' &&
+            item.status === 'ok' &&
+            item.complete &&
+            item.metadataComplete === true &&
+            typeof item.rawSourceContent === 'string' &&
+            item.editAnchor
+          ) {
+            const decoded = decodeReadCapabilityToken(
+              item.editAnchor.readCapability,
+            )
+            if (
+              typeof decoded !== 'string' &&
+              decoded.tokenVersion === 'v4' &&
+              decoded.rawBasis?.scope === 'whole'
+            ) {
+              const document = captureTextDocument(
+                item.rawSourceContent,
+                decoded.rawBasis,
+              )
+              if (
+                item.content === document.observation &&
+                decoded.hash === document.observationHash &&
+                decoded.startLine === 1 &&
+                decoded.endLine === document.maxCapabilityLine &&
+                rawReadBasesMatch(item.editAnchor.rawBasis, decoded.rawBasis) &&
+                rawReadBasesMatch(
+                  decoded.rawBasis,
+                  getRawReadBasis(
+                    document,
+                    1,
+                    document.maxCapabilityLine,
+                    'whole',
+                  ),
+                )
+              ) {
+                if (readSignal.aborted) throw createAbortError(readSignal)
+                // Current raw view for edit freshness only; this callback never mints authority.
+                return document.rawText
+              }
+            }
+          }
+          if (item?.status === 'error' && item.error.code === 'not_found') {
+            return null
+          }
+          const code = item?.status === 'error' ? item.error.code : 'stale_read'
+          const message =
+            item?.status === 'error'
+              ? item.error.message
+              : 'The override did not return an authenticated complete lossless source view. Rendered text cannot supply raw edit authority.'
+          throw new Error(`read_files ${code}: ${message}`)
+        }
+        const read = await getFileForEditResult({
+          filePath,
+          cwd: requireCwd(cwd, 'read_files'),
+          fs: actorFileSystem,
+          fileFilter,
+          signal: readSignal,
         })
-        return
-      }
-      if (action.type === 'prompt-error') {
-        handlePromptResponse({
-          action,
-          resolve: resolveTerminal,
-          onError,
-          initialSessionState: sessionState,
-        })
-        return
-      }
-      return undefined
-    },
-    sendSubagentChunk: ({
-      userInputId,
-      agentId,
-      agentType,
-      chunk,
-      prompt,
-      forwardToPrompt = true,
-    }) => {
-      if (!callbacksEnabled || terminalRequested) {
-        return
-      }
-      onSubagentResponseChunk({
-        type: 'subagent-response-chunk',
+        if (readSignal.aborted) throw createAbortError(readSignal)
+        if (read.status === 'found') return read.content
+        if (read.status === 'not_found') return null
+        throw new Error(`read_files ${read.status}: ${read.error.message}`)
+      },
+      fileSystem: admittedRootReadFileSystem,
+      fileFilter,
+      sendAction: ({ action }) => {
+        if (!callbacksEnabled || terminalRequested) {
+          return
+        }
+        if (action.type === 'action-error') {
+          return enqueueCallback(() => onError({ message: action.message }))
+        }
+        if (action.type === 'response-chunk') {
+          return enqueueCallback(() => onResponseChunk(action))
+        }
+        if (action.type === 'subagent-response-chunk') {
+          return enqueueCallback(() => onSubagentResponseChunk(action))
+        }
+        if (action.type === 'prompt-response') {
+          handlePromptResponse({
+            action,
+            resolve: resolveTerminal,
+            onError,
+            initialSessionState: sessionState,
+          })
+          return
+        }
+        if (action.type === 'prompt-error') {
+          handlePromptResponse({
+            action,
+            resolve: resolveTerminal,
+            onError,
+            initialSessionState: sessionState,
+          })
+          return
+        }
+        return undefined
+      },
+      sendSubagentChunk: ({
         userInputId,
         agentId,
         agentType,
         chunk,
         prompt,
-        forwardToPrompt,
-      })
-    },
-  })
+        forwardToPrompt = true,
+        chunkKind,
+        ancestorRunIds,
+      }) => {
+        if (!callbacksEnabled || terminalRequested) {
+          return
+        }
+        onSubagentResponseChunk({
+          type: 'subagent-response-chunk',
+          userInputId,
+          agentId,
+          agentType,
+          chunk,
+          prompt,
+          forwardToPrompt,
+          chunkKind,
+          ancestorRunIds,
+        })
+      },
+    })
 
-  // Send input
-  const userInfo = await agentRuntimeImpl.getUserInfoFromApiKey({
-    ...agentRuntimeImpl,
-    apiKey,
-    fields: ['id'],
-  })
-  if (!userInfo) {
-    if (timeoutHandle) clearTimeout(timeoutHandle)
-    const terminalState = getCancelledRunState('Invalid API key or user not found')
-    if (memoryV2Coordinator) {
-      await raceAgainstAbort(
-        memoryV2Coordinator.finishTurn({
-          agentState: terminalState.sessionState!.mainAgentState,
-          output: terminalState.output,
-          signal: runSignal,
-        }),
-        runSignal,
-      ).catch(() => {})
-    }
-    return terminalState
-  }
-
-  const userId = userInfo.id
-
-  if (runSignal.aborted) {
-    resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
-    const terminalState = await terminalPromise
-    await callbackQueue
-    callbacksEnabled = false
-    unsubscribeJobEvents()
-    if (timeoutHandle) clearTimeout(timeoutHandle)
-    if (terminalState.sessionState && memoryV2Coordinator) {
-      await raceAgainstAbort(
-        memoryV2Coordinator.finishTurn({
+    // Send input
+    const userInfo = await raceAgainstAbort(
+      agentRuntimeImpl.getUserInfoFromApiKey({
+        ...agentRuntimeImpl,
+        apiKey,
+        fields: ['id'],
+      }),
+      runSignal,
+    ).catch((error) => {
+      if (!runSignal.aborted) throw error
+      return null
+    })
+    if (runSignal.aborted) {
+      resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
+      const terminalState = await terminalPromise
+      await callbackQueue
+      callbacksEnabled = false
+      unsubscribeJobEvents()
+      if (terminalState.sessionState && memoryV2Coordinator) {
+        await finishMemoryV2Turn({
+          coordinator: memoryV2Coordinator,
           agentState: terminalState.sessionState.mainAgentState,
           output: terminalState.output,
           signal: runSignal,
-        }),
-        runSignal,
-      ).catch(() => {})
-    }
-    return terminalState
-  }
-
-  const promptExecution = callMainPrompt({
-    ...agentRuntimeImpl,
-    promptId,
-    action: {
-      type: 'prompt',
-      promptId,
-      prompt,
-      promptParams: params,
-      content: preparedContent,
-      fingerprintId: fingerprintId,
-      costMode: costMode ?? 'normal',
-      sessionState,
-      toolResults: extraToolResults ?? [],
-      agentId,
-    },
-    repoUrl: undefined,
-    repoId: undefined,
-    clientSessionId: promptId,
-    userId,
-    extraCodebuffMetadata,
-    signal: runSignal,
-    onCheckpoint,
-    resumeInterruptedTurn,
-  })
-    .then((result) => {
-      resolveTerminal(result)
-    })
-    .catch((error) => {
-      let errorMessage =
-        error instanceof Error ? error.message : String(error ?? '')
-      const apiErrorDetails = extractApiErrorDetails(error)
-      const statusCode = apiErrorDetails.statusCode ?? getErrorStatusCode(error)
-      const {
-        countryBlockReason,
-        countryCode,
-        errorCode,
-        ipPrivacySignals,
-        message: parsedMessage,
-      } = apiErrorDetails
-      if (parsedMessage) {
-        errorMessage = parsedMessage
+          logger,
+        })
       }
+      return terminalState
+    }
+    if (!userInfo) {
+      const terminalState = getCancelledRunState(
+        'Invalid API key or user not found',
+        'failed',
+      )
+      if (memoryV2Coordinator) {
+        await finishMemoryV2Turn({
+          coordinator: memoryV2Coordinator,
+          agentState: terminalState.sessionState!.mainAgentState,
+          output: terminalState.output,
+          signal: runSignal,
+          logger,
+        })
+      }
+      // Terminal path: dispose the process-wide jobRegistry listener so it does
+      // not leak across runs (same invariant as the aborted path below).
+      callbacksEnabled = false
+      unsubscribeJobEvents()
+      return terminalState
+    }
 
-      resolveTerminal({
-        sessionState: getCancelledSessionState(errorMessage),
-        output: {
-          type: 'error',
-          message: errorMessage,
-          ...(statusCode !== undefined && { statusCode }),
-          ...(errorCode !== undefined && { error: errorCode }),
-          ...(countryCode !== undefined && { countryCode }),
-          ...(countryBlockReason !== undefined && { countryBlockReason }),
-          ...(ipPrivacySignals !== undefined && { ipPrivacySignals }),
-        },
-      })
+    const userId = userInfo.id
+
+    let settledRuntimeState: RunState | undefined
+    const promptExecution = callMainPrompt({
+      ...(outputSchema !== undefined ? { runOutputSchema: outputSchema } : {}),
+      ...agentRuntimeImpl,
+      promptId,
+      action: {
+        type: 'prompt',
+        promptId,
+        prompt,
+        promptParams: params,
+        content: preparedContent,
+        fingerprintId: fingerprintId,
+        costMode: costMode ?? 'normal',
+        sessionState,
+        toolResults: extraToolResults ?? [],
+        agentId,
+      },
+      repoUrl: undefined,
+      repoId: undefined,
+      clientSessionId: promptId,
+      userId,
+      extraCodebuffMetadata,
+      signal: runSignal,
+      onCheckpoint,
+      resumeInterruptedTurn,
+      maxMissingOutputRetries,
     })
+      .then((result) => {
+        settledRuntimeState = result
+        resolveTerminal(result)
+      })
+      .catch((error) => {
+        let errorMessage =
+          error instanceof Error ? error.message : String(error ?? '')
+        const apiErrorDetails = extractApiErrorDetails(error)
+        const statusCode =
+          apiErrorDetails.statusCode ?? getErrorStatusCode(error)
+        const {
+          countryBlockReason,
+          countryCode,
+          errorCode,
+          ipPrivacySignals,
+          message: parsedMessage,
+        } = apiErrorDetails
+        if (parsedMessage) {
+          errorMessage = parsedMessage
+        }
 
-  const terminalState = await terminalPromise
-  // A timeout/cancel first aborts the shared signal; cooperative runtime and
-  // tools then unwind. Legacy overrides are raced against that signal, so a
-  // non-cooperative promise cannot hold the public run open or publish late
-  // output. Normal completion also waits for callMainPrompt's cleanup.
-  await promptExecution
-  await callbackQueue
-  callbacksEnabled = false
-  unsubscribeJobEvents()
-  if (timeoutHandle) clearTimeout(timeoutHandle)
-  await stopBrowserSessionsByOwner({
-    // Same resolved owner identity the job tools scope by: browser sessions
-    // follow the stable session seed (not the per-turn promptId), so
-    // browses opened this run are still owned next turn until stopped here.
-    clientSessionId: trustedJobOwner.clientSessionId,
-  })
-  const cleanupLibrarianClone = (cloneDir: string) => {
+        resolveTerminal({
+          sessionState: getCancelledSessionState(errorMessage),
+          runOutcome: {
+            termination: runDeadlineExceeded
+              ? 'deadline_exhausted'
+              : runSignal.aborted
+                ? 'cancelled'
+                : 'failed',
+            cause: {
+              code: runDeadlineExceeded
+                ? 'run_deadline_exhausted'
+                : runSignal.aborted
+                  ? 'run_cancelled'
+                  : 'runtime_error',
+              message: errorMessage,
+            },
+          },
+          output: {
+            type: 'error',
+            message: errorMessage,
+            ...(statusCode !== undefined && { statusCode }),
+            ...(errorCode !== undefined && { error: errorCode }),
+            ...(countryCode !== undefined && { countryCode }),
+            ...(countryBlockReason !== undefined && { countryBlockReason }),
+            ...(ipPrivacySignals !== undefined && { ipPrivacySignals }),
+          },
+        })
+      })
+
+    let terminalState = await terminalPromise
+    // A timeout/cancel first aborts the shared signal; cooperative runtime and
+    // tools then unwind. Legacy overrides are raced against that signal, so a
+    // non-cooperative promise cannot hold the public run open or publish late
+    // output. Normal completion also waits for callMainPrompt's cleanup.
+    await promptExecution
+    // Cancellation may resolve before the runtime records its last in-flight
+    // action. Preserve that settled evidence after unwinding, without changing
+    // the selected terminal reason or the interruption transcript.
+    const settledActions =
+      settledRuntimeState?.sessionState?.mainAgentState.actionOutcomes ??
+      sessionState.mainAgentState.actionOutcomes
+    if (settledActions) {
+      terminalState = projectRunOutcomes({
+        ...terminalState,
+        actionOutcomes: settledActions,
+      })
+    }
+    await callbackQueue
+    callbacksEnabled = false
+    unsubscribeJobEvents()
+    hostServices.rootSignal.removeEventListener('abort', markRootDeadline)
+    await stopBrowserSessionsByOwner({
+      // Same resolved owner identity the job tools scope by: browser sessions
+      // follow the stable session seed (not the per-turn promptId), so
+      // browses opened this run are still owned next turn until stopped here.
+      clientSessionId: trustedJobOwner.clientSessionId,
+    })
+    // Dispose warm language servers; no-op when no language-intelligence tool ran.
     try {
-      rmSync(cloneDir, { recursive: true, force: true })
+      await languageIntelligenceService?.dispose()
     } catch {
-      // Best-effort cleanup; the path is constrained to an owned /tmp prefix.
+      // best-effort
     }
-  }
-  for (const cloneDir of ownedLibrarianCloneDirs) {
-    if (terminalState.output.type === 'error') {
-      cleanupLibrarianClone(cloneDir)
-      continue
+    const cleanupLibrarianClone = (cloneDir: string) => {
+      try {
+        rmSync(cloneDir, { recursive: true, force: true })
+      } catch {
+        // Best-effort cleanup; the path is constrained to an owned /tmp prefix.
+      }
     }
-    // Keep successful clones alive long enough for the parent to inspect the
-    // returned relevantFiles. Bound the lifetime to avoid permanent leaks.
-    const cleanupTimer = setTimeout(
-      () => cleanupLibrarianClone(cloneDir),
-      30 * 60 * 1000,
-    )
-    cleanupTimer.unref?.()
-  }
-  if (callbackFailure) {
-    logger?.warn(
-      { error: callbackFailure },
-      'Run completed after one or more client callbacks failed',
-    )
-  }
-  if (terminalState.sessionState && memoryV2Coordinator) {
-    await raceAgainstAbort(
-      memoryV2Coordinator.finishTurn({
+    for (const cloneDir of ownedLibrarianCloneDirs) {
+      if (terminalState.output.type === 'error') {
+        cleanupLibrarianClone(cloneDir)
+        continue
+      }
+      // Keep successful clones alive long enough for the parent to inspect the
+      // returned relevantFiles. Bound the lifetime to avoid permanent leaks.
+      const cleanupTimer = setTimeout(
+        () => cleanupLibrarianClone(cloneDir),
+        30 * 60 * 1000,
+      )
+      cleanupTimer.unref?.()
+    }
+    if (callbackFailure) {
+      logger?.warn(
+        { error: callbackFailure },
+        'Run completed after one or more client callbacks failed',
+      )
+    }
+    if (terminalState.sessionState && memoryV2Coordinator) {
+      await finishMemoryV2Turn({
+        coordinator: memoryV2Coordinator,
         agentState: terminalState.sessionState.mainAgentState,
         output: terminalState.output,
         signal: runSignal,
-      }),
-      runSignal,
-    ).catch(() => {})
+        logger,
+      })
+    }
+    // Persist task memory whenever a cwd is set. The gate lives in
+    // persistRunTaskMemory and deliberately ignores output.type, so cancelled,
+    // aborted, and errored runs still contribute the committed memory the
+    // session produced (saveMergedTaskMemory merges rather than overwrites).
+    // Do not re-add an output.type === 'error' gate here.
+    await persistRunTaskMemory({
+      cwd,
+      terminalState,
+      priorMemory: hydratedTaskMemory,
+      fs,
+      logger,
+    })
+    return terminalState
+  } finally {
+    ;(validationReceipts as { close?: () => void } | undefined)?.close?.()
   }
-  // Persist task memory whenever a cwd is set. The gate lives in
-  // persistRunTaskMemory and deliberately ignores output.type, so cancelled,
-  // aborted, and errored runs still contribute the committed memory the
-  // session produced (saveMergedTaskMemory merges rather than overwrites).
-  // Do not re-add an output.type === 'error' gate here.
-  await persistRunTaskMemory({
-    cwd,
-    terminalState,
-    priorMemory: hydratedTaskMemory,
-    fs,
-    logger,
-  })
-  return terminalState
+}
+
+/** Host correlation of completed metadata; never creates an execution operation. */
+export function buildNativeToolObservationReporter(params: {
+  coordinator?: Pick<MemoryV2Coordinator, 'recordToolObservation'>
+  registeredActor: (
+    actor: ExecutionActor,
+  ) => Readonly<{ actor: ExecutionActor; userInputId?: string }> | undefined
+  registeredAction: (identity: ToolExecutionIdentity) =>
+    | Readonly<{
+        identity: ToolExecutionIdentity
+        toolName: string
+        nativeObservation?: Readonly<{
+          inputHash?: string
+          signal: AbortSignal
+        }>
+      }>
+    | undefined
+  workspaceState: () => WorkspaceStateV1 | undefined
+  logger?: Pick<Logger, 'warn'>
+}): AgentRuntimeDeps['onNativeToolObservation'] {
+  const coordinator = params.coordinator
+  // Configuration, not repository availability, decides whether the seam exists.
+  if (!coordinator) return undefined
+  const delivered = new Set<string>()
+  const sameActor = (left: ExecutionActor, right: ExecutionActor) =>
+    left.runId === right.runId &&
+    left.rootRunId === right.rootRunId &&
+    left.agentId === right.agentId
+  return async (observation) => {
+    try {
+      const actor = params.registeredActor(observation.actor)
+      const start = params.registeredAction(observation.executionIdentity)
+      const input = toolParams.record_decision.inputSchema.safeParse(
+        observation.input,
+      )
+      const output = toolParams.record_decision.outputSchema.safeParse(
+        observation.output,
+      )
+      if (
+        !actor ||
+        !start ||
+        !sameActor(actor.actor, observation.actor) ||
+        !sameActor(actor.actor, start.identity) ||
+        hashActionInput(
+          'openbuff.native-observation-identity.v1',
+          start.identity,
+        ) !==
+          hashActionInput(
+            'openbuff.native-observation-identity.v1',
+            observation.executionIdentity,
+          ) ||
+        observation.toolName !== 'record_decision' ||
+        start.toolName !== 'record_decision' ||
+        observation.callId !== start.identity.actionId ||
+        !actor.userInputId ||
+        observation.userInputId !== actor.userInputId ||
+        !start.nativeObservation?.inputHash ||
+        start.nativeObservation.inputHash !==
+          hashActionInput('record_decision', observation.input) ||
+        observation.signal !== start.nativeObservation.signal ||
+        !input.success ||
+        start.nativeObservation.inputHash !==
+          hashActionInput('record_decision', input.data) ||
+        !output.success ||
+        observation.output.some((part) => 'errorMessage' in part.value)
+      )
+        throw new Error(
+          'Native tool observation does not match its private actor/action registration',
+        )
+      // The original identity/basis stays intact. Its separate metadata hash
+      // correlates the parser's final defaults/trim/repairs, not fresh authority.
+      const key = JSON.stringify([
+        actor.actor.rootRunId,
+        actor.actor.runId,
+        actor.actor.agentId,
+        start.identity.actionId,
+        start.identity.attemptId,
+      ])
+      if (delivered.has(key)) return
+      delivered.add(key)
+      await coordinator.recordToolObservation({
+        toolName: 'record_decision',
+        callId: observation.callId,
+        userInputId: actor.userInputId,
+        input: cloneDeep(input.data),
+        output: cloneDeep(output.data),
+        workspaceState: params.workspaceState(),
+        native: true,
+        mcp: false,
+        completed: true,
+      })
+    } catch (error) {
+      try {
+        params.logger?.warn(
+          { error },
+          'Native tool observation is unconfirmed (non-fatal)',
+        )
+      } catch {
+        /* Metadata reporting cannot change the completed native result. */
+      }
+    }
+  }
+}
+
+/**
+ * Memory-overhaul P4 build-order item 2: builds the playbook-gate outcome
+ * reporter wired into this run's agent-runtime deps, so gate verdicts reach
+ * the persisted effectiveness counters in production runs (design record
+ * .agents/sessions/memory-overhaul-2026-10/design-phase2-4-rederived.md
+ * §P4 build order).
+ *
+ * PURE helper, exported for tests (the applyListJobsDigestGate precedent):
+ * it references only the `repository` PARAMETER and the supplied `logger`,
+ * never runOnce closure state. Returns `undefined` when no Memory V2
+ * repository is configured or the repository lacks the optional
+ * `recordPlaybookGateOutcome` member (fakes and backends without playbook
+ * support), in which case the runtime deps carry no `onPlaybookGateOutcome`
+ * key at all and the run stays byte-identical to an unwired one.
+ *
+ * The returned closure forwards the STORE signature —
+ * `recordPlaybookGateOutcome(event.playbookId, event.outcome)` — never the
+ * whole event (`triggerSignature` is not a store parameter), and satisfies
+ * the AgentRuntimeDeps contract: it NEVER throws and NEVER rejects. A
+ * synchronous store throw is caught and a rejected store promise gets a
+ * `.catch()`; both log at debug and no-op. That is the deliberate
+ * wiring-site decision: a failed report must not affect the gated tool call,
+ * including a store throw like 'The playbook was not found.' (mid-session
+ * retirement). The store member is bound to the repository once here so the
+ * receiver survives the detached call (it may be a class method).
+ */
+export function buildPlaybookGateOutcomeReporter(
+  repository: MemoryV2ClientConfig['repository'] | undefined,
+  logger?: Logger,
+): ((event: PlaybookGateOutcomeEvent) => void) | undefined {
+  if (!repository?.recordPlaybookGateOutcome) {
+    return undefined
+  }
+  const record = repository.recordPlaybookGateOutcome.bind(repository)
+  const logFailure = (error: unknown) =>
+    logger?.debug?.({ error }, 'Failed to record playbook gate outcome')
+  return (event) => {
+    try {
+      record(event.playbookId, event.outcome).catch(logFailure)
+    } catch (error) {
+      logFailure(error)
+    }
+  }
 }
 
 /**
@@ -1746,23 +4648,44 @@ export async function handleToolCall({
   fs,
   fileFilter,
   filesystemPolicy,
+  intentLog,
+  brokerRecoveryBlocked = false,
   trustedJobOwner,
   capabilityIssuer,
   logger,
   env,
+  inheritEnv = true,
   harnessStateDir,
   approvalReceiptIds,
   approvalMode,
   requestApproval,
+  approvedClientMcpTools,
   approvalService,
   harnessWorkspaceIdentity,
   getWorkspaceState,
   setWorkspaceState,
   advanceWorkspaceJournal,
+  onConfirmedWorkspaceTransition,
+  onUnscopedHandlerEntered,
+  shouldObserveUnknownMutation,
   onFilesChanged,
   onFilesystemMutation,
   verifyExternalMutation,
-  signal,
+  getLanguageIntelligence,
+  diagnosticDelta,
+  executionContext,
+  planMode = false,
+  terminalTimeoutPolicy,
+  planTerminalHostProfiles,
+  resources,
+  capturedHookConfiguration,
+  diagnosticPreflightEnabled,
+  terminalShell,
+  getTerminalLaunchMetadata,
+  prepareTransferredLaunch,
+  resolveMcpRequest,
+  getBrowserExecution,
+  signal: requestedSignal,
 }: {
   action: ServerAction<'tool-call-request'>
   overrides: NonNullable<OpenbuffClientOptions['overrideTools']>
@@ -1771,16 +4694,25 @@ export async function handleToolCall({
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
   filesystemPolicy?: FilesystemAuthorityPolicy
+  /** Durable intent authority for this workspace. */
+  intentLog?: TransactionIntentLog
+  /** Broker initialization discovered unfinished workspace effects. */
+  brokerRecoveryBlocked?: boolean
   /** Trusted owner injected into every process-job op; never model-derived. */
   trustedJobOwner: JobOwner
   capabilityIssuer?: ReadCapabilityIssuer
   logger?: Logger
-  env?: Record<string, string>
-  harnessStateDir: string
+  env?: Record<string, string | undefined>
+  inheritEnv?: boolean
+  harnessStateDir?: string
   approvalReceiptIds: string[]
   approvalMode: HarnessApprovalMode
   requestApproval?: OpenbuffClientOptions['requestApproval']
-  approvalService: HarnessApprovalService
+  /** Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+   * Optional so existing direct callers/tests keep working; when absent, the
+   * gate still enforces approval but with a fresh local set for this call. */
+  approvedClientMcpTools?: Set<string>
+  approvalService?: HarnessApprovalService
   harnessWorkspaceIdentity?: {
     repositoryId: string
     workspaceId: string
@@ -1793,15 +4725,69 @@ export async function handleToolCall({
     receiptId?: string
     actions: FilesystemMutationEvent['actions']
   }) => WorkspaceStateV1
+  /** Private composition callback, invoked only for a canonical local transition before LSP sync. */
+  onConfirmedWorkspaceTransition?: (
+    transition: ConfirmedWorkspaceTransition,
+  ) => void
+  onUnscopedHandlerEntered?: () => void
+  shouldObserveUnknownMutation?: () => boolean
   onFilesChanged?: OpenbuffClientOptions['onFilesChanged']
   onFilesystemMutation?: OpenbuffClientOptions['onFilesystemMutation']
   verifyExternalMutation?: OpenbuffClientOptions['verifyExternalMutation']
+  /**
+   * P3-T2 (LI-01): lazily builds/returns this run's shared language-intelligence
+   * service. Optional so existing direct `handleToolCall` callers keep working;
+   * when absent the four LSP read tools fall back to a spawner-less service that
+   * degrades each query into a structured result instead of throwing.
+   */
+  getLanguageIntelligence?: () => LanguageIntelligenceService
+  /** Audit fix (B): fail-open diagnostic-delta preflight injector threaded
+   * into run_file_change_hooks (and forwarded to run_targeted_validation).
+   * Optional so existing direct callers/tests keep working; absent means the
+   * preflight seam stays off. The OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check
+   * lives inside runFileChangeHooks. */
+  diagnosticDelta?: DiagnosticDeltaHook
+  executionContext?: ExecutionAdapterContext
+  planMode?: boolean
+  terminalTimeoutPolicy?: TerminalTimeoutPolicy
+  planTerminalHostProfiles?: readonly ProfileRequest['policy'][]
+  resources?: BoundResourceFactory
+  capturedHookConfiguration?: CapturedHookConfiguration
+  diagnosticPreflightEnabled?: boolean
+  terminalShell?: Parameters<typeof runTerminalCommand>[0]['terminalShell']
+  getTerminalLaunchMetadata?: Parameters<
+    typeof runTerminalCommand
+  >[0]['getTerminalLaunchMetadata']
+  prepareTransferredLaunch?: Parameters<
+    typeof runTerminalCommand
+  >[0]['prepareTransferredLaunch']
+  resolveMcpRequest?: (config: MCPConfig) => Promise<MediatedMcpRequest>
+  getBrowserExecution?: () => Parameters<typeof browserLogs>[2]
   signal?: AbortSignal
 }): Promise<{
   output: ToolResultOutput[]
   canonicalReceipt?: CommitReceiptV1
 }> {
   const toolName = action.toolName
+  const signal = executionContext?.signal ?? requestedSignal
+  const lspRequest = executionContext
+    ? { execution: executionContext.execution, signal }
+    : undefined
+  // P3-T2 (LI-01): resolve the shared language-intelligence service. runOnce
+  // injects a getter closing over this run's spawn/cwd; direct handleToolCall
+  // callers (tests) fall back to a spawner-less service whose queries degrade
+  // into a structured errorMessage result rather than throwing.
+  let fallbackLanguageIntelligence: LanguageIntelligenceService | undefined
+  const resolveLanguageIntelligence = (): LanguageIntelligenceService => {
+    if (getLanguageIntelligence) return getLanguageIntelligence()
+    fallbackLanguageIntelligence ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+      // Direct handleToolCall callers (tests) run against THIS call's fs, so
+      // the splice seam is still filesystem-owned rather than raw node disk.
+      fs,
+    })
+    return fallbackLanguageIntelligence
+  }
   const input =
     typeof action.input === 'string'
       ? parseJsonBounded(action.input)
@@ -1812,21 +4798,164 @@ export async function handleToolCall({
   if (signal?.aborted) {
     throw createAbortError(signal)
   }
+  if (
+    isProjectOnlyReadPolicy(fs.hostReadPolicy) &&
+    (!isStrictProjectReadToolSupported(toolName) ||
+      action.mcpConfig ||
+      customToolDefinitions[toolName] ||
+      overrides[toolName as PublishedToolName] ||
+      !hasGuardedProjectReads(fs))
+  ) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            errorCode: 'strict_project_reads_unavailable',
+            errorMessage: `strict_project_reads_unavailable: ${toolName} has no verified guarded project-only read view.`,
+          },
+        },
+      ],
+    }
+  }
+
+  // Recheck before invoking a participating mutator, including overrides.
+  // A pending intent is an operator recovery condition, not a stale read.
+  if (!action.mcpConfig && RECOVERY_GATED_MUTATION_TOOLS.has(toolName)) {
+    let blocked = brokerRecoveryBlocked
+    let transactionIds: string[] = []
+    if (!blocked && intentLog && cwd) {
+      try {
+        const recovery = await recoverAndRevertInterruptedTransactions({
+          intentLog,
+          cwd,
+          fs,
+          logger,
+        })
+        if (!recovery.ok) {
+          blocked = true
+          transactionIds = recovery.transactionIds.slice(0, 16)
+        }
+      } catch (error) {
+        blocked = true
+        logger?.warn({ error }, 'Workspace mutation recovery check failed')
+      }
+    }
+    if (signal?.aborted) throw createAbortError(signal)
+    if (blocked) {
+      return {
+        output: [
+          {
+            type: 'json',
+            value: {
+              errorCode: 'recovery_required',
+              errorMessage:
+                'Workspace mutation recovery is required. No edits from this call were applied. Inspect the pending workspace transaction or broker receipt before retrying.',
+              recovery: {
+                kind: brokerRecoveryBlocked ? 'broker' : 'transaction_intent',
+                transactionIds,
+              },
+            },
+          },
+        ],
+      }
+    }
+  }
 
   // Handle MCP tool calls when mcpConfig is present
   if (action.mcpConfig) {
+    // P1-T2: gate the FIRST call of each tool from a `client`-origin MCP
+    // config behind the host approval callback. Trusted origins
+    // (`user`/`project`, and any explicitly trusted mark) proceed unchanged
+    // with no approval. `resolveMCPConfigOrigin` fails closed to `client` for
+    // unmarked configs, so an unmarked config is gated too — matching every
+    // other origin consumer.
+    if (resolveMCPConfigOrigin(action.mcpConfig) === 'client') {
+      // Stable per-(server-config, tool) key. `getMCPClientCacheKey` is the
+      // same identity `getMCPClient` computes downstream, so computing it here
+      // first is safe. If it can ever throw for a malformed config, fall back
+      // to a JSON key so a key failure never bypasses the gate.
+      let cacheKey: string
+      try {
+        cacheKey = getMCPClientCacheKey(action.mcpConfig, { origin: 'client' })
+      } catch {
+        cacheKey = JSON.stringify(action.mcpConfig)
+      }
+      const approvalKey = `${cacheKey}\u0000${toolName}`
+      // When no per-run set is threaded in, use a fresh local set so behavior
+      // is defined (the gate still enforces approval for this call).
+      const approvedTools = approvedClientMcpTools ?? new Set<string>()
+      if (!approvedTools.has(approvalKey)) {
+        if (requestApproval) {
+          // NUL-free, human-readable approval target derived from the config.
+          const serverLabel =
+            action.mcpConfig.type === 'stdio'
+              ? action.mcpConfig.command
+              : action.mcpConfig.url
+          const approved = await requestApproval({
+            action: 'mcp-tool',
+            target: `${serverLabel} ${toolName}`,
+            commandHash: hashCommand(approvalKey),
+            reason: `MCP tool '${toolName}' comes from a client-supplied (untrusted) MCP server and is running for the first time this run.`,
+            risk: 'high',
+          })
+          if (!approved) {
+            // Denied: do NOT call the tool. Return the same error-output shape
+            // the branch uses for a thrown MCP error so callers parse it
+            // identically to a failed call.
+            return {
+              output: [
+                {
+                  type: 'json',
+                  value: {
+                    errorMessage: `Client MCP tool '${toolName}' was denied approval.`,
+                  },
+                },
+              ],
+            }
+          }
+        }
+        // Approved by the host, or fail-open when no host approver exists
+        // (headless/CI). Record the key so subsequent calls of this same tool
+        // this run run freely.
+        approvedTools.add(approvalKey)
+      }
+    }
     try {
-      const mcpClientId = await getMCPClient(action.mcpConfig)
-      const result = await callMCPTool(
-        mcpClientId,
-        {
-          name: toolName,
-          arguments: input,
-        },
-        undefined,
-        { signal },
+      if (
+        input !== undefined &&
+        (input === null || typeof input !== 'object' || Array.isArray(input))
       )
-      return { output: result }
+        throw new Error('MCP tool arguments must be an object.')
+      if (!resolveMcpRequest)
+        throw new ExecutionRefusalError({
+          ok: false,
+          reason: 'unavailable',
+          cause: 'Captured MCP execution context is unavailable',
+        })
+      const request = await resolveMcpRequest(action.mcpConfig)
+      try {
+        if (
+          typeof action.mcpCatalogGeneration === 'number' &&
+          request.generation !== action.mcpCatalogGeneration
+        ) {
+          throw new Error(
+            'MCP tool catalog changed before dispatch; rediscover the server tools before retrying.',
+          )
+        }
+        onUnscopedHandlerEntered?.()
+        const result = await request.callTool(
+          {
+            name: toolName,
+            arguments: input as Record<string, unknown> | undefined,
+          },
+          undefined,
+          { signal },
+        )
+        return { output: result }
+      } finally {
+        request.release()
+      }
     } catch (error) {
       return {
         output: [
@@ -1835,6 +4964,11 @@ export async function handleToolCall({
             value: {
               errorMessage:
                 error instanceof Error ? error.message : String(error),
+              ...(error instanceof McpError
+                ? mcpProtocolError(error)
+                : isExecutionRefusalError(error)
+                  ? { executionRefusal: error.refusal }
+                  : executionRefusalFromError(error)),
             },
           },
         ],
@@ -1844,10 +4978,12 @@ export async function handleToolCall({
 
   let result: ToolResultOutput[]
   let canonicalReceipt: CommitReceiptV1 | undefined
+  let confirmedWorkspaceState: WorkspaceStateV1 | undefined
   // Returned by tools whose declared output is a compact receipt rather than
-  // the file_mutation_result payload (write_audit_findings), so the
-  // post-dispatch mutation block below still observes their filesystem
-  // actions. It is returned for applied AND not_applied writes, so the
+  // the file_mutation_result payload (write_audit_findings, rename_symbol,
+  // code_action), so the post-dispatch mutation block below still observes
+  // their filesystem actions. It is returned for applied AND not_applied
+  // writes, so the
   // `getConfirmedAppliedActionsV1` gate below — not its presence — decides
   // whether anything landed. That receipt intentionally stays compact: the
   // emitted FilesystemMutationEvent, which carries
@@ -1862,13 +4998,159 @@ export async function handleToolCall({
         `Custom tool handler not found for user input ID ${action.userInputId}`,
       )
     }
+    // Apply the original schema once at the host execution boundary. Provider
+    // projections cannot preserve Zod defaults, transforms, async refinements
+    // or UTF-16 length semantics. JSON-only legacy hosts are validated here too;
+    // a serialized descriptor must never become an unvalidated handler call.
+    let customInput = input
+    {
+      let inputSchema = customToolHandler.inputSchema
+      if (typeof inputSchema?.safeParseAsync !== 'function') {
+        try {
+          inputSchema = jsonSchemaToZod(inputSchema)
+        } catch (error) {
+          return {
+            output: [
+              {
+                type: 'json',
+                value: {
+                  errorMessage: `Unsupported input schema for ${toolName}: ${String(error)}`,
+                },
+              },
+            ],
+          }
+        }
+      }
+      const validation = inputSchema.safeParseAsync(input)
+      const parsed = signal
+        ? await raceAgainstAbort(validation, signal)
+        : await validation
+      if (!parsed.success) {
+        const details = parsed.error.issues
+          .map((issue) => {
+            const path = issue.path.map(String).join('.') || 'input'
+            return `${path}: ${issue.message}`
+          })
+          .join('; ')
+        return {
+          output: [
+            {
+              type: 'json',
+              value: {
+                errorMessage: `Invalid parameters for ${toolName}: ${details}`,
+              },
+            },
+          ],
+        }
+      }
+      customInput = parsed.data
+    }
+    const authorizedPaths: NonNullable<
+      CustomToolExecutionContext['authorizedPaths']
+    >[number][] = []
+    if (customToolHandler.pathParameters?.length) {
+      try {
+        if (!cwd)
+          throw new Error(
+            'The host requires a project root for declared filesystem effects.',
+          )
+        const authority = getDefaultFilesystemAuthority(
+          cwd,
+          fs,
+          fileFilter,
+          filesystemPolicy,
+        )
+        for (const target of selectExternalToolPaths(
+          customInput,
+          customToolHandler.pathParameters,
+        )) {
+          if (!isSafeProjectRelativePath(target.path))
+            throw new Error('Declared tool path has an unsafe path form.')
+          let operationPath: string
+          if (target.access === 'write') {
+            const pendingAuthorization = authority.authorizePath(
+              target.path,
+              'overwrite',
+            )
+            const authorization = signal
+              ? await raceAgainstAbort(pendingAuthorization, signal)
+              : await pendingAuthorization
+            if (!authorization.allowed)
+              throw new Error(
+                `Declared write path refused (${authorization.code}).`,
+              )
+            operationPath = authorization.path.operationPath
+          } else {
+            const resolved = await resolveFilePathForFileSystemReadOperation(
+              cwd,
+              target.path,
+              fs,
+            )
+            if (!resolved)
+              throw new Error(
+                'Declared read path is outside the allowed filesystem scope.',
+              )
+            const aliases = getScopedReadPolicyAliases(
+              resolved.scope,
+              resolved.operationPath,
+            )
+            if (
+              fileFilter &&
+              aliases.some((alias) => fileFilter(alias).status === 'blocked')
+            )
+              throw new Error('Declared read path refused (custom_filter).')
+            const evaluation = authority.policy.evaluate({
+              operation: 'read',
+              phase: 'resolve',
+              portablePath: resolved.relativePath,
+              canonicalPath: resolved.operationPath,
+              canonicalParentPath: path.dirname(resolved.operationPath),
+            })
+            const decision = signal
+              ? await raceAgainstAbort(Promise.resolve(evaluation), signal)
+              : await evaluation
+            if (!decision.allowed)
+              throw new Error(
+                `Declared read path refused (${decision.code ?? 'host_policy'}).`,
+              )
+            operationPath = resolved.operationPath
+          }
+          authorizedPaths.push(
+            Object.freeze({
+              ...target,
+              inputPath: target.path,
+              path: operationPath,
+            }),
+          )
+          signal?.throwIfAborted()
+        }
+      } catch (error) {
+        signal?.throwIfAborted()
+        return {
+          output: [
+            {
+              type: 'json',
+              value: { errorMessage: String(error), permissionDenied: true },
+            },
+          ],
+        }
+      }
+    }
+    const customExecutionContext: CustomToolExecutionContext = {
+      signal,
+      execution: executionContext,
+      ...(authorizedPaths.length
+        ? { authorizedPaths: Object.freeze(authorizedPaths) }
+        : {}),
+    }
+    onUnscopedHandlerEntered?.()
     return {
       output: signal
         ? await raceAgainstAbort(
-            customToolHandler.execute(input, { signal }),
+            customToolHandler.execute(customInput, customExecutionContext),
             signal,
           )
-        : await customToolHandler.execute(input, { signal }),
+        : await customToolHandler.execute(customInput, customExecutionContext),
     }
   }
 
@@ -1896,16 +5178,55 @@ export async function handleToolCall({
       ? clientToolCallSchema.parse(normalizedAction)
       : undefined
 
+    if (override && planMode && toolName === 'run_terminal_command') {
+      const cause =
+        'plan_mode_read_only: plan terminal overrides have no verified native read-only enforcement contract. File and search tools remain available.'
+      return {
+        output: [
+          {
+            type: 'json',
+            value: {
+              command:
+                typeof (input as { command?: unknown }).command === 'string'
+                  ? (input as { command: string }).command
+                  : '',
+              errorCode: 'plan_mode_read_only',
+              errorMessage: cause,
+              permissionProfile: 'read-only',
+              permissionDenied: true,
+              executionRefusal: { ok: false, reason: 'denied', cause },
+            },
+          },
+        ],
+      }
+    }
     if (override) {
+      onUnscopedHandlerEntered?.()
       const overrideSignal = signal ?? new AbortController().signal
-      result = (await executeOverride({
-        override: override as OverrideDescriptor<
-          typeof input,
-          ToolResultOutput[]
-        >,
-        input,
-        signal: overrideSignal,
-      })) as ToolResultOutput[]
+      try {
+        result = (await executeOverride({
+          override: override as OverrideDescriptor<
+            typeof input,
+            ToolResultOutput[]
+          >,
+          input,
+          signal: overrideSignal,
+          executionContext,
+        })) as ToolResultOutput[]
+      } catch (error) {
+        if (!overrideSignal.aborted) throw error
+        const refusal = refusalForSignal(overrideSignal)
+        // A timed-out override has no attested effect. Preserve the captured
+        // action refusal rather than returning an untyped recovered error.
+        return {
+          output: [
+            {
+              type: 'json',
+              value: { errorMessage: refusal.cause, executionRefusal: refusal },
+            },
+          ],
+        }
+      }
       if (
         toolName === 'write_file' ||
         toolName === 'str_replace' ||
@@ -2031,6 +5352,7 @@ export async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        intentLog,
         capabilityIssuer,
         callId: action.requestId,
         logger,
@@ -2057,153 +5379,96 @@ export async function handleToolCall({
           'Expected a parsed run_terminal_command client tool call',
         )
       }
-      const terminalInput = parsed.input
-      // `permission_profile` passes through verbatim from the client tool call
-      // input, but that input is constructed by the agent runtime handler
-      // (handleRunTerminalCommand), which always sets it from the agent
-      // template's declared `terminalPermissionProfile` (defaulting to
-      // 'full-access') and never from model/tool input — see the parity test
-      // in packages/agent-runtime/src/tools/handlers/tool/__tests__/
-      // run-terminal-command.test.ts. The per-profile policy engine is
-      // therefore clamped to the template declaration, never widened by the
-      // model. The schema on the SDK side still validates the value.
-      result = await runTerminalCommand({
-        ...terminalInput,
-        timeout_seconds: terminalInput.timeout_seconds ?? -1,
-        // Ownership identity is runtime-injected from trusted run state; any
-        // model-supplied `owner` in terminalInput is overridden here.
-        owner: trustedJobOwner,
-        cwd: path.resolve(projectRoot, terminalInput.cwd ?? '.'),
-        projectRoot,
-        env,
-        signal,
-        authorizeHighImpactAction: async (classified) => {
-          let branch: string | undefined
-          let defaultBranch: string | undefined
-          if (classified.action === 'push') {
-            const workspace = await inspectWorkspace({
-              cwd: projectRoot,
-              signal,
-            })
-            const value = workspace.find((part) => part.type === 'json')
-              ?.value as { branch?: string; defaultBranch?: string } | undefined
-            branch = classified.branch ?? value?.branch
-            defaultBranch = value?.defaultBranch
+      const terminalInput = planMode
+        ? {
+            ...parsed.input,
+            mode: 'assistant' as const,
+            permission_profile: 'read-only' as const,
           }
-          const staticDecision = evaluateHarnessActionPolicy({
-            ...classified,
-            branch,
-            defaultBranch,
-            hasMatchingApproval: false,
-            approvalMode,
-          })
-          if (!staticDecision.allowed && !staticDecision.approvalRequired) {
-            return staticDecision
-          }
-          if (staticDecision.allowed) {
-            return { allowed: true as const }
-          }
-          const candidateApprovalIds = [
-            terminalInput.approval_receipt_id,
-            ...approvalReceiptIds,
-          ].filter(
-            (value, index, values): value is string =>
-              typeof value === 'string' &&
-              value.length > 0 &&
-              values.indexOf(value) === index,
-          )
-          const snapshotId = getWorkspaceState()?.snapshotId
-          // Approval binding uses the TRUSTED root run id (run/session
-          // state), never a model-supplied owner.
-          const rootRunId = trustedJobOwner.rootRunId
-          if (!snapshotId || !rootRunId || !harnessWorkspaceIdentity) {
-            return {
-              allowed: false as const,
-              approvalRequired: true,
-              reason: `Action '${classified.action}' requires an approval context bound to the current repository, workspace, root run, and snapshot.`,
-            }
-          }
-          let lastError: unknown
-          for (const approvalId of candidateApprovalIds) {
-            try {
-              const receipt = approvalService.consume({
-                ...harnessWorkspaceIdentity,
-                runId: rootRunId,
-                approvalId,
-                action: classified.action,
-                target: classified.target,
-                snapshotId,
-              })
-              const approvedDecision = evaluateHarnessActionPolicy({
-                ...classified,
-                branch,
-                defaultBranch,
-                hasMatchingApproval: true,
-                approvalMode,
-              })
-              return approvedDecision.allowed
-                ? { allowed: true, approvalReceiptId: receipt.id }
-                : approvedDecision
-            } catch (error) {
-              lastError = error
-            }
-          }
-          if (requestApproval) {
-            const approved = await requestApproval({
-              ...classified,
-              risk:
-                classified.action === 'dependency-install' ||
-                classified.action === 'commit' ||
-                classified.action === 'push' ||
-                classified.action === 'pull-request'
-                  ? 'routine'
-                  : 'high',
-              reason: staticDecision.reason,
-            })
-            if (approved) {
-              const grant = approvalService.grant(
-                {
-                  ...harnessWorkspaceIdentity,
-                  runId: rootRunId,
-                  snapshotId,
-                },
-                { action: classified.action, target: classified.target },
-              )
-              const receipt = approvalService.consume({
-                ...harnessWorkspaceIdentity,
-                runId: rootRunId,
-                snapshotId,
-                approvalId: grant.id,
-                action: classified.action,
-                target: classified.target,
-              })
-              const approvedDecision = evaluateHarnessActionPolicy({
-                ...classified,
-                branch,
-                defaultBranch,
-                hasMatchingApproval: true,
-                approvalMode,
-              })
-              return approvedDecision.allowed
-                ? { allowed: true as const, approvalReceiptId: receipt.id }
-                : approvedDecision
-            }
-            return {
-              allowed: false as const,
-              approvalRequired: true,
-              reason: 'The user declined this operation.',
-            }
-          }
-          return {
-            allowed: false,
-            approvalRequired: true,
-            reason:
-              lastError instanceof Error
-                ? lastError.message
-                : 'Approval receipt validation failed.',
-          }
-        },
+        : parsed.input
+      // Plan profiles are bound to the original host request, not merely
+      // checked lexically. Keep the original host/task gates as additional
+      // restrictions; execute-mode declarations retain their existing behavior.
+      const hostProfileRefusal = planTerminalHostProfiles
+        ?.map((declaredProfile) =>
+          refuseByDeclaredTerminalProfile({
+            command: terminalInput.command,
+            declaredProfile,
+            enforceCapturedProfile: true,
+            hostProfile: executionContext?.profile.policy,
+            mode: 'assistant',
+            projectRoot: executionContext?.projectRoot ?? projectRoot,
+            allowedPaths: executionContext?.allowedPaths,
+            cwd: terminalInput.cwd,
+          }),
+        )
+        .find((refusal) => refusal !== undefined)
+      const declaredProfileRefusal = refuseByDeclaredTerminalProfile({
+        command: terminalInput.command,
+        declaredProfile: terminalInput.permission_profile,
+        hostProfile: executionContext?.profile.policy,
+        mode: executionContext?.mode ?? terminalInput.mode,
+        projectRoot: executionContext?.projectRoot ?? projectRoot,
+        allowedPaths:
+          terminalInput.allowed_paths ?? executionContext?.allowedPaths,
+        cwd: terminalInput.cwd,
       })
+      result =
+        hostProfileRefusal ??
+        declaredProfileRefusal ??
+        (await runTerminalCommand({
+          ...terminalInput,
+          permission_profile:
+            (executionContext?.profile
+              .policy as typeof terminalInput.permission_profile) ??
+            terminalInput.permission_profile,
+          // Only an explicitly selected host default adds an execution-time timeout.
+          timeout_seconds: terminalInput.timeout_seconds,
+          // A payload cannot replace the root-captured policy.
+          timeoutPolicy: terminalTimeoutPolicy,
+          // Ownership identity is runtime-injected from trusted run state; any
+          // model-supplied `owner` in terminalInput is overridden here.
+          owner: trustedJobOwner,
+          cwd: path.resolve(projectRoot, terminalInput.cwd ?? '.'),
+          projectRoot,
+          env,
+          inheritEnv,
+          signal,
+          executionContext,
+          terminalShell,
+          getTerminalLaunchMetadata,
+          prepareTransferredLaunch,
+        }))
+      if (planMode) {
+        result = result.map((part) => {
+          if (
+            part.type !== 'json' ||
+            !part.value ||
+            typeof part.value !== 'object'
+          )
+            return part
+          const value = part.value as Record<string, unknown>
+          const refusal = value.executionRefusal as
+            | { reason?: string }
+            | undefined
+          if (
+            value.permissionDenied !== true &&
+            !['denied', 'unavailable', 'invalid-context'].includes(
+              refusal?.reason ?? '',
+            )
+          )
+            return part
+          return {
+            ...part,
+            value: {
+              ...value,
+              errorCode: 'plan_mode_read_only',
+              errorMessage:
+                `plan_mode_read_only: plan terminal commands require verified native read-only enforcement. File and search tools remain available. ${value.errorMessage ?? ''}`.trim(),
+            },
+          }
+        })
+      }
     } else if (toolName === 'read_image') {
       result = await readImages({
         paths: (input as { paths: string[] }).paths,
@@ -2223,6 +5488,7 @@ export async function handleToolCall({
         cwd: requireCwd(cwd, 'inspect_3d_asset'),
         fs,
         signal,
+        execution: executionContext,
         fileFilter,
       })
     } else if (toolName === 'render_3d_preview') {
@@ -2243,6 +5509,7 @@ export async function handleToolCall({
         cwd: requireCwd(cwd, 'render_3d_preview'),
         fs,
         signal,
+        execution: executionContext,
         fileFilter,
       })
     } else if (toolName === 'edit_3d_asset') {
@@ -2264,6 +5531,7 @@ export async function handleToolCall({
         fs,
         operationId: action.requestId,
         signal,
+        execution: executionContext,
         fileFilter,
       })
     } else if (toolName === 'browser_logs') {
@@ -2280,6 +5548,7 @@ export async function handleToolCall({
       result = await browserLogs(
         browserAction as Parameters<typeof browserLogs>[0],
         { ...trustedJobOwner, projectRoot: cwd },
+        getBrowserExecution?.(),
       )
     } else if (toolName === 'code_search') {
       if (fs.hostProcessView === false) {
@@ -2295,6 +5564,8 @@ export async function handleToolCall({
         ...codeSearchInput,
         projectPath: requireCwd(cwd, 'code_search'),
         signal,
+        executionContext,
+        branchId: 'sdk.code-search',
         fileFilter,
       })
     } else if (toolName === 'find_files_matching_content') {
@@ -2311,11 +5582,15 @@ export async function handleToolCall({
         ...findFilesInput,
         projectPath: requireCwd(cwd, 'find_files_matching_content'),
         signal,
+        executionContext,
+        branchId: 'sdk.find-files-matching-content',
         fileFilter,
       })
     } else if (toolName === 'list_directory') {
       result = await listDirectory({
         directoryPath: (input as { path: string }).path,
+        offset: (input as { offset?: number }).offset,
+        limit: (input as { limit?: number }).limit,
         projectPath: requireCwd(cwd, 'list_directory'),
         fs,
         fileFilter,
@@ -2340,6 +5615,12 @@ export async function handleToolCall({
         env,
         signal,
         fileSystem: fs,
+        diagnosticDelta,
+        executionContext,
+        capturedConfiguration: capturedHookConfiguration,
+        diagnosticPreflightEnabled,
+        terminalShell,
+        getTerminalLaunchMetadata,
       })
     } else if (toolName === 'check_job') {
       // The trusted owner overrides any model-supplied owner in the input.
@@ -2347,8 +5628,12 @@ export async function handleToolCall({
       // model-supplied input value, so a spoofed `signal` in tool input cannot
       // substitute its own for cancellation.
       result = await checkJob({
-        ...(input as Omit<Parameters<typeof checkJob>[0], 'owner'>),
+        ...(input as Omit<
+          Parameters<typeof checkJob>[0],
+          'owner' | 'signal' | 'executionContext'
+        >),
         signal,
+        executionContext,
         owner: trustedJobOwner,
       })
     } else if (toolName === 'kill_job') {
@@ -2368,6 +5653,7 @@ export async function handleToolCall({
         // ER-4: host read policy is runtime-injected, exactly like the
         // read_image / list_directory branches; model input cannot supply it.
         fileFilter,
+        readPolicy: fs.hostReadPolicy,
       })
     } else if (toolName === 'list_jobs') {
       // Any model-supplied `input.owner` is ignored entirely; scoping always
@@ -2382,11 +5668,13 @@ export async function handleToolCall({
         ...gitStatusInput,
         cwd: requireCwd(cwd, 'git_status'),
         signal,
+        executionContext,
       })
     } else if (toolName === 'inspect_workspace') {
       result = await inspectWorkspace({
         cwd: requireCwd(cwd, 'inspect_workspace'),
         signal,
+        executionContext,
       })
     } else if (toolName === 'get_task') {
       result = getTask({
@@ -2400,6 +5688,7 @@ export async function handleToolCall({
         stateDir: harnessStateDir,
         workspaceState: getWorkspaceState(),
         signal,
+        executionContext,
       })
     } else if (toolName === 'run_targeted_validation') {
       const validationInput = input as {
@@ -2415,19 +5704,137 @@ export async function handleToolCall({
         env,
         signal,
         fileSystem: fs,
+        diagnosticDelta,
+        executionContext,
+        capturedConfiguration: capturedHookConfiguration,
+        diagnosticPreflightEnabled,
+        terminalShell,
+        getTerminalLaunchMetadata,
         workspaceState: getWorkspaceState(),
       })
     } else if (toolName === 'inspect_environment') {
-      result = inspectEnvironment(requireCwd(cwd, 'inspect_environment'))
+      result = await inspectEnvironment(
+        requireCwd(cwd, 'inspect_environment'),
+        signal,
+        executionContext,
+      )
     } else if (toolName === 'get_affected_tests') {
-      result = getAffectedTests(
+      result = await getAffectedTests(
         requireCwd(cwd, 'get_affected_tests'),
         (input as { files: string[] }).files,
+        signal,
       )
+    } else if (toolName === 'go_to_definition') {
+      result = await goToDefinition(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+        lspRequest,
+      )
+    } else if (toolName === 'find_references') {
+      result = await findReferences(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+        lspRequest,
+      )
+    } else if (toolName === 'hover_type') {
+      result = await hoverType(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+        lspRequest,
+      )
+    } else if (toolName === 'workspace_symbol') {
+      result = await workspaceSymbol(
+        resolveLanguageIntelligence(),
+        input as { query: string },
+        lspRequest,
+      )
+    } else if (toolName === 'rename_symbol') {
+      // P4-T2: the semantic-edit apply tools route their changed files through
+      // the SAME multi-file commit path as edit_transaction (per-file broker
+      // CAS, CommitReceiptV1s, P2-T5 intent log, rollback). The deps passed
+      // below mirror the edit_transaction branch exactly. Their published
+      // output is a compact named result rather than a file_mutation_result
+      // payload, so the underlying mutation rides the compact-receipt channel
+      // (the writeAuditFindings precedent) into the post-dispatch block and
+      // the journaling/LSP-sync wiring stays automatic with no new machinery.
+      const applied = await renameSymbol(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          new_name: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+        lspRequest,
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'code_action') {
+      const applied = await codeAction(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          kind: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+        lspRequest,
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'extract_symbol') {
+      const applied = await extractSymbol(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          destination_path: string
+          symbol_name: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+        lspRequest,
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
     } else if (toolName === 'get_build_targets') {
-      result = getBuildTargets(
+      result = await getBuildTargets(
         requireCwd(cwd, 'get_build_targets'),
         (input as { files: string[] }).files,
+        signal,
+        executionContext,
       )
     } else if (toolName === 'inspect_codebase_structure') {
       result = inspectCodebaseStructureTool(
@@ -2463,6 +5870,8 @@ export async function handleToolCall({
         switch: branchInput.switch,
         allowDirty: branchInput.allow_dirty,
         cwd: requireCwd(cwd, 'git_branch'),
+        signal,
+        executionContext,
       })
       // gitBranch returns a single GitBranchResult object; the dispatcher
       // expects a ToolResultOutput[] (array of { type: 'json', value }).
@@ -2471,7 +5880,15 @@ export async function handleToolCall({
       result = [
         {
           type: 'json',
-          value: errorMessage !== undefined ? { errorMessage } : successValue,
+          value:
+            errorMessage !== undefined
+              ? {
+                  errorMessage,
+                  ...(branchResult.executionRefusal
+                    ? { executionRefusal: branchResult.executionRefusal }
+                    : {}),
+                }
+              : successValue,
         },
       ]
     } else {
@@ -2487,6 +5904,9 @@ export async function handleToolCall({
       {
         type: 'json',
         value: {
+          ...(toolName === 'check_job'
+            ? { jobId: (input as { jobId: string }).jobId }
+            : {}),
           errorMessage:
             error &&
             typeof error === 'object' &&
@@ -2496,6 +5916,9 @@ export async function handleToolCall({
               : typeof error === 'string'
                 ? error
                 : 'Unknown error',
+          ...(isExecutionRefusalError(error)
+            ? { executionRefusal: error.refusal }
+            : executionRefusalFromError(error)),
         },
       },
     ]
@@ -2508,6 +5931,14 @@ export async function handleToolCall({
   const confirmedActions = mutationValue
     ? getConfirmedAppliedActionsV1(mutationValue)
     : []
+  if (!canonicalReceipt && mutationValue && cwd) {
+    canonicalReceipt = getDefaultFilesystemAuthority(
+      cwd,
+      fs,
+      fileFilter,
+      filesystemPolicy,
+    ).getCanonicalReceipt(mutationValue.operationId, action.requestId)
+  }
   // `mutationValue` is re-tested here so TypeScript narrows it for the whole
   // block below instead of repeating non-null assertions on every use.
   if (mutationValue && confirmedActions.length > 0) {
@@ -2531,10 +5962,49 @@ export async function handleToolCall({
         : {}),
       actions: changedActions,
     }
+    const beforeWorkspaceState = getWorkspaceState()
     const workspaceState = advanceWorkspaceJournal
       ? advanceWorkspaceJournal(workspaceChange)
-      : advanceWorkspaceState(getWorkspaceState(), workspaceChange)
+      : advanceWorkspaceState(beforeWorkspaceState, workspaceChange)
     setWorkspaceState(workspaceState)
+    confirmedWorkspaceState = workspaceState
+    onConfirmedWorkspaceTransition?.({
+      before: beforeWorkspaceState,
+      after: workspaceState,
+      ...workspaceChange,
+      canonicalReceipt,
+    })
+    // Audit fix (C): push the committed files into any already-running
+    // language server so post-edit LSP answers are not stale. Guarded and
+    // fail-open: sync can never fail the run that just committed the write.
+    // Only successfully-written project-relative paths are synced; a move
+    // syncs its destination path.
+    const syncedPaths = changedActions
+      .filter((changed) => changed.action !== 'delete')
+      .map((changed) =>
+        changed.action === 'move' ? changed.destinationPath : changed.path,
+      )
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    // Audit fix: deleted paths are forwarded separately as a didClose so a
+    // warm language server drops its stale open-document state for files
+    // that no longer exist (they are excluded from syncedPaths above).
+    const closedPaths = changedActions
+      .filter((changed) => changed.action === 'delete')
+      .map((changed) => changed.path)
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    if (syncedPaths.length > 0 || closedPaths.length > 0) {
+      try {
+        await getLanguageIntelligence?.().syncMutatedFiles(
+          syncedPaths,
+          {
+            closedPaths,
+          },
+          lspRequest,
+        )
+      } catch (error) {
+        logger?.warn({ error }, 'Language-server document sync failed')
+      }
+    }
     // Only a mutation that was actually part of `result` can be enriched in
     // place. Tools whose declared output is a compact receipt reach this block
     // through `compactReceiptMutation`; their receipt schema declares no
@@ -2595,9 +6065,10 @@ export async function handleToolCall({
       }
     }
   } else if (
-    toolName === 'run_terminal_command' ||
-    Boolean(customToolDefinitions[toolName]) ||
-    Boolean(action.mcpConfig)
+    (shouldObserveUnknownMutation?.() ?? true) &&
+    (toolName === 'run_terminal_command' ||
+      Boolean(customToolDefinitions[toolName]) ||
+      Boolean(action.mcpConfig))
   ) {
     try {
       await onFilesChanged?.()
@@ -2605,13 +6076,15 @@ export async function handleToolCall({
       logger?.warn({ error }, 'Unknown-mutation observer failed')
     }
   }
-  if (!canonicalReceipt && mutationValue && cwd) {
-    canonicalReceipt = getDefaultFilesystemAuthority(
-      cwd,
-      fs,
-      fileFilter,
-      filesystemPolicy,
-    ).getCanonicalReceipt(mutationValue.operationId, action.requestId)
+  if (canonicalReceipt && confirmedWorkspaceState) {
+    // These coordinates come from the local confirmed workspace transition.
+    // Keep independent authority evidence aligned with the enriched envelope
+    // so reconciliation can retain its verified exact after-content.
+    canonicalReceipt = {
+      ...canonicalReceipt,
+      workspaceRevision: confirmedWorkspaceState.revision,
+      workspaceSnapshotId: confirmedWorkspaceState.snapshotId,
+    }
   }
   return {
     output: result,

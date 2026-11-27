@@ -32,6 +32,7 @@ export const ToolBlockGroup = memo(
         <ToolBranch
           key={`${keyPrefix}-tool-${toolBlock.toolCallId}`}
           toolBlock={toolBlock}
+          messageId={keyPrefix}
           keyPrefix={`${keyPrefix}-tool-${toolBlock.toolCallId}`}
           availableWidth={availableWidth}
           onToggleCollapsed={onToggleCollapsed}

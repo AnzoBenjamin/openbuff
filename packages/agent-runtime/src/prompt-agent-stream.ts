@@ -23,6 +23,7 @@ export const getAgentStreamFromTemplate = (params: {
   extraCodebuffMetadata?: Record<string, string>
   fingerprintId: string
   includeCacheControl?: boolean
+  cacheControlToolBreakpoint?: string
   localAgentTemplates: Record<string, AgentTemplate>
   logger: Logger
   messages: Message[]
@@ -55,6 +56,7 @@ export const getAgentStreamFromTemplate = (params: {
     extraCodebuffMetadata,
     fingerprintId,
     includeCacheControl,
+    cacheControlToolBreakpoint,
     localAgentTemplates,
     logger,
     messages,
@@ -90,6 +92,7 @@ export const getAgentStreamFromTemplate = (params: {
     extraCodebuffMetadata,
     fingerprintId,
     includeCacheControl,
+    cacheControlToolBreakpoint,
     logger,
     localAgentTemplates,
     maxRetries: 3,

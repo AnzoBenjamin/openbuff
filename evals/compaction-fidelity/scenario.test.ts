@@ -27,7 +27,19 @@
  */
 import { describe, expect, test } from 'bun:test'
 
-import { archivePreCompaction, recallFromArchive } from '@codebuff/agent-runtime/util/context-archive'
+import {
+  archivePreCompaction,
+  recallFromArchive,
+  recallFromArchiveByToolCallId,
+} from '@codebuff/agent-runtime/util/context-archive'
+import {
+  collectFactualEvidence,
+  evaluateFactualCoverage,
+  MEMORY_FIXTURE_FACTS,
+  renderFixtureFact,
+  FACTUAL_CORRUPTIONS,
+} from './factual-oracle'
+import { getInitialAgentState } from '@codebuff/common/types/session-state'
 import {
   recordConsolidation,
   searchConsolidations,
@@ -37,13 +49,14 @@ import {
   evictStaleToolResults,
   EVICTION_KEEP_RECENT_STEPS,
 } from '@codebuff/agent-runtime/util/tool-result-eviction'
-import {
-  verifyExtractionCoverage,
-} from '@codebuff/agent-runtime/util/compaction-verification'
+import { verifyExtractionCoverage } from '@codebuff/agent-runtime/util/compaction-verification'
 
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
 import type { ContextConsolidation } from '@codebuff/common/types/context-consolidation'
-import type { Message, ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
+import type {
+  Message,
+  ToolMessage,
+} from '@codebuff/common/types/messages/codebuff-message'
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 
 const PLANTED_PATHS = [
@@ -54,11 +67,16 @@ const PLANTED_PATHS = [
 ]
 /** Verbatim fact planted inside each path's tool-result body. */
 const plantedFact = (path: string): string =>
-  `FACT[${path}]=retry-backoff-base-1500ms`
+  MEMORY_FIXTURE_FACTS.filter((fact) => fact.path === path)
+    .map((fact) => renderFixtureFact(fact))
+    .join('\n')
 
 const buildLongTranscript = (): Message[] => {
   const messages: Message[] = [
-    { role: 'user', content: [{ type: 'text', text: 'Harden the session stack.' }] },
+    {
+      role: 'user',
+      content: [{ type: 'text', text: 'Harden the session stack.' }],
+    },
   ]
   for (let i = 0; i < 24; i++) {
     const path = PLANTED_PATHS[i % PLANTED_PATHS.length]
@@ -81,7 +99,10 @@ const buildLongTranscript = (): Message[] => {
         {
           type: 'json',
           value: {
-            output: `// ${path}\n${plantedFact(path)}\nexport const config_${i} = ${i}`,
+            // Padding keeps eviction net-POSITIVE: the identity-carrying
+            // tombstone (~220 chars) is longer than a bare fact line, so
+            // unpadded bodies made the savings floor a no-op and F1 vacuous.
+            output: `// ${path}\n${plantedFact(path)}\nexport const config_${i} = ${i}\n${'context filler '.repeat(250)}`,
           },
         },
       ],
@@ -130,7 +151,12 @@ describe('compaction fidelity (F1–F5)', () => {
     )
     expect(cited.length).toBeGreaterThan(0)
     for (const message of cited) {
-      expect(JSON.stringify(message)).toContain(plantedFact(citedPath))
+      expect(
+        evaluateFactualCoverage(
+          collectFactualEvidence(message),
+          MEMORY_FIXTURE_FACTS.filter((fact) => fact.path === citedPath),
+        ).factualScore,
+      ).toBe(1)
     }
   })
 
@@ -159,20 +185,25 @@ describe('compaction fidelity (F1–F5)', () => {
   })
 
   test('F3: recall_context recovers evicted facts verbatim from the archive', () => {
-    const archiveState: { compactionArchive?: ContextArchiveSnapshot[] } = {}
+    const archiveState = { ...getInitialAgentState(), runId: 'fidelity-f3' }
     archivePreCompaction(
       archiveState,
       transcript,
       'semantic_compaction',
       EVICTION_KEEP_RECENT_STEPS,
     )
-    for (const path of PLANTED_PATHS) {
-      const result = recallFromArchive(archiveState.compactionArchive, path)
-      expect(result.matches.length).toBeGreaterThan(0)
-      expect(
-        result.matches.some((match) => match.snippet.includes(plantedFact(path))),
-      ).toBe(true)
-    }
+    const evidence = transcript
+      .filter((message): message is ToolMessage => message.role === 'tool')
+      .flatMap((message) =>
+        collectFactualEvidence(
+          recallFromArchiveByToolCallId(
+            archiveState.compactionArchive,
+            message.toolCallId,
+            { bodies: archiveState.contextArchiveBodies, maxBytes: 65536 },
+          ).matches.map((match) => match.snippet),
+        ),
+      )
+    expect(evaluateFactualCoverage(evidence).factualScore).toBe(1)
   })
 
   test('F4: aggregate fidelity score is 1.0 for the fixture (retained + recallable)', () => {
@@ -180,7 +211,7 @@ describe('compaction fidelity (F1–F5)', () => {
     // module-level WeakSet), so re-archiving the shared fixture array would
     // be a silent no-op and this test would score a phantom archive.
     const transcriptF4 = buildLongTranscript()
-    const archiveState: { compactionArchive?: ContextArchiveSnapshot[] } = {}
+    const archiveState = { ...getInitialAgentState(), runId: 'fidelity-f4' }
     archivePreCompaction(
       archiveState,
       transcriptF4,
@@ -188,22 +219,34 @@ describe('compaction fidelity (F1–F5)', () => {
       EVICTION_KEEP_RECENT_STEPS,
     )
     const compacted = compactWorstCase(transcriptF4)
-    const verification = verifyExtractionCoverage({
-      preMessages: transcriptF4,
-      postMessages: compacted,
-      taskMemory,
-    })
-    const allPlanted = [...new Set(PLANTED_PATHS)]
-    const retained = allPlanted.filter(
-      (path) => !verification.missing.some((fact) => fact.includes(path)),
-    )
-    const recallable = allPlanted.filter(
-      (path) =>
-        recallFromArchive(archiveState.compactionArchive, path).matches.length > 0,
-    )
-    const recovered = new Set([...retained, ...recallable])
-    const fidelityScore = recovered.size / allPlanted.length
-    expect(fidelityScore).toBe(1)
+    const originalEvidence = transcriptF4
+      .filter((message): message is ToolMessage => message.role === 'tool')
+      .flatMap((message) =>
+        collectFactualEvidence(
+          recallFromArchiveByToolCallId(
+            archiveState.compactionArchive,
+            message.toolCallId,
+            { bodies: archiveState.contextArchiveBodies, maxBytes: 65536 },
+          ).matches.map((match) => match.snippet),
+        ),
+      )
+    const score = evaluateFactualCoverage([
+      ...collectFactualEvidence(compacted),
+      ...originalEvidence,
+    ])
+    expect(score.identifierScore).toBe(1)
+    expect(score.factualScore).toBe(1)
+    for (const corruption of FACTUAL_CORRUPTIONS) {
+      const fact = MEMORY_FIXTURE_FACTS.find(
+        (fact) => fact.id === corruption.id,
+      )!
+      const negative = evaluateFactualCoverage([
+        ...originalEvidence,
+        renderFixtureFact(fact, corruption.values),
+      ])
+      expect(negative.identifierScore).toBe(1)
+      expect(negative.factualScore).toBeLessThan(1)
+    }
   })
 
   test('F5: consolidation recall survives archive aging (and detects an unfaithful summary)', () => {
@@ -268,6 +311,31 @@ describe('compaction fidelity (F1–F5)', () => {
     )
     expect(verbatim.length).toBe(0)
     expect(consolidated.length).toBe(allPlanted.length)
+    expect(
+      evaluateFactualCoverage(
+        collectFactualEvidence(
+          searchConsolidations(state.contextConsolidations, PLANTED_PATHS[0]),
+        ),
+      ).factualScore,
+    ).toBe(1)
+    for (const corruption of FACTUAL_CORRUPTIONS) {
+      const changed = {
+        ...state.contextConsolidations![0],
+        summary: MEMORY_FIXTURE_FACTS.map((fact) =>
+          renderFixtureFact(
+            fact,
+            fact.id === corruption.id ? corruption.values : fact.values,
+          ),
+        ).join('\n'),
+      }
+      const score = evaluateFactualCoverage(
+        collectFactualEvidence(
+          searchConsolidations([changed], PLANTED_PATHS[0]),
+        ),
+      )
+      expect(score.identifierScore).toBe(1)
+      expect(score.factualScore).toBeLessThan(1)
+    }
 
     // An UNFAITHFUL consolidator (drops identifiers) must be detectable: the
     // metric is not vacuously 1.0.
@@ -282,8 +350,9 @@ describe('compaction fidelity (F1–F5)', () => {
       },
     ]
     const unfaithfulScore =
-      allPlanted.filter((path) => searchConsolidations(unfaithful, path).length > 0)
-        .length / allPlanted.length
+      allPlanted.filter(
+        (path) => searchConsolidations(unfaithful, path).length > 0,
+      ).length / allPlanted.length
     expect(unfaithfulScore).toBe(0)
   })
 })

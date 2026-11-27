@@ -1,0 +1,61 @@
+bun test v1.4.4 (38afee6c8)
+
+src/__tests__/protocol-stdout.test.ts:
+(pass) early protocol diagnostic routing > agrees with the canonical parser for TUI [2.25ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for a prompt [0.35ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for --cwd /fixture run [0.46ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for run fixture [0.38ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for serve [0.10ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for mcp [0.10ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for replay fixture [0.09ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for dash [0.15ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for --approval-mode balanced run fixture [0.23ms]
+(pass) early protocol diagnostic routing > agrees with the canonical parser for --approval-mode=strict serve [0.11ms]
+(pass) early protocol diagnostic routing > routes console diagnostics to stderr and restores only its own methods [0.18ms]
+(pass) early protocol diagnostic routing > does not redirect a renderer launch [0.03ms]
+(pass) real CLI protocol stdout > index.tsx: JSON errors have no startup diagnostic prefix [3394.23ms]
+(pass) real CLI protocol stdout > binary-entry.ts: JSON errors have no startup diagnostic prefix [3418.25ms]
+(pass) real CLI protocol stdout > stdin empty returns a clean JSON error before creating a run journal [1870.47ms]
+(pass) real CLI protocol stdout > stdin invalid UTF-8 returns a clean JSON error before creating a run journal [1846.33ms]
+(pass) real CLI protocol stdout > stdin oversized returns a clean JSON error before creating a run journal [1776.82ms]
+(pass) real CLI protocol stdout > stdio ACP initialization emits only JSON-RPC frames [1732.79ms]
+
+src/__tests__/run-continue-sdk.test.ts:
+Using environment: dev
+(pass) persisted headless conversation starts a new SDK turn without old journal replay admission [284.31ms]
+
+src/__tests__/run-command.test.ts:
+Using environment: dev
+(pass) runHeadlessCommand > stdin prompt admission > delivers exact split UTF-8 input before opening the journal and client [34.98ms]
+(pass) runHeadlessCommand > stdin prompt admission > does not consume piped bytes when an explicit prompt exists [20.53ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects empty stdin before opening state or dispatching [1.39ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects whitespace stdin before opening state or dispatching [0.84ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects invalid UTF-8 stdin before opening state or dispatching [0.75ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects too large stdin before opening state or dispatching [0.37ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects interactive stdin before opening state or dispatching [0.09ms]
+(pass) runHeadlessCommand > stdin prompt admission > interrupts stalled stdin through timeout without a run [32.30ms]
+(pass) runHeadlessCommand > stdin prompt admission > interrupts stalled stdin through caller without a run [0.67ms]
+(pass) runHeadlessCommand > resolved failed, exhausted and rejected outcomes fail without an error event [2.63ms]
+(pass) runHeadlessCommand > an accepted recovery succeeds while its failed action stays recorded [0.56ms]
+(pass) runHeadlessCommand > short JSON events flush before a deferred run completes [82.58ms]
+(pass) runHeadlessCommand > short human text flushes before a deferred run completes [81.49ms]
+(pass) runHeadlessCommand > --json emits one ndjson line per event and returns 0 [9.35ms]
+(pass) runHeadlessCommand > batches stdout writes without breaking ndjson line integrity [4.59ms]
+(pass) runHeadlessCommand > non-json writes only text event content to stdout [3.44ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes an error ndjson line (json) [6.89ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes the error to stderr (non-json) [4.05ms]
+(pass) runHeadlessCommand > threads prompt and agentId into client.run (defaulting to the current CLI root) [3.89ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > the opened journal is threaded as BOTH journalWriter and journalReader, then closed [0.76ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > a fail-open opener (undefined) runs WITHOUT journaling and never throws [0.29ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > an opener that throws is contained: fail-open, never crash the run [0.81ms]
+(pass) runHeadlessCommand > timeout (--timeout) > aborts a hung run after the deadline: exit 1 with a clean ndjson error event [51.46ms]
+(pass) runHeadlessCommand > timeout (--timeout) > non-json mode reports the timeout on stderr only [51.18ms]
+(pass) runHeadlessCommand > timeout (--timeout) > a run finishing before the deadline still succeeds [2.61ms]
+(pass) runHeadlessCommand > timeout (--timeout) > delayed client setup retains the original numeric deadline [38.06ms]
+(pass) runHeadlessCommand > timeout (--timeout) > the run receives a signal when a timeout is set (none before this change) [55.15ms]
+(pass) runHeadlessCommand > timeout (--timeout) > an injected deps.signal still aborts the run when a timeout is also set [11.37ms]
+
+ 47 pass
+ 0 fail
+ 195 expect() calls
+Ran 47 tests across 3 files. [17.96s]

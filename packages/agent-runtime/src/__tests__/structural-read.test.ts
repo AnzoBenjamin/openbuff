@@ -1,4 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
+import {
+  decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
 
 import { handleReadOutline } from '../tools/handlers/tool/read-outline'
 import { processStrReplace } from '../process-str-replace'
@@ -158,7 +167,7 @@ describe('read_outline handler (AST-backed)', () => {
 })
 
 describe('extractSlices (shared core for read_files symbols)', () => {
-  test('extracts symbol spans with reusable capability tokens', async () => {
+  test('extracts symbol spans without authority when no source capability is supplied', async () => {
     const slices = await extractSlices(TS_SRC, 'svc.ts', ['greet', 'Service'])
     expect(slices).toHaveLength(2)
 
@@ -166,7 +175,7 @@ describe('extractSlices (shared core for read_files symbols)', () => {
     expect(greet).toMatchObject({ symbol: 'greet', startLine: 3, endLine: 6 })
     expect(greet.content).toContain('return msg + name')
     // extractSlices no longer mints a capability without a caller-supplied
-    // scope; the read_files handler mints the scoped cap.v3 token instead.
+    // authenticated whole source; the read_files handler supplies that source.
     expect(greet.readCapability).toBeUndefined()
 
     const service = slices.find((s) => s.symbol === 'Service')!
@@ -202,6 +211,86 @@ describe('extractSlices (shared core for read_files symbols)', () => {
   test('omits symbols that are not found', async () => {
     const slices = await extractSlices(TS_SRC, 'svc.ts', ['doesNotExist'])
     expect(slices).toEqual([])
+  })
+
+  test('mints scoped v4 symbol authority from the original signed BOM/CRLF source', async () => {
+    const content = '\uFEFF' + TS_SRC.replaceAll('\n', '\r\n')
+    const document = captureTextDocument(content)
+    const scope = {
+      projectId: '/project',
+      path: 'svc.ts',
+      runId: 'structural-v4-run',
+    }
+    const sourceReadCapability = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
+      scope,
+      rawBasis: getRawReadBasis(
+        document,
+        1,
+        document.maxCapabilityLine,
+        'whole',
+      ),
+    })
+    const slices = await extractSlices(
+      content,
+      'svc.ts',
+      ['greet'],
+      undefined,
+      scope,
+      sourceReadCapability,
+    )
+    expect(slices).toHaveLength(1)
+    expect(slices[0]?.content).toBe(TS_SRC.split('\n').slice(2, 6).join('\n'))
+    const decoded = decodeReadCapabilityToken(slices[0]!.readCapability!)
+    if (typeof decoded === 'string') throw new Error(decoded)
+    expect(decoded.tokenVersion).toBe('v4')
+    expect(readCapabilityMatchesScope(decoded, scope)).toBe(true)
+    expect(decoded.rawBasis).toEqual(getRawReadBasis(document, 3, 6, 'lines'))
+  })
+
+  test('scope, legacy source, and raw-drifted source never mint fresh symbol authority', async () => {
+    const document = captureTextDocument(TS_SRC)
+    const scope = {
+      projectId: '/project',
+      path: 'svc.ts',
+      runId: 'structural-source-control',
+    }
+    const legacy = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
+      scope,
+    })
+    const signed = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
+      scope,
+      rawBasis: getRawReadBasis(
+        document,
+        1,
+        document.maxCapabilityLine,
+        'whole',
+      ),
+    })
+    for (const [source, token] of [
+      [TS_SRC, undefined],
+      [TS_SRC, legacy],
+      [TS_SRC.replaceAll('\n', '\r\n'), signed],
+    ] as const) {
+      const slices = await extractSlices(
+        source,
+        'svc.ts',
+        ['greet'],
+        undefined,
+        scope,
+        token,
+      )
+      expect(slices[0]?.symbol).toBe('greet')
+      expect(slices[0]?.readCapability).toBeUndefined()
+    }
   })
 
   test('[COR-M07] heuristic matches are declaration-only and grant no edit capability', async () => {

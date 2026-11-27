@@ -1,30 +1,45 @@
+import { previousGrapheme, sliceTextCells } from '../../utils/text-boundaries'
 import { TextAttributes } from '@opentui/core'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { defineToolComponent } from './types'
-import { useTerminalDimensions } from '../../hooks/use-terminal-dimensions'
 import { useTheme } from '../../hooks/use-theme'
 import {
   getLatestFollowupToolCallId,
   useChatStore,
 } from '../../state/chat-store'
 import { Button } from '../button'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { createTextDocument } from '../../utils/output-document'
+import {
+  requestFollowupSubmission,
+  type FollowupSubmissionOutcome,
+} from '../../utils/followup-request'
 
 import type { ToolRenderConfig } from './types'
 import type { SuggestedFollowup } from '../../types/store'
 
 const EMPTY_CLICKED_SET = new Set<number>()
-const MIN_LABEL_COLUMN_WIDTH = 12
-const MAX_LABEL_COLUMN_WIDTH = 60
-/** Minimum terminal width to show the prompt description on hover */
-const MIN_WIDTH_FOR_DESCRIPTION = 80
+const inspectedPrompts = new Map<string, string>()
+function boundedPreview(text: string, width: number): string {
+  let prefix = text.slice(0, 512)
+  if (text.length > prefix.length)
+    prefix = prefix.slice(0, previousGrapheme(prefix, prefix.length))
+  const single = prefix.replace(/\s+/g, ' ').trim()
+  const shown = sliceTextCells(single, 0, width)
+  return shown + (shown !== single || prefix.length < text.length ? '…' : '')
+}
 
 interface FollowupLineProps {
   followup: SuggestedFollowup
+  toolCallId: string
   index: number
   isClicked: boolean
   isHovered: boolean
-  onSendFollowup: (prompt: string, index: number) => void
+  onSendFollowup: (
+    prompt: string,
+    index: number,
+  ) => Promise<FollowupSubmissionOutcome>
   onHover: (index: number | null) => void
   disabled?: boolean
   /** Width of the label column (for fixed-width alignment) */
@@ -32,107 +47,159 @@ interface FollowupLineProps {
   availableWidth: number
 }
 
-const FollowupLine = ({
+export const FollowupLine = ({
   followup,
+  toolCallId,
   index,
   isClicked,
   isHovered,
   onSendFollowup,
   onHover,
   disabled,
-  labelColumnWidth,
   availableWidth,
 }: FollowupLineProps) => {
   const theme = useTheme()
-  const { terminalWidth } = useTerminalDimensions()
-  const renderWidth = Math.max(10, Math.min(terminalWidth, availableWidth))
-
-  const handleClick = useCallback(() => {
-    if (!disabled) {
-      onSendFollowup(followup.prompt, index)
+  const pending = useRef(false)
+  const accepted = useRef(isClicked)
+  const mounted = useRef(true)
+  const [state, setState] = useState<
+    'idle' | 'pending' | 'accepted' | 'failed'
+  >('idle')
+  const [error, setError] = useState('')
+  useEffect(
+    () => {
+      mounted.current = true
+      return () => {
+        mounted.current = false
+      }
+    },
+    [],
+  )
+  const key = `${toolCallId}:${index}`
+  const inspect = useCallback(() => {
+    if (inspectedPrompts.size >= 128)
+      inspectedPrompts.delete(inspectedPrompts.keys().next().value!)
+    inspectedPrompts.set(key, followup.prompt)
+    useOutputReaderStore.getState().open({
+      document: createTextDocument({
+        id: `followup:${key}`,
+        title: `Suggested followup ${index + 1}`,
+        text: followup.prompt,
+        notice:
+          'Complete retained suggested prompt · Back returns to the suggestion',
+        provenance: {
+          source: 'capture',
+          identity: toolCallId,
+          freshness: 'captured',
+          exact: true,
+        },
+      }),
+    })
+  }, [followup.prompt, index, key, toolCallId])
+  const send = useCallback(async () => {
+    if (
+      disabled ||
+      pending.current ||
+      accepted.current ||
+      isClicked ||
+      !followup.prompt.trim()
+    )
+      return
+    if (
+      inspectedPrompts.has(key) &&
+      inspectedPrompts.get(key) !== followup.prompt
+    ) {
+      setError('Suggestion changed · Inspect the current prompt before sending')
+      setState('failed')
+      return
     }
-  }, [followup.prompt, index, onSendFollowup, disabled])
-
-  const handleMouseOver = useCallback(() => onHover(index), [onHover, index])
-  const handleMouseOut = useCallback(() => onHover(null), [onHover])
-
-  // Compute effective hover state declaratively
-  // Show hover effects if actually hovered AND not disabled AND not already clicked
-  const showHoverState = isHovered && !disabled && !isClicked
-
-  const hasLabel = Boolean(followup.label)
-  const displayText = hasLabel ? followup.label : followup.prompt
-
-  // Show description when hovered, has a label, and terminal is wide enough
-  const showDescription =
-    showHoverState && hasLabel && renderWidth >= MIN_WIDTH_FOR_DESCRIPTION
-
-  // Calculate truncated prompt with ellipsis only when needed
-  const truncatedPrompt = showDescription
-    ? (() => {
-        const descriptionWidth = Math.max(1, renderWidth - labelColumnWidth - 4)
-        return followup.prompt.length > descriptionWidth
-          ? followup.prompt.slice(0, descriptionWidth - 1) + '…'
-          : followup.prompt
-      })()
-    : ''
-
-  // Determine colors based on state
-  // When hovered, use primary color (acid green) for both arrow and title
-  const iconColor = isClicked
-    ? theme.success
-    : showHoverState
-      ? theme.primary
-      : theme.muted
-  const labelColor = isClicked
-    ? theme.muted
-    : showHoverState
-      ? theme.primary
-      : theme.foreground
-
-  // Calculate padding spaces needed to align descriptions (only when showing description)
-  const labelLength = (displayText ?? '').length
-  const paddingSpaces = showDescription
-    ? ' '.repeat(Math.max(0, labelColumnWidth - 2 - labelLength)) // -2 for "→ " prefix
-    : ''
-
+    pending.current = true
+    setState('pending')
+    setError('')
+    try {
+      const result = await onSendFollowup(followup.prompt, index)
+      accepted.current = result.accepted === true
+      if (mounted.current) {
+        setState(result.accepted === true ? 'accepted' : 'failed')
+        setError(
+          result.accepted
+            ? ''
+            : (result.error ?? 'Followup was not accepted · try again'),
+        )
+      }
+    } catch {
+      if (mounted.current) {
+        setState('failed')
+        setError('Followup was not accepted · try again')
+      }
+    } finally {
+      pending.current = false
+    }
+  }, [disabled, followup.prompt, index, isClicked, key, onSendFollowup])
+  const done = isClicked || state === 'accepted'
+  const label = followup.label
+    ? boundedPreview(
+        followup.label,
+        Math.max(24, Math.min(80, availableWidth * 2)),
+      )
+    : followup.prompt.length <= availableWidth * 2
+      ? boundedPreview(followup.prompt, Math.max(24, availableWidth * 2))
+      : `Followup ${index + 1}`
+  const preview =
+    followup.label || followup.prompt.length > availableWidth * 2
+      ? `${boundedPreview(followup.prompt, Math.max(24, Math.min(160, availableWidth * 2)))} · Full prompt available below`
+      : ''
   return (
-    <box style={{ flexDirection: 'column' }}>
-      {/* Row layout: clickable label + non-clickable description */}
-      <box style={{ flexDirection: 'row', width: '100%' }}>
-        {/* Clickable label area - only the text itself is clickable */}
-        <Button
-          onClick={handleClick}
-          onMouseOver={handleMouseOver}
-          onMouseOut={handleMouseOut}
-          style={{
-            flexShrink: 1,
-            flexGrow: showDescription ? 0 : 1,
-            backgroundColor: showHoverState ? theme.surface : undefined,
-          }}
-        >
-          <text style={{ wrapMode: 'word' }}>
-            <span fg={iconColor}>{isClicked ? '✓' : '→'}</span>
-            <span
-              fg={labelColor}
-              attributes={showHoverState ? TextAttributes.BOLD : undefined}
-            >
-              {' '}
-              {displayText}
-            </span>
-          </text>
+    <box style={{ flexDirection: 'column', width: '100%' }}>
+      <Button
+        onClick={send}
+        onMouseOver={() => onHover(index)}
+        onMouseOut={() => onHover(null)}
+        style={{ backgroundColor: isHovered ? theme.surface : undefined }}
+      >
+        <text style={{ wrapMode: 'word' }}>
+          <span
+            fg={
+              done
+                ? theme.success
+                : state === 'failed'
+                  ? theme.warning
+                  : theme.muted
+            }
+          >
+            {done ? '✓' : state === 'pending' ? '…' : '→'}{' '}
+          </span>
+          <span
+            fg={theme.foreground}
+            attributes={isHovered ? TextAttributes.BOLD : undefined}
+          >
+            {label}
+          </span>
+        </text>
+      </Button>
+      {preview ? (
+        <text fg={theme.muted} style={{ wrapMode: 'word' }}>
+          {preview}
+        </text>
+      ) : null}
+      {state === 'pending' ? (
+        <text fg={theme.muted}>Submitting followup…</text>
+      ) : null}
+      {done ? <text fg={theme.success}>Followup accepted</text> : null}
+      {error ? (
+        <text fg={theme.warning} style={{ wrapMode: 'word' }}>
+          {error}
+        </text>
+      ) : null}
+      <box style={{ flexDirection: 'row', gap: 2 }}>
+        <Button onClick={inspect}>
+          <text fg={theme.link}>Inspect full prompt</text>
         </Button>
-        {/* Flexible description column - NOT clickable, with padding for alignment */}
-        {showDescription && hasLabel && (
-          <box style={{ flexGrow: 1, flexShrink: 1 }}>
-            <text style={{ wrapMode: 'word' }}>
-              <span fg={theme.muted} attributes={TextAttributes.ITALIC}>
-                {paddingSpaces}
-                {truncatedPrompt}
-              </span>
-            </text>
-          </box>
-        )}
+        {state === 'failed' ? (
+          <Button onClick={send}>
+            <text fg={theme.link}>Try again</text>
+          </Button>
+        ) : null}
       </box>
     </box>
   )
@@ -141,7 +208,10 @@ const FollowupLine = ({
 interface SuggestFollowupsItemProps {
   toolCallId: string
   followups: SuggestedFollowup[]
-  onSendFollowup: (prompt: string, index: number) => void
+  onSendFollowup: (
+    prompt: string,
+    index: number,
+  ) => Promise<FollowupSubmissionOutcome>
   availableWidth: number
 }
 
@@ -231,7 +301,6 @@ const SuggestFollowupsItem = ({
   availableWidth,
 }: SuggestFollowupsItemProps) => {
   const theme = useTheme()
-  const inputFocused = useChatStore((state) => state.inputFocused)
   const setSuggestedFollowups = useChatStore(
     (state) => state.setSuggestedFollowups,
   )
@@ -290,20 +359,7 @@ const SuggestFollowupsItem = ({
     return <PastFollowupsToggle toolCallId={toolCallId} followups={followups} />
   }
 
-  // Calculate label column width for alignment across all followups
-  // Width = "→ " (2 chars) + max label/prompt length + "  " spacing (2 chars)
-  const maxDisplayLength = Math.max(
-    0,
-    ...followups.map((f) => (f.label ?? f.prompt).length),
-  )
-  const labelColumnWidth = Math.max(
-    6,
-    Math.min(
-      MAX_LABEL_COLUMN_WIDTH,
-      Math.max(MIN_LABEL_COLUMN_WIDTH, 2 + maxDisplayLength + 2),
-      Math.max(6, availableWidth - 4),
-    ),
-  ) // "→ " + label/prompt + "  "
+  const labelColumnWidth = Math.max(10, availableWidth - 4)
 
   return (
     <box style={{ flexDirection: 'column' }}>
@@ -313,12 +369,13 @@ const SuggestFollowupsItem = ({
           <FollowupLine
             key={`followup-${index}`}
             followup={followup}
+            toolCallId={toolCallId}
             index={index}
             isClicked={clickedIndices.has(index)}
             isHovered={hoveredIndex === index}
             onSendFollowup={onSendFollowup}
             onHover={setHoveredIndex}
-            disabled={!inputFocused}
+            disabled={false}
             labelColumnWidth={labelColumnWidth}
             availableWidth={availableWidth}
           />
@@ -356,14 +413,8 @@ export const SuggestFollowupsComponent = defineToolComponent({
 
     // The actual click handling is done in chat.tsx via the global handler
     // Here we just pass a placeholder that will be replaced
-    const handleSendFollowup = (prompt: string, index: number) => {
-      // This gets called from the FollowupCard component
-      // The actual logic is handled via the global followup handler
-      const event = new CustomEvent('codebuff:send-followup', {
-        detail: { prompt, index, toolCallId },
-      })
-      globalThis.dispatchEvent(event)
-    }
+    const handleSendFollowup = (prompt: string, index: number) =>
+      requestFollowupSubmission(prompt, index, toolCallId)
 
     return {
       content: (

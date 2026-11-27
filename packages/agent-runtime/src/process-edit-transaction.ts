@@ -1,18 +1,20 @@
 import { applyPatch, createPatch, diffChars } from 'diff'
 import {
   decodeReadCapabilityToken,
-  getContentHash,
-  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 import {
   describeLineBounds,
-  describeReanchorFailure,
   getLineCoordinates,
-  getRangeSlice,
-  reanchorCapabilityRange,
   resolveLineRange,
 } from '@codebuff/common/util/line-coordinates'
+import {
+  captureTextDocument,
+  describeRawReadFailure,
+  reanchorRawReadCapability,
+  spliceDocumentObservation,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
 
 import { processStrReplace } from './process-str-replace'
 import { processStructuredEdit } from './process-structured-edit'
@@ -30,7 +32,6 @@ import type {
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { StructuredEditErrorCode } from '@codebuff/common/util/error'
-
 
 type StrReplaceTransactionEdit = {
   id?: string
@@ -169,6 +170,14 @@ type TransactionFileChange = {
   content: string
   patch: string
   messages: string[]
+  /**
+   * Transformation ledger for this path: which edit produced each byte range
+   * of the candidate content. Lets the handler attribute a preflight syntax
+   * failure to the exact originating edit instead of the first edit that
+   * touched the path. Empty when this path's original-snapshot provenance
+   * became unmappable mid-transaction.
+   */
+  ledger: TransformationLedgerEntry[]
 }
 
 export async function processEditTransaction(params: {
@@ -318,10 +327,15 @@ export async function processEditTransaction(params: {
     }
     const priorContent = currentContent ?? ''
     workingContentByPath.set(effectiveEdit.path, result.content)
+    // The loop-scoped editIndex is the FIRST index of a coalesced adjacent
+    // same-path str_replace run, so every entry of that run records the run's
+    // first index (best effort): the coalesced batch applies as one action and
+    // the ledger cannot split it back per originating edit.
     const ledgerResult = appendTransformationLedgerEntries(
       transformationLedgerByPath.get(effectiveEdit.path) ?? [],
-      normalizeLineEndings(priorContent),
-      normalizeLineEndings(result.content),
+      captureTextDocument(priorContent).observation,
+      captureTextDocument(result.content).observation,
+      editIndex,
     )
     if ('error' in ledgerResult) {
       unmappableOriginalPaths.add(effectiveEdit.path)
@@ -353,7 +367,7 @@ export async function processEditTransaction(params: {
       tool: 'edit_transaction',
       error: [
         `edit_transaction aborted during preflight at edit ${firstFailure.editIndex + 1} of ${edits.length}, so NO files were changed.`,
-        'The detailed cause is listed once in failures below. If that failure requires fresh read/capability state, re-read EVERY target in this transaction in the current run, then rebuild and retry the whole transaction from that one current snapshot. Do not refresh only the first failed path while replaying stale tokens for the remaining targets.',
+        'See failures and the recovery packet below for the cause and required next action. Resubmit the complete transaction after addressing the failure.',
       ].join('\n\n'),
       failures,
       requiresFreshRead: recovery.requiresFreshRead,
@@ -383,6 +397,9 @@ export async function processEditTransaction(params: {
       content: finalContent,
       patch,
       messages: messagesByPath.get(path) ?? [],
+      ledger: unmappableOriginalPaths.has(path)
+        ? []
+        : (transformationLedgerByPath.get(path) ?? []),
     })
   }
 
@@ -631,6 +648,15 @@ function buildTransactionRecovery(params: {
 
 type TransformationLedgerEntry = {
   actionIndex: number
+  /**
+   * Index (into the edits array this module received) of the edit that
+   * produced this action, stamped when the ledger entries are appended. For a
+   * coalesced adjacent same-path str_replace run this is the run's FIRST
+   * index — the coalesced batch applies as one action, so the ledger cannot
+   * attribute the individual replacements of the run back to their own edits
+   * (best-effort limitation).
+   */
+  editIndex: number
   originalStart: number
   originalEnd: number
   beforeStart: number
@@ -644,7 +670,9 @@ function originalLineSpan(
   startLine: number,
   endLine: number,
 ): { startOffset: number; endOffset: number } | null {
-  const coordinates = getLineCoordinates(content)
+  const coordinates = getLineCoordinates(
+    captureTextDocument(content).observation,
+  )
   // Resolve in capability space: read_files mints whole-file capabilities that
   // bind the trailing entry past the final newline, so resolving in visible
   // space here would drop provenance for exactly the whole-file case and let it
@@ -706,12 +734,16 @@ function resolveReplaceRangeEdit(
   | { error: string; failureKind?: TransactionFailureKind } {
   if (edit.type !== 'replace_range') return { edit }
   const decoded = decodeReadCapabilityToken(edit.readCapability)
-  if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
+  if (
+    typeof decoded === 'string' ||
+    decoded.tokenVersion !== 'v4' ||
+    !decoded.rawBasis
+  ) {
     return {
       error:
         typeof decoded === 'string'
           ? decoded
-          : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
+          : 'readCapability requires an authenticated project/path/run-bound cap.v4 raw basis.',
       // Only a decode failure carries the structured capability-invalid kind;
       // a wrong-version token is classified by classifyTransactionFailureKind.
       ...(typeof decoded === 'string'
@@ -728,15 +760,13 @@ function resolveReplaceRangeEdit(
   let capabilityEndLine = decoded.endLine
   let reanchoredBy: number | undefined
   if (typeof currentContent === 'string') {
-    const reanchored = reanchorCapabilityRange({
-      coordinates: getLineCoordinates(currentContent),
-      startLine: decoded.startLine,
-      endLine: decoded.endLine,
-      expectedHash: decoded.hash,
+    const reanchored = reanchorRawReadCapability({
+      content: currentContent,
+      capability: decoded,
     })
     if (!reanchored.ok) {
       return {
-        error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${decoded.startLine}-${decoded.endLine} and retry with the fresh token. Cause: ${describeReanchorFailure(reanchored)}.`,
+        error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${decoded.startLine}-${decoded.endLine} and retry with the fresh token. Cause: ${describeRawReadFailure(reanchored)}.`,
         failureKind: 'capability_stale' as const,
       }
     }
@@ -768,7 +798,7 @@ function resolveReplaceRangeEdit(
       }
     }
     const resolved = resolveOccurrenceRangeInCapabilityRange({
-      content: currentContent,
+      content: captureTextDocument(currentContent).observation,
       match: edit.occurrence.match,
       occurrence: edit.occurrence.occurrence,
       capabilityStartLine,
@@ -895,10 +925,79 @@ function mapWorkingOffsetToOriginal(
   return offset
 }
 
+/**
+ * Attributes a candidate-content offset back to the edit that produced it.
+ *
+ * This is a backward action-group walk that MIRRORS mapWorkingOffsetToOriginal
+ * above: the same contiguous-same-actionIndex grouping, the same
+ * last-entry-first ordering, and the same left-affinity actionDelta
+ * accumulation, so an offset that no entry owns maps to exactly the original
+ * offset the mirrored walk would return. The one addition is ownership: the
+ * FIRST non-deletion entry in a group whose after-range contains the offset is
+ * the edit that produced those bytes, so its editIndex is returned (with
+ * originalOffset null) instead of continuing the offset translation.
+ */
+export function attributeContentOffset(
+  ledger: TransformationLedgerEntry[],
+  workingOffset: number,
+): { owningEditIndex: number | null; originalOffset: number | null } {
+  let offset = workingOffset
+  for (let index = ledger.length - 1; index >= 0; ) {
+    const actionIndex = ledger[index]!.actionIndex
+    let firstIndex = index
+    while (
+      firstIndex > 0 &&
+      ledger[firstIndex - 1]!.actionIndex === actionIndex
+    ) {
+      firstIndex--
+    }
+    // Ownership first: the first non-deletion entry in this group whose
+    // after-range contains the offset produced those bytes.
+    for (let entryIndex = firstIndex; entryIndex <= index; entryIndex++) {
+      const entry = ledger[entryIndex]!
+      if (
+        entry.afterStart !== entry.afterEnd &&
+        offset >= entry.afterStart &&
+        offset < entry.afterEnd
+      ) {
+        return { owningEditIndex: entry.editIndex, originalOffset: null }
+      }
+    }
+    // No entry in this group owns the offset: shift it exactly like
+    // mapWorkingOffsetToOriginal would (left affinity) and walk the earlier
+    // group.
+    let actionDelta = 0
+    for (let entryIndex = firstIndex; entryIndex <= index; entryIndex++) {
+      const entry = ledger[entryIndex]!
+      const isDeletion = entry.afterStart === entry.afterEnd
+      // Strictly inside an entry's after-range is unrepresentable. Ownership
+      // above returns first for exactly that case on non-deletion entries (a
+      // deletion entry has an empty after-range), so this is unreachable today
+      // — kept as the same fail-closed guard the mirrored walk carries.
+      if (offset > entry.afterStart && offset < entry.afterEnd) {
+        return { owningEditIndex: null, originalOffset: null }
+      }
+      if (
+        offset > entry.afterEnd ||
+        (offset === entry.afterEnd && !isDeletion)
+      ) {
+        actionDelta +=
+          entry.afterEnd -
+          entry.afterStart -
+          (entry.beforeEnd - entry.beforeStart)
+      }
+    }
+    offset -= actionDelta
+    index = firstIndex - 1
+  }
+  return { owningEditIndex: null, originalOffset: offset }
+}
+
 function appendTransformationLedgerEntries(
   existingLedger: TransformationLedgerEntry[],
   beforeContent: string,
   afterContent: string,
+  owningEditIndex: number,
 ): { ledger: TransformationLedgerEntry[] } | { error: string } {
   if (beforeContent === afterContent) return { ledger: existingLedger }
   const actionIndex = (existingLedger.at(-1)?.actionIndex ?? -1) + 1
@@ -935,6 +1034,7 @@ function appendTransformationLedgerEntries(
     entries.push({
       ...pending,
       actionIndex,
+      editIndex: owningEditIndex,
       originalStart,
       originalEnd,
     })
@@ -1016,11 +1116,13 @@ async function processTransactionEdit(params: {
   switch (edit.type) {
     case 'str_replace': {
       const initialContent = await initialContentPromise
+      const originalContent = await originalContentPromise
       return processStrReplace({
         path: edit.path,
         replacements: edit.replacements,
         atomic: true,
         transactionContext: true,
+        ...(originalContent !== null && { recoverySnapshot: originalContent }),
         requireFreshReadCapability,
         readCapabilityScope: readCapabilityIssuer
           ? { ...readCapabilityIssuer, path: edit.path }
@@ -1043,8 +1145,8 @@ async function processTransactionEdit(params: {
       if (initialContent === null) {
         return { error: `Cannot replace a range in missing file ${edit.path}.` }
       }
-      const coordinates = getLineCoordinates(initialContent)
-      const { normalized, lines } = coordinates
+      const document = captureTextDocument(initialContent)
+      const coordinates = getLineCoordinates(document.observation)
       const authorizationTarget = edit.originalRange ?? {
         startLine: edit.startLine,
         endLine: edit.endLine,
@@ -1084,12 +1186,18 @@ async function processTransactionEdit(params: {
         // Freshness is re-verified at the ACTUAL located bounds: after a
         // re-anchor the proven bytes live there, and re-slicing the token's
         // original bounds would re-report the staleness the re-anchor resolved.
-        const observedContent = getRangeSlice(
-          getLineCoordinates(originalContent ?? ''),
-          edit.capabilityStartLine,
-          edit.capabilityEndLine,
-        )
-        if (getContentHash(observedContent) !== decoded.hash) {
+        const fresh =
+          originalContent === null
+            ? undefined
+            : reanchorRawReadCapability({
+                content: originalContent,
+                capability: decoded,
+              })
+        if (
+          !fresh?.ok ||
+          fresh.startLine !== edit.capabilityStartLine ||
+          fresh.endLine !== edit.capabilityEndLine
+        ) {
           return {
             error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${edit.capabilityStartLine}-${edit.capabilityEndLine} and retry with the fresh token.`,
             failureKind: 'capability_stale',
@@ -1141,18 +1249,19 @@ async function processTransactionEdit(params: {
         edit.reanchoredBy === undefined
           ? ''
           : ` (re-anchored ${edit.reanchoredBy > 0 ? '+' : ''}${edit.reanchoredBy} lines after content shifted above the target)`
-      const replacementContent = normalizeLineEndings(edit.newContent)
       const content = edit.mappedRange
-        ? `${normalized.slice(0, edit.mappedRange.startOffset)}${replacementContent}${normalized.slice(edit.mappedRange.endOffset)}`
-        : (() => {
-            const replacementLines = replacementContent.split('\n')
-            lines.splice(
-              targetStartLine - 1,
-              targetEndLine - targetStartLine + 1,
-              ...replacementLines,
-            )
-            return lines.join('\n')
-          })()
+        ? spliceDocumentObservation(
+            document,
+            edit.mappedRange.startOffset,
+            edit.mappedRange.endOffset,
+            edit.newContent,
+          )
+        : spliceDocumentRange(
+            document,
+            targetStartLine,
+            targetEndLine,
+            edit.newContent,
+          )
       return {
         content,
         messages: [
@@ -1211,22 +1320,22 @@ async function processTransactionEdit(params: {
           path: edit.path,
           slice: originalMatch,
           scope: readCapabilityIssuer,
+          rawContent: originalContent ?? undefined,
         })
-        if (capabilityError) return { error: capabilityError }
+        if (capabilityError) return capabilityError
         if (match.content !== originalMatch.content) {
           return {
             error: `rewrite_symbol blocked for ${edit.path}: the symbol replacement bytes were changed earlier in this transaction.`,
           }
         }
       }
-      const lines = normalizeLineEndings(initialContent).split('\n')
-      lines.splice(
-        match.startLine - 1,
-        match.endLine - match.startLine + 1,
-        ...normalizeLineEndings(edit.content).split('\n'),
-      )
       return {
-        content: lines.join('\n'),
+        content: spliceDocumentRange(
+          captureTextDocument(initialContent),
+          match.startLine,
+          match.endLine,
+          edit.content,
+        ),
         messages: [`Rewrote symbol ${edit.symbol} in ${edit.path}.`],
       }
     }

@@ -68,20 +68,40 @@ if (siblingPath) {
   ;(
     globalThis as { __CODEBUFF_TREE_SITTER_WASM_PATH__?: string }
   ).__CODEBUFF_TREE_SITTER_WASM_PATH__ = siblingPath
+}
 
-  // Also try the synchronous-bytes path: hand the bytes straight to
-  // Parser.init({ wasmBinary }) so the SDK doesn't need to round-trip
-  // through emscripten's path resolution. Both channels feed the same
-  // tree-sitter init; whichever one trips first wins.
+/**
+ * Read + publish the sibling tree-sitter.wasm bytes.
+ *
+ * Memoized so the bytes are read at most once per process; the bytes are
+ * handed straight to Parser.init({ wasmBinary }) so the SDK doesn't need to
+ * round-trip through emscripten's path resolution. The path env/global
+ * published above remains available as a fallback channel either way.
+ *
+ * Compatibility: this is invoked at module-import time below. code-map's
+ * init-node.ts reads __CODEBUFF_TREE_SITTER_WASM_BINARY__ at its own
+ * Parser.init, and publishing the bytes only on the --smoke-tree-sitter
+ * diagnostic path would force the normal startup/highlight path back onto
+ * the path-resolution fallback that is unreliable for Windows bun --compile
+ * binaries (bunfs paths ENOENT under fs.existsSync). The single ~200KB
+ * readFileSync is cheap relative to the rest of startup.
+ */
+export function publishWasmBinary(): Uint8Array | null {
+  const globalWithBinary = globalThis as {
+    __CODEBUFF_TREE_SITTER_WASM_BINARY__?: Uint8Array
+  }
+  const cached = globalWithBinary.__CODEBUFF_TREE_SITTER_WASM_BINARY__
+  if (cached && cached.byteLength > 0) {
+    return cached
+  }
+  if (!siblingPath) {
+    return null
+  }
   try {
     const buf = readFileSync(siblingPath)
-    ;(
-      globalThis as { __CODEBUFF_TREE_SITTER_WASM_BINARY__?: Uint8Array }
-    ).__CODEBUFF_TREE_SITTER_WASM_BINARY__ = new Uint8Array(
-      buf.buffer,
-      buf.byteOffset,
-      buf.byteLength,
-    )
+    const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+    globalWithBinary.__CODEBUFF_TREE_SITTER_WASM_BINARY__ = bytes
+    return bytes
   } catch (err) {
     console.error(
       '[tree-sitter pre-init] readFileSync failed for sibling wasm at',
@@ -89,8 +109,16 @@ if (siblingPath) {
       '—',
       err instanceof Error ? err.message : String(err),
     )
+    return null
   }
 }
 
 // `--smoke-tree-sitter` is the deterministic CI gate. The handler lives at
 // the top of main() in cli/src/index.tsx (before parseArgs).
+
+// Publish the sibling wasm bytes eagerly on the NORMAL startup/highlight
+// path too — not just the --smoke-tree-sitter diagnostic gate — so
+// code-map's init-node.ts finds __CODEBUFF_TREE_SITTER_WASM_BINARY__
+// already published when its Parser.init runs (see the compatibility note
+// on publishWasmBinary). Memoized: the smoke path's later call is a no-op.
+publishWasmBinary()

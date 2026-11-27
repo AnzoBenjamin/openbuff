@@ -1,0 +1,116 @@
+{
+  "toolCall": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_7",
+        "title": "Edit transaction",
+        "kind": "edit",
+        "status": "pending",
+        "locations": [
+          {
+            "path": "/home/dev/proj/src/a.ts"
+          }
+        ],
+        "rawInput": {
+          "edits": [
+            {
+              "type": "str_replace",
+              "path": "src/a.ts",
+              "replacements": [
+                {
+                  "oldString": "foo",
+                  "newString": "bar"
+                }
+              ]
+            }
+          ]
+        },
+        "_meta": {
+          "openbuff.dev": {
+            "laneId": "main"
+          }
+        }
+      }
+    }
+  },
+  "toolCallUpdate": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_7",
+        "status": "completed",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/home/dev/proj/src/a.ts",
+            "oldText": "export const foo = 1\n",
+            "newText": "export const bar = 1\n"
+          }
+        ],
+        "_meta": {
+          "openbuff.dev": {
+            "laneId": "main",
+            "receipt": {
+              "kind": "openbuff.receipt_envelope",
+              "version": 1,
+              "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+              "toolCallId": "call_7",
+              "laneId": "main",
+              "mutation": {
+                "kind": "file_mutation_result",
+                "version": 1,
+                "operationId": "op_1",
+                "outcome": "applied",
+                "actions": [
+                  {
+                    "actionId": "op_1:0",
+                    "index": 0,
+                    "action": "update",
+                    "path": "src/a.ts",
+                    "outcome": "applied",
+                    "beforeHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    "afterHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                  }
+                ],
+                "authorityTier": "conditional_commit",
+                "receiptId": "rcpt_1",
+                "authorityReceipt": {
+                  "kind": "commit_receipt",
+                  "version": 1,
+                  "receiptId": "rcpt_1",
+                  "operationId": "op_1",
+                  "callId": "call_7",
+                  "authorityTier": "conditional_commit",
+                  "status": "committed",
+                  "actions": [
+                    {
+                      "actionId": "op_1:0",
+                      "index": 0,
+                      "action": "update",
+                      "path": "src/a.ts",
+                      "status": "committed",
+                      "beforeHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                      "afterHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                    }
+                  ],
+                  "finalHashes": {
+                    "src/a.ts": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                  }
+                },
+                "errors": [],
+                "freshCapabilities": []
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

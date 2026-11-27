@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 import type { ChatMessage, CompactionContentBlock } from '../../../types/chat'
 import type { SendMessageTimerController } from '../../../utils/send-message-timer'
@@ -24,6 +27,7 @@ const { createStreamController } = await import('../../stream-state')
 const {
   cleanupProviderReadinessFailure,
   createRunOwnership,
+  prepareUserMessage,
   formatFileAttachmentForPrompt,
   formatQueuedMessageForHistory,
   setupStreamingContext,
@@ -168,6 +172,69 @@ describe('createRunOwnership', () => {
   })
 })
 
+describe('prepareUserMessage transcript retention', () => {
+  test('preserves prior IDs, order and objects when appending a user and post-user response', async () => {
+    const projectFiles = await import('../../../project-files')
+    const { useChatStore } = await import('../../../state/chat-store')
+    const owned = mkdtempSync(path.join(tmpdir(), 'openbuff-b13-prepare-'))
+    const project = path.join(owned, 'project')
+    mkdirSync(project)
+    const previousConfig = process.env.OPENBUFF_CONFIG_DIR
+    let previousProject: string | undefined
+    try {
+      previousProject = projectFiles.getProjectRoot()
+    } catch {}
+    process.env.OPENBUFF_CONFIG_DIR = path.join(owned, 'config')
+    projectFiles.setProjectRoot(project)
+    useChatStore.getState().reset()
+    const previous: ChatMessage[] = Array.from({ length: 240 }, (_, index) => ({
+      id: `retained-${index}`,
+      variant: index % 2 ? 'ai' : 'user',
+      content: `retained body ${index}`,
+      timestamp: 'now',
+    }))
+    let messages = previous
+    const response: ChatMessage = {
+      id: 'post-user-response',
+      variant: 'ai',
+      content: 'response',
+      timestamp: 'now',
+    }
+    try {
+      const prepared = await prepareUserMessage({
+        content: 'new prompt',
+        agentMode: 'DEFAULT',
+        attachments: [],
+        postUserMessage: (next) => [...next, response],
+        deps: {
+          setMessages: (update) => {
+            messages = typeof update === 'function' ? update(messages) : update
+          },
+          lastMessageMode: 'DEFAULT',
+          setLastMessageMode: () => {},
+          scrollToLatest: () => {},
+          setHasReceivedPlanResponse: () => {},
+        },
+      })
+      expect(messages).toHaveLength(242)
+      expect(messages.map((message) => message.id)).toEqual([
+        ...previous.map((message) => message.id),
+        prepared.userMessageId,
+        response.id,
+      ])
+      for (let index = 0; index < previous.length; index++)
+        expect(messages[index]).toBe(previous[index])
+      expect(messages.at(-1)).toBe(response)
+    } finally {
+      useChatStore.getState().reset()
+      if (previousConfig === undefined) delete process.env.OPENBUFF_CONFIG_DIR
+      else process.env.OPENBUFF_CONFIG_DIR = previousConfig
+      if (previousProject) projectFiles.setProjectRoot(previousProject)
+      rmSync(owned, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('file attachment prompt provenance', () => {
   test('labels guaranteed @file reads and warns when context is truncated', () => {
     const attachment = {
@@ -198,6 +265,7 @@ describe('formatQueuedMessageForHistory', () => {
     expect(
       formatQueuedMessageForHistory({
         content: 'plain prompt',
+        agentMode: 'DEFAULT',
         attachments: [],
       }),
     ).toBe('plain prompt')
@@ -206,6 +274,7 @@ describe('formatQueuedMessageForHistory', () => {
   test('folds text and file attachments into the persisted prompt text', () => {
     const persisted = formatQueuedMessageForHistory({
       content: 'review this',
+      agentMode: 'PLAN',
       attachments: [
         {
           kind: 'text',
@@ -237,6 +306,7 @@ describe('formatQueuedMessageForHistory', () => {
   test('persists a locating note for image attachments instead of dropping them', () => {
     const persisted = formatQueuedMessageForHistory({
       content: 'look at this',
+      agentMode: 'DEFAULT',
       attachments: [
         {
           kind: 'image',
@@ -645,6 +715,169 @@ describe('markPendingCompactionInterrupted', () => {
 })
 
 describe('handleRunCompletion', () => {
+  test('publishes a zero cache-hit rate only when usage is complete', () => {
+    const runStates = [
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 0,
+        cacheTotalInputTokens: 100,
+        expectedRate: 0,
+      },
+      {
+        cacheUsageComplete: false,
+        cacheInputTokens: 0,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+      {
+        cacheUsageComplete: undefined,
+        cacheInputTokens: 0,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 50,
+        cacheTotalInputTokens: 150,
+        expectedRate: 1 / 3,
+      },
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 150,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 50.5,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+    ]
+
+    for (const cacheStats of runStates) {
+      const timerController = createMockTimerController()
+      let messages = createBaseMessages()
+      const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+        messages = fn(messages)
+      })
+
+      handleRunCompletion({
+        runState: {
+          sessionState: {
+            mainAgentState: cacheStats,
+          } as any,
+          output: { type: 'lastMessage', value: [] },
+        } as RunState,
+        actualCredits: undefined,
+        agentMode: 'DEFAULT' as any,
+        timerController,
+        updater,
+        aiMessageId: 'ai-1',
+        wasAbortedByUser: false,
+        setStreamStatus: () => {},
+        setCanProcessQueue: () => {},
+        updateChainInProgress: () => {},
+        setHasReceivedPlanResponse: () => {},
+      })
+      updater.flush()
+
+      expect(messages[0]?.cacheHitRate).toBe(cacheStats.expectedRate)
+    }
+  })
+
+  for (const runOutcome of [
+    { termination: 'completed' },
+    {
+      termination: 'cancelled',
+      cause: {
+        code: 'original_cancel',
+        message: 'Original cancellation cause',
+      },
+    },
+  ] as const)
+    test(`cancellation persists evidence before queue release from ${runOutcome.termination}`, () => {
+      const timerController = createMockTimerController()
+      let messages = createBaseMessages()
+      const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+        messages = fn(messages)
+      })
+      const runState: RunState = {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome,
+        taskAcceptance: { status: 'unknown', basis: 'interrupted-oracle' },
+        actionOutcomes: [
+          {
+            actionId: 'late-action',
+            attemptId: 'attempt',
+            runId: 'run',
+            toolName: 'write_file',
+            basis: { inputHash: 'sha256:fixture' },
+            outcome: 'succeeded',
+            effect: {
+              status: 'confirmed',
+              receiptIds: ['receipt'],
+              confirmedPaths: ['a.ts'],
+            },
+          },
+        ],
+      }
+      let released = false
+      handleRunCompletion({
+        runState,
+        actualCredits: undefined,
+        agentMode: 'DEFAULT' as any,
+        timerController,
+        updater,
+        aiMessageId: 'ai-1',
+        wasAbortedByUser: true,
+        setStreamStatus: () => {},
+        setCanProcessQueue: () => {},
+        updateChainInProgress: () => {},
+        setHasReceivedPlanResponse: () => {},
+        resumeQueue: () => {
+          released = true
+          expect(messages[0].runOutcome?.termination).toBe('cancelled')
+          if (runOutcome.termination === 'cancelled')
+            expect(messages[0].runOutcome).toEqual(runOutcome)
+          expect(messages[0].actionOutcomes).toEqual(runState.actionOutcomes)
+          expect(messages[0].taskAcceptance).toEqual(runState.taskAcceptance)
+        },
+      })
+      expect(released).toBe(true)
+    })
+
+  test('empty typed failure does not issue a successful completion', () => {
+    const timerController = createMockTimerController()
+    let messages = createBaseMessages()
+    const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+      messages = fn(messages)
+    })
+    handleRunCompletion({
+      runState: {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: {
+          termination: 'failed',
+          cause: { code: 'fixture_failure', message: '   ' },
+        },
+      },
+      actualCredits: undefined,
+      agentMode: 'DEFAULT' as any,
+      timerController,
+      updater,
+      aiMessageId: 'ai-1',
+      wasAbortedByUser: false,
+      setStreamStatus: () => {},
+      setCanProcessQueue: () => {},
+      updateChainInProgress: () => {},
+      setHasReceivedPlanResponse: () => {},
+    })
+    updater.flush()
+    expect(timerController.stopCalls).toEqual(['error'])
+    expect(messages[0].runOutcome?.termination).toBe('failed')
+    expect(messages[0].userError?.trim().length).toBeGreaterThan(0)
+  })
+
   describe('abort path', () => {
     test('finalizes queue state after an aborted run settles', () => {
       const timerController = createMockTimerController()
@@ -1467,7 +1700,7 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
     expect(streamStatus as StreamStatus).toBe('idle') // Clobbered!
   })
 
-  test('full two-run lifecycle preserves run A state before run B completion', () => {
+  test('full two-run lifecycle preserves run A state before run B completion', async () => {
     // End-to-end test: two complete runs sharing the SAME streamRefs instance
     // (matching production behavior where streamRefs is reused across sends).
     // Verifies that run B can start immediately after abort, and that run A's
@@ -1616,7 +1849,7 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
     }
     previousRunState = runStateB
 
-    handleRunCompletion({
+    await handleRunCompletion({
       runState: runStateB,
       actualCredits: 5,
       agentMode: 'DEFAULT' as any,
@@ -1654,6 +1887,126 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
  * - validation failure (success: false)
  * - validation exception
  */
+/**
+ * Queue-gate ordering (reliability finding
+ * queue-gate-reopens-before-batched-updater-settles): the terminal message
+ * write and the timer stop must settle BEFORE finalizeQueueState reopens
+ * the queue gate (setStreamStatus('idle') / resumeQueue), so a queued
+ * follow-up send can never begin mutating the same chat-store messages
+ * batch while the previous turn's batched AI-message write-out is still in
+ * flight.
+ */
+describe('handleRunCompletion and handleRunError settle writes before reopening the queue gate', () => {
+  test('success path stops the timer and marks complete before finalizeQueueState', async () => {
+    let messages = createBaseMessages()
+    const timerController = createMockTimerController()
+    const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+      messages = fn(messages)
+    })
+
+    const eventOrder: string[] = []
+    let messageCompleteAtFinalize = false
+    const originalStop = timerController.stop
+    timerController.stop = (outcome) => {
+      eventOrder.push(outcome)
+      return originalStop(outcome)
+    }
+
+    const runState = {
+      sessionState: undefined,
+      output: { type: 'lastMessage' as const, value: [] },
+    }
+
+    await handleRunCompletion({
+      runState,
+      actualCredits: 1,
+      agentMode: 'DEFAULT' as any,
+      timerController,
+      updater,
+      aiMessageId: 'ai-1',
+      wasAbortedByUser: false,
+      setStreamStatus: () => {},
+      setCanProcessQueue: () => {},
+      updateChainInProgress: () => {},
+      setHasReceivedPlanResponse: () => {},
+      isProcessingQueueRef: { current: true },
+      isQueuePausedRef: { current: false },
+      resumeQueue: () => {
+        // Snapshot whether the terminal write already settled at the
+        // moment the gate is reopened.
+        messageCompleteAtFinalize =
+          messages.find((m) => m.id === 'ai-1')?.isComplete === true
+        eventOrder.push('finalize')
+      },
+    })
+
+    // Order: the timer settled FIRST, then the gate reopened LAST.
+    expect(eventOrder).toEqual(['success', 'finalize'])
+    // The terminal markComplete write had settled before the gate reopened:
+    // a queued follow-up starting after finalizeQueueState cannot mutate the
+    // same batch while this turn's write-out is in flight.
+    expect(messageCompleteAtFinalize).toBe(true)
+    expect(messages.find((m) => m.id === 'ai-1')?.isComplete).toBe(true)
+  })
+
+  test('error path sets the error and stops the timer before finalizeQueueState', () => {
+    let messages: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: '',
+        blocks: [],
+        timestamp: 'now',
+      },
+    ]
+    const timerController = createMockTimerController()
+    const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+      messages = fn(messages)
+    })
+
+    let timerStoppedBeforeFinalize = false
+    const originalStop = timerController.stop
+    timerController.stop = (outcome) => {
+      // Record that the timer outcome is known while finalize has not yet
+      // reopened the gate (setCanProcessQueue fires as finalize's LAST step).
+      const result = originalStop(outcome)
+      void result
+      timerStoppedBeforeFinalize = true
+      return result
+    }
+
+    let timerStoppedAtCanProcessQueue = false
+    let isErrorCompleteAtCanProcessQueue = false
+
+    handleRunError({
+      error: new Error('Something failed'),
+      timerController,
+      updater,
+      setIsRetrying: () => {},
+      setStreamStatus: () => {},
+      // setCanProcessQueue fires inside finalizeQueueState, which must run
+      // AFTER the terminal setError write and the timer stop have settled.
+      setCanProcessQueue: () => {
+        timerStoppedAtCanProcessQueue = timerStoppedBeforeFinalize
+        isErrorCompleteAtCanProcessQueue =
+          messages.find((m) => m.id === 'ai-1')?.isComplete === true
+      },
+      updateChainInProgress: () => {},
+      isProcessingQueueRef: { current: true },
+      isQueuePausedRef: { current: false },
+    })
+
+    expect(timerController.stopCalls).toEqual(['error'])
+    // The timer stop and the terminal error write had both settled by the
+    // moment finalizeQueueState reopened the queue gate.
+    expect(timerStoppedAtCanProcessQueue).toBe(true)
+    expect(isErrorCompleteAtCanProcessQueue).toBe(true)
+    expect(messages.find((m) => m.id === 'ai-1')?.userError).toBe(
+      'Something failed',
+    )
+  })
+})
+
 describe('resetEarlyReturnState', () => {
   describe('prepareUserMessage exception path', () => {
     test('resets chain in progress to false', () => {

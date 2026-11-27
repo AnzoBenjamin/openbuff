@@ -1,0 +1,5 @@
+cli/src/utils/usage-observations.ts 98ms
+cli/src/commands/usage.ts 27ms
+cli/src/utils/__tests__/usage-observations.test.ts 17ms
+cli/src/commands/__tests__/usage.test.ts 22ms
+cli/src/commands/__tests__/usage-wire.test.ts 22ms

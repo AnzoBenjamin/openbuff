@@ -1,0 +1,236 @@
+import argparse
+import hashlib
+import json
+import re
+from collections import Counter
+from pathlib import Path
+from subprocess import run
+
+
+parser = argparse.ArgumentParser(description='Check the review plan and its retained lineage without running product tests.')
+parser.add_argument('--review-dir', default=str(Path(__file__).resolve().parent))
+parser.add_argument('--plan', default='PLAN-DRAFT.md')
+parser.add_argument('--repo', default='/home/ben/Code/CLI/openbuff')
+args = parser.parse_args()
+review = Path(args.review_dir)
+repo = Path(args.repo)
+plan = (review / args.plan).read_text()
+spec = (review / 'SPEC.md').read_text()
+migration = (review / 'OLD-TASK-MIGRATION.md').read_text()
+errors = []
+
+card_pattern = r'^### \[ \] (B\d{2})\b.*$'
+matches = list(re.finditer(card_pattern, plan, re.M))
+cards = [m.group(1) for m in matches]
+duplicates = [key for key, count in Counter(cards).items() if count != 1]
+if duplicates:
+    errors.append({'duplicateCards': duplicates})
+for index, match in enumerate(matches):
+    end = matches[index + 1].start() if index + 1 < len(matches) else len(plan)
+    body = plan[match.end():end]
+    for field in ('Trace', 'Owner/scope/deps/language', 'Accept', 'Verify/evidence/stop'):
+        if '**' + field + ':**' not in body:
+            errors.append({'card': match.group(1), 'missingField': field})
+
+node_pattern = r'(?:B\d{2}|M\d{2}-[A-Z]+)'
+graph = {}
+graph_section = re.search(r'## Immediate ready queue and dependency graph\n(.*?)\n## Task cards', plan, re.S)
+if graph_section is None:
+    errors.append({'missingDependencyGraphSection': True})
+for ident, deps in re.findall(r'^\| (' + node_pattern + r') \| ([^|]+) \|[^\n]+$', graph_section.group(1) if graph_section else '', re.M):
+    if ident in graph:
+        errors.append({'duplicateGraphRow': ident})
+    graph[ident] = re.findall(node_pattern + r'\b', deps)
+graph_cards = {ident for ident in graph if ident.startswith('B')}
+milestones = {ident for ident in graph if ident.startswith('M')}
+if graph_cards != set(cards):
+    errors.append({'graphOnly': sorted(graph_cards - set(cards)), 'cardsOnly': sorted(set(cards) - graph_cards)})
+if milestones:
+    expected_milestones = {'M22-CORE', 'M22-TXN', 'M22-CHILD'}
+    if milestones != expected_milestones:
+        errors.append({'unexpectedMilestoneSet': sorted(milestones)})
+    if set(graph.get('B22', [])) != expected_milestones:
+        errors.append({'nativeRollupDoesNotRequireAllMilestones': graph.get('B22', [])})
+    required_stage_deps = {
+        'M22-CORE': {'B04', 'B15', 'B21'},
+        'M22-TXN': {'M22-CORE', 'B05', 'B07'},
+        'M22-CHILD': {'M22-CORE', 'M22-TXN', 'B16'},
+    }
+    for ident, required in required_stage_deps.items():
+        missing = required - set(graph.get(ident, []))
+        if missing:
+            errors.append({'milestone': ident, 'missingProducerGate': sorted(missing)})
+for ident, deps in graph.items():
+    unknown = set(deps) - set(graph)
+    if unknown:
+        errors.append({'card': ident, 'unknownDependencies': sorted(unknown)})
+visited = set()
+active = []
+
+
+def visit(ident):
+    if ident in active:
+        errors.append({'cycle': active[active.index(ident):] + [ident]})
+        return
+    if ident in visited:
+        return
+    active.append(ident)
+    for dep in graph.get(ident, []):
+        visit(dep)
+    active.pop()
+    visited.add(ident)
+
+
+for ident in graph:
+    visit(ident)
+for ident in ('B02', 'B03', 'B04'):
+    if ident not in graph or graph[ident]:
+        errors.append({'initialQueueNotReady': ident})
+if 'B36' in graph and graph['B36']:
+    errors.append({'immediateDiagnosticRepairNotReady': graph['B36']})
+if milestones and not {'B04', 'B05', 'B07'} <= set(graph.get('B06', [])):
+    errors.append({'semanticRecoveryProducerGatesMissing': graph.get('B06', [])})
+
+canonical_match = re.search(r'<!-- body-completion-graph:v2 -->\s*```json\s*(.*?)\s*```', plan, re.S)
+canonical_graph_validated = False
+if canonical_match:
+    canonical = json.loads(canonical_match.group(1))
+    canonical_nodes = canonical.get('nodes', [])
+    canonical_graph = {entry['id']: entry.get('prerequisites', []) for entry in canonical_nodes}
+    canonical_kinds = {entry['id']: entry.get('kind') for entry in canonical_nodes}
+    if len(canonical_graph) != len(canonical_nodes):
+        errors.append({'duplicateCanonicalNodes': True})
+    if canonical.get('schemaVersion') != 2 or canonical.get('dependencySemantics') != 'all-of':
+        errors.append({'unsupportedCanonicalGraphContract': True})
+    if canonical.get('cardCount') != len(cards) or canonical.get('nodeCount') != len(graph):
+        errors.append({'canonicalNodeCountsMismatch': True})
+    if set(canonical_graph) != set(graph) or any(set(canonical_graph.get(ident, [])) != set(deps) for ident, deps in graph.items()):
+        errors.append({'canonicalJsonTableMismatch': True})
+    for ident in graph:
+        expected_kind = 'card' if ident.startswith('B') else 'milestone'
+        if canonical_kinds.get(ident) != expected_kind:
+            errors.append({'canonicalKindMismatch': ident})
+    for entry in canonical_nodes:
+        if entry.get('kind') == 'milestone' and entry.get('parentCardId') != 'B22':
+            errors.append({'milestoneParentMismatch': entry})
+    for field in ('initialDispatchQueue', 'readyRotationQueue'):
+        for ident in canonical.get(field, []):
+            if ident not in graph or graph[ident]:
+                errors.append({'canonicalQueueNotReady': {'queue': field, 'node': ident}})
+    for ident, children in canonical.get('rollups', {}).items():
+        if set(graph.get(ident, [])) != set(children) or set(children) != milestones:
+            errors.append({'canonicalRollupMismatch': ident})
+    required_ledger_fields = {'nodeId', 'parentCardId', 'acceptedPrerequisites', 'sourceContractHashes', 'repositoryId', 'backend', 'epoch', 'coverageTier', 'evidenceManifest'}
+    if not required_ledger_fields <= set(canonical.get('ledgerRequiredFields', [])):
+        errors.append({'canonicalLedgerFieldsMissing': True})
+    canonical_graph_validated = not errors
+elif milestones:
+    errors.append({'missingCanonicalMilestoneGraph': True})
+
+old = json.loads((review / 'OLD-TASK-INVENTORY.json').read_text())
+rows = re.findall(r'^\| \[([^\]]+)\]\([^\n]+?/PLAN\.md:(\d+)\) · line (\d+) \| (checked|open) \| (\w+) \| ([^|]+) \|', migration, re.M)
+mapped = {}
+for ident, target_line, rendered_line, status, disposition, replacements in rows:
+    if ident in mapped:
+        errors.append({'duplicateOldId': ident})
+    mapped[ident] = {'line': int(target_line), 'renderedLine': int(rendered_line), 'status': status, 'disposition': disposition}
+    unknown = set(re.findall(node_pattern + r'\b', replacements)) - set(graph)
+    if unknown:
+        errors.append({'oldId': ident, 'unknownReplacement': sorted(unknown)})
+    if disposition not in {'verify', 'integrate', 'split', 'consolidate', 'defer', 'retire'}:
+        errors.append({'oldId': ident, 'unknownDisposition': disposition})
+for entry in old:
+    ident = entry['id']
+    row = mapped.get(ident)
+    if row is None:
+        errors.append({'unmappedOldId': ident})
+        continue
+    expected = 'checked' if entry['historicallyChecked'] else 'open'
+    if row['line'] != entry['line'] or row['renderedLine'] != entry['line'] or row['status'] != expected:
+        errors.append({'oldId': ident, 'historyMismatch': {'expectedLine': entry['line'], 'expectedStatus': expected, 'actual': row}})
+extra_old = set(mapped) - {entry['id'] for entry in old}
+if extra_old:
+    errors.append({'extraHistoricalIds': sorted(extra_old)})
+
+findings = json.loads((review / 'FINDINGS-INDEX.json').read_text())
+expected_findings = {entry['id'] for entry in findings}
+references = set(re.findall(r'\b\d{2}-F\d+\b', plan + '\n' + spec + '\n' + migration))
+missing_findings = expected_findings - references
+if missing_findings:
+    errors.append({'unreferencedFindings': sorted(missing_findings)})
+extra_findings = references - expected_findings
+if extra_findings:
+    errors.append({'unknownFindingIds': sorted(extra_findings)})
+
+capabilities = json.loads((review / 'CAPABILITY-RECORDS.json').read_text())
+catalog = (review / 'CAPABILITIES.md').read_text().split('## Exhaustive source lineage', 1)[-1]
+catalog_rows = re.findall(r'^\| (C\d{2}) \| ([^\n]+)$', catalog, re.M)
+expected_caps = {(entry['shardId'].split('-')[0], entry['id']) for entry in capabilities}
+seen_caps = []
+for catalog_id, row in catalog_rows:
+    for shard, ids in re.findall(r'\[(\d{2})\]\([^)]*\): ([^;]+)', row):
+        seen_caps.extend((shard, ident) for ident in re.findall(r'`([^`]+)`', ids))
+missing_caps = expected_caps - set(seen_caps)
+unknown_caps = set(seen_caps) - expected_caps
+duplicate_caps = [list(key) for key, count in Counter(seen_caps).items() if count != 1]
+if missing_caps or unknown_caps or duplicate_caps:
+    errors.append({'missingCapabilityLineage': sorted(missing_caps), 'unknownCapabilityLineage': sorted(unknown_caps), 'duplicateCapabilityLineage': duplicate_caps})
+
+test_refs = sorted(set(re.findall(r'(?<![\w/])((?:[A-Za-z_.-][A-Za-z0-9_.-]*/)+[A-Za-z0-9_.-]+\.(?:test|spec)\.[cm]?[jt]sx?)\b', plan)))
+known_tests = run(['rg', '--files', '-g', '*test.ts', '-g', '*test.tsx', '-g', '*spec.ts', '-g', '*spec.tsx'], cwd=repo, check=True, capture_output=True, text=True).stdout.splitlines()
+test_paths = []
+shorthand_resolutions = []
+for name in test_refs:
+    if (repo / name).is_file():
+        test_paths.append(name)
+        continue
+    candidates = [path for path in known_tests if path.endswith('/' + name)]
+    if len(candidates) == 1:
+        test_paths.append(candidates[0])
+        shorthand_resolutions.append({'reference': name, 'uniqueRepositoryPath': candidates[0]})
+    else:
+        test_paths.append(name)
+test_paths = sorted(set(test_paths))
+missing_tests = [name for name in test_paths if not (repo / name).is_file()]
+if missing_tests:
+    errors.append({'missingListedTestPaths': missing_tests})
+original_baseline_path = review / 'INSPECTED-FILE-HASHES.json'
+original_baseline_recovered = original_baseline_path.is_file()
+binding_path = original_baseline_path if original_baseline_recovered else review / 'CURRENT-FILE-HASHES.json'
+baseline = json.loads(binding_path.read_text()) if binding_path.is_file() else {}
+if not baseline:
+    errors.append({'missingCurrentSourceBinding': str(binding_path)})
+if not original_baseline_recovered and not (review / 'SOURCE-STABILITY.json').is_file():
+    errors.append({'missingRecoverySourceAssuranceRecord': True})
+changed_source = [name for name, digest in baseline.items() if not (repo / name).is_file() or hashlib.sha256((repo / name).read_bytes()).hexdigest() != digest]
+if changed_source:
+    errors.append({'changedInspectedSource': changed_source})
+
+result = {
+    'plan': args.plan,
+    'cards': len(cards),
+    'graphRows': len(graph),
+    'milestoneNodes': sorted(milestones),
+    'completionGraph': graph,
+    'canonicalJsonGraphValidated': canonical_graph_validated,
+    'readyCards': [ident for ident, deps in graph.items() if not deps],
+    'historicalDeclarations': len(old),
+    'historicalMappings': len(mapped),
+    'historicallyChecked': sum(entry['historicallyChecked'] for entry in old),
+    'findingRecords': len(findings),
+    'referencedFindings': len(references & expected_findings),
+    'capabilityRecords': len(capabilities),
+    'catalogCapabilities': len(catalog_rows),
+    'catalogLineageRecords': len(seen_caps),
+    'existingTestPaths': len(test_paths),
+    'shorthandTestResolution': shorthand_resolutions,
+    'baselineSourceHashes': len(baseline),
+    'sourceBinding': {'path': binding_path.name, 'originalHashMapRecovered': original_baseline_recovered, 'mode': 'recovered-original' if original_baseline_recovered else 'fresh-current', 'historicalFullFileEqualityReverified': original_baseline_recovered and not changed_source},
+    'changedSource': changed_source,
+    'documentHashes': {name: hashlib.sha256((review / name).read_bytes()).hexdigest() for name in (args.plan, 'SPEC.md', 'OLD-TASK-MIGRATION.md', 'CAPABILITIES.md')},
+    'errors': errors,
+    'qualification': 'Mechanical consistency and selected source binding only. A fresh-current binding does not reverify equality with the lost original whole-file baseline. Semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script.'
+}
+(review / 'PLAN-VALIDATION.json').write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps(result, indent=2))
+raise SystemExit(1 if errors else 0)

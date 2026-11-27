@@ -1,0 +1,42 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/agent-runtime/src/util/__tests__/context-consolidation.test.ts:
+(pass) selectUnconsolidatedSnapshots > picks uncovered snapshots oldest-first, capped per run [0.57ms]
+(pass) selectUnconsolidatedSnapshots > skips snapshots a stored consolidation already covers [0.50ms]
+(pass) selectUnconsolidatedSnapshots > is empty for missing/empty archives [0.10ms]
+(pass) selectUnconsolidatedSnapshots > tracks coverage per occurrence, not per timestamp [0.16ms]
+(pass) selectUnconsolidatedSnapshots > marks all same-timestamp snapshots covered only after enough occurrences [0.06ms]
+(pass) archivePreCompaction archivedAt collision safety (M3-T4) > mints distinct archivedAt values when multiple snapshots archive in the same tick [1.26ms]
+(pass) archivePreCompaction archivedAt collision safety (M3-T4) > keeps every stored snapshot unique even across MAX_ARCHIVE_SNAPSHOTS same-tick archives [2.89ms]
+(pass) buildConsolidationPrompt > wraps newest-first transcript content between markers [0.57ms]
+(pass) extractLastText > returns the last assistant text and empty for none [0.19ms]
+(pass) recordConsolidation > appends capped by count and summary length [1.93ms]
+(pass) searchConsolidations > OR-ranks by matched terms; ties stay newest-first [0.75ms]
+(pass) searchConsolidations > is empty for no archive, no terms, and no matches [0.08ms]
+(pass) maybeRunBackgroundConsolidation > canary-off: no import/spawn and no record when the gate is not exactly true [2.66ms]
+(pass) maybeRunBackgroundConsolidation > empty-snapshot no-op: nothing to consolidate means no spawn [0.17ms]
+(pass) maybeRunBackgroundConsolidation > re-entrancy guard: a second call while one run is active is a no-op [19.15ms]
+(pass) maybeRunBackgroundConsolidation > record-on-success: stores the child summary with snapshot provenance [3.50ms]
+(pass) maybeRunBackgroundConsolidation > no record and released guard when the child produces no text [9.61ms]
+(pass) maybeRunBackgroundConsolidation > failure is non-fatal: warns, records nothing, releases the guard [17.75ms]
+(pass) handleRecallContext consolidation merge failure paths > includes consolidation hits when searchConsolidations matches [7.61ms]
+(pass) handleRecallContext consolidation merge failure paths > omits the consolidations field entirely when there are no hits [1.67ms]
+(pass) handleRecallContext consolidation merge failure paths > shows the guidance message only when both matches and consolidations are empty [3.79ms]
+(pass) handleRecallContext consolidation merge failure paths > stale-evidence provenance: archive hits carry archivedAt so callers can spot pre-compaction staleness [1.79ms]
+(pass) handleRecallContext consolidation merge failure paths > stale-evidence merge failure path: no archive yields guidance message without provenance [0.81ms]
+(pass) handleRecallContext consolidation merge failure paths > searchConsolidations failure degrades to verbatim-only output instead of throwing [1.58ms]
+(pass) handleRecallContext exact-ID retrieval (by toolCallId) > exact ID resolves even when no archived body text contains the id string [2.22ms]
+(pass) handleRecallContext exact-ID retrieval (by toolCallId) > both params present: the exact ID wins and the consolidations search still runs on the query [1.61ms]
+(pass) handleRecallContext exact-ID retrieval (by toolCallId) > by-ID miss keeps the empty-result guidance message identical to the text path [0.28ms]
+
+packages/agent-runtime/src/util/__tests__/context-archive-context.test.ts:
+(pass) B13 bounded first-request archive references > checks the acting actor/task and emits copy-ready hashes, never original text [2.58ms]
+(pass) B13 bounded first-request archive references > does not advertise forbidden, unavailable or hash-mismatched sources [0.68ms]
+
+packages/agent-runtime/src/tools/handlers/tool/__tests__/recall-context-expiry.test.ts:
+(pass) local excerpt lookup and exact ID cannot bypass archive expiry, including current run [0.56ms]
+
+ 30 pass
+ 0 fail
+ 104 expect() calls
+Ran 30 tests across 3 files. [1161.00ms]

@@ -1,23 +1,21 @@
-import {
-  clearMockedModules,
-  mockModule,
-} from '@codebuff/common/testing/mock-modules'
-import {
-  createMockChildProcess,
-  createRgJsonMatch,
-} from '@codebuff/common/testing/mocks'
+import { createRgJsonMatch } from '@codebuff/common/testing/mocks'
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { findFilesMatchingContent } from '../tools/find-files-matching-content'
+import { findFilesMatchingContent as executeSearch } from '../tools/find-files-matching-content'
+
+import {
+  createSearchExecutionFixture,
+  createSearchMockChild,
+  searchMockChildClosed,
+  waitForSearchSpawn,
+} from './fixtures/search-execution'
 
 import type { MockChildProcess } from '@codebuff/common/testing/mocks'
 
-function getValue(
-  result: Awaited<ReturnType<typeof findFilesMatchingContent>>,
-) {
+function getValue(result: Awaited<ReturnType<typeof executeSearch>>) {
   const value = result[0].value as
     | {
         files: string[]
@@ -36,20 +34,36 @@ function getValue(
 describe('findFilesMatchingContent', () => {
   let mockSpawn: ReturnType<typeof mock>
   let mockProcess: MockChildProcess
+  let fixture: Awaited<ReturnType<typeof createSearchExecutionFixture>>
+  let expectedSpawnCount = 0
+  const findFilesMatchingContent = (
+    input: Parameters<typeof executeSearch>[0],
+  ) => {
+    if (searchMockChildClosed(mockProcess))
+      mockProcess = createSearchMockChild()
+    expectedSpawnCount = mockSpawn.mock.calls.length + 1
+    return executeSearch({
+      ...input,
+      executionContext: fixture.context(input.signal),
+    })
+  }
+  const waitForSpawn = () =>
+    waitForSearchSpawn(() => mockSpawn.mock.calls.length >= expectedSpawnCount)
   let projectPath: string
 
   beforeEach(async () => {
     projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ffc-'))
-    mockProcess = createMockChildProcess()
+    mockProcess = createSearchMockChild()
     mockSpawn = mock(() => mockProcess)
-    await mockModule('child_process', () => ({
-      spawn: mockSpawn,
-    }))
+    fixture = await createSearchExecutionFixture({
+      projectPath: projectPath,
+      spawn: (command, argv, options) => mockSpawn(command, argv, options),
+    })
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await fixture.close()
     mock.restore()
-    clearMockedModules()
     fs.rmSync(projectPath, { recursive: true, force: true })
   })
 
@@ -60,6 +74,7 @@ describe('findFilesMatchingContent', () => {
       maxFiles: 2,
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit(
       'data',
       Buffer.from('src/a.ts\nsrc/b.ts\nsrc/a.ts\nsrc/c.ts\n'),
@@ -82,6 +97,7 @@ describe('findFilesMatchingContent', () => {
       projectPath,
       pattern: 'token',
     })
+    await waitForSpawn()
     mockProcess.stdout.emit(
       'data',
       Buffer.from('.env\nsrc/config.ts\nid_ed25519\n'),
@@ -100,6 +116,7 @@ describe('findFilesMatchingContent', () => {
         cwd: outsideDir,
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from('src/config.ts\n'))
       mockProcess.emit('close', 0)
 
@@ -124,6 +141,7 @@ describe('findFilesMatchingContent', () => {
       cwd: 'package.json',
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from('package.json\n'))
     mockProcess.emit('close', 0)
 
@@ -150,6 +168,7 @@ describe('findFilesMatchingContent', () => {
         cwd: 'outside-link',
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from('src/config.ts\n'))
       mockProcess.emit('close', 0)
 
@@ -171,6 +190,7 @@ describe('findFilesMatchingContent', () => {
       flags: '-i -g "*.ts" -g "-*.ts" --type ts',
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
     mockProcess.emit('close', 0)
 
@@ -193,6 +213,7 @@ describe('findFilesMatchingContent', () => {
         flags,
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
       mockProcess.emit('close', 0)
 
@@ -209,6 +230,7 @@ describe('findFilesMatchingContent', () => {
       flags: ['-t', 'ts', '-g', 'src/**'],
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
     mockProcess.emit('close', 0)
 
@@ -225,6 +247,7 @@ describe('findFilesMatchingContent', () => {
         flags,
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
       mockProcess.emit('close', 0)
 
@@ -248,6 +271,7 @@ describe('findFilesMatchingContent', () => {
         flags,
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from('src/a.ts\n'))
       mockProcess.emit('close', 0)
 
@@ -287,6 +311,7 @@ describe('findFilesMatchingContent', () => {
       pattern: 'needle',
       fileFilter,
     })
+    await waitForSpawn()
     mockProcess.stdout.emit(
       'data',
       Buffer.from('src/blocked.ts\nsrc/allowed.ts\n'),
@@ -294,11 +319,8 @@ describe('findFilesMatchingContent', () => {
     mockProcess.emit('close', 0)
     expect(getValue(await filesOnlyPromise).files).toEqual(['src/allowed.ts'])
 
-    mockProcess = createMockChildProcess()
+    mockProcess = createSearchMockChild()
     mockSpawn = mock(() => mockProcess)
-    await mockModule('child_process', () => ({
-      spawn: mockSpawn,
-    }))
 
     const groupedPromise = findFilesMatchingContent({
       projectPath,
@@ -306,6 +328,7 @@ describe('findFilesMatchingContent', () => {
       groupBySymbol: true,
       fileFilter,
     })
+    await waitForSpawn()
     mockProcess.stdout.emit(
       'data',
       Buffer.from(
@@ -350,6 +373,7 @@ describe('findFilesMatchingContent', () => {
       flags: '[--type-not, ts]',
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from('src/a.py\n'))
     mockProcess.emit('close', 0)
 
@@ -378,6 +402,7 @@ describe('findFilesMatchingContent', () => {
       flags: "-g 'src/legal docs/**'",
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from('src/legal docs/a.ts\n'))
     mockProcess.emit('close', 0)
 
@@ -418,6 +443,7 @@ describe('findFilesMatchingContent', () => {
       pattern: '[invalid',
     })
 
+    await waitForSpawn()
     mockProcess.stderr.emit(
       'data',
       Buffer.from('regex parse error: unclosed character class'),
@@ -433,9 +459,6 @@ describe('findFilesMatchingContent', () => {
     mockSpawn = mock(() => {
       throw new Error('spawn rg failed')
     })
-    await mockModule('child_process', () => ({
-      spawn: mockSpawn,
-    }))
 
     const result = await findFilesMatchingContent({
       projectPath,
@@ -444,6 +467,7 @@ describe('findFilesMatchingContent', () => {
 
     const value = result[0].value as { errorMessage: string }
     expect(value.errorMessage).toContain('spawn rg failed')
+    await waitForSpawn()
     expect(mockSpawn).toHaveBeenCalledTimes(1)
   })
 
@@ -453,6 +477,7 @@ describe('findFilesMatchingContent', () => {
       pattern: 'needle',
     })
 
+    await waitForSpawn()
     mockProcess.emit('error', new Error('rg runtime failed'))
 
     const value = (await searchPromise)[0].value as { errorMessage: string }
@@ -468,6 +493,7 @@ describe('findFilesMatchingContent', () => {
       maxFiles: 3,
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit(
       'data',
       Buffer.from('src/a.ts\nsrc/b.ts\nsrc/c.ts\nsrc/d.ts\n'),
@@ -485,6 +511,7 @@ describe('findFilesMatchingContent', () => {
       pattern: 'needle',
     })
 
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from('x'.repeat(1024 * 1024 + 1)))
 
     const value = getValue(await searchPromise)
@@ -516,6 +543,7 @@ describe('findFilesMatchingContent', () => {
       signal: controller.signal,
     })
 
+    await waitForSpawn()
     expect(mockSpawn).toHaveBeenCalledTimes(1)
     controller.abort(new Error('stop search'))
 
@@ -553,6 +581,7 @@ describe('findFilesMatchingContent', () => {
       createRgJsonMatch('src/example.ts', 2, '  const value = "needle"'),
       createRgJsonMatch('src/example.ts', 8, '    return "needle"'),
     ].join('\n')
+    await waitForSpawn()
     mockProcess.stdout.emit('data', Buffer.from(output))
     mockProcess.emit('close', 0)
 

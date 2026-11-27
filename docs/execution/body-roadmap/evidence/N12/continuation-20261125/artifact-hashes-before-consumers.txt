@@ -1,0 +1,5 @@
+588bc596ada2256c0ea37ca0645eb964bac6f0f7987fcf345644e7ccfc75ed77  cli/bin/openbuff
+588bc596ada2256c0ea37ca0645eb964bac6f0f7987fcf345644e7ccfc75ed77  .tmp/n12-card-continuation/copied-cli/bin/openbuff
+9c339e995c822246581d342d5af0c54e9b12d5106704235514552fd4fcf1e548  sdk/dist/index.mjs
+7612c98d3e3d51abfd53dcad0db39516540cf159e25044e1f9f6271cfa21c8ca  sdk/dist/index.cjs
+b7777bd8ad975fc5e71396dfe83c89f438d2feee6c89ec0b989aac944a06d6a7  sdk/dist/index.d.ts

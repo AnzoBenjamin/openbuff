@@ -16,10 +16,12 @@ import type { AllToolNames } from '../types/secret-agent-definition'
 export type { UnlockedToolTier }
 
 /**
- * Canonical non-core tier order, and the default `unlockedTiers`. Pinned by
- * agents/__tests__/base2-progressive-tool-disclosure.test.ts.
+ * Canonical non-core tier order. The public resolver keeps the historical
+ * full-surface default; createBase2 explicitly starts progressive mode at CORE.
  */
 const NON_CORE_TIERS = Object.keys(BASE2_TIER_TOOL_NAMES) as UnlockedToolTier[]
+
+type ModePolicyToolName = AllToolNames | 'tool_load' | 'tool_search'
 
 type ModeGates = {
   isFast: boolean
@@ -44,12 +46,12 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'check_background_agent',
   'check_job',
   'code_search',
-  'create_plan',
   'end_turn',
   'find_files',
   'find_files_matching_content',
+  'find_references',
   'git_status',
-  'git_branch',
+  'go_to_definition',
   'get_task',
   'get_change_review_bundle',
   'inspect_workspace',
@@ -61,11 +63,11 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'inspect_feature_completeness',
   'evaluate_audit_coverage',
   'glob',
-  'kill_job',
   'list_directory',
   'list_jobs',
   'lookup_agent_info',
   'query_index',
+  'hover_type',
   'recall_context',
   'record_decision',
   'read_docs',
@@ -75,25 +77,26 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'read_logs',
   'read_outline',
   'read_subtree',
-  'replace_range',
-  'rewrite_symbol',
   'render_ui',
-  'run_file_change_hooks',
   'set_messages',
   'set_output',
   'skill',
   'spawn_agents',
   'spawn_agent_inline',
-  'str_replace',
   'suggest_followups',
   'task_completed',
+  // Discovery controls are mode-neutral; searched/loaded tools still pass
+  // through the mode-resolved fullToolSurface ceiling downstream.
+  'tool_load',
+  'tool_search',
   'think_deeply',
-  'update_plan_status',
   'update_subgoal',
   'web_search',
-  'write_file',
+  'workspace_symbol',
+  // Plan artifact sink (runtime-derived .agents/sessions/*/findings path),
+  // allowed in plan mode like create_plan.
   'write_audit_findings',
-] as const satisfies readonly AllToolNames[]
+] as const satisfies readonly ModePolicyToolName[]
 
 /**
  * The only tools whose availability depends on mode rather than on tier.
@@ -102,20 +105,38 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
  */
 export const MODE_GATED_TOOL_NAMES = [
   'ask_user',
+  'create_plan',
+  'update_plan_status',
   'write_todos',
   'edit_transaction',
   'edit_3d_asset',
   'run_targeted_validation',
   'run_terminal_command',
+  // Plan mode is read-only (N03): every plan-refused tool from
+  // common/src/tools/plan-mode-policy.ts, plus kill_job (the plan root starts
+  // no jobs, and the runtime refuses killing jobs outside the plan lineage).
+  'code_action',
+  'extract_symbol',
+  'git_branch',
+  'kill_job',
+  'replace_range',
+  'rename_symbol',
+  'rewrite_symbol',
+  'run_file_change_hooks',
+  'str_replace',
+  'write_file',
 ] as const satisfies readonly AllToolNames[]
 
-const MODE_NEUTRAL_ALLOWED: ReadonlySet<AllToolNames> = new Set(
+const MODE_NEUTRAL_ALLOWED: ReadonlySet<ModePolicyToolName> = new Set(
   MODE_NEUTRAL_TOOL_NAMES,
 )
 
 /** Exported for the exhaustiveness/fail-closed coverage test. */
-export function modeAllowsTool(name: AllToolNames, gates: ModeGates): boolean {
+export function modeAllowsTool(name: ModePolicyToolName, gates: ModeGates): boolean {
   switch (name) {
+    case 'create_plan':
+    case 'update_plan_status':
+      return gates.planOnly
     case 'ask_user':
       return !gates.noAskUser
     case 'write_todos':
@@ -126,6 +147,17 @@ export function modeAllowsTool(name: AllToolNames, gates: ModeGates): boolean {
       return !gates.planOnly
     case 'run_terminal_command':
       return !gates.planOnly && gates.executePlan
+    case 'code_action':
+    case 'extract_symbol':
+    case 'git_branch':
+    case 'kill_job':
+    case 'replace_range':
+    case 'rename_symbol':
+    case 'rewrite_symbol':
+    case 'run_file_change_hooks':
+    case 'str_replace':
+    case 'write_file':
+      return !gates.planOnly
     // M1-T6 fail-closed default: only names with an explicit MODE_NEUTRAL
     // policy pass. An unlisted tool (e.g. a future ToolName added to common
     // without updating this policy) is denied in every mode.
@@ -151,12 +183,14 @@ type ResolveModelToolNamesParams = {
 }
 
 /**
- * Resolve the model-visible toolNames list for createBase2: CORE first, then
- * one block per unlocked tier, minus the mode-gated tools.
+ * Resolve createBase2's model-visible list: CORE first, then unlocked tiers,
+ * minus mode-gated tools. Plan/execute-plan move catalog-dependent
+ * `spawn_agents` behind the shared provider-schema prefix; other modes retain
+ * the canonical order.
  *
- * The mode gates here are base2's ONLY live surface gate; the runtime tier
- * ceiling is dormant because progressiveToolDisclosure is pinned false. See
- * packages/agent-runtime/src/util/base2-tool-tiers.ts.
+ * Mode gates are applied before tier filtering. The runtime tier ceiling is
+ * then used to expose only loaded tools from this mode-resolved full surface.
+ * See packages/agent-runtime/src/util/base2-tool-tiers.ts.
  */
 export function resolveModelToolNames(
   params: ResolveModelToolNamesParams,
@@ -169,22 +203,73 @@ export function resolveModelToolNames(
     unlockedTiers = NON_CORE_TIERS,
   } = params
 
-  const gates: ModeGates = {
-    isFast: mode === 'fast',
-    planOnly,
-    executePlan,
-    noAskUser,
-  }
-  const unlocked = new Set<UnlockedToolTier>(unlockedTiers)
-  // Deduped so a name listed in both CORE and a tier surfaces exactly once.
-  return [
-    ...new Set<AllToolNames>([
-      ...BASE2_CORE_TOOL_NAMES,
+  const resolveForMode = (
+    currentPlanOnly: boolean,
+    currentExecutePlan: boolean,
+  ) => {
+    const gates: ModeGates = {
+      isFast: mode === 'fast',
+      planOnly: currentPlanOnly,
+      executePlan: currentExecutePlan,
+      noAskUser,
+    }
+    const unlocked = new Set<UnlockedToolTier>(unlockedTiers)
+    // Deduped so a name listed in both CORE and a tier surfaces exactly once.
+    // The source name arrays are `as const` readonly literal tuples; a readonly
+    // array cannot spread into a mutable AllToolNames[], and the flatMap union
+    // defeats the Set constructor overload. Concatenate instead: concat widens
+    // each readonly ToolName tuple to AllToolNames cleanly, and Set dedupes.
+    const planModeCore: readonly AllToolNames[] = currentPlanOnly
+      ? ['create_plan', 'update_plan_status']
+      : []
+    const combined = (BASE2_CORE_TOOL_NAMES as readonly ModePolicyToolName[]).concat(
+      ...planModeCore,
       // Single pass over the canonical tier order: no intermediate filtered
       // array, and locked tiers contribute nothing.
-      ...NON_CORE_TIERS.flatMap((tier) =>
-        unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
-      ),
-    ]),
-  ].filter((name) => modeAllowsTool(name, gates))
+      ...NON_CORE_TIERS.flatMap((tier): readonly AllToolNames[] =>
+          unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
+        ),
+    )
+    return [...new Set<ModePolicyToolName>(combined)].filter(
+      // The runtime injects disclosure controls dynamically. Classifying them
+      // as mode-neutral must not add them to authored/full static surfaces.
+      (name): name is AllToolNames =>
+        name !== 'tool_search' && name !== 'tool_load' && modeAllowsTool(name, gates),
+    )
+  }
+
+  const names = resolveForMode(planOnly, executePlan)
+  if (planOnly === executePlan) return names
+
+  const pairedNames = resolveForMode(executePlan, planOnly)
+  if (
+    !names.includes('spawn_agents') ||
+    !pairedNames.includes('spawn_agents')
+  ) {
+    return names
+  }
+
+  // The provider schema for spawn_agents is built from the live spawnable-agent
+  // catalog, which intentionally differs between plan and execute-plan. Move
+  // it after their actual shared tool-name prefix so it cannot poison the
+  // cacheable provider-schema prefix. Ordinary modes retain their exact order.
+  const namesWithoutSpawn = names.filter((name) => name !== 'spawn_agents')
+  const pairedNamesWithoutSpawn = pairedNames.filter(
+    (name) => name !== 'spawn_agents',
+  )
+  let sharedPrefixLength = 0
+  while (
+    sharedPrefixLength < namesWithoutSpawn.length &&
+    sharedPrefixLength < pairedNamesWithoutSpawn.length &&
+    namesWithoutSpawn[sharedPrefixLength] ===
+      pairedNamesWithoutSpawn[sharedPrefixLength]
+  ) {
+    sharedPrefixLength++
+  }
+
+  return [
+    ...namesWithoutSpawn.slice(0, sharedPrefixLength),
+    'spawn_agents',
+    ...namesWithoutSpawn.slice(sharedPrefixLength),
+  ]
 }

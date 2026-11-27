@@ -1,0 +1,24 @@
+{
+  "_note": "Semantic vector (§12.7 GV-26, §12.1): a session/load whose history contains a read_files result with a cap.v3 token. No replayed frame contains 'cap.v3.', and the replayed tool_call carries only toolCallId/title/kind/status/locations (no rawInput/rawOutput).",
+  "history": {
+    "toolCallId": "call_20",
+    "toolName": "read_files",
+    "title": "Read files",
+    "output": "contents with cap.v3.1.1.AAA.BBB.CCC inside"
+  },
+  "replayedToolCall": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_20",
+        "title": "Read files",
+        "kind": "read",
+        "status": "completed",
+        "locations": []
+      }
+    }
+  }
+}

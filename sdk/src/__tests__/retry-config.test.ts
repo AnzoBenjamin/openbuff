@@ -10,6 +10,7 @@ import {
   RETRY_BACKOFF_MAX_DELAY_MS,
   RETRY_BACKOFF_JITTER_FRACTION,
   RETRY_POLICY,
+  RETRY_AFTER_MAX_DELAY_MS,
   runWithRetryPolicy,
   waitForBackoffDelay,
 } from '../retry-config'
@@ -209,35 +210,67 @@ describe('retry matrix: error class × retry decision', () => {
   })
 
   test('retryable statuses (408/429/5xx) ARE retryable without a Retry-After header', () => {
-    for (const statusCode of [408, 429, 500, 502, 503, 504]) {
+    for (const statusCode of [408, 429, 500, 502, 503, 504, 529]) {
       expect(classifyRetryableError(createHttpError('server error', statusCode))).toEqual({
         retryable: true,
       })
     }
   })
 
-  test('a valid Retry-After delta-seconds header overrides the default backoff (capped)', () => {
+  test('a valid Retry-After delta-seconds header overrides the default backoff', () => {
     const error = createHttpError('rate limited', 429)
     ;(error as unknown as { responseHeaders: Record<string, string> }).responseHeaders = {
-      'retry-after': '30',
+      'retry-after': '45',
     }
-    // 30s exceeds the policy cap, so the parsed delay is capped at
-    // RETRY_BACKOFF_MAX_DELAY_MS (same fail-closed cap as the oversized hint).
+    // N07: server waits up to RETRY_AFTER_MAX_DELAY_MS (120 s) are honoured;
+    // the 8 s backoff cap no longer clamps them.
+    expect(RETRY_AFTER_MAX_DELAY_MS).toBe(120_000)
     expect(classifyRetryableError(error)).toEqual({
       retryable: true,
-      delayMs: RETRY_BACKOFF_MAX_DELAY_MS,
+      delayMs: 45_000,
     })
   })
 
-  test('an oversized Retry-After hint is capped at RETRY_BACKOFF_MAX_DELAY_MS', () => {
+  test('an oversized Retry-After hint is capped at RETRY_AFTER_MAX_DELAY_MS', () => {
     const error = createHttpError('rate limited', 429)
     ;(error as unknown as { responseHeaders: Record<string, string> }).responseHeaders = {
       'retry-after': '31536000', // one year
     }
     expect(classifyRetryableError(error)).toEqual({
       retryable: true,
+      delayMs: RETRY_AFTER_MAX_DELAY_MS,
+    })
+  })
+
+  test('a policy without retryAfterMaxDelayMs still caps Retry-After at maxDelayMs', () => {
+    const error = createHttpError('rate limited', 429)
+    ;(error as unknown as { responseHeaders: Record<string, string> }).responseHeaders = {
+      'retry-after': '45',
+    }
+    const { retryAfterMaxDelayMs: _omitted, ...legacy } = RETRY_POLICY
+    expect(classifyRetryableError(error, legacy)).toEqual({
+      retryable: true,
       delayMs: RETRY_BACKOFF_MAX_DELAY_MS,
     })
+  })
+
+  test('an HTTP-date Retry-After is measured against the policy clock', () => {
+    const now = Date.UTC(2026, 10, 12, 9, 0, 0)
+    const error = createHttpError('overloaded', 503)
+    ;(error as unknown as { responseHeaders: Record<string, string> }).responseHeaders = {
+      'retry-after': new Date(now + 45_000).toUTCString(),
+    }
+    expect(classifyRetryableError(error, { ...RETRY_POLICY, now: () => now })).toEqual({
+      retryable: true,
+      delayMs: 45_000,
+    })
+  })
+
+  test('an SSE overloaded_error event (no HTTP status) is retryable as 529', () => {
+    // The shape @ai-sdk/anthropic yields for `event: error` on a 200 stream.
+    const sseError = { type: 'overloaded_error', message: 'Overloaded' }
+    expect(classifyRetryableError(sseError)).toEqual({ retryable: true })
+    expect(classifyRetryableError(new Error('stream failed', { cause: sseError }))).toEqual({ retryable: true })
   })
 
   test('missing/invalid Retry-After headers fail closed to the default backoff', () => {

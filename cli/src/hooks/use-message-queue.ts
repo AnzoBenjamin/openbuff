@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { logger } from '../utils/logger'
+import {
+  getPendingAttachmentId,
+  getPromptAttachmentBlockReason,
+} from '../utils/pending-attachments'
+import { isTurnBisectionRunning } from '../utils/turn-snapshots'
 
 import type { PendingAttachment } from '../types/store'
+import type { PromptAdmissionResult, QueuedPromptAdmission } from '../types/contracts/send-message'
+import type { AgentMode } from '../utils/constants'
 import type { MutableRefObject } from 'react'
 
 export type StreamStatus = 'idle' | 'waiting' | 'streaming' | 'cancelling'
 
 export type QueuedMessage = {
+  id?: string
   content: string
   attachments: PendingAttachment[]
+  agentMode: AgentMode
 }
 
 export const createQueueProcessingOwnership = (
@@ -67,8 +76,17 @@ export const beginQueuedMessageProcessing = (
 
 export type CompleteQueuedMessageProcessingParams = {
   messageToProcess: QueuedMessage
-  sendMessage: (message: QueuedMessage) => Promise<void>
+  sendMessage: (message: QueuedMessage) => Promise<PromptAdmissionResult>
+  onAccepted?: (
+    message: QueuedMessage,
+    result: Extract<PromptAdmissionResult, { status: 'accepted' }>,
+  ) => void
   onRejected?: (message: QueuedMessage, error: unknown) => void
+  onNotAccepted?: (
+    message: QueuedMessage,
+    result: Exclude<PromptAdmissionResult, { status: 'accepted' }>,
+  ) => void
+  onSettled?: () => void
   isProcessingQueueRef: MutableRefObject<boolean>
   queueProcessingRun: QueueProcessingRun
 }
@@ -79,54 +97,63 @@ export const completeQueuedMessageProcessing = (
   const {
     messageToProcess,
     sendMessage,
+    onAccepted,
     onRejected,
+    onNotAccepted,
+    onSettled,
     isProcessingQueueRef,
     queueProcessingRun,
   } = params
+  const release = () => {
+    if (!queueProcessingRun.isCurrentQueueProcessingOwner()) return
+    isProcessingQueueRef.current = false
+    queueProcessingRun.releaseQueueProcessingOwner()
+    onSettled?.()
+  }
+  const reportError = (error: unknown) => {
+    logger.warn({ error }, '[message-queue] Queued admission failed')
+    if (queueProcessingRun.isCurrentQueueProcessingOwner()) {
+      onRejected?.(messageToProcess, error)
+    }
+  }
 
-  // A sendMessage implementation that throws synchronously returns nothing
-  // to chain .catch on (reviewer advisory): without this guard the throw
-  // would escape before the `.finally` cleanup, leaking the processing lock
-  // and orphaning the queue. Route it through the same rejection path.
-  let sendPromise: Promise<void>
+  // Call synchronously: entering send claims the chain before another input
+  // handler can observe an idle turn. Route both kinds of throw through release.
+  let sendPromise: Promise<PromptAdmissionResult>
   try {
     sendPromise = sendMessage(messageToProcess)
-  } catch (err: unknown) {
-    logger.warn(
-      { error: err },
-      '[message-queue] sendMessage threw synchronously',
-    )
-    onRejected?.(messageToProcess, err)
-    if (queueProcessingRun.isCurrentQueueProcessingOwner()) {
-      isProcessingQueueRef.current = false
-      queueProcessingRun.releaseQueueProcessingOwner()
-      logger.debug('[message-queue] Processing lock released')
+  } catch (error) {
+    try {
+      reportError(error)
+    } finally {
+      release()
     }
     return
   }
-  sendPromise
-    .catch((err: unknown) => {
-      logger.warn(
-        { error: err },
-        '[message-queue] sendMessage promise rejected',
-      )
-      onRejected?.(messageToProcess, err)
-    })
-    .finally(() => {
-      if (!queueProcessingRun.isCurrentQueueProcessingOwner()) {
-        logger.debug('[message-queue] Ignoring stale processing cleanup')
-        return
+  void sendPromise
+    .then((result) => {
+      if (!queueProcessingRun.isCurrentQueueProcessingOwner()) return
+      if (result.status !== 'accepted') {
+        onNotAccepted?.(messageToProcess, result)
+      } else if (result.disposition === 'started') {
+        onAccepted?.(messageToProcess, result)
+      } else {
+        onNotAccepted?.(messageToProcess, {
+          status: 'not-started',
+          reason: 'The queued prompt did not start. Review it and resume to retry.',
+        })
       }
-      isProcessingQueueRef.current = false
-      queueProcessingRun.releaseQueueProcessingOwner()
-      logger.debug('[message-queue] Processing lock released')
     })
+    .catch(reportError)
+    .finally(release)
 }
 
 export type RunQueuedMessageParams = BeginQueuedMessageProcessingParams & {
   messageToProcess: QueuedMessage
-  sendMessage: (message: QueuedMessage) => Promise<void>
+  sendMessage: (message: QueuedMessage) => Promise<PromptAdmissionResult>
+  onAccepted?: CompleteQueuedMessageProcessingParams['onAccepted']
   onRejected?: (message: QueuedMessage, error: unknown) => void
+  onNotAccepted?: CompleteQueuedMessageProcessingParams['onNotAccepted']
 }
 
 export const runQueuedMessage = (params: RunQueuedMessageParams): void => {
@@ -135,25 +162,262 @@ export const runQueuedMessage = (params: RunQueuedMessageParams): void => {
   completeQueuedMessageProcessing({
     messageToProcess: params.messageToProcess,
     sendMessage: params.sendMessage,
+    onAccepted: params.onAccepted,
     onRejected: params.onRejected,
+    onNotAccepted: params.onNotAccepted,
     isProcessingQueueRef: params.isProcessingQueueRef,
     queueProcessingRun,
   })
 }
 
 export const useMessageQueue = (
-  sendMessage: (message: QueuedMessage) => Promise<void>,
+  sendMessage: (
+    message: QueuedMessage,
+    admission: QueuedPromptAdmission,
+  ) => Promise<PromptAdmissionResult>,
   isChainInProgressRef: MutableRefObject<boolean>,
   activeAgentStreamsRef: MutableRefObject<number>,
 ) => {
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
-  const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
+  const [streamStatus, setRenderedStreamStatus] = useState<StreamStatus>('idle')
+  const streamStatusRef = useRef<StreamStatus>('idle')
+  const setStreamStatus = useCallback((status: StreamStatus) => {
+    streamStatusRef.current = status
+    setRenderedStreamStatus(status)
+  }, [])
   const [canProcessQueue, setCanProcessQueue] = useState<boolean>(true)
   // Separate state for user-initiated pause to ensure re-renders when pause status changes
   const [queuePausedState, setQueuePausedState] = useState<boolean>(false)
+  const [queueError, setQueueError] = useState<string | null>(null)
+  const [admissionEpoch, setAdmissionEpoch] = useState(0)
+  const [queueRemovalCount, setQueueRemovalCount] = useState(0)
+  const [attachmentRemovalCount, setAttachmentRemovalCount] = useState(0)
+  const [queueAttachmentNotice, setQueueAttachmentNotice] = useState<
+    string | null
+  >(null)
+  const attachmentRevisions = useRef(new Map<string, number>())
+  const activeAttachmentReads = useRef(new Map<string, PendingAttachment>())
+  const removedAttachment = useRef<{
+    messageId: string
+    index: number
+    attachment: PendingAttachment
+  } | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      activeAttachmentReads.current.clear()
+    }
+  }, [])
+  const removedMessagesRef = useRef<
+    Array<{ message: QueuedMessage; index: number }>
+  >([])
 
   // Keep a ref so clearQueue can return the current queue synchronously.
   const queuedMessagesRef = useRef<QueuedMessage[]>([])
+  const attachmentKey = (messageId: string, attachmentId: string) =>
+    `${messageId}\0${attachmentId}`
+  const hasQueuedAttachmentReads = useCallback(
+    () => activeAttachmentReads.current.size > 0,
+    [],
+  )
+  const getQueuedAttachmentRevision = useCallback(
+    (messageId: string, attachmentId: string) =>
+      attachmentRevisions.current.get(attachmentKey(messageId, attachmentId)) ??
+      0,
+    [],
+  )
+  // Restore captured snapshots before archiving a removal. An Undo never revives an old read owner.
+  const invalidateQueuedAttachmentReads = useCallback(
+    (messages: QueuedMessage[]) =>
+      messages.map((message) => {
+        if (!message.id) return message
+        let changed = false
+        const attachments = message.attachments.map((attachment) => {
+          const key = attachmentKey(
+            message.id!,
+            getPendingAttachmentId(attachment),
+          )
+          attachmentRevisions.current.set(
+            key,
+            (attachmentRevisions.current.get(key) ?? 0) + 1,
+          )
+          const original = activeAttachmentReads.current.get(key)
+          activeAttachmentReads.current.delete(key)
+          if (!activeAttachmentReads.current.size)
+            setQueueAttachmentNotice(null)
+          if (original) {
+            changed = true
+            return original
+          }
+          return attachment
+        })
+        return changed ? { ...message, attachments } : message
+      }),
+    [],
+  )
+  const updateQueuedAttachment = useCallback(
+    (
+      messageId: string,
+      attachmentId: string,
+      replacement: PendingAttachment,
+      expected?: PendingAttachment,
+      expectedRevision?: number,
+    ) => {
+      if (
+        !mounted.current ||
+        getPendingAttachmentId(replacement) !== attachmentId
+      )
+        return false
+      const message = queuedMessagesRef.current.find(
+        (item) => item.id === messageId,
+      )
+      const attachment = message?.attachments.find(
+        (item) => getPendingAttachmentId(item) === attachmentId,
+      )
+      const key = attachmentKey(messageId, attachmentId)
+      if (
+        !attachment ||
+        (expected && attachment !== expected) ||
+        (expectedRevision !== undefined &&
+          getQueuedAttachmentRevision(messageId, attachmentId) !==
+            expectedRevision)
+      )
+        return false
+      if (replacement.kind !== 'text' && replacement.status === 'processing') {
+        if (!activeAttachmentReads.current.has(key))
+          activeAttachmentReads.current.set(key, attachment)
+      } else activeAttachmentReads.current.delete(key)
+      setQueueAttachmentNotice(
+        activeAttachmentReads.current.size
+          ? 'Queued attachment is reading · queue paused'
+          : null,
+      )
+      attachmentRevisions.current.set(
+        key,
+        getQueuedAttachmentRevision(messageId, attachmentId) + 1,
+      )
+      const next = queuedMessagesRef.current.map((item) =>
+        item.id === messageId
+          ? {
+              ...item,
+              attachments: item.attachments.map((value) =>
+                getPendingAttachmentId(value) === attachmentId
+                  ? replacement
+                  : value,
+              ),
+            }
+          : item,
+      )
+      queuedMessagesRef.current = next
+      setQueuedMessages(next)
+      return true
+    },
+    [getQueuedAttachmentRevision],
+  )
+  const cancelQueuedAttachmentRetry = useCallback(
+    (messageId: string, attachmentId: string, expectedRevision: number) => {
+      const key = attachmentKey(messageId, attachmentId)
+      const original = activeAttachmentReads.current.get(key)
+      if (
+        !mounted.current ||
+        !original ||
+        getQueuedAttachmentRevision(messageId, attachmentId) !==
+          expectedRevision
+      )
+        return false
+      activeAttachmentReads.current.delete(key)
+      attachmentRevisions.current.set(key, expectedRevision + 1)
+      if (!activeAttachmentReads.current.size) setQueueAttachmentNotice(null)
+      const next = queuedMessagesRef.current.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              attachments: message.attachments.map((item) =>
+                getPendingAttachmentId(item) === attachmentId ? original : item,
+              ),
+            }
+          : message,
+      )
+      queuedMessagesRef.current = next
+      setQueuedMessages(next)
+      return true
+    },
+    [getQueuedAttachmentRevision],
+  )
+  const removeQueuedAttachment = useCallback(
+    (messageId: string, attachmentId: string) => {
+      const current = queuedMessagesRef.current
+      const index = current.findIndex((item) => item.id === messageId)
+      if (index < 0) return false
+      if (
+        !current[index].attachments.some(
+          (attachment) => getPendingAttachmentId(attachment) === attachmentId,
+        )
+      )
+        return false
+      const message = invalidateQueuedAttachmentReads([current[index]])[0]
+      const attachmentIndex = message.attachments.findIndex(
+        (item) => getPendingAttachmentId(item) === attachmentId,
+      )
+      if (attachmentIndex < 0) return false
+      removedAttachment.current = {
+        messageId,
+        index: attachmentIndex,
+        attachment: message.attachments[attachmentIndex],
+      }
+      const next = current.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...message,
+              attachments: message.attachments.filter(
+                (_, position) => position !== attachmentIndex,
+              ),
+            }
+          : item,
+      )
+      queuedMessagesRef.current = next
+      setQueuedMessages(next)
+      setAttachmentRemovalCount(1)
+      return true
+    },
+    [invalidateQueuedAttachmentReads],
+  )
+  const undoQueuedAttachmentRemoval = useCallback(() => {
+    const removed = removedAttachment.current
+    if (!removed) return 0
+    const index = queuedMessagesRef.current.findIndex(
+      (item) => item.id === removed.messageId,
+    )
+    if (index < 0) return 0
+    const message = queuedMessagesRef.current[index]
+    const id = getPendingAttachmentId(removed.attachment)
+    removedAttachment.current = null
+    setAttachmentRemovalCount(0)
+    if (message.attachments.some((item) => getPendingAttachmentId(item) === id))
+      return 0
+    const key = attachmentKey(removed.messageId, id)
+    attachmentRevisions.current.set(
+      key,
+      getQueuedAttachmentRevision(removed.messageId, id) + 1,
+    )
+    const attachments = [...message.attachments]
+    attachments.splice(
+      Math.min(removed.index, attachments.length),
+      0,
+      removed.attachment,
+    )
+    const next = queuedMessagesRef.current.map((item, itemIndex) =>
+      itemIndex === index ? { ...message, attachments } : item,
+    )
+    queuedMessagesRef.current = next
+    setQueuedMessages(next)
+    isQueuePausedRef.current = true
+    setQueuePausedState(true)
+    setCanProcessQueue(false)
+    return 1
+  }, [getQueuedAttachmentRevision])
   const streamTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const streamIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const streamMessageIdRef = useRef<string | null>(null)
@@ -161,6 +425,31 @@ export const useMessageQueue = (
   // User-initiated pause state (separate from system-busy state)
   const isQueuePausedRef = useRef<boolean>(false)
   const queueProcessingOwnerRef = useRef<symbol | null>(null)
+  const pendingAdmissionRef = useRef<{ message: QueuedMessage } | null>(null)
+  const revokeRemovedAdmission = useCallback((removed: readonly QueuedMessage[]) => {
+    const pending = pendingAdmissionRef.current
+    // An edit keeps the logical item but has its own payload object. Removing
+    // the item revokes its pending attempt even if Undo restores that same ID.
+    if (pending && removed.some((item) => item.id === pending.message.id))
+      pendingAdmissionRef.current = null
+  }, [])
+
+  const hasActiveTurn = useCallback(
+    () =>
+      isChainInProgressRef.current ||
+      streamStatusRef.current !== 'idle' ||
+      !!streamMessageIdRef.current ||
+      activeAgentStreamsRef.current > 0,
+    [isChainInProgressRef, activeAgentStreamsRef],
+  )
+  // React's last render can still say idle after a same-batch enqueue (or
+  // streaming after settlement). Read the live owners and list for admission.
+  const getPromptTurnState = useCallback((): 'busy' | 'backlog' | 'idle' => {
+    if (hasActiveTurn() || isProcessingQueueRef.current) return 'busy'
+    if (!isQueuePausedRef.current && queuedMessagesRef.current.length > 0)
+      return 'backlog'
+    return 'idle'
+  }, [hasActiveTurn])
 
   // queuePaused reflects whether the user has explicitly paused the queue
   // (not whether the system is temporarily busy processing)
@@ -179,7 +468,7 @@ export const useMessageQueue = (
     streamMessageIdRef.current = null
     activeAgentStreamsRef.current = 0
     setStreamStatus('idle')
-  }, [activeAgentStreamsRef])
+  }, [activeAgentStreamsRef, setStreamStatus])
 
   useEffect(() => {
     return () => {
@@ -192,6 +481,18 @@ export const useMessageQueue = (
     const queueLength = queuedList.length
 
     if (queueLength === 0) {
+      return
+    }
+    if (
+      !queuedList[0].content.trim() &&
+      queuedList[0].attachments.length === 0
+    ) {
+      isQueuePausedRef.current = true
+      setQueuePausedState(true)
+      setCanProcessQueue(false)
+      setQueueAttachmentNotice(
+        'The next queued item has no prompt or attachment. Edit, restore or remove it before resuming.',
+      )
       return
     }
 
@@ -207,31 +508,10 @@ export const useMessageQueue = (
     if (!canProcessQueue) {
       return
     }
-    if (streamStatus !== 'idle') {
+    if (hasActiveTurn()) {
       logger.debug(
-        { queueLength, streamStatus },
-        '[message-queue] Queue blocked: stream not idle',
-      )
-      return
-    }
-    if (streamMessageIdRef.current) {
-      logger.debug(
-        { queueLength, streamMessageId: streamMessageIdRef.current },
-        '[message-queue] Queue blocked: streamMessageId set',
-      )
-      return
-    }
-    if (isChainInProgressRef.current) {
-      logger.debug(
-        { queueLength, isChainInProgress: isChainInProgressRef.current },
-        '[message-queue] Queue blocked: chain in progress',
-      )
-      return
-    }
-    if (activeAgentStreamsRef.current > 0) {
-      logger.debug(
-        { queueLength, activeAgentStreams: activeAgentStreamsRef.current },
-        '[message-queue] Queue blocked: active agent streams',
+        { queueLength },
+        '[message-queue] Queue blocked: active turn',
       )
       return
     }
@@ -259,6 +539,20 @@ export const useMessageQueue = (
       return
     }
 
+    const preflightBlock =
+      getPromptAttachmentBlockReason(messageToProcess.attachments) ??
+      (isTurnBisectionRunning()
+        ? 'A turn bisection is active. Stop it before resuming the queue.'
+        : null)
+    if (preflightBlock) {
+      setQueueError(preflightBlock)
+      setQueueAttachmentNotice(preflightBlock)
+      isQueuePausedRef.current = true
+      setQueuePausedState(true)
+      setCanProcessQueue(false)
+      return
+    }
+
     const queueProcessingRun = beginQueuedMessageProcessing({
       isProcessingQueueRef,
       isQueuePausedRef,
@@ -266,62 +560,88 @@ export const useMessageQueue = (
       setCanProcessQueue,
     })
 
-    // Now remove the message from the queue
-    setQueuedMessages((prev) => {
-      if (prev.length === 0) {
-        return prev
+    const pendingAdmission = { message: messageToProcess }
+    pendingAdmissionRef.current = pendingAdmission
+    const isPending = () =>
+      mounted.current &&
+      queueProcessingRun.isCurrentQueueProcessingOwner() &&
+      pendingAdmissionRef.current === pendingAdmission
+    const pauseRefusedMessage = (reason: string) => {
+      setQueueError(reason)
+      isQueuePausedRef.current = true
+      setQueuePausedState(true)
+      setCanProcessQueue(false)
+    }
+    const tryCommit = () => {
+      if (!isPending()) return false
+      const index = queuedMessagesRef.current.findIndex(
+        (item) => item.id === messageToProcess.id,
+      )
+      if (index < 0) return false
+      pendingAdmissionRef.current = null
+      if (queuedMessagesRef.current[index] === messageToProcess) {
+        const remaining = [
+          ...queuedMessagesRef.current.slice(0, index),
+          ...queuedMessagesRef.current.slice(index + 1),
+        ]
+        queuedMessagesRef.current = remaining
+        setQueuedMessages(remaining)
+      } else {
+        pauseRefusedMessage(
+          'The accepted revision was sent, but its newer edit remains queued. Resume explicitly to send it.',
+        )
       }
-      const remainingMessages = prev.slice(1)
-      queuedMessagesRef.current = remainingMessages
-      return remainingMessages
-    })
+      return true
+    }
 
     completeQueuedMessageProcessing({
       messageToProcess,
-      sendMessage,
-      onRejected: (rejectedMessage) => {
-        // A queued prompt is user data. Put it back at the front and pause the
-        // queue so a transient or deterministic send failure cannot silently
-        // discard it or trigger an unbounded retry loop.
-        setQueuedMessages((current) => {
-          const restored = [rejectedMessage, ...current]
-          queuedMessagesRef.current = restored
-          return restored
-        })
-        isQueuePausedRef.current = true
-        setQueuePausedState(true)
-        setCanProcessQueue(false)
+      sendMessage: (message) => sendMessage(message, { isPending, tryCommit }),
+      // Production claims admission before committing the transcript. Keep
+      // result-based consumption for send adapters without the commit hook.
+      onAccepted: tryCommit,
+      onRejected: (_message, error) => {
+        if (isPending())
+          pauseRefusedMessage(
+            error instanceof Error
+              ? error.message
+              : 'The queued prompt could not be sent',
+          )
+      },
+      onNotAccepted: (_message, result) => {
+        if (isPending()) pauseRefusedMessage(result.reason)
+      },
+      onSettled: () => {
+        if (pendingAdmissionRef.current === pendingAdmission)
+          pendingAdmissionRef.current = null
+        // If the attempted item was removed while admission was pending,
+        // there may be no state change left to wake the next queued item.
+        if (mounted.current) setAdmissionEpoch((value) => value + 1)
       },
       isProcessingQueueRef,
       queueProcessingRun,
     })
-  }, [
-    canProcessQueue,
-    streamStatus,
-    sendMessage,
-    isChainInProgressRef,
-    activeAgentStreamsRef,
-  ])
+  }, [canProcessQueue, sendMessage, hasActiveTurn])
 
   useEffect(() => {
     processNextMessage()
-  }, [
-    canProcessQueue,
-    streamStatus,
-    queuedMessages.length,
-    processNextMessage,
-    isChainInProgressRef,
-  ])
+  }, [admissionEpoch, streamStatus, queuedMessages.length, processNextMessage])
 
   const addToQueue = useCallback(
-    (message: string, attachments: PendingAttachment[] = []) => {
-      const queuedMessage = { content: message, attachments }
-      // Use functional setState to ensure atomic updates during rapid calls.
-      setQueuedMessages((prev) => {
-        const newQueue = [...prev, queuedMessage]
-        queuedMessagesRef.current = newQueue
-        return newQueue
-      })
+    (
+      message: string,
+      attachments: PendingAttachment[],
+      agentMode: AgentMode,
+    ) => {
+      const queuedMessage: QueuedMessage = {
+        id: crypto.randomUUID(),
+        content: message,
+        attachments: [...attachments],
+        agentMode,
+      }
+      const newQueue = [...queuedMessagesRef.current, queuedMessage]
+      queuedMessagesRef.current = newQueue
+      setQueuedMessages(newQueue)
     },
     [],
   )
@@ -332,44 +652,183 @@ export const useMessageQueue = (
     setCanProcessQueue(false)
   }, [])
 
+  const parkRejectedPrompt = useCallback(
+    (content: string, attachments: PendingAttachment[], agentMode: AgentMode) => {
+      if (!mounted.current) return
+      // Publish the pause before inserting the refused payload so no effect
+      // can process it without an explicit Resume.
+      pauseQueue()
+      addToQueue(content, attachments, agentMode)
+    },
+    [pauseQueue, addToQueue],
+  )
+
   const resumeQueue = useCallback(() => {
+    const next = queuedMessagesRef.current[0]
+    if (next && !next.content.trim() && next.attachments.length === 0) {
+      setQueueAttachmentNotice(
+        'The next queued item has no prompt or attachment. Edit, restore or remove it before resuming.',
+      )
+      return
+    }
+    if (activeAttachmentReads.current.size) {
+      setQueueAttachmentNotice(
+        'A queued attachment is still being read. Wait or cancel its retry before resuming.',
+      )
+      return
+    }
+    setQueueError(null)
     isQueuePausedRef.current = false
     setQueuePausedState(false)
     setCanProcessQueue(true)
+  }, [])
+
+  const updateQueuedMessage = useCallback(
+    (
+      id: string,
+      update: Partial<Pick<QueuedMessage, 'content' | 'agentMode'>>,
+    ) => {
+      if (!queuedMessagesRef.current.some((message) => message.id === id)) {
+        return false
+      }
+      const next = queuedMessagesRef.current.map((message) =>
+        message.id === id ? { ...message, ...update } : message,
+      )
+      queuedMessagesRef.current = next
+      setQueuedMessages(next)
+      return true
+    },
+    [],
+  )
+  const removeQueuedMessage = useCallback(
+    (id: string): QueuedMessage | undefined => {
+      const current = queuedMessagesRef.current
+      const index = current.findIndex((message) => message.id === id)
+      if (index < 0) return
+      const message = invalidateQueuedAttachmentReads([current[index]])[0]
+      revokeRemovedAdmission([message])
+      const next = current.filter((item) => item.id !== id)
+      queuedMessagesRef.current = next
+      setQueuedMessages(next)
+      removedMessagesRef.current = [{ message, index }]
+      setQueueRemovalCount(1)
+      return message
+    },
+    [invalidateQueuedAttachmentReads, revokeRemovedAdmission],
+  )
+  const undoQueueRemoval = useCallback(() => {
+    const removed = removedMessagesRef.current
+    if (!removed.length) return 0
+    // Restoration is a reading/recovery action. Wait for an explicit Resume
+    // instead of dispatching the recovered work as soon as it reappears.
+    isQueuePausedRef.current = true
+    setQueuePausedState(true)
+    setCanProcessQueue(false)
+    const next = [...queuedMessagesRef.current]
+    let restoredCount = 0
+    for (const { message: captured, index } of removed) {
+      const message = invalidateQueuedAttachmentReads([captured])[0]
+      if (message.id && next.some((item) => item.id === message.id)) continue
+      next.splice(Math.min(index, next.length), 0, message)
+      restoredCount++
+    }
+    queuedMessagesRef.current = next
+    setQueuedMessages(next)
+    // Consume synchronously: repeated Undo in one input batch cannot duplicate
+    // prompts while React is still committing the state update.
+    removedMessagesRef.current = []
+    setQueueRemovalCount(0)
+    return restoredCount
+  }, [invalidateQueuedAttachmentReads])
+
+  const cancelQueuedMessages = useCallback(
+    (ids?: readonly string[]) => {
+      const scope = ids ? new Set(ids) : null
+      const current = queuedMessagesRef.current
+      const removed = current.flatMap((message, index) =>
+        !scope || (message.id && scope.has(message.id))
+          ? [{ message, index }]
+          : [],
+      )
+      if (!removed.length) return []
+      const removedSet = new Set(removed.map(({ message }) => message))
+      revokeRemovedAdmission([...removedSet])
+      const remaining = current.filter((message) => !removedSet.has(message))
+      queuedMessagesRef.current = remaining
+      setQueuedMessages(remaining)
+      removedMessagesRef.current = removed.map(({ message, index }) => ({
+        message: invalidateQueuedAttachmentReads([message])[0],
+        index,
+      }))
+      setQueueRemovalCount(removed.length)
+      return removedMessagesRef.current.map(({ message }) => message)
+    },
+    [invalidateQueuedAttachmentReads, revokeRemovedAdmission],
+  )
+  const moveQueuedMessage = useCallback((id: string, direction: -1 | 1) => {
+    const current = queuedMessagesRef.current
+    const index = current.findIndex((message) => message.id === id)
+    const destination = index + direction
+    if (index < 0 || destination < 0 || destination >= current.length) return
+    const next = [...current]
+    ;[next[index], next[destination]] = [next[destination], next[index]]
+    queuedMessagesRef.current = next
+    setQueuedMessages(next)
   }, [])
 
   // Partial-failure-aware drain (reliability finding
   // exit-drain-partial-failure-drops-queue): the exit path drains one entry
   // at a time so a persist failure leaves the remaining prompts queued
   // instead of having been removed from the queue up front.
-  const clearQueue = useCallback((count?: number) => {
-    const current = queuedMessagesRef.current
-    const drained =
-      count === undefined ? current : current.slice(0, Math.max(0, count))
-    const remaining =
-      count === undefined ? [] : current.slice(Math.max(0, count))
-    queuedMessagesRef.current = remaining
-    setQueuedMessages(remaining)
-    return drained
-  }, [])
+  const clearQueue = useCallback(
+    (count?: number) => {
+      const current = queuedMessagesRef.current
+      const drained =
+        count === undefined ? current : current.slice(0, Math.max(0, count))
+      const remaining =
+        count === undefined ? [] : current.slice(Math.max(0, count))
+      revokeRemovedAdmission(drained)
+      queuedMessagesRef.current = remaining
+      setQueuedMessages(remaining)
+      return invalidateQueuedAttachmentReads(drained)
+    },
+    [invalidateQueuedAttachmentReads, revokeRemovedAdmission],
+  )
 
   const startStreaming = useCallback(() => {
     setStreamStatus('streaming')
     setCanProcessQueue(false)
-  }, [])
+  }, [setStreamStatus])
 
   const stopStreaming = useCallback(() => {
     setStreamStatus('idle')
     setCanProcessQueue(!isQueuePausedRef.current)
-  }, [])
+  }, [setStreamStatus])
 
   return {
     queuedMessages,
+    queueError,
+    queueRemovalCount,
+    queueAttachmentNotice,
+    hasQueuedAttachmentReads,
+    attachmentRemovalCount,
+    getQueuedAttachmentRevision,
+    updateQueuedAttachment,
+    cancelQueuedAttachmentRetry,
+    removeQueuedAttachment,
+    undoQueuedAttachmentRemoval,
+    cancelQueuedMessages,
+    updateQueuedMessage,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    undoQueueRemoval,
     streamStatus,
     canProcessQueue,
     queuePaused,
     streamMessageIdRef,
+    getPromptTurnState,
     addToQueue,
+    parkRejectedPrompt,
     startStreaming,
     stopStreaming,
     setStreamStatus,

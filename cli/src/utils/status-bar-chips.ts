@@ -8,12 +8,18 @@ export type StatusBarChipId =
   | 'context'
   | 'compaction'
   | 'index'
+  | 'capabilities'
   | 'git'
   | 'model'
   | 'cost'
   | 'timer'
 
-export type StatusBarChipTone = 'muted' | 'secondary' | 'warning' | 'error'
+export type StatusBarChipTone =
+  | 'muted'
+  | 'primary'
+  | 'secondary'
+  | 'warning'
+  | 'error'
 
 export type StatusBarChip = {
   id: StatusBarChipId
@@ -58,6 +64,13 @@ export type SelectStatusBarChipsInput = {
    * '!', so the label should lead with its subject (e.g. 'idx failed: …').
    */
   indexChip?: { label: string; tone: 'secondary' | 'warning' | 'error' } | null
+  /**
+   * Capability-tier chip (e.g. 'sandbox:lexical'), sourced from the CLI's
+   * honest default capability map. Rendered only at 'md'/'lg' and the first
+   * chip dropped on overflow: it is a static advertisement, so every live
+   * chip outranks it.
+   */
+  capabilitiesChip?: { label: string; tone: StatusBarChipTone } | null
   /** Whether the scroll-to-bottom button shares the row with the chips. */
   showScrollButton?: boolean
   /**
@@ -97,7 +110,7 @@ export const STOP_BUTTON_WIDTH = 7
 /**
  * Columns reserved for the scroll-to-bottom button rendered beside the chips.
  * `SCROLL_BUTTON_WIDTH` in components/scroll-to-bottom-button.tsx is the source
- * of truth ('↓ Bottom' plus one column of padding per side); duplicated here so
+ * of truth ('↓ Latest' plus one column of padding per side); duplicated here so
  * this util does not import a component module.
  */
 export const SCROLL_BUTTON_RESERVATION = 10
@@ -106,9 +119,9 @@ export const SCROLL_BUTTON_RESERVATION = 10
  * `SCROLL_BUTTON_COMPACT_WIDTH` in components/scroll-to-bottom-button.tsx is the
  * source of truth (the glyph plus one column of padding per side); duplicated
  * here for the same reason as the expanded reservation, so reserving the wider
- * form at 'xs'/'sm' cannot silently cost the chips seven columns.
+ * form at 'xs'/'sm' cannot silently cost the chips two columns.
  */
-export const SCROLL_BUTTON_COMPACT_RESERVATION = 3
+export const SCROLL_BUTTON_COMPACT_RESERVATION = 8
 /** Columns rendered between two adjacent chips. */
 const CHIP_SEPARATOR_WIDTH = 3
 /** Suffix appended to a truncated status chip label. */
@@ -491,6 +504,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     modelName,
     diffStats,
     indexChip,
+    capabilitiesChip,
     compactionNotice,
     elapsedSeconds,
     showTimer,
@@ -579,6 +593,17 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     })
   }
 
+  // Static tier advertisement: rendered beside the readiness chips at the
+  // wider sizes only, and (in the overflow loop below) the first chip given
+  // up when the row runs out of room.
+  if (capabilitiesChip && widthSize !== 'xs' && widthSize !== 'sm') {
+    chips.push({
+      id: 'capabilities',
+      label: capabilitiesChip.label,
+      tone: capabilitiesChip.tone,
+    })
+  }
+
   const gitLabel = diffStats ? formatGitLabel(diffStats) : null
   if (
     gitLabel != null &&
@@ -592,7 +617,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     chips.push({
       id: 'model',
       label: shortenStatusModelName(modelName, modelMaxChars(widthSize)),
-      tone: 'muted',
+      tone: 'primary',
     })
   }
 
@@ -611,7 +636,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     chips.push({
       id: 'timer',
       label: formatElapsedTime(elapsedSeconds),
-      tone: 'secondary',
+      tone: 'primary',
     })
   }
 
@@ -623,6 +648,9 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
   )
 
   while (statusBarClusterWidth(chips) > budget) {
+    // The capabilities chip is a static advertisement, so it goes first; the
+    // live cost/model/git chips follow.
+    if (removeChip(chips, 'capabilities')) continue
     if (removeChip(chips, 'cost')) continue
     if (removeChip(chips, 'model')) continue
     if (removeChip(chips, 'git')) continue
@@ -689,8 +717,8 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     break
   }
 
-  // Chips are pushed in render order (context, compaction, index, git, model,
-  // cost, timer) and the overflow loop only removes or shortens them, so the
-  // array is already ordered here.
+  // Chips are pushed in render order (context, compaction, index,
+  // capabilities, git, model, cost, timer) and the overflow loop only removes
+  // or shortens them, so the array is already ordered here.
   return { chips }
 }

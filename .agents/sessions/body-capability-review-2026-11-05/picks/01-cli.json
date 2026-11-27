@@ -1,0 +1,214 @@
+{
+  "shardId": "01-cli",
+  "question": "Where are CLI/TUI user entrypoints, commands, streaming/question/approval surfaces, durable history/plan and attachment/cancellation/recovery paths actually implemented, consumed and tested?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "cli"
+  ],
+  "selectedFiles": [
+    {
+      "path": "cli/src/cli-args.ts",
+      "from": 1,
+      "to": 250,
+      "reason": "Primary CLI argument/transport contract: renderer vs serve/mcp/run/replay/dash and attach flags"
+    },
+    {
+      "path": "cli/src/index.tsx",
+      "from": 435,
+      "to": 735,
+      "reason": "Actual startup dispatch and backend selection; protocol subcommands return before renderer creation"
+    },
+    {
+      "path": "cli/src/data/slash-commands.ts",
+      "from": 1,
+      "to": 314,
+      "reason": "Authoritative command palette, aliases, plan/history/files/tools/modes, game-dev and skills discovery"
+    },
+    {
+      "path": "cli/src/commands/command-registry.ts",
+      "from": 1090,
+      "to": 1498,
+      "reason": "Registered interactive handlers for history, plans, resumptions, review and safe prompt dispatch"
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 225,
+      "to": 595,
+      "reason": "Mounted prompt/question bridges, registry readiness, route states and streaming hooks"
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 1800,
+      "to": 1925,
+      "reason": "Keyboard/modal consumer wiring and plan-picker selection/action dispatch"
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 145,
+      "to": 325,
+      "reason": "Persistent session loading and interrupted checkpoint restoration lifecycle"
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 385,
+      "to": 885,
+      "reason": "Current run ownership, SDK invocation, provider readiness, queue serialization, cancellation/completion/error cleanup"
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "from": 163,
+      "to": 646,
+      "reason": "Attachment provenance and atomic drains, streaming abort hook, run completion/error and snapshot affordances"
+    },
+    {
+      "path": "cli/src/hooks/use-chat-streaming.ts",
+      "from": 125,
+      "to": 270,
+      "reason": "Streaming, attachment retry, queued prompts, question timer and abort lifecycle wiring"
+    },
+    {
+      "path": "cli/src/hooks/use-chat-keyboard.ts",
+      "from": 106,
+      "to": 345,
+      "reason": "Keyboard options, mode-sensitive interception and cancel/exit routing"
+    },
+    {
+      "path": "cli/src/hooks/use-ask-user-bridge.ts",
+      "from": 1,
+      "to": 103,
+      "reason": "Actual question/approval-style UI bridge and submit/skip response identity"
+    },
+    {
+      "path": "cli/src/utils/stream-chunk-processor.ts",
+      "from": 1,
+      "to": 72,
+      "reason": "Root/subagent text event routing from SDK events into UI destinations"
+    },
+    {
+      "path": "cli/src/components/blocks/blocks-renderer.tsx",
+      "from": 118,
+      "to": 289,
+      "reason": "Actual tool/subagent block presentation and focus/expansion consumers"
+    },
+    {
+      "path": "cli/src/commands/plan-artifacts.ts",
+      "from": 1,
+      "to": 202,
+      "reason": "Bounded artifact reads, paginated artifact drilldown and asynchronous session list progress"
+    },
+    {
+      "path": "cli/src/utils/attach-session.ts",
+      "from": 1,
+      "to": 130,
+      "reason": "Interactive detach/attach/exit behavior and backend delegation"
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 252,
+      "to": 425,
+      "reason": "File/folder attachment content loading and complete/truncated/unavailable provenance"
+    },
+    {
+      "path": "cli/src/components/status-bar.tsx",
+      "from": 125,
+      "to": 358,
+      "reason": "Displayed status/model/context/compaction/interaction affordances"
+    },
+    {
+      "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+      "from": 1,
+      "to": 261,
+      "reason": "UI behavioral evidence for large model menus, history load/failure/retry/delete, and plan-session state"
+    },
+    {
+      "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+      "from": 1,
+      "to": 178,
+      "reason": "Ownership/cancellation/late result/session restoration source-level lifecycle guard coverage"
+    }
+  ],
+  "secondaryFiles": [
+    "cli/src/app.tsx",
+    "cli/src/commands/router.ts",
+    "cli/src/commands/router-utils.ts",
+    "cli/src/components/chat-history-screen.tsx",
+    "cli/src/components/plan-session-picker-screen.tsx",
+    "cli/src/components/provider-picker-screen.tsx",
+    "cli/src/components/model-route-picker.tsx",
+    "cli/src/components/attachment-recovery-screen.tsx",
+    "cli/src/components/pending-attachments-banner.tsx",
+    "cli/src/components/blocks/agent-block-grid.tsx",
+    "cli/src/utils/block-processor.ts",
+    "cli/src/state/chat-store.ts",
+    "cli/src/utils/chat-history.ts",
+    "cli/src/utils/message-history.ts",
+    "cli/src/utils/provider-diagnostics.ts",
+    "cli/src/commands/snapshot-commands.ts",
+    "cli/src/hooks/use-chat-state.ts",
+    "cli/src/hooks/use-chat-input.ts",
+    "cli/src/hooks/use-chat-ui.ts",
+    "cli/src/hooks/use-message-queue.ts",
+    "cli/src/hooks/helpers/__tests__/send-message.test.ts",
+    "cli/src/components/__tests__/provider-recovery.test.tsx",
+    "cli/src/components/__tests__/attachment-recovery.test.tsx",
+    "cli/src/components/__tests__/chat-history-screen.test.tsx",
+    "cli/src/components/__tests__/message-block.completion.test.tsx",
+    "cli/src/components/__tests__/subagent-card-layout.test.tsx",
+    "cli/src/commands/__tests__/secondary-surfaces.test.ts",
+    "cli/src/data/__tests__/slash-commands.test.ts",
+    "cli/src/__tests__/cli-args.test.ts",
+    "cli/src/utils/__tests__/attach-session.test.ts",
+    "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts",
+    "cli/src/hooks/__tests__/use-send-message-journal.test.ts",
+    "cli/src/__tests__/README.md",
+    "docs/local-mode.md",
+    "docs/agents-and-tools.md",
+    "docs/request-flow.md",
+    "docs/testing.md"
+  ],
+  "capabilityCandidates": [
+    "Interactive chat and mode/model switching",
+    "Command palette and skills/game preset discoverability",
+    "Attachments and guaranteed file reads",
+    "Question/approval interaction and draft preservation",
+    "Subagent/tool streaming and completion display",
+    "Run cancellation and queued prompt ownership",
+    "Chat history/loading/retry/deletion",
+    "Durable plan discovery/resume/status/artifact drilldown",
+    "Attach/detach sessions",
+    "Context/compaction/provider diagnostic status",
+    "Turn snapshot/undo/restore affordances"
+  ],
+  "searchCoverage": {
+    "inventoryCliFiles": 685,
+    "retrievalIndexFileCount": 2344,
+    "searchedRoots": [
+      "cli/src/commands",
+      "cli/src/components",
+      "cli/src/hooks",
+      "cli/src/utils",
+      "cli/src/state",
+      "cli/src/data",
+      "cli/src/__tests__"
+    ],
+    "searches": [
+      "Authoritative command arrays, registry names and parser dispatch",
+      "App-to-Chat mounted hook/route consumers",
+      "ask_user/bridge submit and skip paths",
+      "Escape/abort/cancellation/run owner/queue flows",
+      "File/image attachment loading/provenance/recovery",
+      "Chat/plan picker restoration/history states and tests",
+      "root/subagent streaming destination and block consumers",
+      "status/context/compaction display",
+      "attach/detach implementation and tests"
+    ],
+    "missingFeatureSearchAreas": [
+      "Full primary Chat controls are in the 2385-line cli/src/chat.tsx; selected slices cover mounted hooks and picker dispatch, remaining render/modal states are secondary",
+      "Approval policy enforcement itself is SDK/runtime owned; this shard selects UI request/answer wiring only",
+      "Turn snapshots and headless/server runtime semantics should be reviewed by durability/execution shards; this shard covers discoverability and command entrypoints"
+    ],
+    "selectedDistinctFiles": 18,
+    "selectedSections": 20,
+    "selectedLines": 4849
+  }
+}

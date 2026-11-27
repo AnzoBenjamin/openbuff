@@ -5,9 +5,19 @@ import * as path from 'node:path'
 import {
   extractCodeChunks,
   getFileTokenScores,
+  AST_IMPORT_SPECIFIER_LIMIT,
   SUPPORTED_CODE_EXTENSIONS,
+  getParserExtractionFingerprint,
 } from '@codebuff/code-map'
 
+import {
+  extractImportSpecifiers,
+  hasImportableGoPackageDeclaration,
+  resolveImportToFile,
+  stripJsonComments,
+} from './import-resolution'
+import { createTsModuleResolver } from './ts-module-resolver'
+import { edgeDedupeKey, isStaleScipEdge } from './scip-ingest'
 import {
   BINARY_EXTENSIONS,
   statProjectFiles,
@@ -19,12 +29,16 @@ import {
   resolveGuidRef,
 } from './asset-refs'
 import { sanitizeIndexCacheDir } from './index-store'
-import { buildIndexQueryData } from './query-data'
+import {
+  buildIndexQueryDataAsync,
+  updateIndexQueryDataAsync,
+} from './query-data'
 import type {
   GraphWeights,
   IndexedFile,
   IndexEdge,
   IndexGraph,
+  IndexGraphDependencies,
   IndexingConfig,
   IndexMutationDelta,
   IndexNode,
@@ -33,11 +47,207 @@ import type {
 } from './types'
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
 import type { WalkedFile, WalkProjectResult } from './file-walker'
+import type { TsModuleResolver } from './ts-module-resolver'
+import {
+  getSourceLanguageIdentityForPath,
+  type SourceLanguageFamily,
+} from '@codebuff/common/util/language-profiles'
 
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 
 const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst'])
 const CONFIG_EXTENSIONS = new Set(['.json', '.jsonc', '.yaml', '.yml', '.toml'])
+
+/**
+ * Default time slice (ms) of synchronous work between event-loop yields. The
+ * gate is awaited at every scheduling seam — once per file-loop iteration AND
+ * at the intra-file seams around each dominant synchronous block (stat/hash
+ * pass, content extraction vs. tree-sitter chunk extraction) — so the slice
+ * bounds synchronous work between consecutive yields across the whole run,
+ * not merely per file. The residual exception is a single atomic native call
+ * (a whole-content SHA-256 or a whole-file tree-sitter parse): it cannot be
+ * split, so it alone can overshoot the slice, and the gate then suspends at
+ * the immediately following seam. Recorded baseline: see the 'tunables cost
+ * baselines' block in cli/src/utils/__tests__/opentui-syntax-style.test.ts.
+ */
+const DEFAULT_YIELD_INTERVAL_MS = 8
+/**
+ * Production yield interval, overridable via CODEBUFF_YIELD_INTERVAL_MS so the
+ * 8ms default can be tuned and later regression-tracked against quantitative
+ * before/after evidence (event-loop lag via perf_hooks.monitorEventLoopDelay,
+ * cold-index throughput) without a code change per experiment; the measured
+ * gate-on/gate-off evidence harness lives in the 'yield-gate throughput and
+ * event-loop-lag evidence' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts, which measures BOTH
+ * packages' loops against fixed recorded baselines: the code-map cold parse
+ * (RECORDED_YIELD_GATE_BASELINE) and this package's cold buildMetadataIndex
+ * over the same shared fixture (RECORDED_INDEXER_YIELD_GATE_BASELINE — its
+ * mechanism assertions read the indexer module's OWN suspension counter, so
+ * they cover the indexer's yield-gated loops independently of the embedded
+ * code-map parse counter). The default
+ * stays put until such evidence justifies moving it. Recorded baseline for
+ * the cost this knob introduces (one macrotask suspension per elapsed slice
+ * during cold index; at interval 0, one per yield-gate call — pinned in the
+ * 'tunables cost baselines' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts and by the indexer
+ * cold-build suspension pin in
+ * packages/indexer/src/metadata-indexer.test.ts).
+ */
+let yieldIntervalMs = getPositiveIntegerEnv(
+  'CODEBUFF_YIELD_INTERVAL_MS',
+  DEFAULT_YIELD_INTERVAL_MS,
+)
+/**
+ * Completed macrotask suspensions across every yield gate, incremented only
+ * AFTER the awaited `setImmediate` resolves so a count > 0 proves the await
+ * actually suspended through the macrotask queue. Read (and reset) via the
+ * TEST-ONLY hooks below.
+ */
+let macrotaskYieldCount = 0
+
+/**
+ * Create an independent macrotask-yield gate for ONE indexing invocation.
+ * Every buildMetadataIndex / updateMetadataIndex call gets its own gate
+ * state, so concurrent index builds (e.g. index-manager refreshing two
+ * roots) each receive a full time slice instead of sharing one module-level
+ * "last yield" timestamp.
+ *
+ * The gate measures elapsed time with performance.now(), NOT Date.now(): the
+ * slice measures elapsed work time and must be immune to wall-clock steps
+ * (NTP corrections, manual clock adjustment), which could otherwise suppress
+ * or spuriously force yields during a long index run.
+ *
+ * A plain `await` inside a loop resumes via the MICROTASK queue, which the
+ * event loop drains fully before it can process I/O or UI input — so
+ * per-file awaits never unblock the TUI during a cold index build on a large
+ * repo. Awaiting a `setImmediate` schedules a MACROTASK, which lets the
+ * event loop interleave pending I/O and keystrokes between file batches.
+ * (Local helper instead of importing from code-map keeps the packages
+ * decoupled; duplicating the helper and its TEST-ONLY hooks across the two
+ * packages is acceptable.) Called at every scheduling seam — the top of each
+ * file-loop iteration AND the intra-file seams around each dominant
+ * synchronous block (stat/hash, content vs. chunk extraction) — so the slice
+ * bounds synchronous work between consecutive yields across the whole run,
+ * not merely per file; a cheap no-op until the time slice has elapsed. The
+ * invocation's first slice starts when its gate is created, so an invocation
+ * whose total work stays below one slice never suspends.
+ *
+ * Regression-pinned: the macrotask-yield regression tests assert that (a)
+ * awaiting a gate lets a pending macrotask I/O callback run BEFORE the await
+ * resumes, (b) the macrotaskYields counter increments only across an actual
+ * suspension, (c) concurrent gates slice independently, and (d) the gate
+ * factory remains an exported, awaitable seam via createYieldGateForTests /
+ * forceEventLoopYieldForTests. Replacing the awaited `setImmediate` with a
+ * plain await/microtask, dropping the awaited suspension, or inlining the
+ * loop body so the gate disappears fails those tests.
+ */
+function createEventLoopYieldGate(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  // The invocation's first slice starts at gate CREATION, not at epoch 0: a
+  // lastYield of 0 sits infinitely outside every slice, so the old default
+  // forced the first gate call of EVERY invocation through a setImmediate
+  // macrotask even when the whole invocation's work is far below one slice
+  // (small incremental updateMetadataIndex/getFileTokenScores calls paid
+  // ~1ms+ latency each). An explicit initialLastYieldMs (TEST-ONLY) still
+  // pins the stale-gate semantics.
+  const firstSliceStart = initialLastYieldMs ?? performance.now()
+  let lastYield = firstSliceStart
+  return async () => {
+    const now = performance.now()
+    if (now - lastYield < yieldIntervalMs) return
+    lastYield = now
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    macrotaskYieldCount += 1
+  }
+}
+
+/** Positive-int env override with fallback (mirrors code-map's parse.ts). */
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * TEST-ONLY yield-seam hooks (repo `*ForTests` convention) backing the
+ * macrotask-yield regression pins described on
+ * {@link createEventLoopYieldGate}. Never call from app code: they override
+ * the production time slice.
+ */
+
+/** TEST-ONLY: override the yield interval (0 forces a yield on every call). */
+export function setYieldIntervalForTests(intervalMs: number): void {
+  if (Number.isFinite(intervalMs) && intervalMs >= 0) {
+    yieldIntervalMs = intervalMs
+  }
+}
+
+/** TEST-ONLY: restore the production yield interval and zero the counters. */
+export function resetYieldStateForTests(): void {
+  yieldIntervalMs = getPositiveIntegerEnv(
+    'CODEBUFF_YIELD_INTERVAL_MS',
+    DEFAULT_YIELD_INTERVAL_MS,
+  )
+  macrotaskYieldCount = 0
+}
+
+/** TEST-ONLY: yield-seam counters for regression assertions. */
+export function getYieldStatsForTests(): { macrotaskYields: number } {
+  return { macrotaskYields: macrotaskYieldCount }
+}
+
+/**
+ * TEST-ONLY: the effective production yield interval (ms), so the 8ms
+ * DEFAULT_YIELD_INTERVAL_MS default itself is pinnable in tests — a default
+ * change must fail the interval pin and re-record the quantitative
+ * before/after baseline it deltas against (see the 'tunables cost baselines'
+ * and 'yield-gate throughput and event-loop-lag evidence' blocks in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts).
+ */
+export function getYieldIntervalForTests(): number {
+  return yieldIntervalMs
+}
+
+/**
+ * TEST-ONLY: create an independent yield gate exactly like the per-invocation
+ * gates the indexing loops await, so the per-invocation slice semantics and
+ * the macrotask mechanism are pinnable without running a full index build.
+ * Omit the argument for the production semantics (first slice starts at
+ * creation); pass 0 explicitly for a stale gate whose first call always
+ * suspends.
+ */
+export function createYieldGateForTests(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  return createEventLoopYieldGate(initialLastYieldMs)
+}
+
+/**
+ * TEST-ONLY: await a gate from the same factory the indexing loops await, so
+ * a refactor that removes, renames, or inlines the gate fails the regression
+ * tests instead of silently dropping the macrotask yield. Pinned to the
+ * stale-gate semantics (lastYield = 0) so the FIRST call always suspends,
+ * independent of the production interval.
+ */
+export async function forceEventLoopYieldForTests(): Promise<void> {
+  await createEventLoopYieldGate(0)()
+}
+
+/**
+ * TEST-ONLY re-export namespace: code-map's parse-loop yield hooks, exposed
+ * through this module so dependents that declare only @codebuff/indexer
+ * (e.g. @codebuff/cli, whose yield-gate regression pins in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts cover BOTH packages'
+ * loops) can reach them without importing '@codebuff/code-map/parse'
+ * directly. @codebuff/cli does not declare @codebuff/code-map, so a direct
+ * import there would be a phantom dependency resolved only via hoisting and
+ * would break if this package dropped its code-map dependency. The namespace
+ * carries the same module instance the '@codebuff/code-map/parse' specifier
+ * resolves to, so the module-level yield state is shared, not duplicated.
+ */
+export * as codeMapParseYieldHooks from '@codebuff/code-map/parse'
 
 /** Historical hardcoded graph edge weights — the ranking baseline. */
 export const DEFAULT_GRAPH_WEIGHTS: Required<GraphWeights> = {
@@ -100,11 +310,6 @@ export function compareRevisions(
   return strA < strB ? -1 : strA > strB ? 1 : 0
 }
 
-// Captures the module specifier from: `import … from 'x'`, `export … from 'x'`
-// (re-exports), `require('x')` / `import('x')` (dynamic), and `import 'x'`
-// (side-effect). The {0,500} bound avoids catastrophic backtracking.
-const IMPORT_REGEX =
-  /(?:\b(?:import|export)\b[\s\S]{0,500}?\bfrom\s+['"]([^'"]+)['"])|(?:\b(?:require|import)\s*\(\s*['"]([^'"]+)['"])|(?:\bimport\s+['"]([^'"]+)['"])/g
 const MARKDOWN_LINK_REGEX = /\[[^\]]+\]\(([^)]+)\)/g
 
 /**
@@ -123,10 +328,26 @@ const tsAliasCacheByRoot = new Map<string, TsAliasMap>()
  * Upper bound on the number of distinct project roots whose parse/alias
  * caches we retain in-process. Eviction is FIFO (Map insertion order). A
  * long-lived process that indexes many distinct roots can't grow these
- * without bound; the oldest root's cache is dropped on overflow.
+ * without bound; the oldest root's cache is dropped on overflow. Each of
+ * the two per-root maps is bounded INDEPENDENTLY: a doc-only root (no code
+ * files) gets a tsAliasCacheByRoot entry without any parsedCacheByRoot
+ * insert, so bounding only the parse-cache size would let the alias cache
+ * grow without bound. Exported so tests can assert the bound is enforced
+ * on every write path.
  */
-const MAX_INDEXED_PROJECT_ROOTS = 8
+export const MAX_INDEXED_PROJECT_ROOTS = 8
 
+/**
+ * FIFO eviction guard shared by every insert path into either per-root
+ * cache. Both maps must be bounded independently: a doc-only root (no code
+ * files) gets a tsAliasCacheByRoot entry via loadTsAliases WITHOUT any
+ * parsedCacheByRoot insert, so gating eviction on the parse-cache size
+ * alone lets the alias cache grow without bound in a long-lived process
+ * indexing many distinct doc-only roots. Each map evicts its own oldest
+ * root on overflow; evicting a parse-cache root also drops that root's
+ * alias entry, and evicting an alias-only root leaves any parse cache it
+ * may still hold intact (aliases are recomputable on the next load).
+ */
 function evictOldestRootCacheIfNeeded(): void {
   if (parsedCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
     const oldestRoot = parsedCacheByRoot.keys().next().value
@@ -135,6 +356,67 @@ function evictOldestRootCacheIfNeeded(): void {
       tsAliasCacheByRoot.delete(oldestRoot)
     }
   }
+  if (tsAliasCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
+    const oldestRoot = tsAliasCacheByRoot.keys().next().value
+    if (oldestRoot !== undefined) {
+      tsAliasCacheByRoot.delete(oldestRoot)
+    }
+  }
+}
+
+/**
+ * Single write path into parsedCacheByRoot: every insert routes through the
+ * FIFO eviction guard so MAX_INDEXED_PROJECT_ROOTS bounds the number of
+ * retained per-root caches even when a build/update holds a complete parse
+ * result to store (previously those paths called .set directly and bypassed
+ * eviction, letting the map grow past the bound).
+ */
+function setParsedCache(
+  projectRoot: string,
+  cache: Record<string, ParsedFileTokens>,
+): void {
+  if (!parsedCacheByRoot.has(projectRoot)) {
+    evictOldestRootCacheIfNeeded()
+  }
+  parsedCacheByRoot.set(projectRoot, cache)
+}
+
+/** Test hook: number of roots currently holding parse caches. */
+export function getParsedCacheRootCount(): number {
+  return parsedCacheByRoot.size
+}
+
+/** Test hook: number of roots currently holding tsconfig alias caches. */
+export function getTsAliasCacheRootCount(): number {
+  return tsAliasCacheByRoot.size
+}
+
+/**
+ * Warn-latch for transient hash-read failures: the same unreadable path
+ * previously failed silently on every refresh. Each distinct path warns at
+ * most once per process; the latch is FIFO-bounded so a long-lived process
+ * indexing many distinct failing paths cannot grow it without bound. Keyed
+ * by absolute path so identical relative paths in different projects are
+ * warned (and latched) independently.
+ */
+const HASH_READ_FAILURE_WARN_LATCH_LIMIT = 256
+const hashReadFailureWarnedPaths = new Set<string>()
+
+function recordHashReadFailure(
+  absolutePath: string,
+  relativePath: string,
+  error: unknown,
+): void {
+  if (hashReadFailureWarnedPaths.has(absolutePath)) return
+  if (hashReadFailureWarnedPaths.size >= HASH_READ_FAILURE_WARN_LATCH_LIMIT) {
+    const oldest = hashReadFailureWarnedPaths.keys().next()
+    if (!oldest.done) hashReadFailureWarnedPaths.delete(oldest.value)
+  }
+  hashReadFailureWarnedPaths.add(absolutePath)
+  const message = error instanceof Error ? error.message : String(error)
+  console.warn(
+    `[metadata-indexer] hash read failed for ${relativePath} (will retry on a later refresh): ${message}`,
+  )
 }
 
 function getParsedCache(projectRoot: string): Record<string, ParsedFileTokens> {
@@ -168,15 +450,27 @@ export async function buildMetadataIndex(
   let parseDiagnostics: ParseDiagnostic[] = []
   let parseCoverage: ParseCoverage | undefined
   let parseData: Record<string, ParsedFileTokens> = {}
+  const parsedSourceHashes = new Map<string, string>()
   if (codeFilePaths.length > 0) {
     try {
-      const data = await getFileTokenScores(projectRoot, codeFilePaths)
+      const data = await getFileTokenScores(
+        projectRoot,
+        codeFilePaths,
+        (filePath) => {
+          const content = fs.readFileSync(
+            path.join(projectRoot, filePath),
+            'utf8',
+          )
+          parsedSourceHashes.set(filePath, hashContent(content))
+          return content
+        },
+      )
       tokenScores = data.tokenScores
       tokenCallers = data.tokenCallers
       parseDiagnostics = data.diagnostics
       parseCoverage = data.coverage
       parseData = data.parsed
-      parsedCacheByRoot.set(projectRoot, parseData)
+      setParsedCache(projectRoot, parseData)
     } catch (error) {
       parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
     }
@@ -184,7 +478,16 @@ export async function buildMetadataIndex(
 
   const indexedFiles: Record<string, IndexedFile> = {}
 
+  // One yield gate per invocation: concurrent buildMetadataIndex calls each
+  // get their own time slice instead of sharing one (see
+  // createEventLoopYieldGate).
+  const yieldToEventLoop = createEventLoopYieldGate()
+
   for (const file of files) {
+    // Macrotask yield so a cold build does not starve the TUI (see
+    // createEventLoopYieldGate). Precedes all per-file work; loop-carried state
+    // (indexedFiles) is mutated only below the yield.
+    await yieldToEventLoop()
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
       projectRoot,
@@ -194,11 +497,28 @@ export async function buildMetadataIndex(
       ext: file.ext,
       asset: file.asset,
       tokenScores: tokenScores[file.relativePath] ?? {},
+      astImports: parseData[file.relativePath]?.imports,
+      parsedSourceHash: parsedSourceHashes.get(file.relativePath),
+      yieldToEventLoop,
     })
-    if (indexed) indexedFiles[file.relativePath] = indexed
+    if (indexed) {
+      indexedFiles[file.relativePath] = indexed
+      if (
+        parseData[file.relativePath] &&
+        parsedSourceHashes.get(file.relativePath) !== indexed.hash
+      ) {
+        delete parseData[file.relativePath]
+        parseDiagnostics.push({
+          filePath: file.relativePath,
+          stage: 'parse',
+          message:
+            'Source changed between parsing and publication; cached parse was discarded',
+        })
+      }
+    }
   }
 
-  const index = createMetadataIndex(
+  const index = await createMetadataIndex(
     projectRoot,
     indexedFiles,
     tokenCallers,
@@ -207,6 +527,19 @@ export async function buildMetadataIndex(
     parseData,
   )
   index.coverage = createIndexCoverage(walked, parseCoverage)
+  index.updateStats = {
+    hashedFiles: Object.keys(indexedFiles).length,
+    parsedFiles: parseCoverage?.freshParsedFiles ?? 0,
+    graphFilesUpdated: Object.keys(indexedFiles).length,
+    graphEdgesUpdated: index.graph.edges.length,
+    postingsUpdated: Object.keys(index.queryData?.postings ?? {}).length,
+    changedFiles: Object.keys(indexedFiles).sort(),
+    deletedFiles: [],
+  }
+  index.freshness = parseDiagnostics.length ? 'unverified' : 'verified'
+  index.unverifiedPaths = parseDiagnostics.map(
+    (diagnostic) => diagnostic.filePath,
+  )
   return index
 }
 
@@ -217,70 +550,92 @@ export async function updateMetadataIndex(
   mutationDelta?: IndexMutationDelta,
 ): Promise<MetadataIndex> {
   tsAliasCacheByRoot.delete(projectRoot)
-  // B5(c) workspaceRevision journal: reject stale complete:true deltas. If the
-  // incoming revision is older than the incorporated revision, skip the precise
-  // walk and return existing with a builtAt refresh so callers observe liveness
-  // without regressing to stale content.
   if (
     mutationDelta?.complete === true &&
     mutationDelta.revision !== undefined &&
     existing.workspaceRevision !== undefined &&
     compareRevisions(mutationDelta.revision, existing.workspaceRevision) < 0
-  ) {
+  )
     return { ...existing, builtAt: Date.now() }
-  }
-  const preciseDelta = mutationDelta?.complete === true
+
+  const preciseDelta =
+    mutationDelta?.complete === true && !mutationDelta.coverageGap
   const walked = preciseDelta
-    ? await collectPreciseWalk(existing, projectRoot, mutationDelta, config)
+    ? await collectPreciseWalk(existing, projectRoot, mutationDelta!, config)
     : await walkProjectDetailed(
         projectRoot,
         getIndexExcludes(config),
         config.maxFiles,
       )
   const files = walked.files
-  const currentByPath = new Map(files.map((f) => [f.relativePath, f]))
+  const yieldToEventLoop = createEventLoopYieldGate()
+  const currentByPath = new Map(files.map((file) => [file.relativePath, file]))
   const changedDeltaPaths = new Set(
     (mutationDelta?.changedPaths ?? []).map(normalizeMutationPath),
   )
   const deletedPaths = preciseDelta
     ? new Set((mutationDelta?.deletedPaths ?? []).map(normalizeMutationPath))
-    : new Set(Object.keys(existing.files))
-
+    : new Set(
+        Object.keys(existing.files).filter(
+          (filePath) => !currentByPath.has(filePath),
+        ),
+      )
   if (preciseDelta) {
-    for (const changedPath of changedDeltaPaths) {
-      if (!currentByPath.has(changedPath) && existing.files[changedPath]) {
-        deletedPaths.add(changedPath)
-      }
+    for (const filePath of changedDeltaPaths) {
+      if (!currentByPath.has(filePath) && existing.files[filePath])
+        deletedPaths.add(filePath)
     }
   }
-
-  if (!preciseDelta) {
-    for (const f of files) {
-      deletedPaths.delete(f.relativePath)
-    }
-  }
-
+  const updatedFiles = { ...existing.files }
+  const changedFiles: typeof files = []
   const hashByPath = new Map<string, string>()
   const hashReadFailedPaths = new Set<string>()
-  const changedFiles: typeof files = []
-  const updatedFiles: Record<string, IndexedFile> = { ...existing.files }
-  let metadataOnlyChange = false
-
+  const contentReadFailedPaths = new Set<string>()
+  const readDiagnostics: ParseDiagnostic[] = []
+  let hashedFiles = 0
   for (const file of files) {
+    await yieldToEventLoop()
     const indexed = existing.files[file.relativePath]
-    if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) {
-      continue
-    }
+    if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) continue
     let hash: string | undefined
-    try {
-      hash = file.asset
-        ? await hashBinaryFile(file.absolutePath)
-        : await hashFile(file.absolutePath)
-    } catch {
-      hashReadFailedPaths.add(file.relativePath)
-      changedFiles.push(file)
-      continue
+    // Known dirty paths and coverage gaps always rehash. Stat equality is
+    // merely an accelerator for files covered by a continuous journal.
+    if (
+      indexed &&
+      !changedDeltaPaths.has(file.relativePath) &&
+      !mutationDelta?.verifyContent
+    ) {
+      try {
+        const stat = await fs.promises.stat(file.absolutePath)
+        if (
+          indexed.mtime === stat.mtimeMs &&
+          indexed.size === stat.size &&
+          indexed.mtime === file.mtime &&
+          indexed.size === file.size
+        )
+          hash = indexed.hash
+      } catch {
+        /* Rehash when stat cannot attest the cached identity. */
+      }
     }
+    if (hash === undefined) {
+      try {
+        hashedFiles += 1
+        hash = file.asset
+          ? await hashBinaryFile(file.absolutePath)
+          : await hashFile(file.absolutePath)
+      } catch (error) {
+        hashReadFailedPaths.add(file.relativePath)
+        recordHashReadFailure(file.absolutePath, file.relativePath, error)
+        readDiagnostics.push({
+          filePath: file.relativePath,
+          stage: 'read',
+          message: error instanceof Error ? error.message : String(error),
+        })
+        continue
+      }
+    }
+    await yieldToEventLoop()
     hashByPath.set(file.relativePath, hash)
     const derivedMetadataPath = file.asset
       ? `.openbuff/artifacts/3d/metadata/${hash}.json`
@@ -296,168 +651,329 @@ export async function updateMetadataIndex(
         )
         hasNewDerivedMetadata = true
       } catch {
-        // No derived inspection cache is available yet.
+        /* Optional derived asset metadata. */
       }
     }
-    if (!indexed || indexed.hash !== hash || hasNewDerivedMetadata) {
+    if (!indexed || indexed.hash !== hash || hasNewDerivedMetadata)
       changedFiles.push(file)
-    } else if (indexed.mtime !== file.mtime || indexed.size !== file.size) {
+    else if (indexed.mtime !== file.mtime || indexed.size !== file.size)
       updatedFiles[file.relativePath] = {
         ...indexed,
         mtime: file.mtime,
         size: file.size,
-        hash,
       }
-      metadataOnlyChange = true
-    }
   }
 
-  const needsParseHydration = existing.parseData === undefined
-  if (
-    changedFiles.length === 0 &&
-    deletedPaths.size === 0 &&
-    !needsParseHydration
-  ) {
-    const graph = buildGraph(
-      metadataOnlyChange ? updatedFiles : existing.files,
-      {},
-      loadTsAliases(projectRoot),
-      resolveGraphWeights(config.weights?.graph),
-      existing.parseData,
-    )
-    return {
-      ...existing,
-      builtAt: Date.now(),
-      // A refresh that applied changes clears any prior degraded flag (P8.1).
-      parserDegraded: undefined,
-      files: metadataOnlyChange ? updatedFiles : existing.files,
-      graph,
-      queryData: buildIndexQueryData(
-        metadataOnlyChange ? updatedFiles : existing.files,
-        graph,
-      ),
-      coverage: createIndexCoverage(walked, existing.coverage?.parser),
-    }
-  }
-
-  const allCodeFilePaths = files
-    .filter(
-      (f) =>
-        CODE_EXTENSIONS.has(f.ext) && !hashReadFailedPaths.has(f.relativePath),
-    )
-    .map((f) => f.relativePath)
-
-  // Only changed code files need re-parsing; reuse cached parse output for the
-  // rest. The global token scores + call graph are then recomputed from the
-  // merged set (cheap, no tree-sitter). This avoids a full project re-parse on
-  // every incremental update (e.g. after each agent edit).
-  const changedPathSet = new Set(changedFiles.map((f) => f.relativePath))
-  const previousCache = {
-    ...(existing.parseData ?? {}),
-    ...getParsedCache(projectRoot),
-  }
-  const reuseParsed: Record<string, ParsedFileTokens> = {}
-  for (const codePath of allCodeFilePaths) {
-    if (!changedPathSet.has(codePath) && previousCache[codePath]) {
-      reuseParsed[codePath] = previousCache[codePath]
-    }
-  }
-
+  const allCodePaths = files
+    .filter((file) => CODE_EXTENSIONS.has(file.ext))
+    .map((file) => file.relativePath)
+  const currentFingerprints = getParseFingerprints(allCodePaths)
+  const previousParse = existing.parseData ?? {}
+  const changedPathSet = new Set(changedFiles.map((file) => file.relativePath))
+  const parsePaths = allCodePaths.filter(
+    (filePath) =>
+      !hashReadFailedPaths.has(filePath) &&
+      (changedPathSet.has(filePath) ||
+        !previousParse[filePath] ||
+        existing.parseFingerprints?.[filePath] !==
+          currentFingerprints[filePath]),
+  )
+  let parseData = { ...previousParse }
+  const parseFingerprints = { ...(existing.parseFingerprints ?? {}) }
+  let parseDiagnostics = (existing.parseDiagnostics ?? []).filter(
+    (diagnostic) =>
+      currentByPath.has(diagnostic.filePath) &&
+      !parsePaths.includes(diagnostic.filePath),
+  )
+  let parsedFiles = 0
+  let parseCoverage = existing.coverage?.parser
+  const parseContents = new Map<string, string>()
+  const failedParsePaths = new Set<string>()
   let tokenScores: Record<string, Record<string, number>> = {}
-  let tokenCallers: Record<string, Record<string, string[]>> = {}
-  let parseDiagnostics: ParseDiagnostic[] = []
-  let parseCoverage: ParseCoverage | undefined
-  let parseData: Record<string, ParsedFileTokens> = { ...previousCache }
-  let parserDegraded = false
-  if (allCodeFilePaths.length > 0) {
+  if (parsePaths.length) {
     try {
       const data = await getFileTokenScores(
         projectRoot,
-        allCodeFilePaths,
-        undefined,
-        reuseParsed,
+        parsePaths,
+        async (filePath) => {
+          const content = await fs.promises.readFile(
+            path.join(projectRoot, filePath),
+            'utf8',
+          )
+          parseContents.set(filePath, content)
+          return content
+        },
       )
+      parsedFiles = data.coverage.freshParsedFiles
       tokenScores = data.tokenScores
-      tokenCallers = data.tokenCallers
-      parseDiagnostics = data.diagnostics
+      parseData = { ...parseData, ...data.parsed }
+      parseDiagnostics = [...parseDiagnostics, ...data.diagnostics]
       parseCoverage = data.coverage
-      parseData = data.parsed
-      parsedCacheByRoot.set(projectRoot, parseData)
+      for (const filePath of parsePaths) {
+        if (data.parsed[filePath])
+          parseFingerprints[filePath] =
+            data.parsed[filePath]!.extractionFingerprint ??
+            currentFingerprints[filePath]!
+        else {
+          failedParsePaths.add(filePath)
+          // Keep the last valid source and its parse together after a failed
+          // derivation. The path remains explicitly unverified for discovery.
+          if (!previousParse[filePath]) delete parseData[filePath]
+        }
+      }
     } catch (error) {
-      parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
-      parserDegraded = true
+      return {
+        ...existing,
+        parserDegraded: true,
+        freshness: 'unverified',
+        unverifiedPaths: parsePaths,
+        parseDiagnostics: [createParseDiagnostic(projectRoot, error)],
+        coverage: createIndexCoverage(walked, parseCoverage),
+        updateStats: {
+          hashedFiles,
+          parsedFiles,
+          graphFilesUpdated: 0,
+          changedFiles: [],
+          deletedFiles: [],
+        },
+      }
     }
   }
-
-  if (parserDegraded) {
-    // P8.1: the parser degraded, so `files`/`parseData` above were not
-    // refreshed and the pending mutation delta was dropped. Keep the prior
-    // builtAt (and workspaceRevision) intact — re-stamping Date.now() would
-    // mark a stale index fresh and suppress the manager's staleness-driven
-    // retry. parseDiagnostics/coverage are preserved; the returned
-    // `parserDegraded` flag makes IndexManager re-queue the delta once.
-    return {
-      ...existing,
-      parserDegraded: true,
-      parseDiagnostics,
-      coverage: createIndexCoverage(walked, parseCoverage),
-    }
+  for (const filePath of deletedPaths) {
+    delete updatedFiles[filePath]
+    delete parseData[filePath]
+    delete parseFingerprints[filePath]
   }
-
-  for (const deletedPath of deletedPaths) {
-    delete updatedFiles[deletedPath]
-    delete parseData[deletedPath]
-  }
-
-  for (const file of changedFiles) {
-    const previous = existing.files[file.relativePath]
+  const reindexPaths = new Set([...changedPathSet, ...parsePaths])
+  for (const filePath of reindexPaths) {
+    await yieldToEventLoop()
+    const file = currentByPath.get(filePath)
+    if (
+      !file ||
+      hashReadFailedPaths.has(filePath) ||
+      (failedParsePaths.has(filePath) && existing.files[filePath])
+    )
+      continue
+    const previous = existing.files[filePath]
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
       projectRoot,
-      relativePath: file.relativePath,
+      relativePath: filePath,
       mtime: file.mtime,
       size: file.size,
       ext: file.ext,
       asset: file.asset,
-      hash: hashByPath.get(file.relativePath),
-      tokenScores: tokenScores[file.relativePath] ?? {},
-      previousChunks: previous?.chunks,
+      hash: hashByPath.get(filePath),
+      content: parseContents.get(filePath),
+      tokenScores: tokenScores[filePath] ?? {},
+      astImports: parseData[filePath]?.imports,
+      previousChunks:
+        existing.parseFingerprints?.[filePath] === currentFingerprints[filePath]
+          ? previous?.chunks
+          : undefined,
       previousHash: previous?.hash,
+      readFailedPaths: contentReadFailedPaths,
+      yieldToEventLoop,
     })
-    if (indexed) {
-      updatedFiles[file.relativePath] = indexed
-    } else if (
-      hashReadFailedPaths.has(file.relativePath) &&
-      existing.files[file.relativePath]
-    ) {
-      // Transient (non-deletion) read failure: the walk still sees the file,
-      // so keep the previous indexed entry until a later refresh can re-read
-      // it instead of silently dropping a still-existing file from the index.
-    } else {
-      delete updatedFiles[file.relativePath]
-    }
+    if (indexed) updatedFiles[filePath] = indexed
+    else if (!contentReadFailedPaths.has(filePath))
+      delete updatedFiles[filePath]
   }
-
-  for (const [filePath, scores] of Object.entries(tokenScores)) {
-    const file = currentByPath.get(filePath)
-    const indexed = updatedFiles[filePath]
-    if (!file || !indexed) continue
-    updatedFiles[filePath] = {
-      ...indexed,
-      symbols: getTopSymbols(scores, 30),
-    }
+  for (const filePath of contentReadFailedPaths) {
+    if (previousParse[filePath]) parseData[filePath] = previousParse[filePath]!
+    else delete parseData[filePath]
+    if (existing.parseFingerprints?.[filePath])
+      parseFingerprints[filePath] = existing.parseFingerprints[filePath]!
+    else delete parseFingerprints[filePath]
+    readDiagnostics.push({
+      filePath,
+      stage: 'read',
+      message: 'Source content could not be read during reconciliation',
+    })
   }
+  parseDiagnostics.push(...readDiagnostics)
+  setParsedCache(projectRoot, parseData)
 
-  const index = createMetadataIndex(
-    projectRoot,
+  const changedFacts = new Set([
+    ...deletedPaths,
+    ...Object.keys(updatedFiles).filter(
+      (filePath) => updatedFiles[filePath] !== existing.files[filePath],
+    ),
+  ])
+  const graphChangedPaths = new Set([
+    ...Array.from(changedFacts).filter(
+      (filePath) =>
+        existing.files[filePath]?.hash !== updatedFiles[filePath]?.hash,
+    ),
+    ...parsePaths.filter(
+      (filePath) =>
+        !failedParsePaths.has(filePath) &&
+        !contentReadFailedPaths.has(filePath),
+    ),
+  ])
+  const sourceConfigFingerprint = getSourceConfigurationFingerprint(
     updatedFiles,
-    tokenCallers,
-    config.weights?.graph,
-    parseDiagnostics,
-    parseData,
+    projectRoot,
   )
-  index.coverage = createIndexCoverage(walked, parseCoverage)
-  return index
+  const graphConfigFingerprint = getGraphConfigurationFingerprint(
+    sourceConfigFingerprint,
+    config.weights?.graph,
+  )
+  const configChanged =
+    existing.graphConfigFingerprint !== graphConfigFingerprint
+  const dependencies = updateGraphDependencies(
+    existing,
+    updatedFiles,
+    parseData,
+    graphChangedPaths,
+  )
+  let graphData: Record<string, IndexGraph>
+  let graphFilesUpdated = 0
+  let graphUpdatedPaths = new Set<string>()
+  if (!existing.graphData || !existing.graphDependencies || configChanged) {
+    const aliases = loadTsAliases(projectRoot)
+    const structural = await buildGraph(
+      updatedFiles,
+      {},
+      aliases,
+      resolveGraphWeights(config.weights?.graph),
+      parseData,
+      createTsModuleResolver({ projectRoot, files: updatedFiles, aliases }),
+      yieldToEventLoop,
+      undefined,
+      dependencies.definitions,
+    )
+    graphData = partitionGraphBySource(structural, updatedFiles)
+    graphFilesUpdated = Object.keys(updatedFiles).length
+    graphUpdatedPaths = new Set([...Object.keys(updatedFiles), ...deletedPaths])
+  } else {
+    const affected = collectAffectedGraphPaths(
+      existing,
+      updatedFiles,
+      parseData,
+      graphChangedPaths,
+      dependencies,
+    )
+    graphUpdatedPaths = affected
+    graphFilesUpdated = Array.from(affected).filter((filePath) =>
+      Boolean(updatedFiles[filePath]),
+    ).length
+    graphData = { ...existing.graphData }
+    for (const filePath of deletedPaths) delete graphData[filePath]
+    if (affected.size) {
+      const aliases = loadTsAliases(projectRoot)
+      const structural = await buildGraph(
+        updatedFiles,
+        {},
+        aliases,
+        resolveGraphWeights(config.weights?.graph),
+        parseData,
+        createTsModuleResolver({ projectRoot, files: updatedFiles, aliases }),
+        yieldToEventLoop,
+        affected,
+        dependencies.definitions,
+      )
+      Object.assign(
+        graphData,
+        partitionGraphBySource(structural, updatedFiles, affected),
+      )
+    }
+  }
+  const graph = composeGraphLayers(
+    graphData,
+    existing,
+    updatedFiles,
+    sourceConfigFingerprint,
+  )
+  const queryData =
+    changedFacts.size || graph !== existing.graph
+      ? await updateIndexQueryDataAsync(
+          existing,
+          updatedFiles,
+          graph,
+          changedFacts,
+          yieldToEventLoop,
+        )
+      : existing.queryData
+  const skippedPaths = new Set([
+    ...allCodePaths.filter((filePath) => !parseData[filePath]),
+    ...failedParsePaths,
+  ])
+  if (parseCoverage)
+    parseCoverage = {
+      ...parseCoverage,
+      requestedFiles: allCodePaths.length,
+      parsedFiles: allCodePaths.length - skippedPaths.size,
+      freshParsedFiles: parsedFiles,
+      reusedFiles: Math.max(
+        0,
+        allCodePaths.length - skippedPaths.size - parsedFiles,
+      ),
+      skippedFiles: skippedPaths.size,
+      skippedPrefixes: Array.from(
+        new Set(
+          Array.from(skippedPaths).map((filePath) =>
+            filePath.includes('/') ? filePath.split('/')[0]! : '.',
+          ),
+        ),
+      ).sort(),
+      skippedLanguages: Array.from(
+        new Set(
+          Array.from(skippedPaths).map((filePath) => path.extname(filePath)),
+        ),
+      ).sort(),
+      truncated: skippedPaths.size > 0,
+    }
+  const unverifiedPaths = Array.from(
+    new Set([
+      ...hashReadFailedPaths,
+      ...contentReadFailedPaths,
+      ...failedParsePaths,
+    ]),
+  ).sort()
+  return {
+    ...existing,
+    builtAt: Date.now(),
+    parserDegraded: undefined,
+    files: updatedFiles,
+    fileCount: Object.keys(updatedFiles).length,
+    graph,
+    graphData,
+    graphDependencies: dependencies,
+    graphConfigFingerprint,
+    sourceConfigFingerprint,
+    queryData,
+    parseData,
+    parseFingerprints,
+    parseDiagnostics,
+    freshness: unverifiedPaths.length ? 'unverified' : 'verified',
+    unverifiedPaths,
+    coverage: createIndexCoverage(walked, parseCoverage),
+    updateStats: {
+      hashedFiles,
+      parsedFiles,
+      graphFilesUpdated,
+      graphEdgesUpdated: countUpdatedGraphEdges(
+        existing,
+        graphData,
+        graph,
+        graphUpdatedPaths,
+      ),
+      postingsUpdated: Array.from(
+        new Set([
+          ...Object.keys(existing.queryData?.postings ?? {}),
+          ...Object.keys(queryData?.postings ?? {}),
+        ]),
+      ).filter(
+        (token) =>
+          existing.queryData?.postings[token] !== queryData?.postings[token],
+      ).length,
+      changedFiles: Array.from(changedFacts)
+        .filter((filePath) => Boolean(updatedFiles[filePath]))
+        .sort(),
+      deletedFiles: Array.from(deletedPaths).sort(),
+    },
+  }
 }
 
 async function indexWalkedFile(params: {
@@ -469,9 +985,26 @@ async function indexWalkedFile(params: {
   ext: string
   asset?: { kind: '3d'; format: string }
   hash?: string
+  /** Exact source text used by the parse of this changed file. */
+  content?: string
+  parsedSourceHash?: string
   tokenScores: Record<string, number>
+  /**
+   * P3-T5 AST import-capture tier: import specifiers captured by the
+   * code-map tags query for this file's language (five tier languages).
+   * Empty/undefined keeps the line-based fallback byte-identical.
+   */
+  astImports?: string[]
   previousChunks?: IndexedFile['chunks']
   previousHash?: string
+  /**
+   * Caller-collected set of relative paths whose content read failed
+   * transiently inside this function, so the caller can keep the previous
+   * indexed entry instead of dropping a still-existing file.
+   */
+  readFailedPaths?: Set<string>
+  /** Macrotask yield gate owned by the calling index build/update run. */
+  yieldToEventLoop: () => Promise<void>
 }): Promise<IndexedFile | null> {
   // Skip binary files entirely — they cannot be parsed as UTF-8 text and
   // reading them would corrupt the index with garbage imports/symbols.
@@ -532,13 +1065,25 @@ async function indexWalkedFile(params: {
   }
   let content = ''
   try {
-    content = await fs.promises.readFile(params.absolutePath, 'utf8')
+    content =
+      params.content ??
+      (await fs.promises.readFile(params.absolutePath, 'utf8'))
   } catch {
+    // Transient read failure: report it so the caller can keep the previous
+    // indexed entry for this still-walked file instead of dropping it.
+    params.readFailedPaths?.add(params.relativePath)
     return null
   }
 
-  const symbols = getTopSymbols(params.tokenScores, 30)
-  const imports = extractImports(content, params.ext)
+  const exactContentHash = hashContent(content)
+  const parseMatches =
+    !params.parsedSourceHash || params.parsedSourceHash === exactContentHash
+  const symbols = parseMatches ? getTopSymbols(params.tokenScores, 30) : []
+  const imports = extractImports(
+    content,
+    params.ext,
+    parseMatches ? params.astImports : undefined,
+  )
   const headings = DOC_EXTENSIONS.has(params.ext)
     ? extractHeadings(content)
     : []
@@ -557,47 +1102,68 @@ async function indexWalkedFile(params: {
     .slice(0, 120)
     .join('\n')
   const contentSampleSliced = contentSampleRaw.slice(0, 4_000)
-  const contentSampleTruncated = contentSampleSliced.length < contentSampleRaw.length
-  const contentSample = contentSampleTruncated ? `${contentSampleSliced}…[truncated]` : contentSampleSliced
+  const contentSampleTruncated =
+    contentSampleSliced.length < contentSampleRaw.length
+  const contentSample = contentSampleTruncated
+    ? `${contentSampleSliced}…[truncated]`
+    : contentSampleSliced
 
   // Extract asset references from game engine text files (Unity .meta/.prefab/.unity,
   // Godot .tscn/.tres, Unreal .uproject, Bevy configs). Returns [] for non-asset files.
   const assetRefs = extractAssetRefs(content, params.ext, params.relativePath)
 
+  // Intra-file yield seam: the content read / imports / headings / concepts /
+  // content-sample extraction block above and the tree-sitter chunk
+  // extraction block below each stay within one time slice (a single
+  // whole-file tree-sitter chunk parse is one atomic native call — the
+  // documented residual exception; see createEventLoopYieldGate).
+  await params.yieldToEventLoop()
+
   // Phase A2 (additive): chunk summaries for code files only. Reuses the
   // already-read `content`; never re-reads disk. Errors or empty results
   // leave `chunks` undefined to keep the cache compact.
   let chunks: IndexedFile['chunks']
+  // Content hash, computed AT MOST once per file: on the cold-build path
+  // buildMetadataIndex passes no `hash`, and this full synchronous SHA-256
+  // over the entire content used to run twice per code file (once for
+  // chunk freshness here and once for the indexed record below) inside the
+  // yield-seam-bounded block. Non-code files hash lazily at the return.
+  let contentHash: string | undefined
   if (CODE_EXTENSIONS.has(params.ext)) {
-    const contentHash = params.hash ?? hashContent(content)
-    if (params.previousChunks && params.previousHash && contentHash === params.previousHash) {
+    contentHash = exactContentHash
+    if (
+      params.previousChunks &&
+      params.previousHash &&
+      contentHash === params.previousHash
+    ) {
       chunks = params.previousChunks.slice(0, 100)
       if (chunks.length === 0) chunks = undefined
-    } else try {
-      const rawChunks = await extractCodeChunks(content, params.relativePath)
-      if (rawChunks.length > 0) {
-        chunks = rawChunks.slice(0, 100).map((chunk) => ({
-          chunkId: chunk.chunkId,
-          qualifiedName: chunk.qualifiedName,
-          kind: chunk.kind,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          hash: chunk.hash,
-          stableChunkId: chunk.stableChunkId,
-          signature: chunk.signature,
-        }))
-        if (chunks.length === 0) chunks = undefined
+    } else
+      try {
+        const rawChunks = await extractCodeChunks(content, params.relativePath)
+        if (rawChunks.length > 0) {
+          chunks = rawChunks.slice(0, 100).map((chunk) => ({
+            chunkId: chunk.chunkId,
+            qualifiedName: chunk.qualifiedName,
+            kind: chunk.kind,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            hash: chunk.hash,
+            stableChunkId: chunk.stableChunkId,
+            signature: chunk.signature,
+          }))
+          if (chunks.length === 0) chunks = undefined
+        }
+      } catch {
+        chunks = undefined
       }
-    } catch {
-      chunks = undefined
-    }
   }
 
   return {
     path: params.relativePath,
     mtime: params.mtime,
     size: params.size,
-    hash: params.hash ?? hashContent(content),
+    hash: exactContentHash,
     ext: params.ext,
     symbols,
     imports,
@@ -609,21 +1175,372 @@ async function indexWalkedFile(params: {
   }
 }
 
-function createMetadataIndex(
+function getParseFingerprints(filePaths: string[]): Record<string, string> {
+  const byExtension = new Map<string, string>()
+  const fingerprints: Record<string, string> = {}
+  for (const filePath of filePaths) {
+    const extension = path.extname(filePath).toLowerCase()
+    if (!byExtension.has(extension))
+      byExtension.set(extension, getParserExtractionFingerprint(filePath))
+    fingerprints[filePath] = byExtension.get(extension)!
+  }
+  return fingerprints
+}
+
+function buildGraphDependencies(
+  parseData: Record<string, ParsedFileTokens>,
+): IndexGraphDependencies {
+  const definitions: Record<string, string[]> = Object.create(null)
+  const callers: Record<string, string[]> = Object.create(null)
+  for (const [filePath, parsed] of Object.entries(parseData)) {
+    for (const symbol of new Set(parsed.identifiers))
+      (definitions[symbol] ??= []).push(filePath)
+    for (const call of new Set(parsed.calls))
+      (callers[call] ??= []).push(filePath)
+  }
+  return { definitions, callers }
+}
+
+function updateGraphDependencies(
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  parsed: Record<string, ParsedFileTokens>,
+  changedPaths: ReadonlySet<string>,
+): IndexGraphDependencies {
+  if (!previous.graphDependencies) return buildGraphDependencies(parsed)
+  const dependencies: IndexGraphDependencies = {
+    definitions: Object.assign(
+      Object.create(null),
+      previous.graphDependencies.definitions,
+    ),
+    callers: Object.assign(
+      Object.create(null),
+      previous.graphDependencies.callers,
+    ),
+  }
+  for (const filePath of changedPaths) {
+    for (const [field, parseField] of [
+      ['definitions', 'identifiers'],
+      ['callers', 'calls'],
+    ] as const) {
+      const before = new Set(previous.parseData?.[filePath]?.[parseField] ?? [])
+      const after = new Set(
+        files[filePath] ? (parsed[filePath]?.[parseField] ?? []) : [],
+      )
+      for (const symbol of new Set([...before, ...after])) {
+        if (before.has(symbol) === after.has(symbol)) continue
+        const members = new Set(dependencies[field][symbol] ?? [])
+        if (after.has(symbol)) members.add(filePath)
+        else members.delete(filePath)
+        if (members.size)
+          dependencies[field][symbol] = Array.from(members).sort()
+        else delete dependencies[field][symbol]
+      }
+    }
+  }
+  return dependencies
+}
+
+function collectAffectedGraphPaths(
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  parsed: Record<string, ParsedFileTokens>,
+  changedPaths: ReadonlySet<string>,
+  dependencies: IndexGraphDependencies,
+): Set<string> {
+  const affected = new Set(changedPaths)
+  let importTopologyChanged = false
+  const changedGuids = new Set<string>()
+  for (const filePath of changedPaths) {
+    const oldFile = previous.files[filePath]
+    const newFile = files[filePath]
+    const before = new Set(previous.parseData?.[filePath]?.identifiers ?? [])
+    const after = new Set(parsed[filePath]?.identifiers ?? [])
+    for (const symbol of new Set([...before, ...after])) {
+      if (before.has(symbol) === after.has(symbol)) continue
+      for (const caller of previous.graphDependencies?.callers[symbol] ?? [])
+        affected.add(caller)
+      for (const caller of dependencies.callers[symbol] ?? [])
+        affected.add(caller)
+    }
+    if (!oldFile || !newFile) importTopologyChanged = true
+    if (
+      filePath.endsWith('.go') &&
+      hasImportableGoPackageDeclaration(oldFile) !==
+        hasImportableGoPackageDeclaration(newFile)
+    ) {
+      importTopologyChanged = true
+    }
+    if (/\.(?:java|kt|php)$/.test(filePath)) {
+      const declaration = (file: IndexedFile | undefined) =>
+        file?.contentSample?.match(/(?:package|namespace)\s+[^;\n{]+/)?.[0]
+      if (declaration(oldFile) !== declaration(newFile))
+        importTopologyChanged = true
+    }
+    if (filePath.endsWith('.meta')) {
+      for (const ref of [
+        ...(oldFile?.assetRefs ?? []),
+        ...(newFile?.assetRefs ?? []),
+      ]) {
+        if (ref.refType === 'guid') changedGuids.add(ref.rawRef)
+      }
+    }
+    if (!newFile) {
+      for (const edgeIndex of previous.queryData?.adjacency[
+        fileNodeId(filePath)
+      ] ?? []) {
+        const edge = previous.graph.edges[edgeIndex]
+        if (edge?.from.startsWith('file:')) affected.add(edge.from.slice(5))
+      }
+    }
+  }
+  if (importTopologyChanged) {
+    const aliases = loadTsAliases(previous.projectRoot)
+    const oldResolver = createTsModuleResolver({
+      projectRoot: previous.projectRoot,
+      files: previous.files,
+      aliases,
+    })
+    const newResolver = createTsModuleResolver({
+      projectRoot: previous.projectRoot,
+      files,
+      aliases,
+    })
+    for (const file of Object.values(files)) {
+      if (affected.has(file.path)) continue
+      for (const specifier of file.imports) {
+        if (
+          resolveImportToFile(
+            file.path,
+            file.ext,
+            specifier,
+            previous.files,
+            aliases,
+            oldResolver,
+          ) !==
+          resolveImportToFile(
+            file.path,
+            file.ext,
+            specifier,
+            files,
+            aliases,
+            newResolver,
+          )
+        ) {
+          affected.add(file.path)
+          break
+        }
+      }
+      if (
+        file.assetRefs?.some(
+          (ref) => ref.resolvedPath && changedPaths.has(ref.resolvedPath),
+        )
+      )
+        affected.add(file.path)
+    }
+  }
+  if (changedGuids.size) {
+    for (const file of Object.values(files)) {
+      if (file.assetRefs?.some((ref) => changedGuids.has(ref.rawRef)))
+        affected.add(file.path)
+    }
+  }
+  return affected
+}
+
+/** Structural facts are owned by their source; shared nodes stay referenced. */
+function partitionGraphBySource(
+  graph: IndexGraph,
+  files: Record<string, IndexedFile>,
+  sourcePaths?: ReadonlySet<string>,
+): Record<string, IndexGraph> {
+  const grouped: Record<string, IndexGraph> = {}
+  for (const filePath of sourcePaths ?? Object.keys(files)) {
+    if (files[filePath]) grouped[filePath] = { nodes: {}, edges: [] }
+  }
+  for (const node of Object.values(graph.nodes)) {
+    if (node.path && grouped[node.path])
+      grouped[node.path]!.nodes[node.id] = node
+  }
+  for (const edge of graph.edges) {
+    const source = edge.from.startsWith('file:')
+      ? edge.from.slice(5)
+      : graph.nodes[edge.from]?.path
+    const group = source ? grouped[source] : undefined
+    if (!group) continue
+    group.edges.push(edge)
+    const target = graph.nodes[edge.to]
+    if (target && target.type !== 'file') group.nodes[target.id] = target
+  }
+  return grouped
+}
+
+function composeGraphLayers(
+  structural: Record<string, IndexGraph>,
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  sourceConfigFingerprint: string,
+): IndexGraph {
+  const priorPrecise = previous.graph.edges.filter(
+    (edge) => edge.confidence === 'precise',
+  )
+  const precise = priorPrecise.filter((edge) => {
+    if (isStaleScipEdge(edge)) return false
+    const dependencies =
+      edge.producer?.sourceHashes ??
+      Object.fromEntries(
+        [edge.from, edge.to]
+          .filter((node) => node.startsWith('file:'))
+          .map((node) => [node.slice(5), previous.files[node.slice(5)]?.hash]),
+      )
+    if (
+      Object.entries(dependencies).some(
+        ([filePath, hash]) => !hash || files[filePath]?.hash !== hash,
+      )
+    )
+      return false
+    const configFingerprint =
+      edge.producer?.configFingerprint ?? previous.sourceConfigFingerprint
+    return !configFingerprint || configFingerprint === sourceConfigFingerprint
+  })
+  if (
+    previous.graphData &&
+    precise.length === priorPrecise.length &&
+    Object.keys(structural).length === Object.keys(previous.graphData).length &&
+    Object.keys(structural).every(
+      (filePath) => structural[filePath] === previous.graphData?.[filePath],
+    )
+  )
+    return previous.graph
+
+  const nodes: Record<string, IndexNode> = {}
+  const edges: IndexEdge[] = []
+  const preciseTuples = new Set(
+    precise.map((edge) => `${edge.from}\0${edge.to}\0${edge.type}`),
+  )
+  for (const group of Object.values(structural)) {
+    Object.assign(nodes, group.nodes)
+    for (const edge of group.edges) {
+      if (!preciseTuples.has(`${edge.from}\0${edge.to}\0${edge.type}`))
+        edges.push(edge)
+    }
+  }
+  edges.push(...precise)
+  return { nodes, edges: dedupeEdges(edges) }
+}
+
+function countUpdatedGraphEdges(
+  previous: MetadataIndex,
+  graphData: Record<string, IndexGraph>,
+  graph: IndexGraph,
+  affected: ReadonlySet<string>,
+): number {
+  const key = (edge: IndexEdge) =>
+    JSON.stringify([edgeDedupeKey(edge), edge.confidence ?? 'heuristic'])
+  const before = new Map<string, IndexEdge>()
+  const after = new Map<string, IndexEdge>()
+  for (const filePath of affected) {
+    for (const edge of previous.graphData?.[filePath]?.edges ?? [])
+      before.set(key(edge), edge)
+    for (const edge of graphData[filePath]?.edges ?? [])
+      after.set(key(edge), edge)
+  }
+  for (const edge of previous.graph.edges)
+    if (edge.confidence === 'precise') before.set(key(edge), edge)
+  for (const edge of graph.edges)
+    if (edge.confidence === 'precise') after.set(key(edge), edge)
+  return Array.from(new Set([...before.keys(), ...after.keys()])).filter(
+    (edgeKey) => {
+      const oldEdge = before.get(edgeKey)
+      const newEdge = after.get(edgeKey)
+      return (
+        oldEdge !== newEdge &&
+        (!oldEdge ||
+          !newEdge ||
+          JSON.stringify(oldEdge) !== JSON.stringify(newEdge))
+      )
+    },
+  ).length
+}
+
+/** Compiler/config/dependency inputs are distinct from structural edge weights. */
+export function getSourceConfigurationFingerprint(
+  files: Record<string, IndexedFile>,
+  projectRoot: string,
+): string {
+  const digest = crypto.createHash('sha256').update('source-configuration:1\0')
+  const configuration =
+    /(?:^|\/)(?:tsconfig[^/]*\.json|jsconfig[^/]*\.json|package\.json|(?:bun|package|pnpm|yarn|Cargo|composer|poetry|uv).*lock[^/]*|go\.(?:mod|sum)|Cargo\.toml|pyproject\.toml|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|[^/]*\.(?:csproj|fsproj|sln))$/
+  for (const filePath of Object.keys(files)
+    .filter((filePath) => configuration.test(filePath))
+    .sort()) {
+    digest
+      .update(filePath)
+      .update('\0')
+      .update(files[filePath]!.hash)
+      .update('\0')
+  }
+  for (const relativePath of [
+    'node_modules/.package-lock.json',
+    'node_modules/.modules.yaml',
+    '.pnp.cjs',
+    '.pnp.loader.mjs',
+  ]) {
+    try {
+      const absolutePath = path.join(projectRoot, relativePath)
+      const stat = fs.statSync(absolutePath)
+      digest.update(relativePath).update('\0')
+      if (stat.size <= 1_000_000) digest.update(fs.readFileSync(absolutePath))
+      else
+        digest.update(`oversized:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`)
+    } catch {
+      digest.update(`${relativePath}:absent\0`)
+    }
+  }
+  return digest.digest('hex')
+}
+
+function getGraphConfigurationFingerprint(
+  sourceFingerprint: string,
+  weights?: GraphWeights,
+): string {
+  return crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify({
+        version: 2, // Rebuild call edges made before source-family joins.
+        sourceFingerprint,
+        weights: resolveGraphWeights(weights),
+      }),
+    )
+    .digest('hex')
+}
+
+async function createMetadataIndex(
   projectRoot: string,
   files: Record<string, IndexedFile>,
   tokenCallers: Record<string, Record<string, string[]>>,
   graphWeights?: GraphWeights,
   parseDiagnostics: ParseDiagnostic[] = [],
   parseData: Record<string, ParsedFileTokens> = {},
-): MetadataIndex {
+): Promise<MetadataIndex> {
   const aliases = loadTsAliases(projectRoot)
-  const graph = buildGraph(
+  const yieldToEventLoop = createEventLoopYieldGate()
+  const dependencies = buildGraphDependencies(parseData)
+  const graph = await buildGraph(
     files,
     tokenCallers,
     aliases,
     resolveGraphWeights(graphWeights),
     parseData,
+    createTsModuleResolver({ projectRoot, files, aliases }),
+    yieldToEventLoop,
+    undefined,
+    dependencies.definitions,
+  )
+  const sourceConfigFingerprint = getSourceConfigurationFingerprint(
+    files,
+    projectRoot,
   )
   return {
     version: '2',
@@ -632,8 +1549,22 @@ function createMetadataIndex(
     fileCount: Object.keys(files).length,
     files,
     graph,
-    queryData: buildIndexQueryData(files, graph),
+    graphData: partitionGraphBySource(graph, files),
+    graphDependencies: dependencies,
+    sourceConfigFingerprint,
+    graphConfigFingerprint: getGraphConfigurationFingerprint(
+      sourceConfigFingerprint,
+      graphWeights,
+    ),
+    queryData: await buildIndexQueryDataAsync(files, graph, yieldToEventLoop),
     parseData,
+    parseFingerprints: Object.fromEntries(
+      Object.entries(parseData).map(([filePath, parsed]) => [
+        filePath,
+        parsed.extractionFingerprint ??
+          getParserExtractionFingerprint(filePath),
+      ]),
+    ),
     parseDiagnostics,
   }
 }
@@ -724,18 +1655,6 @@ function normalizeMutationPath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\.\//, '')
 }
 
-function getLanguageFamily(extension: string | undefined): string {
-  const normalized = extension?.toLowerCase() ?? ''
-  if (['.ts', '.tsx', '.mts', '.cts'].includes(normalized)) return 'typescript'
-  if (['.js', '.jsx', '.mjs', '.cjs'].includes(normalized)) return 'javascript'
-  if (['.c', '.h'].includes(normalized)) return 'c'
-  if (['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'].includes(normalized)) {
-    return 'cpp'
-  }
-  if (['.kt', '.kts'].includes(normalized)) return 'kotlin'
-  return normalized
-}
-
 function createParseDiagnostic(
   projectRoot: string,
   error: unknown,
@@ -747,13 +1666,17 @@ function createParseDiagnostic(
   }
 }
 
-function buildGraph(
+async function buildGraph(
   files: Record<string, IndexedFile>,
   tokenCallers: Record<string, Record<string, string[]>>,
   aliases: TsAliasMap | undefined,
   weights: Required<GraphWeights>,
   parseData: Record<string, ParsedFileTokens> = {},
-): IndexGraph {
+  tsResolver: TsModuleResolver | null = null,
+  yieldToEventLoop: () => Promise<void> = createEventLoopYieldGate(),
+  sourcePaths?: ReadonlySet<string>,
+  definitionPaths?: Record<string, string[]>,
+): Promise<IndexGraph> {
   const nodes: Record<string, IndexNode> = {}
   const edges: IndexEdge[] = []
 
@@ -762,6 +1685,8 @@ function buildGraph(
   const guidToPathMap = buildGuidToPathMap(files)
 
   for (const file of Object.values(files)) {
+    if (sourcePaths && !sourcePaths.has(file.path)) continue
+    await yieldToEventLoop()
     const fileId = fileNodeId(file.path)
     nodes[fileId] = {
       id: fileId,
@@ -803,6 +1728,7 @@ function buildGraph(
         importPath,
         files,
         aliases,
+        tsResolver,
       )
       if (resolved) {
         edges.push({
@@ -884,9 +1810,11 @@ function buildGraph(
   }
 
   for (const [definingFile, callersByToken] of Object.entries(tokenCallers)) {
+    await yieldToEventLoop()
     if (!files[definingFile]) continue
     for (const [token, callers] of Object.entries(callersByToken)) {
       for (const callerFile of callers) {
+        if (sourcePaths && !sourcePaths.has(callerFile)) continue
         if (!files[callerFile]) continue
         edges.push({
           from: fileNodeId(callerFile),
@@ -900,32 +1828,78 @@ function buildGraph(
   }
 
   edges.push(
-    ...buildModuleAwareCallEdges(files, parseData, aliases, weights.calls),
+    ...(await buildModuleAwareCallEdges(
+      files,
+      parseData,
+      aliases,
+      weights.calls,
+      tsResolver,
+      yieldToEventLoop,
+      sourcePaths,
+      definitionPaths,
+    )),
   )
 
   return { nodes, edges: dedupeEdges(edges) }
 }
 
-function buildModuleAwareCallEdges(
+async function buildModuleAwareCallEdges(
   files: Record<string, IndexedFile>,
   parseData: Record<string, ParsedFileTokens>,
   aliases: TsAliasMap | undefined,
   weight: number,
-): IndexEdge[] {
+  tsResolver: TsModuleResolver | null = null,
+  yieldToEventLoop: () => Promise<void> = createEventLoopYieldGate(),
+  sourcePaths?: ReadonlySet<string>,
+  definitionPaths?: Record<string, string[]>,
+): Promise<IndexEdge[]> {
   const definitions = new Map<string, string[]>()
-  for (const [filePath, parsed] of Object.entries(parseData)) {
+  const definitionMembership = new Map<string, Set<string>>()
+  if (definitionPaths) {
+    for (const [symbol, paths] of Object.entries(definitionPaths))
+      definitions.set(symbol, paths)
+  }
+  for (const [filePath, parsed] of definitionPaths
+    ? []
+    : Object.entries(parseData)) {
+    await yieldToEventLoop()
     if (!files[filePath]) continue
     for (const symbol of parsed.identifiers) {
       const paths = definitions.get(symbol) ?? []
-      if (!paths.includes(filePath)) paths.push(filePath)
+      let members = definitionMembership.get(symbol)
+      if (!members) {
+        members = new Set()
+        definitionMembership.set(symbol, members)
+      }
+      if (!members.has(filePath)) {
+        members.add(filePath)
+        paths.push(filePath)
+      }
       definitions.set(symbol, paths)
     }
   }
 
+  // Resolve once per file, including misses. An unknown family is not a
+  // candidate, even if another indexed path is also unknown.
+  const familyByPath = new Map<string, SourceLanguageFamily | null>()
+  const familyForPath = (filePath: string): SourceLanguageFamily | null => {
+    let family = familyByPath.get(filePath)
+    if (family === undefined) {
+      family = files[filePath]
+        ? (getSourceLanguageIdentityForPath(filePath)?.family ?? null)
+        : null
+      familyByPath.set(filePath, family)
+    }
+    return family
+  }
+
   const edges: IndexEdge[] = []
   for (const [callerPath, parsed] of Object.entries(parseData)) {
+    if (sourcePaths && !sourcePaths.has(callerPath)) continue
+    await yieldToEventLoop()
     const caller = files[callerPath]
-    if (!caller) continue
+    const callerFamily = familyForPath(callerPath)
+    if (!caller || !callerFamily) continue
     const importedFiles = new Set(
       caller.imports
         .map((importPath) =>
@@ -935,21 +1909,17 @@ function buildModuleAwareCallEdges(
             importPath,
             files,
             aliases,
+            tsResolver,
           ),
         )
         .filter((filePath): filePath is string => Boolean(filePath)),
     )
 
     for (const call of parsed.calls) {
-      const candidates = (definitions.get(call) ?? []).filter(
-        (filePath) => filePath !== callerPath,
-      )
-      const sameLanguage = candidates.filter(
+      const languageCandidates = (definitions.get(call) ?? []).filter(
         (filePath) =>
-          getLanguageFamily(files[filePath]?.ext) ===
-          getLanguageFamily(caller.ext),
+          filePath !== callerPath && familyForPath(filePath) === callerFamily,
       )
-      const languageCandidates = sameLanguage
       const importedCandidates = languageCandidates.filter((filePath) =>
         importedFiles.has(filePath),
       )
@@ -992,86 +1962,32 @@ function getTopSymbols(
     .map(([sym]) => sym)
 }
 
-function extractImports(content: string, extension: string): string[] {
-  const imports = new Set<string>()
-  const addMatches = (
-    regex: RegExp,
-    select: (match: RegExpExecArray) => string | undefined,
-  ) => {
-    let match: RegExpExecArray | null
-    while ((match = regex.exec(content)) !== null && imports.size < 50) {
-      const importPath = select(match)?.trim()
-      if (importPath) imports.add(importPath)
-    }
+/**
+ * P3-T5 AST import-capture tier: prefer import specifiers captured by the
+ * code-map tree-sitter tags query (the SAME .scm query the parse pipeline
+ * runs; see `parseFile`'s @import.* capture grouping and
+ * `importSpecifiersFromAstCaptures`) when the parse pipeline produced a
+ * non-empty list for a tier language (TypeScript, JavaScript, Python, Go,
+ * Rust). AST captures are normalized in code-map to the exact specifier
+ * shapes the line-based extractor emits, so downstream resolution
+ * (resolveImportToFile / edge building) is untouched.
+ *
+ * When the parse pipeline exposes no captures — the file's language has no
+ * AST tier, the grammar failed to load, or the file produced no @import
+ * captures — this falls back byte-identically to the canonical line-based
+ * extraction (`extractImportSpecifiers`), which remains the safety net and
+ * is NOT removed. Both tiers are capped by the same bound. Exported so the
+ * seam contract is directly pinnable in tests.
+ */
+export function extractImports(
+  content: string,
+  extension: string,
+  astImports?: string[],
+): string[] {
+  if (astImports && astImports.length > 0) {
+    return astImports.slice(0, AST_IMPORT_SPECIFIER_LIMIT)
   }
-
-  if (
-    ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'].includes(
-      extension,
-    )
-  ) {
-    addMatches(
-      new RegExp(IMPORT_REGEX.source, 'g'),
-      (match) => match[1] ?? match[2] ?? match[3],
-    )
-  } else if (['.py', '.pyi'].includes(extension)) {
-    addMatches(/^\s*from\s+([.\w]+)\s+import\b/gm, (match) => match[1])
-    addMatches(/^\s*import\s+([\w.]+)/gm, (match) => match[1])
-  } else if (extension === '.rs') {
-    addMatches(/^\s*(?:pub\s+)?(?:use|mod)\s+([\w:]+)/gm, (match) => match[1])
-  } else if (extension === '.go') {
-    addMatches(
-      /^\s*import\s+(?:[\w.]+\s+)?["`]([^"`]+)["`]/gm,
-      (match) => match[1],
-    )
-    addMatches(/\bimport\s*\(([\s\S]*?)\)/gm, (blockMatch) => {
-      for (const line of (blockMatch[1] ?? '').split(/\r?\n/)) {
-        const item = line.match(
-          /^\s*(?:[\w.]+\s+)?["`]([^"`]+)["`]\s*(?:\/\/.*)?$/,
-        )
-        if (item?.[1]) imports.add(item[1])
-      }
-      return undefined
-    })
-  } else if (['.java', '.kt', '.kts'].includes(extension)) {
-    addMatches(
-      /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;?\s*$/gm,
-      (match) => match[1],
-    )
-  } else if (
-    ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(
-      extension,
-    )
-  ) {
-    addMatches(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm, (match) => match[1])
-  } else if (extension === '.cs') {
-    addMatches(
-      /^\s*(?:global\s+)?using\s+(?:[\w]+\s*=\s*)?([\w.]+)\s*;/gm,
-      (match) => match[1],
-    )
-  } else if (extension === '.rb') {
-    addMatches(
-      /^\s*require(?:_relative)?\s*[('" ]+([^'"\s)]+)/gm,
-      (match) => match[1],
-    )
-  } else if (extension === '.php') {
-    addMatches(/^\s*use\s+([\w\\]+)/gm, (match) =>
-      match[1]?.replace(/\\/g, '/'),
-    )
-    addMatches(
-      /\b(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)/g,
-      (match) => match[1],
-    )
-  } else if (extension === '.swift') {
-    addMatches(/^\s*import\s+(?:\w+\s+)?([\w.]+)/gm, (match) => match[1])
-  } else if (extension === '.gd') {
-    addMatches(
-      /\b(?:preload|load)\s*\(\s*["'](?:res:\/\/)?([^"']+)/g,
-      (match) => match[1],
-    )
-  }
-
-  return Array.from(imports)
+  return extractImportSpecifiers(content, extension)
 }
 
 function extractHeadings(content: string): string[] {
@@ -1182,6 +2098,17 @@ function mergeConcepts(primary: string[], secondary: string[]): string[] {
   return Array.from(new Set([...primary, ...secondary])).slice(0, 160)
 }
 
+/**
+ * Raw command text (package.json script bodies, CI `run:`/`name:` lines) is
+ * embedded verbatim as a query-facing concept; cap each such concept so a
+ * pathological multi-kilobyte command cannot dominate the concept index.
+ */
+const MAX_RAW_CONCEPT_LENGTH = 200
+const clampRawConcept = (concept: string): string =>
+  concept.length > MAX_RAW_CONCEPT_LENGTH
+    ? concept.slice(0, MAX_RAW_CONCEPT_LENGTH)
+    : concept
+
 function extractPackageJsonConcepts(content: string): string[] {
   const concepts = new Set<string>([
     'package manifest',
@@ -1205,7 +2132,7 @@ function extractPackageJsonConcepts(content: string): string[] {
     if (typeof command !== 'string') continue
     concepts.add(name)
     concepts.add(`script ${name}`)
-    concepts.add(`script:${name}=${command}`)
+    concepts.add(clampRawConcept(`script:${name}=${command}`))
     for (const token of conceptTokens(`${name} ${command}`)) concepts.add(token)
   }
   return Array.from(concepts).slice(0, 160)
@@ -1223,11 +2150,13 @@ function extractCiWorkflowConcepts(content: string): string[] {
     if (/^(?:-\s*)?(run|uses|name):\s+/i.test(trimmed)) {
       const isRunCommand = /^(?:-\s*)?run:/i.test(trimmed)
       concepts.add(
-        isRunCommand
-          ? trimmed.startsWith('run:')
-            ? trimmed
-            : `run:${trimmed}`
-          : trimmed,
+        clampRawConcept(
+          isRunCommand
+            ? trimmed.startsWith('run:')
+              ? trimmed
+              : `run:${trimmed}`
+            : trimmed,
+        ),
       )
       for (const token of conceptTokens(trimmed)) concepts.add(token)
     }
@@ -1337,59 +2266,139 @@ function conceptNodeId(concept: string): string {
   return `concept:${concept}`
 }
 
-export type TsAliasMap = Record<string, string[]>
-
-function stripJsonComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
-    .replace(/,(\s*[}\]])/g, '$1')
-}
+export type { TsAliasMap } from './import-resolution'
+import type { TsAliasMap } from './import-resolution'
 
 /**
- * Load tsconfig `compilerOptions.paths` aliases (following `extends`), so the
- * import graph can resolve workspace-internal aliases like "@codebuff/common/*".
- * Tolerant: comments/trailing commas are stripped, and any failure yields no
- * aliases (relative-import resolution still works). Cached per root.
+ * Upper bound on tsconfig project references followed per loadTsAliases walk;
+ * a hostile or accidental reference fan-out cannot grow the walk without
+ * bound (cycles are separately bounded by the shared visited set).
+ */
+const MAX_TSCONFIG_REFERENCES = 32
+
+/**
+ * Load tsconfig `compilerOptions.paths` aliases (following `extends` AND
+ * top-level `references`), so the import graph can resolve workspace-internal
+ * aliases like "@codebuff/common/*" and paths declared by project-referenced
+ * tsconfigs.
+ *
+ * Walk order: the root tsconfig.json contributes first, then its `extends`
+ * chain (each extends resolved relative to the referencing file's directory);
+ * a config's top-level `references` entries (`{ path: string }[]`, resolved
+ * relative to the referencing file's directory, with a directory reference
+ * getting `/tsconfig.json` appended, as TypeScript does) are queued behind
+ * the extends chain, and each referenced config is walked with its own
+ * extends chain too. A single visited set bounds the whole walk against
+ * cycles, and at most MAX_TSCONFIG_REFERENCES references are followed.
+ *
+ * Closest-wins precedence, matching the existing rule: a key already in the
+ * map is never overwritten, so the root config wins over its extends bases,
+ * and nearer references win over farther ones in walk order. Paths
+ * discovered through references are rebased to be project-root-relative (a
+ * referenced config's `paths` are relative to that config's own directory,
+ * but the resolver applies every alias against the project root).
+ *
+ * Tolerant/fail-open: comments/trailing commas are stripped, and malformed
+ * JSON, missing files, reference cycles, or the reference cap simply
+ * contribute nothing for that config (relative-import resolution still
+ * works). Cached per root.
  */
 function loadTsAliases(projectRoot: string): TsAliasMap {
   const cached = tsAliasCacheByRoot.get(projectRoot)
   if (cached) return cached
 
   const aliases: TsAliasMap = {}
-  try {
-    let configPath: string = path.join(projectRoot, 'tsconfig.json')
-    const visited = new Set<string>()
-    while (
-      configPath &&
-      !visited.has(configPath) &&
-      fs.existsSync(configPath)
-    ) {
-      visited.add(configPath)
+  const queue: { filePath: string; viaReference: boolean }[] = [
+    { filePath: path.join(projectRoot, 'tsconfig.json'), viaReference: false },
+  ]
+  const visited = new Set<string>()
+  let referencesFollowed = 0
+  while (queue.length > 0) {
+    const entry = queue.shift()!
+    if (visited.has(entry.filePath) || !fs.existsSync(entry.filePath)) {
+      continue
+    }
+    visited.add(entry.filePath)
+    let extendsPath: string | undefined
+    const referencePaths: { filePath: string; viaReference: boolean }[] = []
+    try {
       const raw = JSON.parse(
-        stripJsonComments(fs.readFileSync(configPath, 'utf8')),
-      )
+        stripJsonComments(fs.readFileSync(entry.filePath, 'utf8')),
+      ) as {
+        compilerOptions?: { paths?: unknown }
+        extends?: unknown
+        references?: unknown
+      }
       const paths = raw?.compilerOptions?.paths
       if (paths && typeof paths === 'object') {
+        // Paths in a config reached via `references` are relative to that
+        // config's own directory; rebase them so they resolve against the
+        // project root like every other alias.
+        const rebasePrefix = entry.viaReference
+          ? path
+              .relative(projectRoot, path.dirname(entry.filePath))
+              .split(path.sep)
+              .join('/')
+          : ''
         for (const [key, value] of Object.entries(paths)) {
           // Closest config wins; do not let a base config override.
           if (!(key in aliases) && Array.isArray(value)) {
-            aliases[key] = (value as string[]).map((t) =>
-              t.replace(/^\.\//, '').replace(/\\/g, '/'),
-            )
+            aliases[key] = (value as unknown[])
+              .filter((t): t is string => typeof t === 'string')
+              .map((t) => {
+                const normalized = t.replace(/^\.\//, '').replace(/\\/g, '/')
+                return rebasePrefix
+                  ? `${rebasePrefix}/${normalized}`
+                  : normalized
+              })
           }
         }
       }
       const ext = raw?.extends
-      configPath =
-        typeof ext === 'string'
-          ? path.resolve(path.dirname(configPath), ext)
-          : ''
+      if (typeof ext === 'string' && ext !== '') {
+        extendsPath = path.resolve(path.dirname(entry.filePath), ext)
+      }
+      if (Array.isArray(raw?.references)) {
+        for (const reference of raw.references) {
+          const referencePath =
+            reference !== null && typeof reference === 'object'
+              ? (reference as { path?: unknown }).path
+              : undefined
+          if (typeof referencePath !== 'string') continue
+          if (referencesFollowed >= MAX_TSCONFIG_REFERENCES) break
+          referencesFollowed++
+          const resolved = path.resolve(
+            path.dirname(entry.filePath),
+            referencePath,
+          )
+          // A directory reference names the referenced project root; its
+          // tsconfig.json is the config file (mirrors TypeScript's behavior).
+          referencePaths.push({
+            filePath: /\.json$/i.test(resolved)
+              ? resolved
+              : path.join(resolved, 'tsconfig.json'),
+            viaReference: true,
+          })
+        }
+      }
+    } catch {
+      // Malformed/missing config contributes nothing; the walk continues.
     }
-  } catch {
-    // No aliases on parse/read failure.
+    // Extends chains drain before any queued reference so the root config
+    // and its bases stay closer than referenced configs.
+    if (extendsPath) {
+      queue.unshift({
+        filePath: extendsPath,
+        viaReference: entry.viaReference,
+      })
+    }
+    if (referencePaths.length > 0) queue.push(...referencePaths)
   }
 
+  // Every alias-cache insert routes through the evicting helper so
+  // MAX_INDEXED_PROJECT_ROOTS bounds this map too — including doc-only
+  // roots whose project has no code files, for which no parsedCacheByRoot
+  // insert ever happens (see evictOldestRootCacheIfNeeded).
   if (!tsAliasCacheByRoot.has(projectRoot)) {
     evictOldestRootCacheIfNeeded()
   }
@@ -1397,244 +2406,11 @@ function loadTsAliases(projectRoot: string): TsAliasMap {
   return aliases
 }
 
-function resolveModuleCandidates(
-  base: string,
-  files: Record<string, IndexedFile>,
-): string | null {
-  const normalized = base.replace(/^\.\//, '')
-  const sourceExtensions = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mts',
-    '.cts',
-    '.mjs',
-    '.cjs',
-    '.py',
-    '.pyi',
-    '.rs',
-    '.go',
-    '.java',
-    '.kt',
-    '.kts',
-    '.cs',
-    '.c',
-    '.cc',
-    '.cpp',
-    '.cxx',
-    '.h',
-    '.hh',
-    '.hpp',
-    '.hxx',
-    '.rb',
-    '.php',
-    '.swift',
-    '.gd',
-  ]
-  const candidates = [
-    normalized,
-    ...sourceExtensions.map((extension) => `${normalized}${extension}`),
-    ...sourceExtensions.map((extension) => `${normalized}/index${extension}`),
-    `${normalized}/__init__.py`,
-    `${normalized}/mod.rs`,
-  ]
-  return candidates.find((candidate) => files[candidate]) ?? null
-}
-
-/**
- * Resolve a non-relative import via tsconfig `paths` aliases (e.g.
- * "@codebuff/common/util/x" -> "common/src/util/x"). Supports both wildcard
- * (`@scope/*`) and exact (`@scope/sdk`) patterns. Targets are interpreted
- * relative to the project root (baseUrl="." in this repo).
- */
-function resolveAliasImport(
-  importPath: string,
-  aliases: TsAliasMap,
-  files: Record<string, IndexedFile>,
-): string | null {
-  for (const [pattern, targets] of Object.entries(aliases)) {
-    const starIndex = pattern.indexOf('*')
-    if (starIndex >= 0) {
-      const prefix = pattern.slice(0, starIndex)
-      const suffix = pattern.slice(starIndex + 1)
-      if (
-        importPath.startsWith(prefix) &&
-        importPath.endsWith(suffix) &&
-        importPath.length >= prefix.length + suffix.length
-      ) {
-        const middle = importPath.slice(
-          prefix.length,
-          importPath.length - suffix.length,
-        )
-        for (const target of targets) {
-          const base = target.replace('*', middle)
-          const resolved = resolveModuleCandidates(base, files)
-          if (resolved) return resolved
-        }
-      }
-    } else if (importPath === pattern) {
-      for (const target of targets) {
-        const resolved = resolveModuleCandidates(target, files)
-        if (resolved) return resolved
-      }
-    }
-  }
-  return null
-}
-
-function resolveImportToFile(
-  fromFilePath: string,
-  fromExtension: string,
-  importPath: string,
-  files: Record<string, IndexedFile>,
-  aliases?: TsAliasMap,
-): string | null {
-  const normalizedImport = importPath.replace(/\\/g, '/')
-  let suffixSpecifier = normalizedImport
-  if (fromExtension === '.gd') {
-    return resolveModuleCandidates(
-      normalizedImport.replace(/^res:\/\//, ''),
-      files,
-    )
-  }
-  if (
-    ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx', '.rb'].includes(
-      fromExtension,
-    )
-  ) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const local = resolveModuleCandidates(
-      path.posix.normalize(path.posix.join(fromDir, normalizedImport)),
-      files,
-    )
-    if (local) return local
-  }
-  if (['.java', '.kt', '.kts', '.cs', '.php'].includes(fromExtension)) {
-    const dottedPath = normalizedImport.replace(/\./g, '/')
-    suffixSpecifier = dottedPath
-    if (['.java', '.kt', '.kts', '.php'].includes(fromExtension)) {
-      const declared = resolveDeclaredPackageImport(
-        dottedPath,
-        fromExtension,
-        files,
-      )
-      if (declared) return declared
-    } else {
-      const exact = resolveModuleCandidates(dottedPath, files)
-      if (exact) return exact
-    }
-  }
-  if (fromExtension === '.rs') {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const rustPath = normalizedImport
-      .replace(/^crate::/, '')
-      .replace(/^self::/, '')
-      .replace(/^super::/, '../')
-      .replace(/::/g, '/')
-    const local = resolveModuleCandidates(
-      path.posix.normalize(path.posix.join(fromDir, rustPath)),
-      files,
-    )
-    if (local) return local
-    const crateRelative = resolveModuleCandidates(`src/${rustPath}`, files)
-    if (crateRelative) return crateRelative
-  }
-  if (['.py', '.pyi'].includes(fromExtension)) {
-    const leadingDots = normalizedImport.match(/^\.+/)?.[0].length ?? 0
-    const modulePath = normalizedImport.slice(leadingDots).replace(/\./g, '/')
-    if (leadingDots > 0) {
-      let baseDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-      for (let index = 1; index < leadingDots; index++)
-        baseDir = path.posix.dirname(baseDir)
-      const relative = resolveModuleCandidates(
-        path.posix.join(baseDir, modulePath),
-        files,
-      )
-      if (relative) return relative
-    }
-    const absolute = resolveModuleCandidates(modulePath, files)
-    if (absolute) return absolute
-  }
-  if (normalizedImport.startsWith('.')) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const normalizedBase = path.posix.normalize(
-      path.posix.join(fromDir, normalizedImport),
-    )
-    return resolveModuleCandidates(normalizedBase, files)
-  }
-  // Non-relative: try tsconfig path aliases (workspace-internal imports).
-  if (aliases) {
-    const aliasResolved = resolveAliasImport(normalizedImport, aliases, files)
-    if (aliasResolved) return aliasResolved
-  }
-  // Go module imports and Ruby load paths often include a repository/module
-  // prefix. Resolve only an unambiguous suffix to avoid inventing graph edges.
-  if (fromExtension !== '.go') {
-    return null
-  }
-  const goModule = files['go.mod']?.contentSample?.match(
-    /^\s*module\s+([^\s]+)\s*$/m,
-  )?.[1]
-  if (!goModule || !normalizedImport.startsWith(`${goModule}/`)) return null
-  suffixSpecifier = normalizedImport.slice(goModule.length + 1)
-  const suffixMatches = Object.keys(files).filter((candidate) => {
-    const withoutExtension = candidate.replace(/\.[^.\/]+$/, '')
-    const packageDirectory = path.posix.dirname(withoutExtension)
-    return (
-      suffixSpecifier.endsWith(withoutExtension) ||
-      withoutExtension.endsWith(suffixSpecifier) ||
-      (fromExtension === '.go' &&
-        packageDirectory !== '.' &&
-        suffixSpecifier.endsWith(packageDirectory))
-    )
-  })
-  if (suffixMatches.length === 1) return suffixMatches[0]
-  return null
-}
-
-function resolveDeclaredPackageImport(
-  importPath: string,
-  fromExtension: string,
-  files: Record<string, IndexedFile>,
-): string | null {
-  const segments = importPath.split('/').filter(Boolean)
-  if (segments.length < 2) return null
-  const symbolName = segments.at(-1)!
-  const packageName = segments
-    .slice(0, -1)
-    .join(fromExtension === '.php' ? '\\' : '.')
-  const allowedExtensions =
-    fromExtension === '.php' ? new Set(['.php']) : new Set(['.java', '.kt'])
-  const matches = Object.values(files).filter((candidate) => {
-    if (!allowedExtensions.has(candidate.ext)) return false
-    if (path.posix.basename(candidate.path, candidate.ext) !== symbolName) {
-      return false
-    }
-    const sample = candidate.contentSample ?? ''
-    if (fromExtension === '.php') {
-      return new RegExp(
-        `^\\s*namespace\\s+${escapeRegex(packageName)}\\s*;`,
-        'm',
-      ).test(sample)
-    }
-    return new RegExp(
-      `^\\s*package\\s+${escapeRegex(packageName)}\\s*;?`,
-      'm',
-    ).test(sample)
-  })
-  return matches.length === 1 ? matches[0].path : null
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function dedupeEdges(edges: IndexEdge[]): IndexEdge[] {
   const seen = new Set<string>()
   const deduped: IndexEdge[] = []
   for (const edge of edges) {
-    const key = `${edge.from}\0${edge.to}\0${edge.type}\0${edge.label ?? ''}`
+    const key = edgeDedupeKey(edge)
     if (seen.has(key)) continue
     seen.add(key)
     deduped.push(edge)

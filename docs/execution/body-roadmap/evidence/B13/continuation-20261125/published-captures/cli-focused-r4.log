@@ -1,0 +1,259 @@
+bun test v1.4.4 (38afee6c8)
+
+src/hooks/__tests__/use-send-message-restore.test.tsx:
+Using environment: test
+(pass) B13 mounted selected-session recovery > missing selection blocks send before draft/attachment drain and retry restores the actual saved file [112.33ms]
+(pass) B13 mounted selected-session recovery > corrupt selection blocks send before draft/attachment drain and retry restores the actual saved file [38.22ms]
+(pass) B13 mounted selected-session recovery > cancel aborts an in-flight restore, preserves draft/queue and ignores the late old result [42.64ms]
+
+src/hooks/__tests__/use-chat-messages-retention.test.tsx:
+Using environment: dev
+(pass) 500 retained messages start with a 15-message hot page, load older pages and reveal the earliest through the viewport [1360.63ms]
+
+src/hooks/__tests__/use-send-message-ownership.test.ts:
+Using environment: test
+(pass) replacing the conversation during old failure yield keeps a newer submission busy [14.88ms]
+(pass) clearing a running SDK call holds execution occupancy until abort settles [8.16ms]
+
+src/hooks/helpers/__tests__/send-message.test.ts:
+Using environment: test
+(pass) createRunOwnership > superseding run owns persistence and stale owner release cannot clear it [0.07ms]
+(pass) createRunOwnership > run is active only while it still owns the ref and has not been aborted [0.12ms]
+(pass) createRunOwnership > early-return cleanup releases the current run owner [0.03ms]
+(pass) prepareUserMessage transcript retention > preserves prior IDs, order and objects when appending a user and post-user response [4.69ms]
+(pass) file attachment prompt provenance > labels guaranteed @file reads and warns when context is truncated [0.19ms]
+(pass) formatQueuedMessageForHistory > returns the content unchanged when no attachments are queued [0.07ms]
+(pass) formatQueuedMessageForHistory > folds text and file attachments into the persisted prompt text [0.06ms]
+(pass) formatQueuedMessageForHistory > persists a locating note for image attachments instead of dropping them [0.06ms]
+(pass) cleanupProviderReadinessFailure > sets error state, releases queue/chain locks, and releases run ownership [0.29ms]
+(pass) setupStreamingContext > abort flow > abort handler marks cancelling and retains the chain lock until settlement [0.39ms]
+(pass) setupStreamingContext > abort flow > abort sets canProcessQueue based on queue pause state [0.29ms]
+(pass) setupStreamingContext > abort flow > abort retains isProcessingQueueRef until the run settles [0.20ms]
+(pass) setupStreamingContext > abort flow > abort retains chain and processing ownership while cancelling [0.22ms]
+(pass) setupStreamingContext > abort flow > abort handler stores abortController in ref [0.09ms]
+(pass) setupStreamingContext > abort flow > setupStreamingContext resets streamRefs and starts timer [0.10ms]
+(pass) setupStreamingContext > abort flow > abort terminates a still-running compaction block instead of leaving it pending [0.47ms]
+(pass) markPendingCompactionInterrupted > rewrites a pending block and strips its live stamp [0.07ms]
+(pass) markPendingCompactionInterrupted > leaves complete, interrupted and status-less compaction blocks untouched by identity [0.07ms]
+(pass) handleRunCompletion > publishes a zero cache-hit rate only when usage is complete [17.51ms]
+(pass) handleRunCompletion > cancellation persists evidence before queue release from completed [0.38ms]
+(pass) handleRunCompletion > cancellation persists evidence before queue release from cancelled [0.13ms]
+(pass) handleRunCompletion > empty typed failure does not issue a successful completion [0.34ms]
+(pass) handleRunCompletion > abort path > finalizes queue state after an aborted run settles [0.20ms]
+(pass) handleRunCompletion > abort path > does not process server response when wasAbortedByUser is true [0.17ms]
+(pass) handleRunCompletion > abort path > resumes queue only after the aborted run settles [0.12ms]
+(pass) finalizeQueueState > sets stream status to idle and resets queue state [0.08ms]
+(pass) finalizeQueueState > calls resumeQueue instead of setCanProcessQueue when provided [0.06ms]
+(pass) finalizeQueueState > respects isQueuePausedRef when no resumeQueue provided [0.09ms]
+(pass) handleRunError > stores error in userError field for regular errors [2.10ms]
+(pass) handleRunError > handles empty existing content gracefully [0.59ms]
+(pass) handleRunError > resets isProcessingQueueRef to false on error [0.32ms]
+(pass) handleRunError > respects isQueuePausedRef when setting canProcessQueue on error [0.24ms]
+(pass) handleRunError > context length exceeded error (AI_APICallError) stores error in userError and preserves content [0.46ms]
+(pass) handleRunError > Payment required error (402) is displayed without switching input mode [0.38ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > run B remains blocked while run A is cancelling [0.40ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > handleRunCompletion releases cancellation ownership after settlement [0.22ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > aborted run A finally block must not clear isProcessingQueueRef owned by run B [0.20ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > reject-after-abort must not run handleRunError cleanup that could clobber run B [0.10ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > handleRunError WOULD clobber run B state if called without abort guard (documents why guard is needed) [0.51ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > full two-run lifecycle preserves run A state before run B completion [3.41ms]
+(pass) handleRunCompletion and handleRunError settle writes before reopening the queue gate > success path stops the timer and marks complete before finalizeQueueState [3.63ms]
+(pass) handleRunCompletion and handleRunError settle writes before reopening the queue gate > error path sets the error and stops the timer before finalizeQueueState [0.88ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > resets chain in progress to false [0.08ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > sets canProcessQueue to true when queue is not paused [0.07ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > sets canProcessQueue to false when queue is paused [0.04ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > resets isProcessingQueueRef to false [0.03ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > handles missing isProcessingQueueRef gracefully [0.06ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > handles missing isQueuePausedRef gracefully (defaults to canProcessQueue=true) [0.04ms]
+(pass) resetEarlyReturnState > validation failure path (success: false) > resets all queue state correctly when processing queued message [0.11ms]
+(pass) resetEarlyReturnState > validation failure path (success: false) > respects queue paused state after validation failure [0.04ms]
+(pass) resetEarlyReturnState > validation exception path > resets all queue state correctly when validation throws [0.07ms]
+(pass) resetEarlyReturnState > validation exception path > preserves queue pause state when validation throws [0.06ms]
+(pass) resetEarlyReturnState > complete early return scenarios > queue can process next message after prepareUserMessage exception [0.04ms]
+(pass) resetEarlyReturnState > complete early return scenarios > queue can process next message after validation returns success=false [8.04ms]
+(pass) resetEarlyReturnState > complete early return scenarios > queue can process next message after validation throws exception [0.09ms]
+(pass) resetEarlyReturnState > complete early return scenarios > queue remains blocked after error if user had paused it [0.03ms]
+
+src/components/__tests__/session-route-recovery.test.tsx:
+Using environment: dev
+(pass) 250 models are windowed with visible focus, pending identity and preserved reasoning [924.04ms]
+(pass) history exposes loading/failure/retry, confirms deletion and keeps narrow titles intact [151.64ms]
+(pass) plan picker loads asynchronously and exposes the full selected path through details [35.66ms]
+(pass) registered agents can create and clear an override while compact write failures stay visible [42.96ms]
+An update to SelectableList inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ModelRoutePicker inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SelectableList inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SelectableList inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ModelRoutePicker inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SelectableList inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ModelRoutePicker inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(pass) mouse route/model/reasoning activation shares the keyboard target [130.80ms]
+
+src/services/memory-v2/__tests__/b13-archive-originals.test.ts:
+(pass) B13 normalized original archive policy > persists 30 distinct originals, reopens, and pages the exact hash and tail [668.69ms]
+(pass) B13 normalized original archive policy > discloses quota cutoff and an old envelope cannot resurrect a removed original [16.65ms]
+(pass) B13 normalized original archive policy > expiry includes the current run and protected overflow refuses atomically [22.28ms]
+(pass) B13 normalized original archive policy > source-run ambiguity, Unicode cursors, conflicting originals and corruption fail closed [24.18ms]
+(pass) B13 normalized original archive policy > new pointer timestamps cannot renew an original TTL, while an explicit pin protects its closure [14.57ms]
+(pass) B13 normalized original archive policy > constructor policy is captured, 4MiB quota is logical bytes, and shared originals are charged once [157.54ms]
+(pass) B13 normalized original archive policy > keep-until-delete is explicitly unbounded aggregate storage, and malformed policy never opens a store [8.32ms]
+
+src/services/memory-v2/__tests__/context-archive-sync.test.ts:
+Using environment: dev
+(pass) mergeContextArchives > orders the merged archive chronologically oldest-first [1.23ms]
+(pass) mergeContextArchives > dedupes an identical checked manifest; in-memory wins [0.52ms]
+(pass) mergeContextArchives > same-time actions, content and distinct source runs survive repeated restoration [1.88ms]
+(pass) mergeContextArchives > a legacy unnamed snapshot binds only to one exact matching source manifest [1.68ms]
+(pass) mergeContextArchives > ambiguous legacy source runs are retained without guessing ownership [1.64ms]
+(pass) mergeContextArchives > treats the same action at different archivedAt as distinct [0.25ms]
+(pass) mergeContextArchives > dedupes repeated restores: a second hydrate with the merged archive is a no-op [0.44ms]
+(pass) mergeContextArchives > caps semantic/mechanical fills at 8 while eviction keeps its own cap [1.01ms]
+(pass) mergeContextArchives > eviction cap is 16 and independent of the semantic/mechanical cap [1.41ms]
+(pass) mergeContextArchives > in-memory entries are never dropped even when already over cap [0.74ms]
+(pass) mergeContextArchives > handles undefined in-memory archive and empty durable set [0.16ms]
+(pass) mergeContextArchives > mechanical_trim and semantic_compaction share the same cap kind [0.83ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > persist returns null when the repository lacks the method [1.17ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > persist returns null (never throws) when the method rejects [0.37ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > persist forwards the request and returns the outcome [0.21ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > binds prototype methods to the repository (this-aware invocation) [0.49ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load returns null when the repository lacks the method [0.10ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load returns null (never throws) when the method rejects [0.22ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load forwards the request and returns snapshots [0.17ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > load coerces a malformed (non-array) snapshots field to [] [0.08ms]
+(pass) optional repository narrowing (callers-must-narrow contract) > successful empty and unavailable loads remain distinct; degraded snapshots remain readable [0.56ms]
+(pass) flushContextArchiveSnapshots skip paths (best-effort, no-throw) > resolves without touching the provider when runId is missing [0.33ms]
+(pass) flushContextArchiveSnapshots skip paths (best-effort, no-throw) > resolves without touching the provider when the archive is empty [0.23ms]
+(pass) flushContextArchiveSnapshots skip paths (best-effort, no-throw) > resolves when sessionState is absent entirely [0.09ms]
+(pass) hydrateContextArchiveSnapshots (merge-through seam) > merges loaded durable snapshots into the in-memory archive [0.56ms]
+
+src/utils/__tests__/persisted-context-archive.test.ts:
+(pass) B13 persistence projection > publishes references only after all corresponding archive commits are confirmed [1.14ms]
+(pass) B13 persistence projection > failed, incomplete or unconfirmed storage keeps bounded inline originals, not dangling refs [0.42ms]
+(pass) B13 persistence projection > normalizes sanitized text and all references together before sending them to storage [0.64ms]
+
+src/utils/__tests__/persistence-codec.test.ts:
+(pass) persistence worker codec > parses and sanitizes large chat data identically to the synchronous path [19.41ms]
+(pass) persistence worker codec > serializes independently captured messages and redacts archive data [18.77ms]
+(pass) persistence worker codec > propagates cancellation and invalid JSON [14.16ms]
+(pass) persistence worker codec > terminates and rejects at the bounded deadline instead of staying pending [1.78ms]
+(pass) persistence worker codec > unaffected calls settle normally under the default deadline [15.74ms]
+(pass) production runtime portability (Bun standalone eval-worker support) > the embedded worker script resolves only node: builtins [0.32ms]
+(pass) production runtime portability (Bun standalone eval-worker support) > the embedded sanitizer factory closes over no module scope [1.09ms]
+(pass) production runtime portability (Bun standalone eval-worker support) > the synchronous caller fallback parses identically to the worker [22.59ms]
+
+src/utils/__tests__/run-state-storage.test.ts:
+Using environment: dev
+(pass) run-state-storage > getAllToggleIdsFromMessages > extracts agent IDs from messages [0.98ms]
+(pass) run-state-storage > getAllToggleIdsFromMessages > extracts tool call IDs from messages [0.21ms]
+(pass) run-state-storage > getAllToggleIdsFromMessages > recursively extracts IDs from nested agent blocks [0.18ms]
+(pass) run-state-storage > getAllToggleIdsFromMessages > handles messages with no blocks [0.10ms]
+(pass) run-state-storage > getAllToggleIdsFromMessages > handles empty messages array [0.07ms]
+(pass) run-state-storage > getAllToggleIdsFromMessages > handles mixed block types in single message [0.13ms]
+(pass) run-state-storage > getAllToggleIdsFromMessages > does not deduplicate IDs (returns all occurrences) [0.17ms]
+(pass) run-state-storage > getRunStatePath > returns path with correct filename [0.09ms]
+(pass) run-state-storage > getChatMessagesPath > returns path with correct filename [0.08ms]
+(pass) run-state-storage > chat id containment > accepts a single chat directory name [0.11ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id ../other-project [0.09ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id ../../secrets [0.10ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id nested/chat [0.06ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id /absolute/chat [0.05ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id . [0.05ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id .. [0.13ms]
+(pass) run-state-storage > chat id containment > rejects unsafe chat id     [0.05ms]
+(pass) run-state-storage > legacy session validation (P6.5) > rejects a legacy messages file whose entries fail the shape guard [1.39ms]
+(pass) run-state-storage > legacy session validation (P6.5) > rejects a chat-state envelope whose messages fail the shape guard [1.19ms]
+(pass) run-state-storage > legacy session validation (P6.5) > accepts valid legacy messages that include extra fields [0.58ms]
+(pass) run-state-storage > legacy session validation (P6.5) > accepts a legacy AgentState snapshot carrying removed fields [0.57ms]
+(pass) run-state-storage > mixed CLI version envelope tolerance > saveChatState leaves a newer envelope in place instead of clobbering it [29.54ms]
+(pass) run-state-storage > mixed CLI version envelope tolerance > saveChatState still refreshes an envelope of its own version [19.84ms]
+(pass) run-state-storage > mixed CLI version envelope tolerance > a newer envelope survives a downgraded session load for re-upgrade [0.89ms]
+(pass) run-state-storage > file serialization format > async restore preserves large transcripts and redacts old credentials [22.84ms]
+(pass) run-state-storage > file serialization format > async restore loads valid envelopes and recovers corrupt ones [1.91ms]
+(pass) run-state-storage > file serialization format > async restore leaves newer envelopes untouched and honors cancellation [0.78ms]
+(pass) run-state-storage > file serialization format > recovers from compatibility files when the envelope is corrupt [1.72ms]
+(pass) run-state-storage > file serialization format > run state JSON structure is preserved through serialization [0.29ms]
+(pass) run-state-storage > file serialization format > messages JSON structure is preserved through serialization [0.37ms]
+(pass) run-state-storage > file serialization format > nested message structure is preserved through serialization [0.31ms]
+(pass) run-state-storage > edge cases > handles empty blocks array [0.21ms]
+(pass) run-state-storage > edge cases > handles deeply nested structure [0.14ms]
+(pass) run-state-storage > edge cases > preserves order of IDs as encountered [0.16ms]
+(pass) run-state-storage > compaction archive persistence (P2-T2 slice 1) > compactionArchive incl. D26 eviction snapshot survives saveChatState → loadMostRecentChatState deep-equal [19.20ms]
+(pass) run-state-storage > async write queue behavior (persistence rewire) > saveChatState returns off the synchronous stack and flushes on drain [17.17ms]
+(pass) run-state-storage > async write queue behavior (persistence rewire) > queued worker saves the call-time snapshot despite later mutation [22.39ms]
+(pass) run-state-storage > async write queue behavior (persistence rewire) > a queued save keeps every destination in the original chat after switching projects [24.67ms]
+(pass) run-state-storage > async write queue behavior (persistence rewire) > omits redundant historical run states while preserving message metadata [15.99ms]
+(pass) run-state-storage > async write queue behavior (persistence rewire) > saveCheckpoint writes through the queue without blocking on disk IO [3.17ms]
+(pass) run-state-storage > async write queue behavior (persistence rewire) > clearCheckpoint cancels a still-pending checkpoint save [1.00ms]
+
+src/utils/__tests__/b13-transcript-restart.test.ts:
+Using environment: test
+(pass) 500 actual prepareUserMessage sends save, drain and resume all IDs and bodies in a fresh process [2263.76ms]
+(pass) non-cloneable state takes the synchronous save fallback without capping a 500-message transcript [1161.55ms]
+
+ 153 pass
+ 0 fail
+ 2516 expect() calls
+Ran 153 tests across 11 files. [12.86s]

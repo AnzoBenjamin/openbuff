@@ -1,0 +1,33 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:
+Using environment: dev
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed retains explicit own fact, decision and rationale across a new process [1200.89ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed retains explicit own fact, decision and rationale across a new process [1046.82ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled retains explicit own fact, decision and rationale across a new process [1040.19ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed precommit terminal checkpoint reconciles unchanged identities after reopen [1036.45ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1060.21ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed precommit terminal checkpoint reconciles unchanged identities after reopen [1030.06ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1022.47ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled precommit terminal checkpoint reconciles unchanged identities after reopen [1049.91ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled lost-ack terminal checkpoint reconciles unchanged identities after reopen [1019.44ms]
+340 |       agent: b12Recorder.id, prompt: 'Record audit evidence then cancel', params: { finish: 'cancelled' }, signal: cancelController.signal,
+341 |     }).then(result => { settled = true; return result })
+342 |     try {
+343 |       await Promise.race([entered, pending.then(() => { throw new Error('SDK returned before terminal append started') })])
+344 |       await new Promise(resolve => setTimeout(resolve, 10))
+345 |       expect(settled).toBe(false)
+                            ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:345:23)
+(fail) B12 actual local handler → SQLite → fresh process → next core prompt > caller cancellation does not settle the SDK before its terminal memory append [64.66ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > genuinely captured ranked facts exceed 12k while the complete high-ranked claim survives [1194.52ms]
+
+ 10 pass
+ 1 fail
+ 196 expect() calls
+Ran 11 tests across 1 file. [11.52s]

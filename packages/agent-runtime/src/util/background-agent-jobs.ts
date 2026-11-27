@@ -35,12 +35,23 @@
  * outlive the CLI process.
  */
 
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   isTerminalJobState,
   jobRegistry,
 } from '@codebuff/common/util/job-registry'
 
 import type { AgentState } from '@codebuff/common/types/session-state'
+import {
+  runOutcomeSchema,
+  runStatusFromOutcome,
+} from '@codebuff/common/types/run-outcome'
+import {
+  agentReceiptSchema,
+  type AgentReceipt,
+} from '@codebuff/common/types/agent-handoff'
+import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
+
 import type {
   AssertOwnedResult,
   Job,
@@ -144,7 +155,7 @@ export interface BackgroundAgentJob {
   status: BackgroundAgentJobStatus
   startedAt: number
   completedAt?: number
-  /** Resolved value when status === 'completed'; undefined otherwise. */
+  /** Resolved value and receipt, including fulfilled failed/cancelled runs. */
   result?: unknown
   /** Rejection reason when status === 'error'; undefined otherwise. */
   error?: string
@@ -329,6 +340,7 @@ function createBackgroundAgentJobRecord(params: {
   agentType: string
   agentName: string
   owner: BackgroundAgentJob['owner']
+  now?: number
 }): BackgroundAgentJob {
   const { agentType, agentName, owner } = params
   // The unified core owns lifecycle/state: create in 'queued' with the
@@ -348,7 +360,9 @@ function createBackgroundAgentJobRecord(params: {
     agentName,
     owner,
     status: 'running',
-    startedAt: startedCoreJob.startedAt ?? Date.now(),
+    // P2-T1b: lifecycle timestamps use the injected clock when threaded; the
+    // registry stamps startedAt itself.
+    startedAt: startedCoreJob.startedAt ?? params.now ?? realClock.now(),
     chunks: [],
     readOffset: 0,
     consumerCursors: new Map(),
@@ -374,6 +388,7 @@ export function allocateBackgroundAgentJob(params: {
   agentType: string
   agentName: string
   owner?: BackgroundAgentJob['owner']
+  now?: number
 }): BackgroundAgentJob {
   const owner = resolveBackgroundAgentJobOwner(params.owner)
   assertBackgroundAgentCapacity({ additional: 1, owner })
@@ -381,6 +396,7 @@ export function allocateBackgroundAgentJob(params: {
     agentType: params.agentType,
     agentName: params.agentName,
     owner,
+    now: params.now,
   })
 }
 
@@ -400,11 +416,17 @@ export function allocateBackgroundAgentJob(params: {
 export function allocateBackgroundAgentJobBatch(params: {
   agents: Array<{ agentType: string; agentName: string }>
   owner?: BackgroundAgentJob['owner']
+  now?: number
 }): BackgroundAgentJob[] {
   const owner = resolveBackgroundAgentJobOwner(params.owner)
   assertBackgroundAgentCapacity({ additional: params.agents.length, owner })
   return params.agents.map(({ agentType, agentName }) =>
-    createBackgroundAgentJobRecord({ agentType, agentName, owner }),
+    createBackgroundAgentJobRecord({
+      agentType,
+      agentName,
+      owner,
+      now: params.now,
+    }),
   )
 }
 
@@ -496,10 +518,37 @@ function attachJobCompletionHandlers(job: BackgroundAgentJob): void {
     (result) => {
       if (job.status === 'cancelled') return
       job.result = result
+      // Promise fulfillment only establishes delivery. A returned agent
+      // receipt independently describes whether the child run completed.
+      const receipt =
+        result && typeof result === 'object' && 'agentReceipt' in result
+          ? (result as { agentReceipt?: Partial<AgentReceipt> }).agentReceipt
+          : undefined
+      const parsedOutcome = runOutcomeSchema.safeParse(receipt?.runOutcome)
+      const termination = parsedOutcome.success
+        ? parsedOutcome.data.termination
+        : undefined
+      const runStatus = parsedOutcome.success
+        ? runStatusFromOutcome(parsedOutcome.data)
+        : receipt?.status
+      const state =
+        runStatus === 'cancelled'
+          ? 'cancelled'
+          : runStatus === 'failed'
+            ? 'error'
+            : 'completed'
       registry.emit(job.jobId, {
         type: 'lifecycle',
-        state: 'completed',
+        state,
         result,
+        ...(state === 'error'
+          ? {
+              error: parsedOutcome.success
+                ? (parsedOutcome.data.cause?.message ??
+                  `Child run ${termination}`)
+                : 'Child receipt reported failure',
+            }
+          : {}),
       })
       const coreJob = registry.get(job.jobId)
       if (coreJob) syncViewFromCore(job, coreJob)
@@ -610,11 +659,84 @@ export function getBackgroundAgentJob(
  */
 export function reconcileInterruptedBackgroundAgentIntents(
   state: AgentState,
+  now?: number,
+  reader?: JournalReader,
 ): void {
-  for (const job of state.backgroundAgentJobs ?? []) {
-    if (job.status === 'running' && !getBackgroundAgentJob(job.jobId)) {
+  const jobs = state.backgroundAgentJobs
+  if (!jobs?.length) return
+  const recentRunRows = new Map<
+    string,
+    Map<string, { receipt: AgentReceipt; childRunId?: string; atMs?: number }>
+  >()
+  const readSettled = (parentRunId: string) => {
+    const seen = new Map<
+      string,
+      { receipt: AgentReceipt; childRunId?: string; atMs?: number }
+    >()
+    if (!reader) return seen
+    try {
+      for (const row of reader.events(parentRunId)) {
+        if (
+          row.eventType !== 'spawn' ||
+          typeof row.correlation !== 'string' ||
+          !row.payload ||
+          typeof row.payload !== 'object'
+        )
+          continue
+        const p = row.payload as Record<string, unknown>
+        if (p.backgroundSettled !== true || p.jobId !== row.correlation)
+          continue
+        const validated = agentReceiptSchema.safeParse(p.receipt)
+        if (!validated.success) continue
+        seen.set(row.correlation, {
+          receipt: validated.data,
+          childRunId:
+            typeof p.childRunId === 'string' && p.childRunId
+              ? p.childRunId
+              : undefined,
+          atMs: row.createdAt,
+        })
+      }
+    } catch {
+      /* an unreadable journal confers no settlement or replay authority */
+    }
+    return seen
+  }
+  for (const job of jobs) {
+    if (job.status !== 'running' && job.status !== 'interrupted') continue
+    const live = getBackgroundAgentJob(job.jobId)
+    const parent = job.parentRunId ?? state.runId
+    if (parent && reader) {
+      let rows = recentRunRows.get(parent)
+      if (!rows) {
+        rows = readSettled(parent)
+        recentRunRows.set(parent, rows)
+      }
+      const observed = rows.get(job.jobId)
+      if (observed) {
+        job.receipt = observed.receipt
+        job.childRunId = observed.childRunId ?? job.childRunId
+        const termination = observed.receipt.runOutcome?.termination
+        job.status =
+          termination === 'cancelled' || observed.receipt.status === 'cancelled'
+            ? 'cancelled'
+            : termination === 'completed' ||
+                (!termination && observed.receipt.status === 'completed')
+              ? 'completed'
+              : 'error'
+        job.completedAt = observed.atMs ?? now ?? realClock.now()
+        if (job.status === 'completed') delete job.error
+        else
+          job.error =
+            observed.receipt.runOutcome?.cause?.message ??
+            observed.receipt.errors[0]?.message
+        continue
+      }
+    }
+    if (job.status === 'running' && !live) {
       job.status = 'interrupted'
-      job.completedAt = Date.now()
+      // P2-T1b: interrupted timestamps use the injected clock when threaded.
+      job.completedAt = now ?? realClock.now()
       job.error =
         'Background agent host process/session ended before a terminal receipt was recorded.'
     }
@@ -792,6 +914,7 @@ export type CancelBackgroundAgentJobResult =
 
 export function cancelBackgroundAgentJob(
   jobId: string,
+  now?: number,
 ): CancelBackgroundAgentJobResult {
   sweepBackgroundAgentJobs()
   const coreJob = registry.get(jobId)
@@ -814,7 +937,8 @@ export function cancelBackgroundAgentJob(
   // 'running', absorbing once terminal); the adapter performs the real abort.
   registry.cancel(jobId)
   job.status = 'cancelled'
-  job.completedAt = Date.now()
+  // P2-T1b: cancelled timestamps use the caller's injected clock.
+  job.completedAt = now ?? realClock.now()
   job.error = error
   job.abortController.abort(new Error(error))
   return { cancelled: true, status: 'cancelled' }
@@ -871,6 +995,7 @@ export function backgroundAgentJobWasCancelled(
 export function abandonPreLaunchBackgroundAgentJob(
   job: BackgroundAgentJob,
   reason: string,
+  now?: number,
 ): void {
   const coreJob = registry.get(job.jobId)
   // Terminal states absorb in the core, so an already-settled job is a no-op.
@@ -882,7 +1007,8 @@ export function abandonPreLaunchBackgroundAgentJob(
     })
   }
   job.status = 'error'
-  job.completedAt = Date.now()
+  // P2-T1b: abandoned timestamps use the caller's injected clock.
+  job.completedAt = now ?? realClock.now()
   job.error = reason
   if (!job.abortController.signal.aborted) {
     job.abortController.abort(new Error(reason))

@@ -1,0 +1,114 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-prompt-content.test.ts:
+Using environment: dev
+(pass) ACP plain-data prompt conversion > legacy direct text-only callers retain the exact prompt without a content property [3.11ms]
+(pass) ACP plain-data prompt conversion > wire-style text-only content stays text-only, including empty blocks and whitespace [0.42ms]
+(pass) ACP plain-data prompt conversion > text, inline images, resource text and blobs reach run in block order as user data [2.06ms]
+(pass) ACP plain-data prompt conversion > an image-only prompt is not converted into an empty text-only run [2.84ms]
+(pass) ACP plain-data prompt conversion > unsupported audio blocks reject before runs, listeners, timers or MCP ingest [0.55ms]
+(pass) ACP plain-data prompt conversion > unsupported video blocks reject before runs, listeners, timers or MCP ingest [0.05ms]
+(pass) ACP plain-data prompt conversion > unsupported future-block blocks reject before runs, listeners, timers or MCP ingest [0.03ms]
+(pass) ACP plain-data prompt conversion > accessor fields and non-plain objects are refused without executing them [0.23ms]
+(pass) ACP plain-data prompt conversion > per-image and expanded-total limits are enforced before run [41.18ms]
+(pass) ACP plain-data prompt conversion > a decoded image exactly at 5 MiB survives the agent preflight padding calculation [20.76ms]
+(pass) ACP plain-data prompt conversion > pre-abort and cancel while assembling do not start a run or attach listeners [0.38ms]
+(pass) ACP plain-data prompt conversion > createAcpAgent forwards the validated captured session cwd without changing the text projection [0.39ms]
+(pass) ACP plain-data prompt conversion > later unsupported blocks are rejected before opening earlier resource links [0.41ms]
+(pass) ACP plain-data prompt conversion > plain resource metadata/config/schema fields remain inert user data [0.24ms]
+(pass) ACP plain-data prompt conversion > block count is bounded even when every text block is empty [0.51ms]
+(pass) ACP plain-data prompt conversion > cancellation during the capability sink still prevents client.run [0.45ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-prompt-content-encoding.test.ts:
+Using environment: dev
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 ! is refused [0.72ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 a=== is refused [0.16ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 AA=A is refused [0.06ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 YQ is refused [0.06ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 YQ==
+ is refused [0.03ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 Zh== is refused [0.07ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 YWJ= is refused [0.04ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 a-b_ is refused [0.04ms]
+(pass) ACP image and resource encoding controls > invalid or noncanonical base64 data:image/png;base64,YQ== is refused [0.06ms]
+(pass) ACP image and resource encoding controls > unsupported image MIME image/svg+xml is refused [0.23ms]
+(pass) ACP image and resource encoding controls > unsupported image MIME application/pdf is refused [0.03ms]
+(pass) ACP image and resource encoding controls > unsupported image MIME audio/wav is refused [0.05ms]
+(pass) ACP image and resource encoding controls > resource text must be lossless UTF-8 [0.20ms]
+(pass) ACP image and resource encoding controls > resource text must be lossless UTF-8 [0.06ms]
+(pass) ACP image and resource encoding controls > blob MIME and charset are validated rather than relabelled as text [0.33ms]
+(pass) ACP image and resource encoding controls > resource blobs validate base64 and preserve UTF-8 BOM and whitespace [0.43ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-prompt-content-files.test.ts:
+Using environment: dev
+(pass) ACP host-root file resource boundary > a local @file URI expands to exact text in order, not a filesystem/tool capability [5.31ms]
+(pass) ACP host-root file resource boundary > a file image is encoded without dropping it or performing a remote read [1.73ms]
+(pass) ACP host-root file resource boundary > empty file images are invalid input, not empty image parts [1.18ms]
+(pass) ACP host-root file resource boundary > server-selected root is required; captured cwd cannot become a fallback authority [0.50ms]
+(pass) ACP host-root file resource boundary > missing and outside files return typed refusals before any run [1.26ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses .env [0.99ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses credentials.json [0.66ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses .kube/config [0.64ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses .aws/config [0.42ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses .docker/config.json [0.39ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses gh/hosts.yml [0.39ms]
+(pass) ACP host-root file resource boundary > shared sensitive-path classification refuses private.key [0.35ms]
+(pass) ACP host-root file resource boundary > public/template filenames allowed by the shared classifier remain readable [3.16ms]
+(pass) ACP host-root file resource boundary > refuses safe-final symlinks before run [0.84ms]
+(pass) ACP host-root file resource boundary > refuses outside-final symlinks before run [0.50ms]
+(pass) ACP host-root file resource boundary > refuses sensitive-final symlinks before run [0.50ms]
+(pass) ACP host-root file resource boundary > refuses safe-parent symlinks before run [0.49ms]
+(pass) ACP host-root file resource boundary > refuses outside-parent symlinks before run [0.62ms]
+(pass) ACP host-root file resource boundary > hard-linked aliases to outside or sensitive files are not readable under innocuous names [1.45ms]
+(pass) ACP host-root file resource boundary > directory and FIFO resources are refused; FIFO opens cannot block [2.91ms]
+(pass) ACP host-root file resource boundary > a file over 1 MiB is refused before any body read [2.30ms]
+(pass) ACP host-root file resource boundary > expanded file contents and labels count toward the 8 MiB total, not just URI sizes [18.07ms]
+(pass) ACP host-root file resource boundary > invalid UTF-8 files are not silently decoded with replacement characters [3.86ms]
+(pass) ACP host-root file resource boundary > nonlocal or ambiguous URI https://do-not-fetch.invalid/context is refused without requests [0.59ms]
+(pass) ACP host-root file resource boundary > nonlocal or ambiguous URI http://127.0.0.1:1/context is refused without requests [0.18ms]
+(pass) ACP host-root file resource boundary > nonlocal or ambiguous URI notes.txt is refused without requests [0.13ms]
+(pass) ACP host-root file resource boundary > nonlocal or ambiguous URI file://remote-host/notes.txt is refused without requests [0.14ms]
+(pass) ACP host-root file resource boundary > nonlocal or ambiguous URI file://user@localhost/notes.txt is refused without requests [0.14ms]
+(pass) ACP host-root file resource boundary > nonlocal or ambiguous URI file:////server/share/notes.txt is refused without requests [0.17ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (?) [0.63ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (?query) [0.16ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (#) [0.18ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (#fragment) [0.14ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/nested/../notes.txt) [0.20ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/nested/%2e%2e/notes.txt) [0.18ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/nested/%252e%252e/notes.txt) [0.27ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/nested%2fnotes.txt) [0.13ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/nested%5cnotes.txt) [0.11ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/nested/./notes.txt) [0.14ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/bad%00name) [0.11ms]
+(pass) ACP host-root file resource boundary > query, fragment, traversal and encoded aliases are rejected (/bad%zzname) [0.14ms]
+(pass) ACP host-root file resource boundary > an unavailable verified /proc backend fails closed with no lexical fallback [0.84ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-prompt-content-uri.test.ts:
+Using environment: dev
+(pass) ACP legitimate file URI encoding > percent-encoded legitimate Unicode and spaces are decoded once [13.59ms]
+(pass) ACP legitimate file URI encoding > a legitimate percent-encoded URI can exceed 4 KiB without exceeding filesystem path limits [5.86ms]
+(pass) ACP legitimate file URI encoding > oversized URI labels have an accurate typed limit reason and no file opens [0.84ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-prompt-content-races.test.ts:
+Using environment: dev
+(pass) ACP resource descriptor and cancellation controls > all body/directory opens use no-follow and nonblocking flags relative to held parents [4.46ms]
+(pass) ACP resource descriptor and cancellation controls > an open-time parent symlink replacement cannot disclose outside bytes [1.50ms]
+(pass) ACP resource descriptor and cancellation controls > an open-time final symlink replacement cannot disclose outside bytes [1.10ms]
+(pass) ACP resource descriptor and cancellation controls > renaming a held parent outside the root fails capture identity checks, not a lexical reopen [1.29ms]
+(pass) ACP resource descriptor and cancellation controls > same-inode mutation during a capture is rejected by post-read size/timestamp checks [1.63ms]
+(pass) ACP resource descriptor and cancellation controls > cancel during an asynchronous file open closes every descriptor and never starts the SDK [1.66ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/acp-prompt-content-wire.test.ts:
+Using environment: dev
+(pass) actual ACP → serve bridge → source SDK provider wire > file bytes and the inline image reach a single user-role provider request in order [410.96ms]
+(pass) actual ACP → serve bridge → source SDK provider wire > unsupported, missing, outside, symlink, oversize and malformed data fail over actual ACP with zero SDK/provider runs [67.22ms]
+(pass) actual ACP → serve bridge → source SDK provider wire > actual ACP cancel during capture closes the file and starts no SDK/provider request [13.90ms]
+[openbuff] Loaded provider config from:
+  - /tmp/acp-content-wire-K2p7Y9/provider.json
+(pass) actual ACP → serve bridge → source SDK provider wire > runServe binds its default containment root into the real socket bridge once [40.57ms]
+
+ 87 pass
+ 0 fail
+ 651 expect() calls
+Ran 87 tests across 6 files. [2.22s]

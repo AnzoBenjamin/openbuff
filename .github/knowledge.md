@@ -65,7 +65,7 @@ Tests should prefer focused package commands for retained packages (`cli`, `sdk`
 
 ## Artifact Actions
 
-- Use `actions/upload-artifact@v4` and `actions/download-artifact@v4`
+- Artifact uploads in CI use SHA-pinned `actions/upload-artifact@v7.0.2`; downloads keep the matching immutable artifact contract.
 - v3 was deprecated and stopped working on January 30th, 2025
 - v4 provides up to 98% faster upload/download speeds
 - See [GitHub's migration guide](https://github.com/actions/upload-artifact/blob/main/docs/MIGRATION.md) for breaking changes
@@ -172,3 +172,7 @@ When running GitHub Actions locally using `act`:
 5. Version control `.github/actions/` and `.github/act/`
 6. Use the retry mechanism for flaky tests
 7. Cache dependencies between jobs for faster builds
+
+## Runtime pins
+
+Linux workflows explicitly select Ubuntu 26.04, matching the image already used by CI and avoiding moving-label migration notices. `.node-version` pins Node 26.13.1 for CI commands and npm release publishing; Bun remains pinned separately at 1.4.4. SHA-pinned retry v4.0.0 and upload-artifact v7.0.2 declare Node 24 as their GitHub-managed action runtime. setup-node selects the job command runtime and cannot change those action runtimes.

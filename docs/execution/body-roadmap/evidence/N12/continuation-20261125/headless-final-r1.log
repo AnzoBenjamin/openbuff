@@ -1,0 +1,341 @@
+bun test v1.4.4 (38afee6c8)
+
+src/utils/__tests__/headless-sessions.test.ts:
+(pass) private headless conversation store > missing continuation fails without creating a store or a fresh conversation [1.15ms]
+(pass) private headless conversation store > a fresh process-equivalent store restores all 500 messages and exact text [11.80ms]
+(pass) private headless conversation store > last means the last committed headless session; an explicit ID selects an earlier session [3.66ms]
+(pass) private headless conversation store > sessions are scoped by canonical project identity [1.37ms]
+(pass) private headless conversation store > the same session cannot be continued concurrently and is usable after release [2.35ms]
+(pass) private headless conversation store > corrupt selected state is not overwritten or replaced with an older session [1.88ms]
+(pass) private headless conversation store > content integrity detects valid JSON with changed retained conversation bytes [1.76ms]
+(pass) private headless conversation store > refuses unsafe session ID "" [0.23ms]
+(pass) private headless conversation store > refuses unsafe session ID "." [0.07ms]
+(pass) private headless conversation store > refuses unsafe session ID ".." [0.06ms]
+(pass) private headless conversation store > refuses unsafe session ID "../outside" [0.06ms]
+(pass) private headless conversation store > refuses unsafe session ID "/absolute" [0.11ms]
+(pass) private headless conversation store > refuses unsafe session ID "a/b" [0.06ms]
+(pass) private headless conversation store > refuses unsafe session ID "a\\b" [0.06ms]
+(pass) private headless conversation store > refuses unsafe session ID " a" [0.06ms]
+(pass) private headless conversation store > refuses unsafe session ID "a\u0000b" [0.06ms]
+(pass) private headless conversation store > refuses unsafe session ID "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" [0.06ms]
+(pass) private headless conversation store > symlinked session and snapshot files cannot supply outside conversation bytes [1.88ms]
+(pass) private headless conversation store > hard-linked snapshot aliases are refused [1.91ms]
+(pass) private headless conversation store > failed and cancelled result states retain their outcome and history [3.42ms]
+(pass) private headless conversation store > explicit byte quota refuses a new snapshot without truncating or destroying the prior one [1.93ms]
+(pass) private headless conversation store > an already aborted acquisition never creates state [0.28ms]
+(pass) private headless conversation store > release does not remove a foreign replacement lock [0.63ms]
+
+src/__tests__/run-continue.test.ts:
+Using environment: dev
+(pass) headless continuation admission > parser supports the last session and an explicit ID independently from prompt/model [5.98ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [3.09ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.61ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.16ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.11ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.11ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.11ms]
+(pass) headless continuation admission > continues the saved agent with previousRun but never enables interrupted effect replay [1.62ms]
+(pass) headless continuation admission > explicit agent and model apply only to the new turn [0.12ms]
+(pass) headless continuation admission > missing or corrupt continuation fails before journal and provider dispatch, with no fresh-session fallback [0.19ms]
+(pass) headless continuation admission > the shared readiness message is preserved, with no journal or fresh-session creation [0.12ms]
+(pass) headless continuation admission > a cancelled or failed run is saved before its lease is released [0.23ms]
+(pass) headless continuation admission > continuation persistence failure is visible rather than a successful lost update [0.22ms]
+(pass) headless continuation admission > a throwing client releases only its acquired session [0.16ms]
+
+src/__tests__/run-continue-wire.test.ts:
+(pass) actual headless continuation consumer > stdin/model/schema run persists; a new process continues all prior context without inheriting the model override [7906.21ms]
+(pass) actual headless continuation consumer > an explicit session ID is a real continuation, while a busy cross-process owner refuses provider entry [10919.55ms]
+(pass) actual headless continuation consumer > missing continuation does not create a journal, a conversation, or a provider request [2327.71ms]
+(pass) actual headless continuation consumer > a missing key produces the exact same readiness message as the TUI and no provider request [4434.83ms]
+
+src/__tests__/run-command.test.ts:
+Using environment: dev
+(pass) runHeadlessCommand > stdin prompt admission > delivers exact split UTF-8 input before opening the journal and client [7.18ms]
+(pass) runHeadlessCommand > stdin prompt admission > does not consume piped bytes when an explicit prompt exists [0.57ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects empty stdin before opening state or dispatching [1.44ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects whitespace stdin before opening state or dispatching [0.62ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects invalid UTF-8 stdin before opening state or dispatching [0.49ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects too large stdin before opening state or dispatching [0.42ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects interactive stdin before opening state or dispatching [0.09ms]
+(pass) runHeadlessCommand > stdin prompt admission > interrupts stalled stdin through timeout without a run [45.23ms]
+(pass) runHeadlessCommand > stdin prompt admission > interrupts stalled stdin through caller without a run [0.61ms]
+(pass) runHeadlessCommand > resolved failed, exhausted and rejected outcomes fail without an error event [0.83ms]
+(pass) runHeadlessCommand > an accepted recovery succeeds while its failed action stays recorded [0.35ms]
+(pass) runHeadlessCommand > short JSON events flush before a deferred run completes [80.80ms]
+(pass) runHeadlessCommand > short human text flushes before a deferred run completes [82.16ms]
+(pass) runHeadlessCommand > --json emits one ndjson line per event and returns 0 [7.78ms]
+(pass) runHeadlessCommand > batches stdout writes without breaking ndjson line integrity [5.75ms]
+(pass) runHeadlessCommand > non-json writes only text event content to stdout [2.62ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes an error ndjson line (json) [2.98ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes the error to stderr (non-json) [3.92ms]
+(pass) runHeadlessCommand > threads prompt and agentId into client.run (defaulting to the current CLI root) [3.68ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > the opened journal is threaded as BOTH journalWriter and journalReader, then closed [0.82ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > a fail-open opener (undefined) runs WITHOUT journaling and never throws [0.39ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > an opener that throws is contained: fail-open, never crash the run [0.29ms]
+(pass) runHeadlessCommand > timeout (--timeout) > aborts a hung run after the deadline: exit 1 with a clean ndjson error event [50.98ms]
+(pass) runHeadlessCommand > timeout (--timeout) > non-json mode reports the timeout on stderr only [50.76ms]
+(pass) runHeadlessCommand > timeout (--timeout) > a run finishing before the deadline still succeeds [1.86ms]
+(pass) runHeadlessCommand > timeout (--timeout) > delayed client setup retains the original numeric deadline [31.13ms]
+(pass) runHeadlessCommand > timeout (--timeout) > the run receives a signal when a timeout is set (none before this change) [52.12ms]
+(pass) runHeadlessCommand > timeout (--timeout) > an injected deps.signal still aborts the run when a timeout is also set [11.23ms]
+
+src/__tests__/run-output-schema.test.ts:
+Using environment: dev
+(pass) headless schema delivery > parser accepts --output-schema alongside stdin/model selection [2.53ms]
+--output-schema must be a non-empty file path.
+(pass) headless schema delivery > parser refuses an empty schema path [3.23ms]
+--output-schema must be a non-empty file path.
+(pass) headless schema delivery > parser refuses an empty schema path [2.21ms]
+(pass) headless schema delivery > plain schema mode prints only the validated final JSON, not intermediate prose [67.80ms]
+(pass) headless schema delivery > JSON event mode delivers one explicit final result after streamed events [10.91ms]
+(pass) headless schema delivery > unconfirmed or mismatched final output is refused, not printed as valid JSON [12.00ms]
+(pass) headless schema delivery > unconfirmed or mismatched final output is refused, not printed as valid JSON [13.08ms]
+(pass) headless schema delivery > unconfirmed or mismatched final output is refused, not printed as valid JSON [8.66ms]
+(pass) headless schema delivery > schema file symlinks and nonregular inputs are refused before admission [1.26ms]
+(pass) headless schema delivery > bad schema input is refused before journal/client admission [0.93ms]
+(pass) headless schema delivery > bad schema input is refused before journal/client admission [0.70ms]
+(pass) headless schema delivery > bad schema input is refused before journal/client admission [0.71ms]
+(pass) headless schema delivery > bad schema input is refused before journal/client admission [0.51ms]
+
+src/__tests__/run-model-args.test.ts:
+Using environment: dev
+(pass) headless model override intake > parses --model with -p or stdin and preserves the explicit choice [2.19ms]
+--model must be a non-empty provider/model identifier without whitespace or control characters.
+(pass) headless model override intake > refuses an invalid --model value "" [0.75ms]
+--model must be a non-empty provider/model identifier without whitespace or control characters.
+(pass) headless model override intake > refuses an invalid --model value " " [0.43ms]
+--model must be a non-empty provider/model identifier without whitespace or control characters.
+(pass) headless model override intake > refuses an invalid --model value "provider/selected\n" [0.26ms]
+(pass) headless model override intake > forwards model to the actual SDK run boundary without changing agent or prompt [0.95ms]
+
+src/__tests__/cli-args.test.ts:
+(pass) production CLI argument parser > accepts --approval-mode balanced for TUI, headless, and server invocations [3.94ms]
+(pass) production CLI argument parser > accepts --approval-mode strict for TUI, headless, and server invocations [0.87ms]
+(pass) production CLI argument parser > accepts --approval-mode allow-all for TUI, headless, and server invocations [0.83ms]
+error: option '--approval-mode <mode>' argument 'typo' is invalid. Allowed choices are balanced, strict, allow-all.
+error: option '--approval-mode <mode>' argument missing
+error: option '--approval-mode <mode>' argument 'typo' is invalid. Allowed choices are balanced, strict, allow-all.
+error: option '--approval-mode <mode>' argument missing
+error: option '--approval-mode <mode>' argument 'typo' is invalid. Allowed choices are balanced, strict, allow-all.
+error: option '--approval-mode <mode>' argument missing
+--approval-mode is controlled by openbuff serve when using --attach
+(pass) production CLI argument parser > rejects missing, invalid, and client-side remote approval modes [5.62ms]
+(pass) production CLI argument parser > parses agent, cwd, mode, trust, logs, and prompt together [0.55ms]
+(pass) production CLI argument parser > parses continuation with and without an id [0.91ms]
+(pass) production CLI argument parser > does not treat a positional directory as cwd [0.51ms]
+(pass) production CLI argument parser > keeps compatibility --local as a no-op [0.31ms]
+(pass) production CLI argument parser > handles empty arguments [0.32ms]
+Usage: openbuff [options] [prompt...]
+
+Local/BYOK AI coding assistant
+
+Arguments:
+  prompt                        Initial prompt to send to the agent
+
+Options:
+  --approval-mode <mode>        Command approvals: balanced (routine commands
+                                run freely), strict, or allow-all (no prompts)
+                                (choices: "balanced", "strict", "allow-all")
+  -v, --version                 Print the CLI version
+  --agent <agent-id>            Run a specific agent id (skips loading local
+                                .agents overrides)
+  --clear-logs                  Remove any existing CLI log files before
+                                starting
+  --continue [conversation-id]  Continue from a previous conversation
+                                (optionally specify a conversation id)
+  --cwd <directory>             Set the working directory (default: current
+                                directory)
+  --plan                        Start in PLAN mode
+  --local                       Local/BYOK mode (default; kept for
+                                compatibility)
+  --trust-project-agents        Trust this project: load its agents, skills, MCP
+                                config and openbuff.json
+                                providers/hooks/approvalMode (recorded as a
+                                persistent grant)
+  --attach                      Attach to a running `openbuff serve` over ACP
+                                instead of running in-process
+  --serve-socket <path>         Unix socket of a running `openbuff serve` (used
+                                with --attach; or OPENBUFF_SERVE_SOCKET)
+  --serve-token <token>         Auth token for --serve-socket (or
+                                OPENBUFF_SERVE_TOKEN)
+  -h, --help                    Show this help message
+
+Commands:
+  init                 Create local project context: openbuff init
+  run                  Headless agent: openbuff run --timeout 60 "check changes"
+  replay               Read recorded evidence: openbuff replay <run-id> --from-step 2
+  dash                 Browse local journals: openbuff dash [--export <directory>]
+  serve                Serve a local agent session: openbuff serve --help
+  mcp                  Serve local tools over MCP: openbuff mcp --help
+
+Use openbuff <command> --help for options.
+Wrapper actions: openbuff --check-update checks registry freshness; openbuff --update installs a verified update.
+In chat: /help opens the slash command directory; /provider configures BYOK routing.
+(pass) production CLI argument parser > uses Commander output paths for --help [4.06ms]
+Usage: openbuff [options] [prompt...]
+
+Local/BYOK AI coding assistant
+
+Arguments:
+  prompt                        Initial prompt to send to the agent
+
+Options:
+  --approval-mode <mode>        Command approvals: balanced (routine commands
+                                run freely), strict, or allow-all (no prompts)
+                                (choices: "balanced", "strict", "allow-all")
+  -v, --version                 Print the CLI version
+  --agent <agent-id>            Run a specific agent id (skips loading local
+                                .agents overrides)
+  --clear-logs                  Remove any existing CLI log files before
+                                starting
+  --continue [conversation-id]  Continue from a previous conversation
+                                (optionally specify a conversation id)
+  --cwd <directory>             Set the working directory (default: current
+                                directory)
+  --plan                        Start in PLAN mode
+  --local                       Local/BYOK mode (default; kept for
+                                compatibility)
+  --trust-project-agents        Trust this project: load its agents, skills, MCP
+                                config and openbuff.json
+                                providers/hooks/approvalMode (recorded as a
+                                persistent grant)
+  --attach                      Attach to a running `openbuff serve` over ACP
+                                instead of running in-process
+  --serve-socket <path>         Unix socket of a running `openbuff serve` (used
+                                with --attach; or OPENBUFF_SERVE_SOCKET)
+  --serve-token <token>         Auth token for --serve-socket (or
+                                OPENBUFF_SERVE_TOKEN)
+  -h, --help                    Show this help message
+
+Commands:
+  init                 Create local project context: openbuff init
+  run                  Headless agent: openbuff run --timeout 60 "check changes"
+  replay               Read recorded evidence: openbuff replay <run-id> --from-step 2
+  dash                 Browse local journals: openbuff dash [--export <directory>]
+  serve                Serve a local agent session: openbuff serve --help
+  mcp                  Serve local tools over MCP: openbuff mcp --help
+
+Use openbuff <command> --help for options.
+Wrapper actions: openbuff --check-update checks registry freshness; openbuff --update installs a verified update.
+In chat: /help opens the slash command directory; /provider configures BYOK routing.
+(pass) production CLI argument parser > uses Commander output paths for -h [0.79ms]
+1.2.3
+(pass) production CLI argument parser > uses Commander output paths for --version [0.42ms]
+1.2.3
+(pass) production CLI argument parser > uses Commander output paths for -v [0.34ms]
+(pass) isRendererCommand > returns true for the default (renderer/TUI) path [0.68ms]
+(pass) isRendererCommand > returns false for the serve subcommand (ACP wire on stdio) [0.32ms]
+(pass) isRendererCommand > returns false for the mcp subcommand (MCP wire on stdio) [0.17ms]
+(pass) isRendererCommand > returns false for the run subcommand (ndjson stream on stdout) [0.21ms]
+(pass) isRendererCommand > returns false for the replay subcommand (ndjson stream on stdout) [0.16ms]
+(pass) serve subcommand parsing > leaves serve undefined when the subcommand is not used [0.45ms]
+(pass) serve subcommand parsing > parses bare `serve` as stdio transport [0.23ms]
+(pass) serve subcommand parsing > parses --stdio as stdio transport [0.16ms]
+error: option '--socket <path>' argument missing
+(pass) serve subcommand parsing > errors when --socket is given without a path [0.12ms]
+--socket must not be empty (pass a unix socket path)
+--socket must not be empty (pass a unix socket path)
+(pass) serve subcommand parsing > rejects an empty --socket instead of selecting socket transport with an empty path [0.41ms]
+(pass) serve subcommand parsing > parses --socket with a path [0.19ms]
+(pass) serve subcommand parsing > parses --socket with a path and --socket-token [0.14ms]
+(pass) serve subcommand parsing > parses --agent into serve.agentId for stdio [0.11ms]
+(pass) serve subcommand parsing > parses --socket with --agent [0.10ms]
+(pass) serve subcommand parsing > leaves serve.agentId undefined for bare serve [0.13ms]
+(pass) serve subcommand parsing > defaults serve trust to false for both variants [0.13ms]
+(pass) serve subcommand parsing > parses --trust-project-agents into the stdio variant [0.13ms]
+(pass) serve subcommand parsing > parses --trust-project-agents into the socket variant [0.12ms]
+(pass) serve subcommand parsing > parses --trust-project-agents together with --agent [0.10ms]
+(pass) serve subcommand parsing > keeps the serve-level trust flag out of the top-level result [0.29ms]
+(pass) run subcommand parsing > leaves run undefined when the subcommand is not used [0.76ms]
+(pass) run subcommand parsing > joins positional prompt tokens with spaces [0.34ms]
+(pass) run subcommand parsing > parses --json [0.26ms]
+(pass) run subcommand parsing > parses --agent into run.agentId [0.17ms]
+(pass) run subcommand parsing > parses --timeout into run.timeout (seconds) [0.24ms]
+(pass) run subcommand parsing > leaves run.timeout undefined by default (no timeout) [0.18ms]
+--timeout must be a positive integer in [1, 2147483] seconds, got "nope"
+--timeout must be a positive integer in [1, 2147483] seconds, got "0x10"
+--timeout must be a positive integer in [1, 2147483] seconds, got "1e2"
+--timeout must be a positive integer in [1, 2147483] seconds, got ""
+--timeout must be a positive integer in [1, 2147483] seconds, got "   "
+(pass) run subcommand parsing > rejects a non-integer --timeout [0.94ms]
+--timeout must be a positive integer in [1, 2147483] seconds, got "0"
+(pass) run subcommand parsing > rejects a zero --timeout (a zero-second deadline would abort immediately) [0.38ms]
+(pass) run subcommand parsing > selects stdin when no prompt or a lone dash is supplied [0.42ms]
+Provide either --prompt/-p or positional prompt text, not both.
+The explicit prompt must not be empty.
+The explicit prompt must not be empty.
+(pass) run subcommand parsing > accepts -p/--prompt and refuses ambiguous or empty explicit input [0.74ms]
+(pass) run subcommand parsing > keeps the run subcommand out of the top-level result [0.20ms]
+(pass) replay subcommand parsing (P2-T3) > leaves replay undefined when the subcommand is not used [0.63ms]
+(pass) replay subcommand parsing (P2-T3) > parses a bare runId with json off and no overrides [0.50ms]
+error: missing required argument 'runId'
+(pass) replay subcommand parsing (P2-T3) > errors when the runId is missing [0.46ms]
+(pass) replay subcommand parsing (P2-T3) > parses --json [0.40ms]
+(pass) replay subcommand parsing (P2-T3) > parses --from-step into replay.fromStep [0.42ms]
+--from-step must be a non-negative integer in [0, 9007199254740991], got "nope"
+(pass) replay subcommand parsing (P2-T3) > rejects a non-integer --from-step [0.47ms]
+--from-step must be a non-negative integer in [0, 9007199254740991], got ""
+--from-step must be a non-negative integer in [0, 9007199254740991], got "   "
+(pass) replay subcommand parsing (P2-T3) > rejects an empty/whitespace --from-step instead of silently replaying from step 0 [1.21ms]
+--from-step must be a non-negative integer in [0, 9007199254740991], got "0x10"
+--from-step must be a non-negative integer in [0, 9007199254740991], got "1e2"
+(pass) replay subcommand parsing (P2-T3) > rejects non-decimal numeric forms of --from-step [0.71ms]
+(pass) replay subcommand parsing (P2-T3) > parses --model into replay.model [0.44ms]
+(pass) replay subcommand parsing (P2-T3) > parses --from-step, --model and --json together [0.51ms]
+(pass) replay subcommand parsing (P2-T3) > keeps the replay subcommand out of the top-level result [0.43ms]
+(pass) attach flag parsing (P1-T3) > leaves attach undefined by default [0.55ms]
+--attach requires a serve socket: pass --serve-socket <path> or set OPENBUFF_SERVE_SOCKET
+(pass) attach flag parsing (P1-T3) > rejects --attach with no socket path [0.54ms]
+--attach requires a serve socket: pass --serve-socket <path> or set OPENBUFF_SERVE_SOCKET
+--attach requires a serve socket: pass --serve-socket <path> or set OPENBUFF_SERVE_SOCKET
+(pass) attach flag parsing (P1-T3) > rejects --attach when neither the flag nor OPENBUFF_SERVE_SOCKET provides a socket [1.28ms]
+(pass) attach flag parsing (P1-T3) > accepts --attach with only OPENBUFF_SERVE_SOCKET (documented env fallback) [0.44ms]
+(pass) attach flag parsing (P1-T3) > the env socket unblocks --attach carrying only --serve-token [0.38ms]
+(pass) attach flag parsing (P1-T3) > parses --attach with --serve-socket [0.41ms]
+(pass) attach flag parsing (P1-T3) > parses --attach with --serve-socket and --serve-token [0.60ms]
+(pass) attach flag parsing (P1-T3) > attach does not poison the top-level prompt/serve/mcp fields [0.34ms]
+(pass) dash subcommand parsing (P2-T7) > leaves dash undefined when the subcommand is not used [0.60ms]
+(pass) dash subcommand parsing (P2-T7) > parses bare `dash` into serve mode with default open and no port/token [0.62ms]
+(pass) dash subcommand parsing (P2-T7) > parses --port into dash.port [0.14ms]
+--port must be a non-negative integer, got "nope"
+(pass) dash subcommand parsing (P2-T7) > rejects a non-integer --port [0.13ms]
+--port must be a non-negative integer, got "0x10"
+--port must be a non-negative integer, got "1e2"
+--port must be a non-negative integer, got ""
+(pass) dash subcommand parsing (P2-T7) > rejects non-decimal numeric forms of --port [0.32ms]
+--port must be at most 65535, got 65536
+(pass) dash subcommand parsing (P2-T7) > rejects --port above 65535 [0.10ms]
+(pass) dash subcommand parsing (P2-T7) > parses --token into dash.token [0.14ms]
+--token must not be empty (omit it to generate one)
+--token must not be empty (omit it to generate one)
+(pass) dash subcommand parsing (P2-T7) > rejects an empty --token (an empty expected token is an auth bypass) [0.29ms]
+(pass) dash subcommand parsing (P2-T7) > parses --export into dash.exportDir [0.20ms]
+--export must not be empty (pass a directory path)
+--export must not be empty (pass a directory path)
+(pass) dash subcommand parsing (P2-T7) > rejects an empty --export instead of silently degrading to serve mode [0.71ms]
+error: option '--export <dir>' argument missing
+(pass) dash subcommand parsing (P2-T7) > errors when --export is given without a value [0.21ms]
+(pass) dash subcommand parsing (P2-T7) > parses --no-open into dash.open=false [0.28ms]
+(pass) dash subcommand parsing (P2-T7) > parses --port, --token and --no-open together [0.22ms]
+(pass) dash subcommand parsing (P2-T7) > keeps the dash subcommand out of the top-level result [0.10ms]
+(pass) dash subcommand parsing (P2-T7) > isRendererCommand returns false for the dash subcommand [0.12ms]
+(pass) mcp subcommand parsing > leaves mcp undefined when the subcommand is not used [0.37ms]
+(pass) mcp subcommand parsing > parses bare `mcp` into ParsedArgs.mcp [0.14ms]
+(pass) mcp subcommand parsing > parses --mutations into mcp.mutations [0.12ms]
+(pass) mcp subcommand parsing > tolerates excess arguments (allowExcessArguments) [0.30ms]
+(pass) mcp subcommand parsing > keeps the mcp subcommand out of the top-level result [0.27ms]
+
+src/__tests__/unit/openbuff-provider-readiness.test.ts:
+Using environment: dev
+(pass) getOpenbuffProviderReadiness > fails closed when the project provider config is malformed [5.86ms]
+
+ 171 pass
+ 0 fail
+ 473 expect() calls
+Ran 171 tests across 8 files. [30.56s]

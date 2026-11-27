@@ -1,0 +1,368 @@
+{
+  "schemaVersion": 1,
+  "type": "body-bootstrap-selection",
+  "tools": {
+    "bun": {
+      "selector": {
+        "kind": "path-name",
+        "name": "bun"
+      },
+      "expectedVersion": "1.4.4",
+      "expectedSha256ByHost": {
+        "linux-x64": "10702245766b225e70bbf6235fd6b47214fd94b4760d00ffaed8ab0df57ac235"
+      },
+      "selectionEvidence": {
+        "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/toolchain-selection-r1/selection.json",
+        "sha256": "e9ed8b92a22e11b3730929a768ed10d2ec5e8e50d481d05e72f22cc8a617bb8b"
+      },
+      "acquisition": "already-selected"
+    },
+    "node": {
+      "selector": {
+        "kind": "path-name",
+        "name": "node"
+      },
+      "expectedVersion": "26.1.0",
+      "expectedSha256ByHost": {
+        "linux-x64": "da220b82279ed9885a7759f6efb8c4b9351ece579f93429bf7b7d2fbd481bcf8"
+      },
+      "selectionEvidence": {
+        "path": "docs/execution/body-roadmap/evidence/B32/bootstrap-intake-20261112/report.json",
+        "sha256": "0384ac10488271814be1e76ad5d3f35470ac92f6663506939248298bede83544"
+      },
+      "acquisition": "already-selected",
+      "versionConstraintSource": {
+        "file": {
+          "path": "sdk/package.json",
+          "sha256": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6"
+        },
+        "jsonPointer": "/engines/node"
+      }
+    },
+    "cargo": {
+      "selector": {
+        "kind": "absolute-path",
+        "path": "/home/ben/Code/CLI/openbuff/.tmp/body-toolchains/rust-1.87.0/bin/cargo"
+      },
+      "expectedVersion": "1.87.0",
+      "expectedSha256ByHost": {
+        "linux-x64": "a9fb5ef0f95be70b324f3e88a4621a566320e2eb00635dc37f8a98e0a9fb7c9a"
+      },
+      "selectionEvidence": {
+        "path": "docs/execution/body-roadmap/evidence/B32/rust-acquisition-20261112-r1/installation-r1/root-observation.json",
+        "sha256": "873f553b7c4e48ef31ba4edbf879719410628904b74ca2f019c55eed37ad106a"
+      },
+      "acquisition": "already-selected"
+    },
+    "rustc": {
+      "selector": {
+        "kind": "absolute-path",
+        "path": "/home/ben/Code/CLI/openbuff/.tmp/body-toolchains/rust-1.87.0/bin/rustc"
+      },
+      "expectedVersion": "1.87.0",
+      "expectedSha256ByHost": {
+        "linux-x64": "9aac770e110f2b2cf1a38e40c9da8268139bae1fcf88d5d152889d199a514a73"
+      },
+      "selectionEvidence": {
+        "path": "docs/execution/body-roadmap/evidence/B32/rust-acquisition-20261112-r1/installation-r1/root-observation.json",
+        "sha256": "873f553b7c4e48ef31ba4edbf879719410628904b74ca2f019c55eed37ad106a"
+      },
+      "acquisition": "already-selected"
+    },
+    "bwrap": {
+      "selector": {
+        "kind": "path-name",
+        "name": "bwrap"
+      },
+      "expectedVersion": "0.13.1",
+      "expectedSha256ByHost": {
+        "linux-x64": "33516b9cd1fa6432307ad71f23765fa30604b0a8d769dac0d2ba054e85aeec83"
+      },
+      "selectionEvidence": {
+        "path": "docs/execution/body-roadmap/evidence/B32/bootstrap-intake-20261112/report.json",
+        "sha256": "0384ac10488271814be1e76ad5d3f35470ac92f6663506939248298bede83544"
+      },
+      "acquisition": "already-selected"
+    }
+  },
+  "cells": {
+    "bun": {
+      "boundary": "bootstrap-prerequisites",
+      "tools": ["bun"],
+      "cells": [],
+      "artifacts": [],
+      "platform": "any"
+    },
+    "node": {
+      "boundary": "bootstrap-prerequisites",
+      "tools": ["node"],
+      "cells": [],
+      "artifacts": [],
+      "platform": "any"
+    },
+    "rust": {
+      "boundary": "bootstrap-prerequisites",
+      "tools": ["cargo", "rustc"],
+      "cells": [],
+      "artifacts": [],
+      "platform": "any"
+    },
+    "native-linux": {
+      "boundary": "bootstrap-prerequisites",
+      "tools": ["bwrap"],
+      "cells": ["bun", "rust"],
+      "artifacts": [],
+      "platform": "linux"
+    },
+    "installed-sdk": {
+      "boundary": "bootstrap-prerequisites",
+      "tools": ["node"],
+      "cells": [],
+      "artifacts": ["sdk-cjs", "sdk-esm"],
+      "platform": "any"
+    },
+    "installed-cli": {
+      "boundary": "bootstrap-prerequisites",
+      "tools": [],
+      "cells": [],
+      "artifacts": ["cli-checkout"],
+      "platform": "any"
+    }
+  },
+  "inputs": {
+    "packages": [
+      {
+        "path": "package.json",
+        "sha256": "101b258e97f09fe4c93edc7265fae3a51c5f11663935136eba0735763751054b"
+      },
+      {
+        "path": "scripts/package.json",
+        "sha256": "c37a33ad8fa146b2e3f1d3e5fe6dca73bdf61d4a42c71a92d551c98df7356219"
+      },
+      {
+        "path": "common/package.json",
+        "sha256": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1"
+      },
+      {
+        "path": "sdk/package.json",
+        "sha256": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6"
+      },
+      {
+        "path": "cli/package.json",
+        "sha256": "c3f7dc4a26e8409f9011e627cf19377ac5173526065cb7c4354e77a511b22b46"
+      },
+      {
+        "path": "rust/Cargo.toml",
+        "sha256": "5804b3a9ffbae3693d2ccb84f7b21e474eb101c2d699817671395763082f8292"
+      },
+      {
+        "path": "rust/crates/openbuff-native/Cargo.toml",
+        "sha256": "36679c08486d35c9b3ef1525c70f80cfcf7e36e11c075b3c16582c4e340e3410"
+      },
+      {
+        "path": "rust/crates/openbuff-workspace-harness/Cargo.toml",
+        "sha256": "11252f9e8e4f8e3c402a0f3cae44b95637f8c444d99105b68c33c5c706b4caef"
+      }
+    ],
+    "locks": [
+      {
+        "path": "bun.lock",
+        "sha256": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567"
+      },
+      {
+        "path": "rust/Cargo.lock",
+        "sha256": "8eb91d4eb3bc1bbbed06a422dfbe2367e0d5dd39207faf3e4f555bb6a63201a7"
+      }
+    ],
+    "sources": [
+      {
+        "path": "scripts/body-bootstrap.ts",
+        "sha256": "9e1120e9b458ba89c459e8925e3acca3a6d2a6ac220177d1a01591008268a76c"
+      },
+      {
+        "path": "scripts/__tests__/body-bootstrap.test.ts",
+        "sha256": "8ea2aa25cbcfebb5f7b34313485e696f1f78a2ec872d3697f2335b64bd240b37"
+      },
+      {
+        "path": "common/src/util/node-process-scope.ts",
+        "sha256": "4f37545c0d546ec647d3ffaa9c2a31671e3c683d7ba0e6e22797a2078a98f98f"
+      },
+      {
+        "path": "common/src/util/owned-process-scope.ts",
+        "sha256": "04a37cac2cac2ba29285fadc80d414ef418521433324b76971723d95ee29fcb4"
+      },
+      {
+        "path": "common/src/util/linux-process-scope.ts",
+        "sha256": "55ba6377c23a28044228c558ca98c1c1dd86c8ed49a771c12194e642093c3093"
+      },
+      {
+        "path": "common/src/util/execution-context.ts",
+        "sha256": "375c056ec0a69befb78b5d0242f4d0398456e4e98bf614239f9c33146938b228"
+      },
+      {
+        "path": "common/src/types/contracts/process-scope.ts",
+        "sha256": "a19be97d72c8e79b06f098b46e6772aa8e870cfd0d3e500f5b0f2b08f2915a51"
+      },
+      {
+        "path": "common/src/types/contracts/execution-context.ts",
+        "sha256": "b6bd741ddbfac51d2d7ee23da5f942010d69ab980dbe51ebb9b11b9df0eeffba"
+      },
+      {
+        "path": "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+        "sha256": "7da2f8e5e150358be64f603eaaa78dc5ff0b774265c437b0288c98773e5af64d"
+      },
+      {
+        "path": "rust/crates/openbuff-native/src/exec/mod.rs",
+        "sha256": "38f41eed77d8fc99d51f8d51c7061c85ca6fae15aeaca914f192f70e813078ff"
+      },
+      {
+        "path": "rust/crates/openbuff-native/src/exec/plan.rs",
+        "sha256": "8b7ee3e6976d09c7b2c92ca6bf55974e4a5da86166c79ee5bfe09da865e0b0aa"
+      },
+      {
+        "path": "rust/crates/openbuff-native/src/exec/runner.rs",
+        "sha256": "6739926889b2cb5fc382dde683c3b0ecf73984fbb1219b55367d1961b20f47e3"
+      },
+      {
+        "path": "rust/crates/openbuff-native/src/lib.rs",
+        "sha256": "2537edb5b356cb33b0ba88a9da0c36c896810d5621b6f354a33b4fcea3297321"
+      },
+      {
+        "path": "rust/crates/openbuff-native/src/main.rs",
+        "sha256": "1923f92d72126926448b92752206984dbf1dc74229cebd4db011a1b160e0b072"
+      },
+      {
+        "path": "rust/crates/openbuff-workspace-harness/src/lib.rs",
+        "sha256": "cd4ac3723fd9af59dd83f9295d923daa3777cbca9e83938aa3afbfe91eb50335"
+      }
+    ],
+    "configuration": [
+      {
+        "path": "test/fixtures/body/.mise.toml",
+        "sha256": "971d7df1ac24eca40cc0e8f5b9851cfb16fccdd6e651db841169db445855749a"
+      },
+      {
+        "path": ".bun-version",
+        "sha256": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35"
+      },
+      {
+        "path": "rust/rust-toolchain.toml",
+        "sha256": "d4e55d8f04b06b1cddd4359cc87aaed956b03956bba70e02b5bf36c4cc9bb350"
+      },
+      {
+        "path": "scripts/tsconfig.json",
+        "sha256": "daefe06703c1e3975884e8b9574b871500b6c5bba07af0adef69ca9ae0a0fac3"
+      },
+      {
+        "path": "tsconfig.base.json",
+        "sha256": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+      },
+      {
+        "path": "scripts/dependency-provenance.json",
+        "sha256": "7e8305700425e6b5e3006e0a4b8417169d9d6c4e6f036b56609faa9641dd3de4"
+      },
+      {
+        "path": ".github/workflows/rust-workspace.yml",
+        "sha256": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3"
+      },
+      {
+        "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+        "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+      },
+      {
+        "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+        "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "sdk-cjs",
+      "path": "sdk/dist/index.cjs",
+      "sha256": null,
+      "executable": false,
+      "buildReceipt": null,
+      "boundary": "isolated-installed"
+    },
+    {
+      "id": "sdk-esm",
+      "path": "sdk/dist/index.mjs",
+      "sha256": null,
+      "executable": false,
+      "buildReceipt": null,
+      "boundary": "isolated-installed"
+    },
+    {
+      "id": "cli-checkout",
+      "path": "cli/bin/openbuff",
+      "sha256": null,
+      "executable": true,
+      "buildReceipt": null,
+      "boundary": "isolated-installed"
+    },
+    {
+      "id": "native-checkout",
+      "path": "rust/target/debug/openbuff-native",
+      "sha256": null,
+      "executable": true,
+      "buildReceipt": null,
+      "boundary": "native-build"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "native-linux-namespace",
+      "state": "unavailable",
+      "boundary": "actual namespace behavior unverified",
+      "proof": null
+    },
+    {
+      "id": "native-linux-seccomp",
+      "state": "unavailable",
+      "boundary": "actual selected syscall policy unverified",
+      "proof": null
+    },
+    {
+      "id": "native-linux-landlock",
+      "state": "unavailable",
+      "boundary": "actual allow/deny filesystem policy unverified",
+      "proof": null
+    },
+    {
+      "id": "native-exec-hard-limit",
+      "state": "unavailable",
+      "boundary": "actual native lifetime limit unverified",
+      "proof": null
+    },
+    {
+      "id": "native-macos-seatbelt",
+      "state": "unavailable",
+      "boundary": "platform and selected enforcement unverified",
+      "proof": null
+    },
+    {
+      "id": "native-windows-restricted-token",
+      "state": "unavailable",
+      "boundary": "platform and selected enforcement unverified",
+      "proof": null
+    },
+    {
+      "id": "native-exec-adoption",
+      "state": "unavailable",
+      "boundary": "current checksummed binary and TS consumer proof unverified",
+      "proof": null
+    },
+    {
+      "id": "installed-sdk",
+      "state": "unavailable",
+      "boundary": "no isolated installation proved by bootstrap",
+      "proof": null
+    },
+    {
+      "id": "installed-cli",
+      "state": "unavailable",
+      "boundary": "no installed wrapper/current asset consumer proved by bootstrap",
+      "proof": null
+    }
+  ]
+}

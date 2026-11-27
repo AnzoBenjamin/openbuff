@@ -25,9 +25,11 @@ describe('PlanSessionPickerScreen', () => {
       expect(getNextPlanSessionFocusIndex(2, 3)).toBe(2)
     })
 
-    it('does not focus beyond the rendered session limit', () => {
+    it('reaches every filtered session beyond the old render cap', () => {
       expect(getNextPlanSessionFocusIndex(498, 1000)).toBe(499)
-      expect(getNextPlanSessionFocusIndex(499, 1000)).toBe(499)
+      expect(getNextPlanSessionFocusIndex(499, 1000)).toBe(500)
+      expect(getNextPlanSessionFocusIndex(998, 1000)).toBe(999)
+      expect(getNextPlanSessionFocusIndex(999, 1000)).toBe(999)
     })
   })
 })

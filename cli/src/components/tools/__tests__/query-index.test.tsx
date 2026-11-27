@@ -80,9 +80,11 @@ describe('QueryIndexComponent', () => {
 
     expect(markup).toContain('explain: authentication — 1 result')
     expect(markup).toContain('docs/authentication.md')
-    expect(markup).toContain('12.35')
-    expect(markup).toContain('heading, concept')
-    expect(markup).toContain('hash abcdef012345')
+    // Humanized rows: matched-on stays, raw score floats and content hashes
+    // are agent telemetry and no longer render.
+    expect(markup).toContain('matched: heading, concept')
+    expect(markup).not.toContain('12.35')
+    expect(markup).not.toContain('hash abcdef012345')
     expect(markup).toContain('related to src/auth.ts')
     expect(markup).toContain('Matched on heading, concept.')
     expect(markup).not.toContain('Status:')
@@ -145,7 +147,12 @@ describe('QueryIndexComponent', () => {
     })
     const markup = renderToStaticMarkup(<>{rendered.content}</>)
 
-    expect(markup).toContain('degraded · refreshing')
+    expect(markup).toContain('State: degraded')
+    expect(markup).toContain('stale evidence')
+    expect(markup).toContain('refreshing')
+    expect(rendered.collapsedPreview).toContain('degraded')
+    expect(rendered.collapsedPreview).toContain('stale evidence')
+    expect(rendered.collapsedPreview).toContain('partial coverage')
     expect(markup).toContain('Vector embeddings: failed')
     expect(markup).toContain('Partial coverage')
     expect(markup).toContain('src/bad.ts')

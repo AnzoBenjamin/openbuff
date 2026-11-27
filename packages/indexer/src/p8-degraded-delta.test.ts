@@ -6,7 +6,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 
 import { IndexManager } from './index-manager'
 import * as metadataIndexer from './metadata-indexer'
-import { saveIndex } from './index-store'
+import { saveLegacyIndex as saveIndex } from './index-store'
 import type { MetadataIndex } from './types'
 
 const roots: string[] = []

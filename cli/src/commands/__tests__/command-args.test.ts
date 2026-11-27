@@ -1,18 +1,32 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
+import {
+  describe,
+  test,
+  expect,
+  mock,
+  beforeEach,
+  afterEach,
+  afterAll,
+} from 'bun:test'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
 import { setProjectRoot } from '../../project-files'
 import { useChatStore } from '../../state/chat-store'
-import { useFeedbackStore } from '../../state/feedback-store'
 import {
   COMMAND_REGISTRY,
   defineCommand,
   defineCommandWithArgs,
+  findCommand,
   formatPlanListReport,
+  handleFeedbackCommand,
   planListActiveState,
 } from '../command-registry'
+import {
+  getLastDetachedSessionId,
+  setLastDetachedSessionId,
+} from '../../utils/attach-session'
+import { setAttachTarget } from '../../utils/codebuff-client'
 import {
   ACTIVE_SESSION_FILE_NAME,
   listPlanSessions,
@@ -20,11 +34,70 @@ import {
 } from '../plan-artifacts'
 
 import type { RouterParams } from '../command-registry'
+import type { FeedbackCommandStorage } from '../command-registry'
 import type {
   ContentBlock,
   PlanStatusContentBlock,
   TextContentBlock,
 } from '../../types/chat'
+import type { OpenbuffClient } from '@openbuff/sdk'
+
+/**
+ * Hermetic codebuff-client double for the attach-mode exit tests. The /exit
+ * handler calls detachOnExit() with no deps, so the client seam is mocked at
+ * the codebuff-client module boundary (the mock applies retroactively to the
+ * already-imported live bindings in attach-session.ts and
+ * command-registry.ts). The detach becomes observable through
+ * getLastDetachedSessionId() without touching a real backend, and module
+ * state resets per test via setAttachTarget(undefined).
+ *
+ * The REAL module is snapshotted (await import) BEFORE the mock.module
+ * registration and its exports are spread in the factory; afterAll
+ * re-registers the original: mock.module is registry-wide for the whole test
+ * process, and CI's bun 1.3.5 does not isolate mock.module registrations
+ * across test files. Spreading keeps working implementations — e.g. the real
+ * ManagedOpenbuffClient, which codebuff-client.test.ts exercises — flowing
+ * through the mock, and the afterAll restore keeps the three attach-mode
+ * seams from leaking real-module drops into sibling files.
+ */
+type FakeBackend = {
+  detach?: () => Promise<string | undefined>
+  attach?: (sessionId: string) => Promise<void>
+}
+
+let fakeBackend: FakeBackend | undefined
+let fakeAttachTarget: { socketPath: string; token?: string } | undefined
+
+// Snapshot the real module BEFORE the mock.module registration so the real
+// exports can be spread in the factory and re-registered in afterAll.
+const realCodebuffClientModule = {
+  ...(await import('../../utils/codebuff-client')),
+}
+
+mock.module('../../utils/codebuff-client', () => ({
+  ...realCodebuffClientModule,
+  getAttachTarget: () => fakeAttachTarget,
+  setAttachTarget: (
+    target: { socketPath: string; token?: string } | undefined,
+  ) => {
+    fakeAttachTarget = target
+  },
+  getCodebuffClient: async (): Promise<OpenbuffClient> => {
+    if (!fakeAttachTarget) {
+      throw new Error('client must not be built outside attach mode')
+    }
+    return { backend: fakeBackend } as unknown as OpenbuffClient
+  },
+}))
+
+afterAll(() => {
+  // Restore the real codebuff-client module registry-wide: without this the
+  // attach-seam mock registration leaks into every other test file sharing
+  // this worker (bun does not isolate mock.module across test files).
+  mock.module('../../utils/codebuff-client', () => ({
+    ...realCodebuffClientModule,
+  }))
+})
 
 /**
  * Tests for the command factory pattern.
@@ -49,7 +122,14 @@ describe('command factory pattern', () => {
       clearMessages: mock(() => {}),
       saveToHistory: mock(() => {}),
       scrollToLatest: mock(() => {}),
-      sendMessage: mock(async () => {}),
+      sendMessage: mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      ),
       setCanProcessQueue: mock(() => {}),
       setInputFocused: mock(() => {}),
       setInputValue: mock(() => {}),
@@ -262,7 +342,14 @@ describe('command factory pattern', () => {
       const newCmd = COMMAND_REGISTRY.find((c) => c.name === 'new')
       expect(newCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const clearMessages = mock(() => {})
       const setCanProcessQueue = mock(() => {})
@@ -286,6 +373,7 @@ describe('command factory pattern', () => {
       expect(sendMessage).toHaveBeenCalledWith({
         content: 'hello world',
         agentMode: 'DEFAULT',
+        attachments: [],
       })
     })
 
@@ -293,7 +381,14 @@ describe('command factory pattern', () => {
       const newCmd = COMMAND_REGISTRY.find((c) => c.name === 'new')
       expect(newCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const clearMessages = mock(() => {})
       const setCanProcessQueue = mock(() => {})
@@ -373,8 +468,11 @@ describe('command factory pattern', () => {
       setMessagesCalls: unknown,
     ): { content: string; blocks?: ContentBlock[] } => {
       const calls = setMessagesCalls as Array<[MessagesUpdater]>
-      expect(calls.length).toBe(1)
-      const next = calls[calls.length - 1][0]([])
+      expect(calls.length).toBeGreaterThan(0)
+      const next = calls.reduce(
+        (messages, [update]) => update(messages),
+        [] as ReturnType<MessagesUpdater>,
+      )
       return next[next.length - 1]
     }
 
@@ -413,7 +511,14 @@ describe('command factory pattern', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       expect(resumeCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         sendMessage,
@@ -450,7 +555,14 @@ describe('command factory pattern', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
-        sendMessage: mock(async () => {}),
+        sendMessage: mock(
+          async () =>
+            ({
+              status: 'accepted',
+              disposition: 'started',
+              completion: Promise.resolve(),
+            }) as const,
+        ),
       })
 
       resumeCmd!.handler(params, 'auth-refresh')
@@ -460,7 +572,14 @@ describe('command factory pattern', () => {
 
     test('resume-plan with missing session does not send', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/resume-plan missing-slug',
@@ -487,7 +606,14 @@ describe('command factory pattern', () => {
       // guarded-submit-busy-path-untested).
       const addToQueue = mock(() => {})
       const setInputFocused = mock(() => {})
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         isStreaming: true,
@@ -500,6 +626,8 @@ describe('command factory pattern', () => {
 
       expect(addToQueue).toHaveBeenCalledWith(
         expect.stringContaining('.agents/sessions/auth-refresh'),
+        [],
+        'EXECUTE_PLAN',
       )
       expect(sendMessage).not.toHaveBeenCalled()
       expect(setInputFocused).toHaveBeenCalledWith(true)
@@ -511,7 +639,14 @@ describe('command factory pattern', () => {
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       const addToQueue = mock(() => {})
       const setInputFocused = mock(() => {})
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         isChainInProgressRef: { current: true },
@@ -524,6 +659,8 @@ describe('command factory pattern', () => {
 
       expect(addToQueue).toHaveBeenCalledWith(
         expect.stringContaining('.agents/sessions/auth-refresh'),
+        [],
+        'EXECUTE_PLAN',
       )
       expect(sendMessage).not.toHaveBeenCalled()
       expect(setInputFocused).toHaveBeenCalledWith(true)
@@ -535,7 +672,14 @@ describe('command factory pattern', () => {
 
       const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
       const addToQueue = mock(() => {})
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/resume-plan auth-refresh',
         addToQueue,
@@ -561,7 +705,14 @@ describe('command factory pattern', () => {
       writeArtifact('foo', 'PLAN.md', 'plan body')
 
       const updateCmd = COMMAND_REGISTRY.find((c) => c.name === 'update-plan')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/update-plan .agents/sessions/foo API changed',
         sendMessage,
@@ -584,7 +735,14 @@ describe('command factory pattern', () => {
       writeArtifact('foo', 'PLAN.md', 'plan body')
 
       const lessonsCmd = COMMAND_REGISTRY.find((c) => c.name === 'lessons')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const params = createMockParams({
         inputValue: '/lessons foo always run tests',
         sendMessage,
@@ -608,7 +766,14 @@ describe('command factory pattern', () => {
       writeArtifact('foo', 'PLAN.md', 'plan body')
 
       const statusCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-status')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-status foo',
@@ -627,7 +792,14 @@ describe('command factory pattern', () => {
 
     test('plan-status reports a session directory that does not exist', () => {
       const statusCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-status')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-status ghost',
@@ -658,7 +830,14 @@ describe('command factory pattern', () => {
         const cmd = COMMAND_REGISTRY.find((c) => c.name === name)
         expect(cmd).toBeDefined()
 
-        const sendMessage = mock(async () => {})
+        const sendMessage = mock(
+          async () =>
+            ({
+              status: 'accepted',
+              disposition: 'started',
+              completion: Promise.resolve(),
+            }) as const,
+        )
         const setMessages = mock(() => {})
         const saveToHistory = mock(() => {})
         const setInputValue = mock(() => {})
@@ -685,7 +864,7 @@ describe('command factory pattern', () => {
       }
     })
 
-    test('plans emits a plan-status-list block without sending to the agent', () => {
+    test('plans emits a plan-status-list block without sending to the agent', async () => {
       writeArtifact(
         'alpha',
         'PLAN.md',
@@ -698,7 +877,14 @@ describe('command factory pattern', () => {
       const plansCmd = COMMAND_REGISTRY.find((c) => c.name === 'plans')
       expect(plansCmd).toBeDefined()
 
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plans',
@@ -706,7 +892,7 @@ describe('command factory pattern', () => {
         setMessages,
       })
 
-      plansCmd!.handler(params, '')
+      await plansCmd!.handler(params, '')
 
       // /plans is a local inspector: it must never reach the agent.
       expect(sendMessage).not.toHaveBeenCalled()
@@ -752,7 +938,7 @@ describe('command factory pattern', () => {
       expect('kind' in block).toBe(false)
     })
 
-    test('plans carries the stale-pointer note as a rendered text block', () => {
+    test('plans carries the stale-pointer note as a rendered text block', async () => {
       writeArtifact('alpha', 'PLAN.md', 'plan body')
       writeSessionState('alpha', 'active')
       // 'ghost' has no known artifacts, so listPlanSessions filters it out and
@@ -766,7 +952,7 @@ describe('command factory pattern', () => {
       const setMessages = mock(() => {})
       const params = createMockParams({ inputValue: '/plans', setMessages })
 
-      plansCmd!.handler(params, '')
+      await plansCmd!.handler(params, '')
 
       const staleNote = staleNoteFor('ghost')
       const message = lastSystemMessage(setMessages.mock.calls)
@@ -782,7 +968,7 @@ describe('command factory pattern', () => {
       expect(message.content).toBe(block.reportText)
     })
 
-    test('plans carries the stale-pointer note only in reportText when no sessions are listed', () => {
+    test('plans carries the stale-pointer note only in reportText when no sessions are listed', async () => {
       // Only the pointer file exists, so listPlanSessions finds no rows and
       // PlanStatusBox falls back to rendering reportText — which
       // formatPlanListReport already ends with the note. A second text block
@@ -794,7 +980,7 @@ describe('command factory pattern', () => {
       const setMessages = mock(() => {})
       const params = createMockParams({ inputValue: '/plans', setMessages })
 
-      plansCmd!.handler(params, '')
+      await plansCmd!.handler(params, '')
 
       const staleNote = staleNoteFor('ghost')
       const message = lastSystemMessage(setMessages.mock.calls)
@@ -1077,7 +1263,14 @@ describe('command factory pattern', () => {
       writeArtifact('alpha', 'PLAN.md', 'plan body')
 
       const planUseCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-use')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-use alpha',
@@ -1105,7 +1298,14 @@ describe('command factory pattern', () => {
       fs.mkdirSync(activeSessionPointerPath(), { recursive: true })
 
       const planUseCmd = COMMAND_REGISTRY.find((c) => c.name === 'plan-use')
-      const sendMessage = mock(async () => {})
+      const sendMessage = mock(
+        async () =>
+          ({
+            status: 'accepted',
+            disposition: 'started',
+            completion: Promise.resolve(),
+          }) as const,
+      )
       const setMessages = mock(() => {})
       const params = createMockParams({
         inputValue: '/plan-use alpha',
@@ -1170,6 +1370,24 @@ describe('command factory pattern', () => {
       }
     }
 
+    // Attach-mode module state must reset per test so the fake client and
+    // detach bookkeeping never leak across cases (mirrors the 'detach and
+    // attach commands' block). The afterEach matters as much as the
+    // beforeEach: mock.module is file-wide, so a leaked fake attach target
+    // would flip the later detach/attach describe's no-attach-mode
+    // assumptions.
+    beforeEach(() => {
+      setAttachTarget(undefined)
+      setLastDetachedSessionId(undefined)
+      fakeBackend = undefined
+    })
+
+    afterEach(() => {
+      setAttachTarget(undefined)
+      setLastDetachedSessionId(undefined)
+      fakeBackend = undefined
+    })
+
     test('drains the guarded-submit queue into session history before exiting', async () => {
       const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
       expect(exitCmd).toBeDefined()
@@ -1184,13 +1402,25 @@ describe('command factory pattern', () => {
         // real clearQueue contract returns the first `count` entries and
         // keeps the rest, which a splicing mock mirrors.
         const remaining = [
-          { content: 'queued one', attachments: [] },
-          { content: 'queued two', attachments: [] },
+          {
+            content: 'queued one',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
+          {
+            content: 'queued two',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
         ]
         const clearQueue = mock((count?: number) => remaining.splice(0, count))
         const saveToHistory = mock(() => {})
         const stopStreaming = mock(() => {})
-        const params = createMockParams({ clearQueue, saveToHistory, stopStreaming })
+        const params = createMockParams({
+          clearQueue,
+          saveToHistory,
+          stopStreaming,
+        })
 
         exitCmd!.handler(params, '')
         await new Promise((resolve) => setTimeout(resolve, 10))
@@ -1221,8 +1451,16 @@ describe('command factory pattern', () => {
         // Same one-at-a-time splicing mock as the happy-path drain test: the
         // synchronous loop terminates only on an empty return.
         const remaining = [
-          { content: 'queued one', attachments: [] },
-          { content: 'queued two', attachments: [] },
+          {
+            content: 'queued one',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
+          {
+            content: 'queued two',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
         ]
         const clearQueue = mock((count?: number) => remaining.splice(0, count))
         // formatQueuedMessageForHistory returns the queued content verbatim
@@ -1270,7 +1508,14 @@ describe('command factory pattern', () => {
 
       const stubs = stubProcessExitAndKill()
       try {
-        const clearQueue = mock(() => [] as Array<{ content: string; attachments: never[] }>)
+        const clearQueue = mock(
+          () =>
+            [] as Array<{
+              content: string
+              attachments: never[]
+              agentMode: 'DEFAULT'
+            }>,
+        )
         const saveToHistory = mock(() => {})
         const params = createMockParams({ clearQueue, saveToHistory })
 
@@ -1328,55 +1573,224 @@ describe('command factory pattern', () => {
         stubs.restore()
       }
     })
+
+    test('attach mode: exits without aborting the run and detaches first', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      fakeBackend = { detach: async () => 'sess-exit-1' }
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+        expect(abortController.signal.aborted).toBe(false)
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        // The remote run KEEPS RUNNING: the exit path detaches instead of
+        // aborting the attached run's controller.
+        expect(abortController.signal.aborted).toBe(false)
+        // The detach actually ran to completion before process.exit: the
+        // backend's session id was persisted for a later /attach.
+        expect(getLastDetachedSessionId()).toBe('sess-exit-1')
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('attach mode: a failing detach still exits without aborting', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      fakeBackend = {
+        detach: async () => {
+          throw new Error('socket closed')
+        },
+      }
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        // The detach failure is swallowed silently (no user-visible message
+        // at exit time) and must never block the exit.
+        expect(abortController.signal.aborted).toBe(false)
+        expect(getLastDetachedSessionId()).toBeUndefined()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
   })
 
   describe('feedback command arg handling', () => {
-    test('pre-populates feedback text when args are provided', () => {
-      const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
-      expect(feedbackCmd).toBeDefined()
+    test('saves feedback locally without attaching conversation context', async () => {
+      const savedInputs: Array<{ category: string; text: string }> = []
+      const storage: FeedbackCommandStorage = {
+        save: async (input) => {
+          savedInputs.push(input)
+          return {
+            record: {
+              id: 'feedback-1',
+              createdAt: '2026-11-24T12:00:00.000Z',
+              category: input.category,
+              text: input.text,
+            },
+            filePath: '/private/openbuff/feedback.jsonl',
+          }
+        },
+        export: async () => '/tmp/feedback-export.jsonl',
+      }
+      const localMessages: unknown[] = []
+      const params = createMockParams({
+        inputValue: '/feedback my bug report',
+        setMessages: (update) => {
+          const messages = typeof update === 'function' ? update([]) : update
+          localMessages.push(...messages)
+        },
+      })
 
-      // Reset the feedback store
-      useFeedbackStore.getState().reset()
+      await handleFeedbackCommand(params, 'my bug report', storage)
 
-      const params = createMockParams({ inputValue: '/feedback my bug report' })
-      feedbackCmd!.handler(params, 'my bug report')
-
-      // Check that feedback text was pre-populated
-      const state = useFeedbackStore.getState()
-      expect(state.feedbackText).toBe('my bug report')
-      expect(state.feedbackCursor).toBe('my bug report'.length)
+      expect(savedInputs).toEqual([
+        { category: 'other', text: 'my bug report' },
+      ])
+      expect(params.saveToHistory).not.toHaveBeenCalled()
+      expect(params.setInputValue).toHaveBeenCalled()
+      expect(localMessages).toHaveLength(1)
+      expect(JSON.stringify(localMessages)).not.toContain('my bug report')
     })
 
-    test('opens feedback mode without pre-populating when no args', () => {
-      const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
-      expect(feedbackCmd).toBeDefined()
+    test('exports only when an explicit destination is provided', async () => {
+      const exported: string[] = []
+      const storage: FeedbackCommandStorage = {
+        save: async () => {
+          throw new Error('save should not run during export')
+        },
+        export: async (destination) => {
+          exported.push(destination)
+          return `/private/${destination}`
+        },
+      }
+      const params = createMockParams({
+        inputValue: '/feedback export feedback.jsonl',
+      })
 
-      // Reset the feedback store
-      useFeedbackStore.getState().reset()
+      await handleFeedbackCommand(params, 'export feedback.jsonl', storage)
 
+      expect(exported).toEqual(['feedback.jsonl'])
+      expect(params.setMessages).toHaveBeenCalled()
+    })
+
+    test('shows local usage without storing an empty submission', async () => {
+      let saveCalled = false
+      const storage: FeedbackCommandStorage = {
+        save: async () => {
+          saveCalled = true
+          throw new Error('unexpected save')
+        },
+        export: async () => '/private/feedback.jsonl',
+      }
       const params = createMockParams({ inputValue: '/feedback' })
-      const result = feedbackCmd!.handler(params, '')
 
-      // Should return openFeedbackMode
-      expect(result).toEqual({ openFeedbackMode: true })
+      await handleFeedbackCommand(params, '', storage)
 
-      // Feedback text should remain empty
-      const state = useFeedbackStore.getState()
-      expect(state.feedbackText).toBe('')
+      expect(saveCalled).toBe(false)
+      expect(params.setMessages).toHaveBeenCalled()
+    })
+  })
+
+  describe('detach and attach commands', () => {
+    /** Lets the fire-and-forget .then callbacks in the handlers run. */
+    const flushMicrotasks = () =>
+      new Promise((resolve) => setTimeout(resolve, 0))
+
+    /** The system message body from the single setMessages call. */
+    const systemMessageBody = (setMessagesCalls: unknown): string => {
+      const calls = setMessagesCalls as Array<
+        [(prev: unknown[]) => Array<{ content: string }>]
+      >
+      const next = calls[calls.length - 1][0]([])
+      return next[next.length - 1].content
+    }
+
+    beforeEach(() => {
+      setLastDetachedSessionId(undefined)
     })
 
-    test('returns openFeedbackMode even with args', () => {
-      const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
-      expect(feedbackCmd).toBeDefined()
+    test('detach and attach are registered as no-arg commands', () => {
+      for (const name of ['detach', 'attach']) {
+        const cmd = COMMAND_REGISTRY.find((c) => c.name === name)
+        expect(cmd, `Command ${name} should exist`).toBeDefined()
+        expect(cmd?.acceptsArgs, `Command ${name} should not accept args`).toBe(
+          false,
+        )
+      }
+    })
 
-      // Reset the feedback store
-      useFeedbackStore.getState().reset()
+    test('/attach resolves to the attach command, not /image', () => {
+      // /image used to claim 'attach' as an alias, which would shadow /attach
+      // in findCommand's first-match scan.
+      expect(findCommand('attach')?.name).toBe('attach')
+      expect(findCommand('img')?.name).toBe('image')
+    })
 
-      const params = createMockParams({ inputValue: '/feedback test' })
-      const result = feedbackCmd!.handler(params, 'test')
+    test('/detach while streaming replies wait and does not attempt a detach', async () => {
+      const detachCmd = COMMAND_REGISTRY.find((c) => c.name === 'detach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({
+        inputValue: '/detach',
+        isStreaming: true,
+        setMessages,
+      })
 
-      // Should still return openFeedbackMode
-      expect(result).toEqual({ openFeedbackMode: true })
+      detachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      const body = systemMessageBody(setMessages.mock.calls)
+      expect(body).toContain('wait')
+      // Between-turns only: the unavailable path is never reached mid-turn and
+      // the run is not aborted.
+      expect(body).not.toContain('unavailable')
+    })
+
+    test('/detach without attach mode replies that detach is unavailable', async () => {
+      // No attach target is set (module default), so the real detachSession
+      // short-circuits before any client is built — fully hermetic.
+      const detachCmd = COMMAND_REGISTRY.find((c) => c.name === 'detach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({ inputValue: '/detach', setMessages })
+
+      detachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      expect(systemMessageBody(setMessages.mock.calls)).toContain('unavailable')
+    })
+
+    test('/attach without a detached session replies with an error message', async () => {
+      const attachCmd = COMMAND_REGISTRY.find((c) => c.name === 'attach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({ inputValue: '/attach', setMessages })
+
+      attachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      const body = systemMessageBody(setMessages.mock.calls)
+      expect(body).toContain('/attach')
+      expect(body).toContain('no detached session')
     })
   })
 })

@@ -39,6 +39,9 @@ export interface AgentDefinition {
    */
   model?: ModelName
 
+  /** Maximum inference steps for this agent. Omitted or -1 adds no ceiling; tighter host/remaining budgets still apply. */
+  maxSteps?: number
+
   /** Maximum subagent nesting depth. Defaults to the runtime limit. */
   maxSpawnDepth?: number
 
@@ -147,6 +150,8 @@ export interface AgentDefinition {
 
   /** MCP servers by name. Names cannot contain `/`. */
   mcpServers?: Record<string, MCPConfig>
+  /** Opaque references from a host-created session; these are not trust labels. */
+  mcpServerReferences?: Record<string, string>
 
   /**
    * Tools this agent can use.
@@ -330,6 +335,8 @@ export interface AgentDefinition {
       agentState: AgentState
       toolResult: ToolResultOutput[] | undefined
       stepsComplete: boolean
+      /** True when stepsComplete is due to an explicit fixed step cap; break out instead of continuing, or the cap re-triggers forever. */
+      hitStepCap?: boolean
       nResponses?: string[]
     }
   >
@@ -340,6 +347,16 @@ export interface AgentDefinition {
 // ============================================================================
 
 export interface AgentState {
+  /** Host-prepared source-cited discovery. It does not grant tool authority. */
+  repositoryContext?: {
+    schemaVersion: 1
+    agentType: string
+    userInputId: string
+    briefing: string
+    freshness: 'current' | 'unverified' | 'degraded'
+    actor: { runId: string; rootRunId: string; agentId: string }
+    metrics: { indexedCandidates: number; rememberedFacts: number; reused: boolean }
+  }
   agentId: string
   runId: string
   parentId: string | undefined

@@ -21,6 +21,7 @@ export function prepareTools({
           description: string | undefined
           parameters: unknown
         }
+        cache_control?: unknown
       }>
   toolChoice:
     | { type: 'function'; function: { name: string } }
@@ -46,14 +47,17 @@ export function prepareTools({
       description: string | undefined
       parameters: unknown
     }
+    cache_control?: unknown
   }> = []
 
   for (const tool of tools) {
     if (tool.type === 'provider-defined') {
       toolWarnings.push({ type: 'unsupported-tool', tool })
     } else {
+      const cacheControl = tool.providerOptions?.openaiCompatible?.cache_control
       openaiCompatTools.push({
         type: 'function',
+        ...(cacheControl === undefined ? {} : { cache_control: cacheControl }),
         function: {
           name: tool.name,
           description: tool.description,

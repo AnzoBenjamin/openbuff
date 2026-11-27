@@ -169,9 +169,13 @@ function discoverSkillsFromDirectory(
 function getDefaultSkillsDirs(
   cwd: string,
   includeProjectSkills: boolean,
+  homeDir: string | null | undefined,
+  includeGlobalSkills: boolean,
 ): string[] {
-  const home = os.homedir()
-  const globalDirs = [
+  const home = includeGlobalSkills
+    ? homeDir === undefined ? os.homedir() : homeDir
+    : null
+  const globalDirs = home === null ? [] : [
     // Global directories (Claude-compatible first, then Codebuff)
     path.join(home, '.claude', SKILLS_DIR_NAME),
     path.join(home, '.agents', SKILLS_DIR_NAME),
@@ -188,6 +192,10 @@ function getDefaultSkillsDirs(
 export type LoadSkillsOptions = {
   /** Working directory for project skills. Defaults to process.cwd() */
   cwd?: string
+  /** Captured home directory. null disables home lookup; undefined retains standalone defaults. */
+  homeDir?: string | null
+  /** Include home skill directories. Defaults to true; false never resolves ambient home. */
+  includeGlobalSkills?: boolean
   /** Optional specific skills directory path */
   skillsPath?: string
   /** Include project-local skill directories. Defaults to true for SDK compatibility. */
@@ -232,6 +240,8 @@ export async function loadSkills(
 ): Promise<SkillsMap> {
   const {
     cwd = process.cwd(),
+    homeDir,
+    includeGlobalSkills = true,
     skillsPath,
     includeProjectSkills = true,
     verbose = false,
@@ -241,7 +251,7 @@ export async function loadSkills(
 
   const skillsDirs = skillsPath
     ? [skillsPath]
-    : getDefaultSkillsDirs(cwd, includeProjectSkills)
+    : getDefaultSkillsDirs(cwd, includeProjectSkills, homeDir, includeGlobalSkills)
 
   for (const skillsDir of skillsDirs) {
     const dirSkills = discoverSkillsFromDirectory(skillsDir, verbose)

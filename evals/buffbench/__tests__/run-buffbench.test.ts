@@ -1,3 +1,4 @@
+import { createArtifactSink } from '../evaluation-artifacts'
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs'
 import os from 'os'
@@ -17,6 +18,7 @@ import {
   mergeIdiomPatternFindings,
   parseInstallScriptArgv,
   runTask,
+  runBuffBench,
   summarizeAgentRuns,
 } from '../run-buffbench'
 
@@ -532,42 +534,15 @@ describe('judgeCommitResult', () => {
       supplementalFiles: [],
       fileDiffs: [],
     }
-    // judge.ts resolves its debug-artifact path from ITS OWN __dirname
-    // (evals/buffbench) joined with '..', so the write lands in evals/.
-    // Assert the sanitized filenames exist there and that the raw-id path
-    // did NOT escape via '../' (pre-fix it would have written
-    // evals/task-<judge>-agent-output-error.json).
-    const judgeWriteDir = path.join(__dirname, '..', '..')
-    const sanitizedGemini = path.join(
-      judgeWriteDir,
-      'escape____task-judge-gemini-agent-output-error.json',
+    const judgeWriteDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'buffbench-judge-sink-'),
     )
-    const sanitizedGpt = path.join(
-      judgeWriteDir,
-      'escape____task-judge-gpt-agent-output-error.json',
-    )
-    // The unsanitized raw id would produce these traversal artifacts.
-    const escapedGemini = path.join(
-      judgeWriteDir,
-      'task-judge-gemini-agent-output-error.json',
-    )
-    const escapedGpt = path.join(
-      judgeWriteDir,
-      'task-judge-gpt-agent-output-error.json',
-    )
-    // Clean leftovers from earlier runs so the assertions are self-contained.
-    for (const file of [
-      sanitizedGemini,
-      sanitizedGpt,
-      escapedGemini,
-      escapedGpt,
-    ]) {
-      fs.rmSync(file, { force: true })
-    }
+    const artifactSink = createArtifactSink(judgeWriteDir)
 
     try {
       const result = await judgeCommitResult({
         client,
+        artifactSink,
         commit,
         contextFiles: {},
         agentDiff: '',
@@ -575,23 +550,13 @@ describe('judgeCommitResult', () => {
 
       expect(result.scoringStatus).toBe('all_judges_failed')
 
-      // The sanitized id (only [a-zA-Z0-9-]) produces a flat filename that
-      // stays exactly in judge's write directory ('escape/../task' has 4
-      // non-alphanumeric chars → 4 underscores).
-      expect(fs.existsSync(sanitizedGemini)).toBe(true)
-      expect(fs.existsSync(sanitizedGpt)).toBe(true)
-      // The raw-id traversal must never materialize.
-      expect(fs.existsSync(escapedGemini)).toBe(false)
-      expect(fs.existsSync(escapedGpt)).toBe(false)
+      const artifacts = fs.readdirSync(judgeWriteDir)
+      expect(artifacts).toHaveLength(2)
+      expect(
+        artifacts.every((file) => file.startsWith('escape____task-')),
+      ).toBe(true)
     } finally {
-      for (const file of [
-        sanitizedGemini,
-        sanitizedGpt,
-        escapedGemini,
-        escapedGpt,
-      ]) {
-        fs.rmSync(file, { force: true })
-      }
+      fs.rmSync(judgeWriteDir, { recursive: true, force: true })
     }
   })
 
@@ -1077,21 +1042,12 @@ describe('runTask proposal dry-run reporting', () => {
       )
       expect(traceJson.proposalDryRun.summary[0]).toContain('[dry-run]')
 
-      const lessonsFile = path.join(
-        __dirname,
-        '..',
-        'agent-lessons',
-        'agent-a.md',
-      )
+      const lessonsFile = path.join(logsDir, 'lessons', 'agent-a.md')
       const lessonsText = fs.readFileSync(lessonsFile, 'utf8')
       expect(lessonsText).toContain('### Proposal dry-run')
       expect(lessonsText).toContain('append system-prompt guidance')
     } finally {
       fs.rmSync(logsDir, { recursive: true, force: true })
-      fs.rmSync(path.join(__dirname, '..', 'agent-lessons'), {
-        recursive: true,
-        force: true,
-      })
     }
   })
 })
@@ -1277,6 +1233,20 @@ describe('cache recall eval', () => {
 })
 
 describe('summarizeAgentRuns', () => {
+  test('excludes empty errors but preserves absent/null legacy errors', () => {
+    const absent = makeEvalRun()
+    delete absent.error
+    const undefinedError = makeEvalRun({ error: undefined })
+    const nullError = { ...makeEvalRun(), error: null } as unknown as EvalRun
+    const emptyError = makeEvalRun({ error: '' })
+    const summary = summarizeAgentRuns(
+      makeAgentResults([absent, undefinedError, nullError, emptyError]),
+    )
+    expect(summary.validRuns).toEqual([absent, undefinedError, nullError])
+    expect(summary.runsExcludingFailures).toBe(summary.validRuns)
+    expect(summary.measuredRuns).toEqual([absent, undefinedError, nullError])
+  })
+
   test('excludes only the failing agent run instead of every run from that commit', () => {
     const healthyRun = makeEvalRun({ commitSha: 'same-commit' })
     const failedRun = makeEvalRun({
@@ -1360,5 +1330,291 @@ describe('summarizeAgentRuns', () => {
       measuredRun,
     ])
     expect(summary.measuredRuns).toEqual([measuredRun])
+  })
+})
+
+describe('runBuffBench finite monetary aggregates', () => {
+  async function runCostFixture(options: {
+    agents: readonly string[]
+    repeats: number
+    cost: number
+    auxiliaryFinishCount?: number
+    unsettledFinishCount?: number
+  }) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buffbench-costs-'))
+    const pendingRuns: Promise<unknown>[] = []
+    const releaseRuns: (() => void)[] = []
+    try {
+      const evalFile = path.join(root, 'eval.json')
+      fs.writeFileSync(
+        evalFile,
+        JSON.stringify({
+          repoUrl: 'offline-fixture',
+          evalCommits: [
+            {
+              id: 'fixed',
+              sha: 'fixed',
+              parentSha: 'parent',
+              spec: 'fixture',
+              prompt: 'fixture',
+              supplementalFiles: [],
+              fileDiffs: [],
+            },
+          ],
+        }),
+      )
+      const client = {
+        run: async (input: {
+          agent?: string
+          handleEvent?: (event: unknown) => void
+        }) => {
+          const unsettled =
+            options.unsettledFinishCount !== undefined && input.agent === 'a'
+          const finishCount =
+            (unsettled
+              ? options.unsettledFinishCount
+              : options.auxiliaryFinishCount) ?? 0
+          for (let index = 0; index < finishCount; index++) {
+            input.handleEvent?.({ type: 'finish', totalCost: Number.MAX_VALUE })
+          }
+          const result = {
+            output: {
+              type: 'structuredOutput',
+              value: {
+                analysis: 'fixture',
+                strengths: [],
+                weaknesses: [],
+                completionScore: 8,
+                codeQualityScore: 8,
+                overallScore: 8,
+              },
+            },
+          }
+          if (unsettled) {
+            await new Promise<void>((resolve) => releaseRuns.push(resolve))
+          }
+          return result
+        },
+      } as unknown as OpenbuffClient
+      return await runBuffBench({
+        evalDataPaths: [evalFile],
+        agents: [...options.agents],
+        repeats: options.repeats,
+        client,
+        artifactsRoot: path.join(root, 'artifacts'),
+        disableAnalysis: true,
+        runAgentOnCommitImpl: async ({ client: executionClient, agentId }) => {
+          if (options.unsettledFinishCount !== undefined) {
+            for (let index = 0; index < 2; index++) {
+              pendingRuns.push(
+                executionClient.run({
+                  agent: agentId,
+                  prompt: 'unsettled fixture',
+                }),
+              )
+            }
+          }
+          return {
+            diff: '',
+            contextFiles: {},
+            durationMs: 1,
+            cost: options.cost,
+            trace: [],
+            runOutcome: { termination: 'completed' },
+            costEvidence: { status: 'reported' },
+            retrievalFlow: {
+              queryCallCount: 0,
+              queryResultPaths: [],
+              successfulReadPaths: [],
+              relevantReadPaths: [],
+              irrelevantReadPaths: [],
+            },
+          }
+        },
+      })
+    } finally {
+      releaseRuns.forEach((release) => release())
+      await Promise.all(pendingRuns)
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  test('retains finite paid totals and unknown auxiliary cost semantics', async () => {
+    const result = await runCostFixture({
+      agents: ['a'],
+      repeats: 2,
+      cost: 1.25,
+    })
+    expect(result.agents.a.totalCost).toBe(2.5)
+    expect(result.agents.a.averageCost).toBe(1.25)
+    expect(result.spend.agentCostUsd).toBe(2.5)
+    expect(result.spend.availableAuxiliaryCostUsd).toBe(0)
+    expect(result.spend.unknownAuxiliaryCostAttempts).toBeGreaterThan(0)
+    expect(result.spend.wholeExperimentCostComplete).toBe(false)
+  })
+
+  test('retains finite available unsettled task costs without claiming completeness', async () => {
+    const result = await runCostFixture({
+      agents: ['a'],
+      repeats: 1,
+      cost: 1,
+      unsettledFinishCount: 1,
+    })
+    expect(result.spend.availableUnsettledTaskCostUsd).toBe(
+      2 * (Number.MAX_VALUE / 100),
+    )
+    expect(result.spend.wholeExperimentCostComplete).toBe(false)
+  })
+
+  test('retains reported finite auxiliary monetary evidence', async () => {
+    const result = await runCostFixture({
+      agents: ['a'],
+      repeats: 1,
+      cost: 1,
+      auxiliaryFinishCount: 1,
+    })
+    expect(result.spend.availableAuxiliaryCostUsd).toBe(
+      2 * (Number.MAX_VALUE / 100),
+    )
+    expect(result.spend.unknownAuxiliaryCostAttempts).toBe(0)
+    expect(result.spend.wholeExperimentCostComplete).toBe(true)
+  })
+
+  test.each([
+    { agents: ['a'], repeats: 2, cost: Number.MAX_VALUE },
+    { agents: ['a', 'b'], repeats: 1, cost: Number.MAX_VALUE },
+    { agents: ['a'], repeats: 1, cost: 1, auxiliaryFinishCount: 60 },
+    { agents: ['a'], repeats: 1, cost: 1, unsettledFinishCount: 60 },
+  ])('rejects finite-input aggregate overflow: %j', async (options) => {
+    await expect(runCostFixture(options)).rejects.toThrow(
+      /Aggregate monetary cost must be finite/,
+    )
+  })
+})
+
+describe('runTask proposal promotion gate (audit: gate never invoked in the live pipeline)', () => {
+  test('fires the promotion gate once per run with proposals and persists the decision', async () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'buffbench-test-'))
+    const client = {
+      run: async (input: { agent?: string; prompt?: string }) => {
+        if (input.agent === 'buffbench-lessons-extractor') {
+          return {
+            output: {
+              type: 'structuredOutput' as const,
+              value: {
+                lessons: [
+                  {
+                    whatWentWrong: 'Edited Python without reading idioms.',
+                    whatShouldHaveBeenDone:
+                      'Read agents/idioms/python.md first.',
+                  },
+                ],
+                proposals: [
+                  {
+                    kind: 'append_system_prompt_guidance',
+                    target: { agentId: 'agent-a' },
+                    guidance:
+                      'Before non-trivial Python edits, read agents/idioms/python.md.',
+                    rationale: 'Addresses the missing idiom-read lesson.',
+                  },
+                ],
+              },
+            },
+          }
+        }
+
+        return {
+          output: {
+            type: 'structuredOutput' as const,
+            value: {
+              analysis: 'ok',
+              strengths: [],
+              weaknesses: [],
+              completionScore: 6,
+              codeQualityScore: 6,
+              overallScore: 6,
+            },
+          },
+        }
+      },
+    } as unknown as OpenbuffClient
+
+    try {
+      const { agentResults, commitTraces } = await runTask({
+        client,
+        commit: {
+          id: 'promotion-gate-task',
+          sha: 'abcdef1234567890',
+          parentSha: 'parent',
+          spec: 'Use Python idioms.',
+          prompt: 'Make Python file handling idiomatic.',
+          supplementalFiles: [],
+          fileDiffs: [],
+        },
+        agents: ['agent-a'],
+        repoUrl: 'https://example.com/repo.git',
+        logsDir,
+        index: 0,
+        totalTasks: 1,
+        analyzerContext: {
+          agentDefinitions: [],
+          agentTypeDefinition: '',
+          testedAgentIds: ['agent-a'],
+        },
+        localAgentDefinitions: [
+          {
+            id: 'agent-a',
+            displayName: 'Agent A',
+            systemPrompt: 'You are agent A.',
+          },
+        ],
+        extractLessons: true,
+        printEvents: false,
+        disableAnalysis: true,
+        runAgentOnCommitImpl: async () => ({
+          diff: 'diff --git a/tool.py b/tool.py',
+          contextFiles: {},
+          durationMs: 10,
+          cost: 0,
+          trace: [],
+          retrievalFlow: {
+            queryCallCount: 0,
+            queryResultPaths: [],
+            successfulReadPaths: [],
+            relevantReadPaths: [],
+            irrelevantReadPaths: [],
+          },
+        }),
+      })
+
+      // One agent with proposals for this run → the gate fired exactly once.
+      expect(commitTraces).toHaveLength(1)
+      const decision =
+        agentResults[0]?.evalRun.proposalDryRun?.promotionDecision
+      expect(decision).toBeDefined()
+      expect(decision?.accepted).toBe(false)
+      // Fail-closed: paired per-task before/after scores do not exist inside
+      // a single live run, so the gate's own significance reason must be
+      // recorded — proving the gate FIRED rather than being skipped.
+      expect(decision?.reasons).toContain(
+        'significance required but no paired per-task scores provided',
+      )
+      // The comparison is constructed from this run's own scores with
+      // before == after, so the zero-delta reason is recorded too.
+      expect(
+        decision?.reasons.some((reason) => reason.startsWith('score delta')),
+      ).toBe(true)
+
+      // The decision is persisted into the run's trace artifact.
+      const traceFiles = fs
+        .readdirSync(logsDir)
+        .filter((file) => file.endsWith('.json') && !file.includes('ANALYSIS'))
+      const traceJson = JSON.parse(
+        fs.readFileSync(path.join(logsDir, traceFiles[0]!), 'utf8'),
+      )
+      expect(traceJson.proposalDryRun.promotionDecision).toEqual(decision)
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true })
+    }
   })
 })

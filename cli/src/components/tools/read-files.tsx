@@ -80,6 +80,14 @@ function ReadDiagnostics({ outputRaw }: { outputRaw: unknown }) {
         >{`… ${rows.length - READ_DIAGNOSTIC_MAX_ROWS} selector results hidden`}</text>
       ) : null}
       {rows.length > READ_DIAGNOSTIC_MAX_ROWS ||
+      rows.some(
+        (row) =>
+          row.error &&
+          typeof row.error === 'object' &&
+          typeof (row.error as Record<string, unknown>).message === 'string' &&
+          ((row.error as Record<string, unknown>).message as string).split('\n')
+            .length > READ_DIAGNOSTIC_MAX_MESSAGE_LINES,
+      ) ||
       getStructuredErrorMessages(outputRaw).some(
         (message) =>
           message.split('\n').length > READ_DIAGNOSTIC_MAX_MESSAGE_LINES,

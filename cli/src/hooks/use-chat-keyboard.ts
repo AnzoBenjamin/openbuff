@@ -36,6 +36,7 @@ export type ChatKeyboardHandlers = {
 
   // Input handlers
   onClearInput: () => void
+  onCancelEdit?: () => void
   onBackspaceExitMode: () => void
 
   // Stream handlers
@@ -109,6 +110,7 @@ export type UseChatKeyboardOptions = {
   handlers: ChatKeyboardHandlers
   /** Whether keyboard handling is disabled (e.g., during ask-user) */
   disabled?: boolean
+  isDisabled?: () => boolean
 }
 
 /**
@@ -123,6 +125,9 @@ function dispatchAction(
   handlers: ChatKeyboardHandlers,
 ): boolean {
   switch (action.type) {
+    case 'cancel-edit':
+      handlers.onCancelEdit?.()
+      return true
     case 'exit-input-mode':
       handlers.onExitInputMode()
       return true
@@ -301,13 +306,14 @@ export function useChatKeyboard({
   state,
   handlers,
   disabled = false,
+  isDisabled,
 }: UseChatKeyboardOptions): void {
   const lastKeyboardActivityRef = useRef<number>(0)
 
   useKeyboard(
     useCallback(
       (key: KeyEvent) => {
-        if (disabled) return
+        if (disabled || isDisabled?.() || key.defaultPrevented) return
 
         // Report keyboard activity for activity-aware features (throttled)
         const now = Date.now()
@@ -333,7 +339,7 @@ export function useChatKeyboard({
           key.preventDefault()
         }
       },
-      [state, handlers, disabled],
+      [state, handlers, disabled, isDisabled],
     ),
   )
 }

@@ -17,7 +17,9 @@ import type {
 
 type ToolName = 'query_index'
 
-function buildDiscoveryQuestion(input: CodebuffToolCall<ToolName>['input']): string {
+function buildDiscoveryQuestion(
+  input: CodebuffToolCall<ToolName>['input'],
+): string {
   const mode = input.mode ?? 'search'
   const query = input.query ?? ''
   let question = `query_index:${mode}:${query}`
@@ -29,7 +31,9 @@ function buildDiscoveryQuestion(input: CodebuffToolCall<ToolName>['input']): str
   return question.slice(0, 4000)
 }
 
-function buildSkipOutput(covering: VerifiedExcerpt[]): CodebuffToolOutput<ToolName> {
+function buildSkipOutput(
+  covering: VerifiedExcerpt[],
+): CodebuffToolOutput<ToolName> {
   const bounded = covering.slice(0, 5)
   const results = bounded.map((entry) => ({
     path: entry.path,
@@ -62,8 +66,12 @@ export const handleQueryIndex = (async (params: {
 }): Promise<{
   output: CodebuffToolOutput<ToolName>
 }> => {
-  const { previousToolCallFinished, toolCall, requestClientToolCall, agentState } =
-    params
+  const {
+    previousToolCallFinished,
+    toolCall,
+    requestClientToolCall,
+    agentState,
+  } = params
   await previousToolCallFinished
   const input = toolCall.input
   const question = buildDiscoveryQuestion(input)
@@ -87,7 +95,7 @@ export const handleQueryIndex = (async (params: {
   try {
     const excerpts = getVerifiedMemoryExcerpts(agentState, {
       limit: 5,
-      maxCharsPerExcerpt: 500,
+      maxCharsPerExcerpt: 2_000,
     })
     const queryText = [input.query ?? '', input.from ?? '', input.to ?? '']
       .filter((part) => typeof part === 'string' && part.length > 0)
@@ -106,6 +114,7 @@ export const handleQueryIndex = (async (params: {
     recordMemoryReuse(agentState, {
       tool: 'query_index',
       decision: cover.decision,
+      reason: cover.reason,
       served:
         cover.decision === 'skip' || cover.decision === 'narrow'
           ? cover.coveringExcerpts.length

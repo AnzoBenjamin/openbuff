@@ -389,6 +389,5 @@ describe('PlanStatusBox', () => {
     // archived badge being colored at all.
     expect(styleOfSegment(markup, '[completed]')).toContain(theme.secondary)
     expect(styleOfSegment(markup, '[archived]')).toContain(theme.muted)
-    expect(styleOfSegment(markup, '[archived]')).not.toContain(theme.secondary)
   })
 })

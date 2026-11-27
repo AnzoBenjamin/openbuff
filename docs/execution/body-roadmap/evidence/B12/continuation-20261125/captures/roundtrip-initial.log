@@ -1,0 +1,49 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:
+Using environment: dev
+84 |         event.type === 'tool_result' &&
+85 |         event.toolName === 'record_decision' &&
+86 |         JSON.stringify(event.output).includes(B12_UNRELATED)
+87 |       )
+88 |         cancelController?.abort(
+89 |           new Error('Owned B12 cancellation after capture'),
+                      ^
+error: expect(received).toBeDefined()
+
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:89:18)
+(fail) B12 actual local handler → SQLite → fresh process → next core prompt > completed retains explicit own fact, decision and rationale across a new process [164.25ms]
+84 |         event.type === 'tool_result' &&
+85 |         event.toolName === 'record_decision' &&
+86 |         JSON.stringify(event.output).includes(B12_UNRELATED)
+87 |       )
+88 |         cancelController?.abort(
+89 |           new Error('Owned B12 cancellation after capture'),
+                      ^
+error: expect(received).toBeDefined()
+
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:89:18)
+(fail) B12 actual local handler → SQLite → fresh process → next core prompt > failed retains explicit own fact, decision and rationale across a new process [59.56ms]
+84 |         event.type === 'tool_result' &&
+85 |         event.toolName === 'record_decision' &&
+86 |         JSON.stringify(event.output).includes(B12_UNRELATED)
+87 |       )
+88 |         cancelController?.abort(
+89 |           new Error('Owned B12 cancellation after capture'),
+                      ^
+error: expect(received).toBeDefined()
+
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:89:18)
+(fail) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled retains explicit own fact, decision and rationale across a new process [55.79ms]
+
+ 0 pass
+ 7 filtered out
+ 3 fail
+ 12 expect() calls
+Ran 3 tests across 1 file. [1035.00ms]

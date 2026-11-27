@@ -100,6 +100,7 @@ export function getUserMessage(
   }
 }
 
+/** Local notices and command results are complete; pending operation rows opt out. */
 export function getSystemMessage(content: string | ContentBlock[]): ChatMessage
 export function getSystemMessage(
   blocks: ContentBlock[],
@@ -113,6 +114,7 @@ export function getSystemMessage(
     return {
       id: generateMessageId('sys'),
       variant: 'ai' as const,
+      isComplete: true,
       content,
       timestamp: formatTimestamp(),
     }
@@ -121,6 +123,7 @@ export function getSystemMessage(
     return {
       id: generateMessageId('sys'),
       variant: 'ai' as const,
+      isComplete: true,
       content: legacyContent,
       blocks: content,
       timestamp: formatTimestamp(),
@@ -129,6 +132,7 @@ export function getSystemMessage(
   return {
     id: generateMessageId('sys'),
     variant: 'ai' as const,
+    isComplete: true,
     content: '',
     blocks: content,
     timestamp: formatTimestamp(),

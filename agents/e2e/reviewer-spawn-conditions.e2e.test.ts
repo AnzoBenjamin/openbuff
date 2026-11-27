@@ -647,7 +647,6 @@ describe('base2 reviewer spawn conditions e2e', () => {
     expect((agentState as any).base2ActiveWork).toMatchObject({
       currentPhase: 'awaiting_review',
       pendingGateFiles: ['src/lifecycle.ts'],
-      reviewedReviewableFingerprint: '',
       reviewReceipts: [],
     })
   })

@@ -1,0 +1,44 @@
+{
+  "runtime": "1.3.5",
+  "assurance": "DI/stub-only current-source runtime probes",
+  "providerRequests": 0,
+  "externalNetworkCalls": 0,
+  "probes": [
+    {
+      "probe": "budget-missing-output-loop",
+      "budgetMessages": 3,
+      "remainingSteps": 1,
+      "correctionMessages": 2,
+      "finishStatuses": [
+        "cancelled"
+      ],
+      "outputType": "error",
+      "terminator": "probe explicitly aborted after the third budget stop; no natural termination was observed"
+    },
+    {
+      "probe": "generator-error-false-completion",
+      "finishStatuses": [
+        "completed"
+      ],
+      "terminalStatuses": [
+        "completed"
+      ],
+      "outputType": "lastMessage",
+      "receiptStatus": "completed",
+      "receiptOutcome": "ok",
+      "receiptErrors": [],
+      "outputCarriesSyntheticFailure": true
+    },
+    {
+      "probe": "generator-abort-false-completion",
+      "parentSignalAborted": true,
+      "finishStatuses": [
+        "completed"
+      ],
+      "terminalStatuses": [
+        "completed"
+      ],
+      "outputType": "lastMessage"
+    }
+  ]
+}

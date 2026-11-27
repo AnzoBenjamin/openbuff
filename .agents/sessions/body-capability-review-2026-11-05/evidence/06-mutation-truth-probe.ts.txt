@@ -1,0 +1,32 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { WorkspaceMutationBroker } from '/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts'
+import { createNodeFileSystem } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/node-filesystem.ts'
+import { changeFiles } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/change-file.ts'
+import { getConfirmedAppliedActionsV1 } from '/home/ben/Code/CLI/openbuff/common/src/tools/results/filesystem.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = await fs.mkdtemp(path.join(evidenceDir, '06-truth-fixture-'))
+const cwd = path.join(fixtureRoot, 'workspace')
+await fs.mkdir(cwd)
+const broker = await WorkspaceMutationBroker.create({ cwd, stateDir: path.join(fixtureRoot, 'state') })
+const base = createNodeFileSystem({ mutationBroker: broker })
+const target = path.join(cwd, 'a.ts')
+await fs.writeFile(target, 'original\n')
+let first = true
+const calls: unknown[] = []
+const adapter = Object.create(base)
+adapter.conditionalCommit = async (p: any, bytes: any, options: any) => {
+  if (first) {
+    first = false
+    await fs.writeFile(target, 'fixture external writer\n')
+  }
+  const result = await base.conditionalCommit!(p, bytes, options)
+  calls.push({ content: String(bytes), expectedHash: options.expectedHash, adapterApplied: result.applied })
+  return result
+}
+const output = await changeFiles({ parameters: [{ type: 'file', path: 'a.ts', content: 'intended agent change\n' }], cwd, fs: adapter })
+const mutation = output[0]?.value as any
+const report = { fixtureRoot, adapterCalls: calls, mutation, confirmedActions: getConfirmedAppliedActionsV1(mutation), final: await fs.readFile(target, 'utf8') }
+await fs.writeFile(path.join(evidenceDir, '06-mutation-truth-probe.json'), `${JSON.stringify(report, null, 2)}\n`)
+console.log(JSON.stringify(report, null, 2))

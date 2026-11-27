@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from 'bun:test'
+import { afterAll, describe, expect, it, mock } from 'bun:test'
 
 import { JobRegistry } from '@codebuff/common/util/job-registry'
 
@@ -12,7 +12,12 @@ import type { JobOwner } from '@codebuff/common/util/job-registry'
 let capturedBrowserLogsOwner: Record<string, unknown> | undefined
 let browserLogsCallCount = 0
 
+// Registry-wide leak class prevented: raw mock.module registrations are process-wide and survive mock.restore(), so sibling sdk browser-logs suites would resolve through this override forever — the afterAll below re-registers the captured real browserLogs/stopBrowserSessionsByOwner for them. This is the first registration for the specifier in this file, so the inline snapshot (captured from the real module before this registration) is untainted.
+const realBrowserLogsModule = { ...(await import('../tools/browser-logs')) }
 mock.module('../tools/browser-logs', () => ({
+  // Real exports first (registry-wide leak guard): the factory must spread
+  // the captured real module so sibling suites keep the un-overridden exports.
+  ...realBrowserLogsModule,
   browserLogs: async (
     _input: unknown,
     owner: Record<string, unknown>,
@@ -66,6 +71,13 @@ function resolveRunOwner(agentState: {
 }
 
 describe('cross-turn background-job ownership', () => {
+  afterAll(() => {
+    // Re-register the untouched real module: mock.module registrations are
+    // process-wide and survive mock.restore(), so sibling suites co-scheduled
+    // in this worker keep resolving the real browser-logs module.
+    mock.module('../tools/browser-logs', () => ({ ...realBrowserLogsModule }))
+  })
+
   it('two consecutive resolutions from the same session share one owner id', async () => {
     // Turn N: fresh session state, no runId yet (agentId fallback).
     const ownerTurnN = resolveRunOwner({ agentId: 'main-agent' })

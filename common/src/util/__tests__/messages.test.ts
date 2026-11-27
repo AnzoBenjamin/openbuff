@@ -1745,4 +1745,18 @@ describe('jsonToolResult', () => {
 
     expect(value).toEqual(snapshot)
   })
+
+  it('preserves __proto__ as an own JSON member without changing the result prototype', () => {
+    const source = JSON.parse(
+      '{"__proto__":{"marker":1}}',
+    ) as Parameters<typeof jsonToolResult>[0]
+    const result = jsonToolResult(source)[0].value as unknown as Record<
+      string,
+      unknown
+    >
+
+    expect(Object.hasOwn(result, '__proto__')).toBe(true)
+    expect(result.__proto__).toEqual({ marker: 1 })
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype)
+  })
 })

@@ -12,17 +12,17 @@ import type { CiEnv } from './types/contracts/env'
  * Get CI environment values.
  * Returns a snapshot of the current process.env values for CI-specific vars.
  */
-export const getCiEnv = (): CiEnv => ({
-  CI: process.env.CI,
-  GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
-  RENDER: process.env.RENDER,
-  IS_PULL_REQUEST: process.env.IS_PULL_REQUEST,
-  CODEBUFF_GITHUB_TOKEN: process.env.CODEBUFF_GITHUB_TOKEN,
+export const getCiEnv = (environment: Readonly<Record<string, string | undefined>> = process.env): CiEnv => ({
+  CI: environment.CI,
+  GITHUB_ACTIONS: environment.GITHUB_ACTIONS,
+  RENDER: environment.RENDER,
+  IS_PULL_REQUEST: environment.IS_PULL_REQUEST,
+  CODEBUFF_GITHUB_TOKEN: environment.CODEBUFF_GITHUB_TOKEN,
   CODEBUFF_CHATGPT_OAUTH_TOKEN:
-    process.env.CODEBUFF_CHATGPT_OAUTH_TOKEN ??
-    process.env.OPENBUFF_CHATGPT_OAUTH_TOKEN,
-  OPENBUFF_CHATGPT_OAUTH_TOKEN: process.env.OPENBUFF_CHATGPT_OAUTH_TOKEN,
-  LINKUP_API_KEY: process.env.LINKUP_API_KEY,
+    environment.CODEBUFF_CHATGPT_OAUTH_TOKEN ??
+    environment.OPENBUFF_CHATGPT_OAUTH_TOKEN,
+  OPENBUFF_CHATGPT_OAUTH_TOKEN: environment.OPENBUFF_CHATGPT_OAUTH_TOKEN,
+  LINKUP_API_KEY: environment.LINKUP_API_KEY,
 })
 
 /**

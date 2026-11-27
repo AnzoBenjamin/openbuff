@@ -1,0 +1,160 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/common/src/util/__tests__/strict-project-read-policy.test.ts:
+(pass) authenticated opt-in project-only read policy > derivation reuses the admission capture and is monotonic [1.33ms]
+(pass) authenticated opt-in project-only read policy > both resolvers admit benign source and deny sensitive/temp/external targets [2.59ms]
+(pass) authenticated opt-in project-only read policy > ambient or rebound sandbox policy cannot widen strict reads [1.05ms]
+(pass) authenticated opt-in project-only read policy > forged, cloned and wrong-project tokens fail closed [0.59ms]
+(pass) authenticated opt-in project-only read policy > retargeting a selected root never recaptures the derived boundary [0.74ms]
+(pass) authenticated opt-in project-only read policy > non-opt-in unrestricted control is unchanged [1.47ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:
+Using environment: dev
+(pass) strict root skill bootstrap read boundary > explicit outside skills are withheld on fresh strict startup, ordinary control unchanged [118.91ms]
+(pass) strict root skill bootstrap read boundary > strict continuation removes inherited outside skill bytes without disk fallback [44.26ms]
+(pass) strict root skill bootstrap read boundary > a hard-linked project skill is not loaded through raw bootstrap [35.41ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-filesystem.test.ts:
+(pass) opened-target strict project read views > benign byte/text/directory reads retain bounded view contracts [34.51ms]
+(pass) opened-target strict project read views > sensitive, owned-temp, external, symlink, hardlink and special-file targets never return bytes [8.76ms]
+(pass) opened-target strict project read views > a symlink substituted immediately before a body read is refused before capture [2.33ms]
+(pass) opened-target strict project read views > a newly created hardlink is refused before a body read [1.59ms]
+(pass) opened-target strict project read views > replacement after capture is refused instead of publishing the held old file [1.62ms]
+(pass) opened-target strict project read views > an intermediate directory swap cannot redirect a held traversal [1.24ms]
+(pass) opened-target strict project read views > unsupported/decorated adapters fail unavailable without reading raw host or custom bytes [0.84ms]
+(pass) opened-target strict project read views > an unverified custom descriptor-open seam cannot fall back to raw host files [0.34ms]
+(pass) opened-target strict project read views > rebound sandbox cannot weaken guarded reads and ordinary unrestricted access is unchanged [0.39ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-actors.test.ts:
+Using environment: dev
+(pass) SDK admission and scoped strict read attribution > static opt-in denies sensitive/temp reads despite actor/root/policy tool-param tampering [101.62ms]
+(pass) SDK admission and scoped strict read attribution > restored template JSON cannot discard admission strictness or select a different root [84.62ms]
+(pass) SDK admission and scoped strict read attribution > parent strictness inherits to a non-opt-in child (in process) [79.55ms]
+(pass) SDK admission and scoped strict read attribution > parent strictness inherits to a non-opt-in child (real supervised process) [1205.53ms]
+(pass) SDK admission and scoped strict read attribution > fresh root discovery uses the guarded read view instead of loading hard-linked knowledge [137.73ms]
+(pass) SDK admission and scoped strict read attribution > optional reads and metadata tools use the same strict actor view [119.88ms]
+(pass) SDK admission and scoped strict read attribution > strict children do not globally switch their non-opt-in parent to project mode [71.44ms]
+(pass) SDK admission and scoped strict read attribution > non-opt-in unrestricted control ignores forged strictness in restored JSON [71.43ms]
+(pass) SDK admission and scoped strict read attribution > unguarded search/index/control readers and cached repository source refuse before dispatch [40.73ms]
+(pass) parent-owned supervised read registry > real guarded reads reject root/sibling/issuer/identity substitution and retain parent cancellation [23.04ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-management-agents.test.ts:
+Using environment: dev
+(pass) actual SDK read-only memory-management agents > the manager joins actual retrieval and independent source reads without a manager model call [344.58ms]
+(pass) actual SDK read-only memory-management agents > declared read-only roles refuse mutation, memory promotion, credentials and outside file reads [157.61ms]
+(pass) actual SDK read-only memory-management agents > a strict manager cannot be widened by an unflagged retrieval child [197.63ms]
+(pass) actual SDK read-only memory-management agents > an explicit non-opt-in control retains existing unrestricted reads [130.28ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted retrieval child cannot produce a falsely complete maintenance report [130.10ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted reviewer preserves retrieval and reports partial, not applied work [151.53ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-project-trust.test.ts:
+Using environment: dev
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-lUhy79/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-lUhy79/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-lUhy79/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-lUhy79/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > trustProjectConfig=%s reaches the session and skill dispatch [105.58ms]
+(pass) actual SDK run project trust intake > trustProjectConfig=%s reaches the session and skill dispatch [48.31ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-rBf8TV/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-rBf8TV/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-rBf8TV/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-rBf8TV/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > trustProjectConfig=%s reaches the session and skill dispatch [27.77ms]
+(pass) actual SDK run project trust intake > a CLI process grant reaches a real SDK run [22.73ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-aWRsVA/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-aWRsVA/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-aWRsVA/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-aWRsVA/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > an explicit SDK refusal wins over stored, process and environment grants [25.58ms]
+(pass) actual SDK run project trust intake > an explicit SDK grant wins over a stored refusal [35.70ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-b8VQUQ/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-b8VQUQ/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-b8VQUQ/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-b8VQUQ/home/.claude/skills/project-only'
+(pass) actual SDK run project trust intake > an explicit host snapshot with trust=%s is authoritative over ambient and run-option decisions [18.54ms]
+(pass) actual SDK run project trust intake > an explicit host snapshot with trust=%s is authoritative over ambient and run-option decisions [17.86ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-DzLRbF/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-DzLRbF/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-DzLRbF/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-DzLRbF/home/.claude/skills/project-only'
+(pass) actual SDK continued-run trust refresh > changing openbuff.json invalidates a stored grant and removes old project skills from the continued session [34.95ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-6Elb7o/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-6Elb7o/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-6Elb7o/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-6Elb7o/home/.claude/skills/project-only'
+(pass) actual SDK continued-run trust refresh > changing .agents/mcp.json invalidates a stored grant and removes old project skills from the continued session [42.61ms]
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-8r7Hea/home/.agents/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-8r7Hea/home/.agents/skills/project-only'
+[skill] loadSkillFromDisk skipped project-only in /tmp/openbuff-run-trust-8r7Hea/home/.claude/skills: ENOENT: no such file or directory, stat '/tmp/openbuff-run-trust-8r7Hea/home/.claude/skills/project-only'
+(pass) actual SDK continued-run trust refresh > revoking trust for a continued run does not mutate its previously trusted checkpoint [31.80ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-state-home-policy.test.ts:
+Using environment: dev
+(pass) null home knowledge performs no filesystem or ambient-home lookup [1.19ms]
+(pass) explicit home knowledge reads only selected real bytes without ambient fallback [2.52ms]
+(pass) explicit home skills retain home and project precedence without probing ambient home [2.40ms]
+(pass) null home and disabled global skills retain project skills without any home search [1.24ms]
+(pass) an explicit skills directory remains authoritative with home and global discovery disabled [0.90ms]
+(pass) omitted standalone home preserves legacy discovery through an owned ambient-home substitute [0.98ms]
+(pass) initial state uses selected home and project skills while caller knowledge wins [4.72ms]
+(pass) initial state with no home retains explicit caller knowledge and project skills [1.04ms]
+(pass) continued isolated state discards previous automatic home inputs and reloads project skills [2.17ms]
+(pass) continued selected home replaces old home knowledge and preserves explicit override precedence [1.61ms]
+(pass) generateInitialRunState forwards selected home and global skill policy [0.96ms]
+(pass) actual SDK fresh and continued runs consume their captured home and global policies [95.85ms]
+(pass) actual SDK fresh and continued relative skills resolve against captured invocation cwd [38.42ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/supervised-execution-identity.test.ts:
+Using environment: dev
+(pass) supervised descendant authority with real host registries > ordinary descendants retain the tighter original action deadline and request cancellation [3.77ms]
+(pass) supervised descendant authority with real host registries > infrastructure descendants inherit their authenticated actor-operation cap and exhausted actions dispatch nothing [4.94ms]
+(pass) supervised descendant authority with real host registries > descriptive descendants cannot fall back to outer authority when authenticated lookups are absent [1.04ms]
+(pass) parent-scoped supervised execution identity > workspace snapshots cross the bridge only for registered child actors, without renewing actions [2.27ms]
+(pass) parent-scoped supervised execution identity > initial supervised host-operation child uses the captured actor and context without a fabricated B02 attempt [0.29ms]
+(pass) parent-scoped supervised execution identity > local runtime registers actual actor IDs and registered parent ancestry [0.55ms]
+(pass) parent-scoped supervised execution identity > child awaits the existing nonce-preserving bridge round trip before using registered action [1.65ms]
+(pass) parent-scoped supervised execution identity > host-issued run registration carries exact parent context and accepts registered descendants only [0.41ms]
+(pass) parent-scoped supervised execution identity > supervised infrastructure descendants retain the original scoped context and reject descriptive spoofing [0.23ms]
+(pass) parent-scoped supervised execution identity > requires acknowledged action and validates original and forwarded inputs separately [0.39ms]
+(pass) parent-scoped supervised execution identity > rejects sibling/root actor descriptors and parent cancellation for tools and MCP [0.39ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/filesystem-sandbox.test.ts:
+Using environment: dev
+(pass) filesystem sandbox configuration reaches actual agent runs > default runs read config, logs, outlines, subtrees, and terminal cwd outside the project [434.83ms]
+(pass) filesystem sandbox configuration reaches actual agent runs > default writes create and overwrite external files through the mutation broker [77.78ms]
+(pass) filesystem sandbox configuration reaches actual agent runs > project mode blocks traversal and sensitive reads [35.49ms]
+(pass) filesystem sandbox configuration reaches actual agent runs > external glob and code search work with the unrestricted policy [8.70ms]
+(pass) filesystem sandbox configuration reaches actual agent runs > project mode applies additional writable roots on the next run [82.10ms]
+(pass) concurrent policies stay isolated, including asynchronous filesystem resolution [1.39ms]
+(pass) project allowPaths permits exact roots and children but rejects siblings and symlink escapes [2.82ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/read-files.test.ts:
+(pass) getFilesStructured > structured v1 results > returns explicit per-selector success and failure items [6.14ms]
+(pass) getFilesStructured > structured v1 results > keeps template state out of content markers and reads large files fully [9.04ms]
+(pass) getFilesStructured > structured v1 results > exposes an edit capability for a large ranged slice under the 10MB read ceiling [15.09ms]
+(pass) getFilesStructured > structured v1 results > does not mint an edit capability without a runtime issuer [0.51ms]
+(pass) getFilesStructured > structured v1 results > does not mistake ordinary marker-like source text for status [0.34ms]
+(pass) getFilesStructured > structured v1 results > [SEC-H01] blocks case variants and sensitive canonical symlink targets [0.40ms]
+(pass) getFilesStructured > structured v1 results > applies a host fileFilter to the owned-temp policy alias [0.44ms]
+(pass) getFilesStructured > structured v1 results > keeps the mandatory sensitive blocklist active for owned-temp basenames [0.82ms]
+(pass) getFilesStructured > structured v1 results > [COR-M11] returns typed binary and unsupported-encoding failures without capabilities [0.87ms]
+(pass) getFilesStructured > structured v1 results > [PERF-M01] snapshots duplicate aliases and mixed selectors for one canonical path once [0.57ms]
+(pass) getFilesStructured > structured v1 results > [PERF-M01] caps active unique snapshots at READ_SNAPSHOT_CONCURRENCY [1.08ms]
+(pass) getFilesStructured > structured v1 results > [ERR-M04] reads an oversized range through one bounded text-range operation [1.09ms]
+(pass) getFilesStructured > structured v1 results > reads distant oversized ranges as independent bounded windows [0.56ms]
+(pass) getFilesStructured > structured v1 results > mints authenticated v4 capabilities when the bounded view supplies raw basis [0.68ms]
+(pass) getFilesStructured > structured v1 results > proper-subset range exposes only its rendered-range capability [0.78ms]
+(pass) getFilesStructured > structured v1 results > whole-file range exposes one capability spanning its own bounds [0.90ms]
+(pass) getFilesStructured > structured v1 results > oversized range-window read exposes only its bounded capability [11.78ms]
+(pass) getFilesStructured > structured v1 results > large full-snapshot range still exposes only its range capability [27.47ms]
+(pass) getFilesStructured > structured v1 results > [ERR-M04] returns typed unsupported without retrying when range capability is absent [0.48ms]
+(pass) getFilesStructured > keeps a BOM and later U+FEFF in the verified raw source while rendering observation text [0.88ms]
+(pass) getFilesStructured > unbounded custom views remain display-only and reject unpaired string surrogates [0.76ms]
+(pass) getFilesStructured > an explicitly incomplete bounded window cannot acquire authority from covering numeric bounds [0.73ms]
+(pass) getFilesStructured > legacy or missing bounded basis grants no authority and explicit unknown EOF is unsupported [0.72ms]
+(pass) getFilesStructured > decorating readFile prevents both inherited bounded readers from serving host bytes [0.51ms]
+(pass) getFilesStructured > a bounded whole-read overflow after a small stat never calls unbounded readFile [0.27ms]
+(pass) getFilesStructured > explicit final-empty ranges stay addressable while omitted ends use visible lines [0.55ms]
+(pass) getFilesStructured > [SEC-H02] optional file reads preserve not-found, blocked, and I/O states [0.49ms]
+(pass) getFilesStructured > optional file reads forward cancellation and reject before opening or returning a cancelled source [3.33ms]
+(pass) getFilesStructured > [COR-M06] preserves returned v1 successes and fills one result per missing selector [2.88ms]
+(pass) getFilesStructured > correlates reordered same-path range overrides by coordinates [2.28ms]
+(pass) getFilesStructured > whole-file editAnchor with edit_transaction replace_range > rejects legacy explicit range fields alongside a capability [3.33ms]
+(pass) getFilesStructured > whole-file editAnchor with edit_transaction replace_range > whole-file capability alone derives its exact bounds and hash [0.91ms]
+(pass) getFilesStructured — allowlisted external read roots > reads a file inside an allowlisted root [0.85ms]
+(pass) getFilesStructured — allowlisted external read roots > refuses credentials.json inside an allowlisted root [0.23ms]
+(pass) getFilesStructured — allowlisted external read roots > applies a host fileFilter to the external-read policy alias [0.31ms]
+(pass) read-files text encodings and notebooks > decodes BOM-marked UTF-16LE and UTF-16BE as display-only text [2.18ms]
+(pass) read-files text encodings and notebooks > renders notebook source cells with indices and omits stored outputs [0.62ms]
+
+ 113 pass
+ 0 fail
+ 679 expect() calls
+Ran 113 tests across 10 files. [8.02s]

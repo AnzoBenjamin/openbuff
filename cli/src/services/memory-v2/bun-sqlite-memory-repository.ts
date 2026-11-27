@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -10,6 +10,53 @@ import {
   type Stats,
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
+import { checkSQLiteIntegrity } from './sqlite-integrity-check'
+import {
+  ARCHIVE_ORIGINAL_DDL,
+  ArchiveInputError,
+  ArchiveCapacityError,
+  captureArchiveRetention,
+  archiveRetentionReceipt,
+  archiveSnapshotAdmissible,
+  putArchiveOriginals,
+  enforceArchiveRetention,
+  readOriginalBodyPage,
+  searchOriginalArchive,
+  prepareOriginalArchiveSnapshot,
+} from './context-archive-original-store'
+import {
+  KNOWLEDGE_PROJECTION_DDL,
+  KNOWLEDGE_FTS_DDL,
+  KNOWLEDGE_PRODUCER_VERSION,
+  applyKnowledgeEvent,
+  advanceKnowledgeCursor,
+  knowledgeCursor,
+  clearKnowledgeProjection,
+  exactKnowledgeIdentity,
+  knowledgeFreshnessKey,
+  type KnowledgeObservationState,
+  type KnowledgeTaskState,
+} from './knowledge-projection'
+import {
+  knowledgeQueryPlan,
+  readKnowledgeQuery,
+  scanKnowledgeQuery,
+  type KnowledgeQueryRows,
+} from './knowledge-query'
+import {
+  migrateContextArchiveSchema,
+  migrateArchivePage,
+  archiveFtsAvailable,
+  prepareArchiveSnapshot,
+  putArchiveSnapshot,
+  readArchiveSnapshot,
+  collectArchiveOrphans,
+  repairArchiveFts,
+  disableArchiveFtsTriggers,
+  archiveSnapshotId,
+  type ArchiveManifestRow,
+} from './context-archive-store'
 
 import {
   MemoryAppendRequestSchema,
@@ -21,6 +68,7 @@ import {
   MemoryHealthRequestSchema,
   MemoryRebuildRequestSchema,
   MemoryRetrievalRequestSchema,
+  MemoryObservationSchema,
   MemoryRetrievalResultSchema,
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
@@ -35,6 +83,7 @@ import {
   type MemoryHealthRequest,
   type MemoryOperationError,
   type MemoryQueryOutcome,
+  type MemoryProvenance,
   type MemoryRebuildOutcome,
   type MemoryRebuildRequest,
   type MemoryRetrievalRequest,
@@ -55,6 +104,17 @@ import {
   type GCRelevantEnvelope,
 } from '../../../../common/src/util/compaction-eligibility'
 import type {
+  ContextArchiveSnapshot,
+  ContextArchiveBody,
+  ContextArchiveBodyPageRequest,
+  ContextArchiveBodyPageOutcome,
+  ContextArchiveRetentionPolicy,
+  ContextArchiveRetentionReceipt,
+} from '../../../../common/src/types/context-archive'
+import { sanitizeFtsQuery } from '../../../../common/src/util/fts5-query'
+import type {
+  ContextArchiveSearchMatch,
+  ContextArchiveSearchOutcome,
   GcCandidateSelection,
   MemoryObservationStatusEntry,
   MemoryObservationStatusReadRequest,
@@ -70,6 +130,21 @@ import {
   type ContradictionCandidate,
 } from '../../../../common/src/util/contradiction-detector'
 import type { ConceptCorpusEntry, ConceptExpansion } from './concept-index'
+import {
+  MemoryPlaybookSchema,
+  PlaybookCountersSchema,
+  computeTriggerSignature,
+  type MemoryPlaybook,
+  type PlaybookEnforcement,
+  type PlaybookGateOutcome,
+  type PlaybookScope,
+  type PlaybookStatus,
+  type PlaybookTrigger,
+} from '../../../../common/src/types/memory-playbook'
+import type {
+  PlaybookStoreContract,
+  PlaybookUpsertInput,
+} from '../../../../common/src/types/contracts/playbook-store'
 
 export type RuntimeNeutralMemoryRepositoryV2 = MemoryRepositoryV2
 export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
@@ -82,17 +157,42 @@ export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
  * closing the window where its GC selection (unaware of claim.reinforced)
  * could archive a reinforced observation and where its projection rebuild
  * could leave claim_dedup stale.
+ *
+ * Bumped 3 -> 4 by the context-archive persistence tables (the cross-session
+ * recall_context source): the additive DDL is idempotent, so a v3 store
+ * upgrades in place, while the existing version > SCHEMA_VERSION guard makes
+ * an OLDER binary fail closed on a v4 store — a pre-archive build sharing
+ * this file can never open it, so it cannot compact or rebuild a store whose
+ * context_archive_* side tables it does not maintain.
+ *
+ * Version 5 adds current knowledge and shared archive bodies. Version 6
+ * gives each checked archive manifest an immutable identity; timestamp
+ * collisions no longer overwrite actions or ordered message memberships.
+ * Version 7 adds immutable original-text references and transactional retention;
+ * older writers must not bypass pins, expiry or persistent cutoff records.
  */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 7
 const DEFAULT_DATABASE_PATH = join('.openbuff', 'memory', 'memory-v2.sqlite')
 const DEFAULT_BUSY_TIMEOUT_MS = 2_500
 const MAX_BUSY_TIMEOUT_MS = 10_000
 const PAGE_SIZE = 250
-const MAX_QUERY_EVENTS = 10_000
-const MAX_QUERY_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_EVENTS = 10_000
 const GC_SELECT_LIMIT = 10_000
 const COMPACTION_APPLY_MAX = 100
+/** Context-archive TTL: recall only surfaces recent pre-compaction context. */
+const CONTEXT_ARCHIVE_TTL_MS = 30 * 24 * 3600 * 1000
+/** Max snapshots the TTL prune removes per persist flush (bounded work). */
+const CONTEXT_ARCHIVE_PRUNE_CAP = 500
+/** Default/capped snapshot count for loadContextArchiveSnapshots. */
+const CONTEXT_ARCHIVE_LOAD_LIMIT_DEFAULT = 24
+const CONTEXT_ARCHIVE_LOAD_LIMIT_MAX = 1000
+/** Default/capped match count and internal scan cap for searchContextArchive. */
+const CONTEXT_ARCHIVE_SEARCH_LIMIT_DEFAULT = 6
+const CONTEXT_ARCHIVE_SEARCH_LIMIT_MAX = 64
+const CONTEXT_ARCHIVE_SEARCH_SCAN_CAP = 500
+/** Snippet shape: up to 120 chars of lead-in, 600 chars total. */
+const CONTEXT_ARCHIVE_SNIPPET_CONTEXT = 120
+const CONTEXT_ARCHIVE_SNIPPET_CHARS = 600
 /** Metadata key tracking the claim_dedup cold-start backfill cursor. */
 const CLAIM_DEDUP_BACKFILL_KEY = 'claim_dedup_backfill'
 /** Event types the shared P6 compaction-eligibility selection consumes. */
@@ -232,6 +332,10 @@ export interface MemoryV2Health {
 }
 
 export interface BunSQLiteMemoryRepositoryOptions {
+  /** Host-selected once at open; never taken from model/persist request data. */
+  contextArchiveRetention?: ContextArchiveRetentionPolicy
+  /** Deterministic storage clock for owned fixtures/hosts. */
+  contextArchiveNow?: () => number
   repositoryRoot?: string
   databasePath?: string
   busyTimeoutMs?: number
@@ -350,12 +454,6 @@ interface PreparedDatabasePath {
   existingIdentity: FileIdentity | null
 }
 
-interface QueryAdmissionRow {
-  sequence: number
-  payload_bytes: number
-  metadata_bytes: number
-}
-
 interface UsageRow {
   observation_id: string
   used_count: number
@@ -375,6 +473,35 @@ interface ObservationStatusRow {
   entity_id: string
   task_id: string | null
   state_json: string
+  claim_state_json?: string | null
+}
+
+interface PlaybookRow {
+  playbook_id: string
+  workspace_id: string
+  task_id: string | null
+  title: string
+  instruction: string
+  trigger_json: string
+  scope_json: string
+  status: string
+  enforcement: string
+  counters_json: string
+  provenance_json: string
+  trigger_signature: string
+  expires_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+interface ContextArchiveMessageRow {
+  snapshot_id?: string
+  run_id: string
+  archived_at: number
+  tool_call_id: string | null
+  tool_name: string | null
+  step: number | null
+  body: string
 }
 
 /**
@@ -398,12 +525,6 @@ const RETRACTED_CLAIM_LIFECYCLES: ReadonlySet<string> = new Set([
   'corrected',
   'archived',
 ])
-
-interface QueryScanResult {
-  rows: EventRow[]
-  eventCapReached: boolean
-  payloadBudgetReached: boolean
-}
 
 const PROJECTIONS: Record<string, ProjectionDefinition> = {
   task: { table: 'memory_tasks', payloadId: 'taskId', explicitId: 'taskId' },
@@ -442,16 +563,45 @@ export class MemoryV2StorageError extends Error {
   }
 }
 
-export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
+export class BunSQLiteMemoryRepository
+  implements MemoryRepositoryV2, PlaybookStoreContract
+{
   readonly databasePath: string
   private closed = false
+  private integrityCheck: Promise<boolean> | undefined
+  private knowledgeRepair: Promise<void> | undefined
+  private archiveMigration: Promise<number> | undefined
 
   private constructor(
     private readonly database: Database,
     databasePath: string,
     private readonly recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
+    private readonly contextArchiveRetention: Readonly<ContextArchiveRetentionPolicy> = captureArchiveRetention(),
+    private readonly archiveNow: () => number = Date.now,
   ) {
     this.databasePath = databasePath
+  }
+
+  private async checkIntegrity(): Promise<boolean> {
+    if (this.databasePath === ':memory:') {
+      return (
+        readPragmaString(
+          this.database,
+          'PRAGMA quick_check(1)',
+          'quick_check',
+        ) === 'ok'
+      )
+    }
+    // Both health APIs can be called together. Share their in-flight scan;
+    // never scan a large database on the terminal's event loop.
+    const pending = (this.integrityCheck ??= checkSQLiteIntegrity(
+      this.databasePath,
+    ))
+    try {
+      return await pending
+    } finally {
+      if (this.integrityCheck === pending) this.integrityCheck = undefined
+    }
   }
 
   static async open(
@@ -466,9 +616,29 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       if (options.requireSecureOpen === true) {
         throw new MemoryV2StorageError(insecureOpenUnavailableFailure())
       }
+      let archivePolicy: Readonly<ContextArchiveRetentionPolicy>
+      try {
+        archivePolicy = captureArchiveRetention(options.contextArchiveRetention)
+      } catch (error) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: String(error),
+          retryable: false,
+        })
+      }
+      const archiveNow = options.contextArchiveNow ?? Date.now
+      if (typeof archiveNow !== 'function')
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'Invalid archive clock.',
+          retryable: false,
+        })
       const preparedPath = prepareDatabasePath(options)
       const timeout = boundedBusyTimeout(options.busyTimeoutMs)
-      preflightExistingDatabase(preparedPath)
+      await preflightExistingDatabase(preparedPath)
+      // The integrity scan yields to a worker. Recheck the admitted file
+      // identity before any writable open after that asynchronous boundary.
+      if (preparedPath.existingIdentity) verifyOpenedDatabasePath(preparedPath)
       database = new Database(preparedPath.databasePath, {
         create: true,
         strict: true,
@@ -494,6 +664,8 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           database,
           preparedPath.databasePath,
           options.recallExpander,
+          archivePolicy,
+          archiveNow,
         ),
         openPosture: SQLITE_OPEN_POSTURE,
       }
@@ -512,6 +684,11 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
   async appendEvents(
     inputs: readonly (MemoryV2EventInput | MemoryEventEnvelope)[],
   ): Promise<MemoryV2AppendResult> {
+    try {
+      await this.ensureKnowledgeProjection()
+    } catch (error) {
+      return { status: 'error', error: classifyStorageError(error) }
+    }
     const result = this.appendKernel(inputs)
     if (result.status === 'error') return result
     return {
@@ -535,6 +712,12 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       return rejectedOutcome(
         'Every event must belong to the requested project.',
       )
+    }
+
+    try {
+      await this.ensureKnowledgeProjection()
+    } catch (error) {
+      return appendFailureOutcome(classifyStorageError(error))
     }
 
     const result = this.appendKernel(parsed.data.events, {
@@ -922,6 +1105,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         this.database.exec('DELETE FROM memory_usage')
         // claim_dedup is rebuilt from the surviving log during the replay.
         this.database.exec('DELETE FROM claim_dedup')
+        clearKnowledgeProjection(this.database)
         setProjectionCursor(this.database, 0)
         return replayProjections(this.database)
       })
@@ -990,29 +1174,26 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       if (filtered !== undefined && filtered.length === 0) {
         return { status: 'ok', usage: [] }
       }
-      const rows =
-        filtered !== undefined
-          ? (this.database
-              .query(
-                `SELECT observation_id, used_count, ignored_count, staled_count,
-                        last_mechanism, last_turn_id, last_sequence
-                   FROM memory_usage
-                  WHERE observation_id IN (${filtered
-                    .map((_, index) => `?${index + 1}`)
-                    .join(', ')})
-                  ORDER BY observation_id
-                  LIMIT 256`,
-              )
-              .all(...filtered) as UsageRow[])
-          : (this.database
-              .query(
-                `SELECT observation_id, used_count, ignored_count, staled_count,
-                        last_mechanism, last_turn_id, last_sequence
-                   FROM memory_usage
-                  ORDER BY observation_id
-                  LIMIT 256`,
-              )
-              .all() as UsageRow[])
+      await this.ensureKnowledgeProjection()
+      const rows = this.database
+        .query(
+          `WITH ids AS (
+        SELECT observation_id FROM memory_usage
+        UNION SELECT observation_id FROM memory_knowledge WHERE project_id=? AND (json_extract(state_json,'$.used')>0 OR json_extract(state_json,'$.ignored')>0)
+      )
+      SELECT ids.observation_id,
+        COALESCE(json_extract(k.state_json,'$.used'),u.used_count,0) AS used_count,
+        COALESCE(json_extract(k.state_json,'$.ignored'),u.ignored_count,0) AS ignored_count,
+        COALESCE(u.staled_count,0) AS staled_count,
+        COALESCE(json_extract(k.state_json,'$.lastUsage.mechanism'),u.last_mechanism) AS last_mechanism,
+        COALESCE(json_extract(k.state_json,'$.lastUsage.turnId'),u.last_turn_id) AS last_turn_id,
+        COALESCE(json_extract(k.state_json,'$.lastUsage.sequence'),u.last_sequence,0) AS last_sequence
+      FROM ids LEFT JOIN memory_usage u ON u.observation_id=ids.observation_id
+      LEFT JOIN memory_knowledge k ON k.observation_id=ids.observation_id
+      ${filtered ? `WHERE ids.observation_id IN (${filtered.map(() => '?').join(',')})` : ''}
+      ORDER BY ids.observation_id LIMIT 256`,
+        )
+        .all(params.projectId, ...(filtered ?? [])) as UsageRow[]
       return {
         status: 'ok',
         usage: rows.map((row) => ({
@@ -1121,17 +1302,16 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       if (filtered.length === 0) {
         return { status: 'ok', entries: [] }
       }
+      await this.ensureKnowledgeProjection()
       const rows = this.database
         .query(
-          `SELECT entity_id, task_id, state_json
-             FROM memory_claims
-            WHERE entity_id IN (${filtered
-              .map((_, index) => `?${index + 1}`)
-              .join(', ')})
-            ORDER BY entity_id
+          `SELECT k.observation_id AS entity_id,k.task_id,k.state_json,c.state_json AS claim_state_json
+             FROM memory_knowledge k LEFT JOIN memory_claims c ON c.entity_id=k.observation_id
+            WHERE k.project_id=? AND k.observation_id IN (${filtered.map(() => '?').join(', ')})
+            ORDER BY k.observation_id
             LIMIT 256`,
         )
-        .all(...filtered) as ObservationStatusRow[]
+        .all(params.projectId, ...filtered) as ObservationStatusRow[]
       return {
         status: 'ok',
         entries: rows
@@ -1147,18 +1327,35 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
               readable = false
               state = undefined
             }
-            const lifecycle = nestedValue(state, 'lifecycle')
+            let legacyLifecycle: unknown
+            try {
+              if (row.claim_state_json)
+                legacyLifecycle = nestedValue(
+                  JSON.parse(row.claim_state_json),
+                  'lifecycle',
+                )
+            } catch {
+              readable = false
+            }
+            const knowledge = objectValue(state)
+            const validFlags = ['forgotten', 'superseded', 'corrected'].every(
+              (key) => typeof knowledge[key] === 'boolean',
+            )
+            if (
+              !validFlags ||
+              (row.claim_state_json && typeof legacyLifecycle !== 'string')
+            )
+              readable = false
             return {
               observationId: row.entity_id,
               taskId: row.task_id ?? '',
               status: !readable
                 ? ('unknown' as const)
-                : typeof lifecycle === 'string' &&
-                    RETRACTED_CLAIM_LIFECYCLES.has(lifecycle)
+                : knowledge.forgotten ||
+                    knowledge.superseded ||
+                    knowledge.corrected
                   ? ('retracted' as const)
-                  : typeof lifecycle === 'string'
-                    ? ('active' as const)
-                    : ('unknown' as const),
+                  : ('active' as const),
             }
           })
           .sort((left, right) =>
@@ -1168,6 +1365,863 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
     } catch (error) {
       return { status: 'error', error: classifyStorageError(error) }
     }
+  }
+
+  private archiveStorageStats(
+    receipt: ContextArchiveRetentionReceipt,
+  ): ContextArchiveRetentionReceipt {
+    try {
+      return {
+        ...receipt,
+        walBytes:
+          this.databasePath === ':memory:' ||
+          !existsSync(`${this.databasePath}-wal`)
+            ? 0
+            : statSync(`${this.databasePath}-wal`).size,
+      }
+    } catch {
+      return receipt
+    }
+  }
+
+  /** Original bodies, memberships, cutoffs and quota publish in the same transaction. */
+  async persistContextArchiveSnapshots(request: {
+    runId: string
+    snapshots: ContextArchiveSnapshot[]
+    bodies?: Record<string, ContextArchiveBody>
+  }): Promise<{
+    persisted: number
+    skipped: number
+    status?: 'ok' | 'degraded' | 'unavailable'
+    reasons?: string[]
+    retention?: ContextArchiveRetentionReceipt
+  }> {
+    const snapshots = Array.isArray(request?.snapshots) ? request.snapshots : []
+    const unavailable = (reason: string) => ({
+      persisted: 0,
+      skipped: snapshots.length,
+      status: 'unavailable' as const,
+      reasons: [reason],
+    })
+    if (this.requireOpen()) return unavailable('store-closed')
+    const runId = typeof request?.runId === 'string' ? request.runId : ''
+    if (!runId || runId.length > 2048 || snapshots.length > 500)
+      return {
+        persisted: 0,
+        skipped: snapshots.length,
+        status: 'degraded',
+        reasons: ['invalid-archive-input'],
+      }
+    try {
+      const invalidLegacy = await this.ensureArchiveMigration()
+      const valid = snapshots
+        .map(prepareOriginalArchiveSnapshot)
+        .filter(
+          (snapshot): snapshot is NonNullable<typeof snapshot> =>
+            snapshot !== null,
+        )
+      const now = this.archiveNow()
+      const result = this.database
+        .transaction(() => {
+          if (!archiveFtsAvailable(this.database))
+            disableArchiveFtsTriggers(this.database)
+          const prior = enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            now,
+          )
+          const accepted = valid.filter((snapshot) =>
+            archiveSnapshotAdmissible(
+              this.database,
+              snapshot.snapshot.runId ?? runId,
+              snapshot,
+              this.contextArchiveRetention,
+              now,
+            ),
+          )
+          for (const snapshot of accepted) {
+            const owner = snapshot.snapshot.runId ?? runId
+            putArchiveSnapshot(
+              this.database,
+              owner,
+              snapshot,
+              new Date(now).toISOString(),
+            )
+            putArchiveOriginals(
+              this.database,
+              owner,
+              snapshot,
+              request.bodies,
+              this.contextArchiveRetention,
+              now,
+            )
+          }
+          if (accepted.length === snapshots.length && snapshots.length) {
+            const identities = accepted
+              .filter(
+                (snapshot) => (snapshot.snapshot.runId ?? runId) === runId,
+              )
+              .map((snapshot) => archiveSnapshotId(runId, snapshot))
+            if (identities.length)
+              this.database
+                .query(
+                  `DELETE FROM context_archive_snapshots WHERE run_id=? AND coalesce(pinned,0)=0 AND snapshot_id NOT IN (${identities.map(() => '?').join(',')})`,
+                )
+                .run(runId, ...identities)
+          }
+          const retention = enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            now,
+          )
+          retention.expiredSnapshots += prior.expiredSnapshots
+          retention.droppedSnapshots += prior.droppedSnapshots
+          for (const owner of new Set(
+            accepted.map((snapshot) => snapshot.snapshot.runId ?? runId),
+          )) {
+            const row = this.database
+              .query(
+                'SELECT max(archived_at) max FROM context_archive_snapshots WHERE run_id=?1',
+              )
+              .get(owner) as { max: number | null }
+            if (row.max !== null)
+              this.database
+                .query(
+                  `INSERT INTO context_archive_watermarks(run_id,max_archived_at,updated_at) VALUES (?1,?2,?3)
+            ON CONFLICT(run_id) DO UPDATE SET max_archived_at=max(max_archived_at,excluded.max_archived_at),updated_at=excluded.updated_at`,
+                )
+                .run(owner, row.max, new Date(now).toISOString())
+          }
+          this.database.exec(
+            'DELETE FROM context_archive_watermarks WHERE NOT EXISTS(SELECT 1 FROM context_archive_snapshots s WHERE s.run_id=context_archive_watermarks.run_id)',
+          )
+          const persisted = accepted.filter((snapshot) =>
+            this.database
+              .query(
+                'SELECT 1 FROM context_archive_snapshots WHERE snapshot_id=?1',
+              )
+              .get(
+                archiveSnapshotId(snapshot.snapshot.runId ?? runId, snapshot),
+              ),
+          ).length
+          return { persisted, skipped: snapshots.length - persisted, retention }
+        })
+        .immediate()
+      const reasons = [
+        ...(valid.length < snapshots.length ? ['invalid-snapshot'] : []),
+        ...(result.skipped > snapshots.length - valid.length
+          ? ['retention-cutoff']
+          : []),
+        ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
+        ...(!archiveFtsAvailable(this.database) ? ['fts-unavailable'] : []),
+      ]
+      return {
+        ...result,
+        retention: this.archiveStorageStats(result.retention),
+        status: reasons.length ? 'degraded' : 'ok',
+        ...(reasons.length ? { reasons } : {}),
+      }
+    } catch (error) {
+      if (
+        error instanceof ArchiveInputError ||
+        error instanceof ArchiveCapacityError
+      )
+        return {
+          persisted: 0,
+          skipped: snapshots.length,
+          status: 'degraded',
+          reasons: [
+            error instanceof ArchiveCapacityError
+              ? 'retention-capacity'
+              : `invalid-original: ${error.message}`,
+          ],
+          retention: this.archiveStorageStats(
+            archiveRetentionReceipt(
+              this.database,
+              this.contextArchiveRetention,
+              { capacity: error instanceof ArchiveCapacityError },
+            ),
+          ),
+        }
+      return unavailable('storage-failed')
+    }
+  }
+
+  async readContextArchiveBodyPage(
+    request: ContextArchiveBodyPageRequest,
+  ): Promise<ContextArchiveBodyPageOutcome> {
+    if (this.requireOpen())
+      return { status: 'unavailable', reason: 'The archive store is closed.' }
+    if (
+      !request ||
+      typeof request.toolCallId !== 'string' ||
+      !request.toolCallId ||
+      request.toolCallId.length > 2048 ||
+      (request.sourceRunId !== undefined &&
+        (typeof request.sourceRunId !== 'string' ||
+          !request.sourceRunId ||
+          request.sourceRunId.length > 2048))
+    )
+      return {
+        status: 'invalid-cursor',
+        reason: 'Invalid original source-run/call selector.',
+      }
+    try {
+      await this.ensureArchiveMigration()
+      return this.database
+        .transaction(() => {
+          const retention = enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            this.archiveNow(),
+          )
+          return {
+            ...readOriginalBodyPage(this.database, request),
+            retention: this.archiveStorageStats(retention),
+          }
+        })
+        .immediate()
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        reason:
+          error instanceof ArchiveCapacityError
+            ? 'Archive protected capacity requires operator resolution.'
+            : 'Original archive storage could not be verified.',
+      }
+    }
+  }
+
+  async loadContextArchiveSnapshots(
+    request: { runId?: string; limit?: number } = {},
+  ): Promise<{
+    snapshots: ContextArchiveSnapshot[]
+    status?: 'ok' | 'degraded' | 'unavailable'
+    reasons?: string[]
+    retention?: ContextArchiveRetentionReceipt
+  }> {
+    if (this.requireOpen())
+      return { snapshots: [], status: 'unavailable', reasons: ['store-closed'] }
+    const runId =
+      typeof request.runId === 'string' && request.runId ? request.runId : null
+    const limit =
+      typeof request.limit === 'number' &&
+      Number.isFinite(request.limit) &&
+      request.limit >= 0
+        ? Math.min(Math.floor(request.limit), CONTEXT_ARCHIVE_LOAD_LIMIT_MAX)
+        : CONTEXT_ARCHIVE_LOAD_LIMIT_DEFAULT
+    try {
+      const invalidLegacy = await this.ensureArchiveMigration()
+      const retention = this.database
+        .transaction(() =>
+          enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            this.archiveNow(),
+          ),
+        )
+        .immediate()
+      const rows = this.database
+        .query(
+          `SELECT * FROM context_archive_snapshots${runId ? ' WHERE run_id=?' : ''} ORDER BY archived_at DESC,run_id,snapshot_id LIMIT ?`,
+        )
+        .all(...(runId ? [runId] : []), limit) as ArchiveManifestRow[]
+      const snapshots: ContextArchiveSnapshot[] = []
+      for (const row of rows) {
+        const snapshot = readArchiveSnapshot(this.database, row)
+        if (snapshot) snapshots.push(snapshot)
+        await yieldToEventLoop()
+      }
+      const reasons = [
+        ...(snapshots.length < rows.length ? ['invalid-manifest'] : []),
+        ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
+      ]
+      return {
+        snapshots,
+        retention: this.archiveStorageStats(retention),
+        status: reasons.length ? 'degraded' : 'ok',
+        ...(reasons.length ? { reasons } : {}),
+      }
+    } catch {
+      return {
+        snapshots: [],
+        status: 'unavailable',
+        reasons: ['storage-failed'],
+      }
+    }
+  }
+
+  async searchContextArchive(request: {
+    query: string
+    limit?: number
+  }): Promise<ContextArchiveSearchOutcome> {
+    const empty: ContextArchiveSearchOutcome = {
+      matches: [],
+      snapshotsSearched: 0,
+      status: 'ok',
+    }
+    if (this.requireOpen())
+      return { ...empty, status: 'unavailable', reasons: ['store-closed'] }
+    const query = typeof request?.query === 'string' ? request.query : ''
+    const terms = sanitizeFtsQuery(query)
+    if (!terms) return empty
+    const limit =
+      typeof request.limit === 'number' &&
+      Number.isFinite(request.limit) &&
+      request.limit > 0
+        ? Math.min(Math.floor(request.limit), CONTEXT_ARCHIVE_SEARCH_LIMIT_MAX)
+        : CONTEXT_ARCHIVE_SEARCH_LIMIT_DEFAULT
+    try {
+      const invalidLegacy = await this.ensureArchiveMigration()
+      const retention = this.database
+        .transaction(() =>
+          enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            this.archiveNow(),
+          ),
+        )
+        .immediate()
+      const literalTerms = terms.map((term) =>
+        term.slice(1, -1).replaceAll('""', '"'),
+      )
+      const originals = searchOriginalArchive(
+        this.database,
+        literalTerms,
+        limit,
+      )
+      const mergeMatches = (legacy: ContextArchiveSearchMatch[]) => {
+        const seen = new Set<string>()
+        return [...originals.matches, ...legacy]
+          .filter((match) => {
+            const key = JSON.stringify([
+              match.runId,
+              match.toolCallId,
+              match.step,
+            ])
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+          .slice(0, limit)
+      }
+      const reasons = [
+        ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
+        ...(originals.capped ? ['original-search-scan-cap'] : []),
+      ]
+      const from = `FROM context_archive_bodies b JOIN context_archive_messages m ON m.content_digest=b.content_digest JOIN context_archive_memberships r ON r.message_id=m.message_id JOIN context_archive_snapshots s ON s.snapshot_id=r.snapshot_id`
+      const select =
+        'SELECT s.snapshot_id,s.run_id,s.archived_at,m.tool_name,m.tool_call_id,r.step,b.body'
+      if (archiveFtsAvailable(this.database)) {
+        try {
+          const rows = this.database
+            .query(
+              `${select} ${from} JOIN context_archive_fts ON context_archive_fts.rowid=b.rowid WHERE context_archive_fts MATCH ?1 AND m.tool_name IS NOT NULL ORDER BY rank,s.archived_at DESC,r.msg_index DESC LIMIT ?2`,
+            )
+            .all(
+              terms.join(' '),
+              CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
+            ) as ContextArchiveMessageRow[]
+          const literalTerms = terms.map((term) =>
+            term.slice(1, -1).replaceAll('""', '"'),
+          )
+          return {
+            matches: mergeMatches(
+              buildArchiveSearchMatches(rows, literalTerms, limit),
+            ),
+            snapshotsSearched: new Set([
+              ...originals.snapshotIds,
+              ...rows.map(
+                (row) => row.snapshot_id ?? `${row.run_id}:${row.archived_at}`,
+              ),
+            ]).size,
+            retention: this.archiveStorageStats(retention),
+            status: reasons.length ? 'degraded' : 'ok',
+            ...(reasons.length ? { reasons } : {}),
+          }
+        } catch {
+          reasons.push('fts-failed')
+        }
+      } else reasons.push('fts-unavailable')
+      const loweredTerms = terms.map((term) =>
+        term.slice(1, -1).replaceAll('""', '"'),
+      )
+      const clauses = loweredTerms
+        .map(() => "lower(b.body) LIKE ? ESCAPE '\\'")
+        .join(' AND ')
+      const rows = this.database
+        .query(
+          `${select} ${from} WHERE m.tool_name IS NOT NULL AND ${clauses} ORDER BY s.archived_at DESC,r.msg_index DESC LIMIT ?`,
+        )
+        .all(
+          ...loweredTerms.map((term) => `%${escapeLikePattern(term)}%`),
+          CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
+        ) as ContextArchiveMessageRow[]
+      return {
+        matches: mergeMatches(
+          buildArchiveSearchMatches(rows, loweredTerms, limit),
+        ),
+        snapshotsSearched: new Set([
+          ...originals.snapshotIds,
+          ...rows.map(
+            (row) => row.snapshot_id ?? `${row.run_id}:${row.archived_at}`,
+          ),
+        ]).size,
+        retention: this.archiveStorageStats(retention),
+        status: 'degraded',
+        reasons,
+      }
+    } catch {
+      return { ...empty, status: 'unavailable', reasons: ['storage-failed'] }
+    }
+  }
+
+  async repairContextArchive(): Promise<{
+    status: 'ok' | 'degraded'
+    reasons?: string[]
+  }> {
+    if (this.requireOpen())
+      return { status: 'degraded', reasons: ['store-closed'] }
+    try {
+      this.database.exec('DELETE FROM context_archive_migration_errors')
+      const invalid = await this.ensureArchiveMigration()
+      this.database
+        .transaction(() => repairArchiveFts(this.database))
+        .immediate()
+      return invalid
+        ? { status: 'degraded', reasons: ['legacy-migration-incomplete'] }
+        : { status: 'ok' }
+    } catch {
+      return { status: 'degraded', reasons: ['repair-failed'] }
+    }
+  }
+
+  /** Bounded exact cross-task maintenance; it never creates a policy or a semantic fact. */
+  async consolidateExact(request: {
+    projectId: string
+    maxGroups?: number
+    now?: number
+  }): Promise<{
+    status: 'ok' | 'degraded'
+    reinforced: number
+    superseded: number
+    reason?: string
+  }> {
+    const degraded = (reason: string) => ({
+      status: 'degraded' as const,
+      reinforced: 0,
+      superseded: 0,
+      reason,
+    })
+    if (this.requireOpen()) return degraded('store-closed')
+    if (!ProjectIdSchema.safeParse(request.projectId).success)
+      return degraded('invalid-project')
+    try {
+      this.requireBoundProject(request.projectId)
+      await this.ensureKnowledgeProjection()
+      const maxGroups =
+        typeof request.maxGroups === 'number' &&
+        Number.isFinite(request.maxGroups)
+          ? Math.max(0, Math.min(16, Math.floor(request.maxGroups)))
+          : 4
+      const tail = this.readLastEventIdForProject(request.projectId)
+      const groups = this.database
+        .query(
+          "SELECT exact_identity FROM memory_knowledge WHERE project_id=?1 AND lifecycle='active' GROUP BY exact_identity HAVING COUNT(*)>1 AND COUNT(DISTINCT task_id)>1 AND sum(pinned=0)>0 ORDER BY min(source_sequence),exact_identity LIMIT ?2",
+        )
+        .all(request.projectId, maxGroups) as Array<{ exact_identity: string }>
+      const at =
+        typeof request.now === 'number' && Number.isFinite(request.now)
+          ? new Date(request.now).toISOString()
+          : new Date().toISOString()
+      const drafts: MemoryEventDraft[] = []
+      for (const group of groups) {
+        const rows = this.database
+          .query(
+            `WITH head AS MATERIALIZED (
+              SELECT observation_id FROM memory_knowledge
+              WHERE project_id=?1 AND exact_identity=?2 AND lifecycle='active'
+              ORDER BY pinned DESC,source_sequence,observation_id LIMIT 1
+            )
+            SELECT state_json FROM memory_knowledge
+            WHERE project_id=?1 AND exact_identity=?2 AND lifecycle='active'
+              AND (pinned=0 OR observation_id=(SELECT observation_id FROM head))
+            ORDER BY pinned DESC,source_sequence,observation_id LIMIT 16`,
+          )
+          .all(request.projectId, group.exact_identity) as Array<{
+          state_json: string
+        }>
+        const states = rows.map(
+          (row) => JSON.parse(row.state_json) as KnowledgeObservationState,
+        )
+        const head = states[0]
+        if (!head) continue
+        for (const source of states.slice(1)) {
+          // Explicit duplicate pins remain independently inspectable and active.
+          if (source.pinned) continue
+          if (
+            exactKnowledgeIdentity(source.observation) !==
+            exactKnowledgeIdentity(head.observation)
+          )
+            continue
+          const identity = createHash('sha256')
+            .update(
+              `${KNOWLEDGE_PRODUCER_VERSION}:${request.projectId}:${source.sourceEventId}:${head.sourceEventId}`,
+            )
+            .digest('hex')
+          drafts.push(
+            MemoryEventDraftSchema.parse({
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+              eventType: 'claim.reinforced',
+              eventId: `event:exact-reinforce:${identity}`,
+              projectId: request.projectId,
+              sessionId: 'session:exact-maintenance',
+              occurredAt: at,
+              payload: {
+                payloadSchemaVersion: 1,
+                observationId: head.observation.observationId,
+                claimId: group.exact_identity,
+                reason: `Exact cross-task corroboration from ${source.observation.observationId}`,
+                reinforcedAt: at,
+                reinforcedBy: 'current-knowledge-exact-maintenance',
+              },
+            }),
+          )
+          drafts.push(
+            MemoryEventDraftSchema.parse({
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+              eventType: 'claim.superseded',
+              eventId: `event:exact-supersede:${identity}`,
+              projectId: request.projectId,
+              sessionId: 'session:exact-maintenance',
+              occurredAt: at,
+              payload: {
+                payloadSchemaVersion: 1,
+                observationId: source.observation.observationId,
+                supersededByObservationId: head.observation.observationId,
+                reason:
+                  'Exact content and dependency duplicate; canonical source and corroboration remain auditable.',
+              },
+            }),
+          )
+        }
+      }
+      if (!drafts.length) return { status: 'ok', reinforced: 0, superseded: 0 }
+      const appended = this.appendKernel(drafts, {
+        projectId: request.projectId,
+        expectedTail: tail
+          ? { kind: 'event', eventId: MemoryEventIdSchema.parse(tail) }
+          : { kind: 'empty' },
+      })
+      if (appended.status === 'error') return degraded(appended.error.kind)
+      return {
+        status: 'ok',
+        reinforced: drafts.length / 2,
+        superseded: drafts.length / 2,
+      }
+    } catch {
+      return degraded('maintenance-failed')
+    }
+  }
+
+  /**
+   * Active, unexpired procedural playbooks for one workspace (the runtime
+   * playbook gate's per-turn input). Every row is revalidated through
+   * MemoryPlaybookSchema and its JSON columns, so a corrupt row throws
+   * instead of coercing into a partially-populated rule.
+   */
+  async listPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const rows = this.database
+        .query(
+          `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+             FROM memory_playbooks
+            WHERE workspace_id = ?1
+              AND status IN ('active','verified')
+              AND (expires_at IS NULL OR expires_at > ?2)
+            ORDER BY created_at, playbook_id`,
+        )
+        .all(workspaceId, Date.now()) as PlaybookRow[]
+      return rows.map((row) => playbookFromRow(row))
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Every playbook row for one workspace regardless of status/expiry — the
+   * Phase-4 lifecycle evaluator's input, where the gate-facing read above
+   * filters retired and expired rows out. Same revalidation as listPlaybooks:
+   * every row is rebuilt through MemoryPlaybookSchema, so a corrupt row
+   * throws instead of coercing into a partially-populated rule.
+   */
+  async listAllPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const rows = this.database
+        .query(
+          `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+             FROM memory_playbooks
+            WHERE workspace_id = ?1
+            ORDER BY created_at, playbook_id`,
+        )
+        .all(workspaceId) as PlaybookRow[]
+      return rows.map((row) => playbookFromRow(row))
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Insert-or-update a playbook keyed by computeTriggerSignature(trigger,
+   * scope): two playbooks with the same signature are the same rule, so an
+   * existing row keeps its playbookId, createdAt and counters while its
+   * instruction/enforcement/scope/provenance/expiry are refreshed. The
+   * assembled record is validated with MemoryPlaybookSchema BEFORE the write,
+   * so a non-evaluable or schema-invalid payload never reaches the store.
+   */
+  async upsertPlaybookByTriggerSignature(
+    input: PlaybookUpsertInput,
+  ): Promise<MemoryPlaybook> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const triggerSignature = computeTriggerSignature(
+        input.trigger,
+        input.scope,
+      )
+      const now = Date.now()
+      const existing = this.readPlaybookRow(input.workspaceId, triggerSignature)
+      const playbook = MemoryPlaybookSchema.parse({
+        schemaVersion: 1,
+        playbookId: existing?.playbook_id ?? randomUUID(),
+        workspaceId: input.workspaceId,
+        taskId: existing ? (existing.task_id ?? undefined) : input.taskId,
+        title: input.title,
+        instruction: input.instruction,
+        trigger: input.trigger,
+        scope: input.scope,
+        status: input.status,
+        enforcement: input.enforcement,
+        counters: existing
+          ? (JSON.parse(existing.counters_json) as unknown)
+          : PlaybookCountersSchema.parse({}),
+        provenance: input.provenance,
+        triggerSignature,
+        expiresAt: input.expiresAt,
+        createdAt: existing?.created_at ?? now,
+        updatedAt: now,
+      })
+      if (existing) {
+        this.database
+          .query(
+            `UPDATE memory_playbooks
+                SET title = ?1,
+                    instruction = ?2,
+                    status = ?3,
+                    enforcement = ?4,
+                    trigger_json = ?5,
+                    scope_json = ?6,
+                    provenance_json = ?7,
+                    expires_at = ?8,
+                    updated_at = ?9
+              WHERE playbook_id = ?10`,
+          )
+          .run(
+            playbook.title,
+            playbook.instruction,
+            playbook.status,
+            playbook.enforcement,
+            JSON.stringify(playbook.trigger),
+            JSON.stringify(playbook.scope),
+            JSON.stringify(playbook.provenance),
+            playbook.expiresAt ?? null,
+            playbook.updatedAt,
+            playbook.playbookId,
+          )
+      } else {
+        this.database
+          .query(
+            `INSERT INTO memory_playbooks (
+               playbook_id, workspace_id, task_id, title, instruction,
+               trigger_json, scope_json, status, enforcement, counters_json,
+               provenance_json, trigger_signature, expires_at, created_at,
+               updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+          )
+          .run(
+            playbook.playbookId,
+            playbook.workspaceId,
+            playbook.taskId ?? null,
+            playbook.title,
+            playbook.instruction,
+            JSON.stringify(playbook.trigger),
+            JSON.stringify(playbook.scope),
+            playbook.status,
+            playbook.enforcement,
+            JSON.stringify(playbook.counters),
+            JSON.stringify(playbook.provenance),
+            playbook.triggerSignature,
+            playbook.expiresAt ?? null,
+            playbook.createdAt,
+            playbook.updatedAt,
+          )
+      }
+      const stored = this.readPlaybookRow(input.workspaceId, triggerSignature)
+      if (!stored) {
+        throw new MemoryV2StorageError({
+          kind: 'corrupt',
+          message: 'The playbook could not be reloaded after the write.',
+          retryable: false,
+        })
+      }
+      return playbookFromRow(stored)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Fold one gate outcome into a playbook's counters: every outcome bumps
+   * `fired` and lastFiredAt, the matching specific counter when one applies
+   * ('warned' has none), and a false positive also stamps
+   * lastFalsePositiveAt.
+   */
+  async recordPlaybookGateOutcome(
+    playbookId: string,
+    outcome: PlaybookGateOutcome,
+  ): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const row = this.database
+        .query(
+          'SELECT counters_json FROM memory_playbooks WHERE playbook_id = ?1',
+        )
+        .get(playbookId) as { counters_json: string } | null
+      if (!row) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'The playbook was not found.',
+          retryable: false,
+        })
+      }
+      const now = Date.now()
+      const prior = PlaybookCountersSchema.parse(
+        JSON.parse(row.counters_json) as unknown,
+      )
+      const counters = PlaybookCountersSchema.parse({
+        ...prior,
+        fired: prior.fired + 1,
+        blocked: prior.blocked + (outcome === 'blocked' ? 1 : 0),
+        bypassed: prior.bypassed + (outcome === 'bypassed' ? 1 : 0),
+        compliedAfterBlock:
+          prior.compliedAfterBlock + (outcome === 'compliedAfterBlock' ? 1 : 0),
+        falsePositives:
+          prior.falsePositives + (outcome === 'falsePositive' ? 1 : 0),
+        lastFiredAt: now,
+        ...(outcome === 'falsePositive' ? { lastFalsePositiveAt: now } : {}),
+      })
+      this.database
+        .query(
+          `UPDATE memory_playbooks
+              SET counters_json = ?1, updated_at = ?2
+            WHERE playbook_id = ?3`,
+        )
+        .run(JSON.stringify(counters), now, playbookId)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /** Change a playbook's lifecycle status (e.g. retire a noisy rule). */
+  async setPlaybookStatus(
+    playbookId: string,
+    status: PlaybookStatus,
+  ): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      this.database
+        .query(
+          `UPDATE memory_playbooks
+              SET status = ?1, updated_at = ?2
+            WHERE playbook_id = ?3`,
+        )
+        .run(status, Date.now(), playbookId)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Idempotent install of the built-in seed playbooks for one workspace.
+   *
+   * Deliberately NOT part of migrate(): the table is keyed by workspaceId,
+   * which is unknown at migration time, so the caller seeds its own
+   * workspace. Each seed is checked independently and skipped when a
+   * playbook with that seed's trigger signature already exists for the
+   * workspace. Exact host-owned legacy seeds upgrade their prerequisite
+   * while preserving operator state; existing current identities skip.
+   */
+  async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    for (const seed of SEED_PLAYBOOKS) {
+      this.database
+        .transaction(() =>
+          upgradeOwnedSeedPlaybook(this.database, workspaceId, seed),
+        )
+        .immediate()
+      const triggerSignature = computeTriggerSignature(seed.trigger, seed.scope)
+      try {
+        const existing = this.database
+          .query(
+            `SELECT 1 AS present FROM memory_playbooks
+              WHERE workspace_id = ?1 AND trigger_signature = ?2
+              LIMIT 1`,
+          )
+          .get(workspaceId, triggerSignature) as { present: number } | null
+        if (existing) continue
+      } catch (error) {
+        if (error instanceof MemoryV2StorageError) throw error
+        throw new MemoryV2StorageError(classifyStorageError(error))
+      }
+      await this.upsertPlaybookByTriggerSignature({
+        workspaceId,
+        title: seed.title,
+        instruction: seed.instruction,
+        trigger: seed.trigger,
+        scope: seed.scope,
+        status: seed.status,
+        enforcement: seed.enforcement,
+        provenance: seed.provenance,
+      })
+    }
+  }
+
+  private readPlaybookRow(
+    workspaceId: string,
+    triggerSignature: string,
+  ): PlaybookRow | null {
+    return this.database
+      .query(
+        `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+           FROM memory_playbooks
+          WHERE workspace_id = ?1 AND trigger_signature = ?2
+          LIMIT 1`,
+      )
+      .get(workspaceId, triggerSignature) as PlaybookRow | null
   }
 
   async getCapabilities(): Promise<
@@ -1191,19 +2245,43 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
 
     try {
       this.requireBoundProject(parsed.data.projectId)
-      const scan = scanQueryRows(this.database, parsed.data.projectId)
-      const events = scan.rows
-        .reverse()
-        .filter((row) => CANONICAL_EVENT_TYPES.has(row.event_type))
-        .map(envelopeFromRow)
+      await this.ensureKnowledgeProjection()
+      const plan = knowledgeQueryPlan(parsed.data, !!this.recallExpander)
+      const scan =
+        this.databasePath === ':memory:'
+          ? readKnowledgeQuery(this.database, plan)
+          : await scanKnowledgeQuery(this.databasePath, plan)
+      const closed = this.requireOpen()
+      if (closed) return operationFailureOutcome(closed.error)
+      const events = scan.coverage.map((row) =>
+        MemoryEventEnvelopeSchema.parse(JSON.parse(row.event_json)),
+      )
       return {
         outcome: 'result',
         result: await buildLexicalResult(
           parsed.data,
           events,
-          scan.eventCapReached,
-          scan.payloadBudgetReached,
+          scan.candidateCapReached,
+          false,
           this.recallExpander,
+          scan,
+          async (ids) => {
+            if (this.closed) return []
+            const eligibleIds = ids
+              .filter((id) => typeof id === 'string')
+              .slice(0, 8)
+            if (!eligibleIds.length) return []
+            const rows = this.database
+              .query(
+                `SELECT state_json FROM memory_knowledge WHERE project_id=? AND lifecycle='active' AND observation_id IN (${eligibleIds.map(() => '?').join(',')})`,
+              )
+              .all(parsed.data.projectId, ...eligibleIds) as Array<{
+              state_json: string
+            }>
+            return rows.map(
+              (row) => JSON.parse(row.state_json) as KnowledgeObservationState,
+            )
+          },
         ),
       }
     } catch (error) {
@@ -1363,11 +2441,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         'PRAGMA user_version',
         'user_version',
       )
-      const check = readPragmaString(
-        this.database,
-        'PRAGMA quick_check(1)',
-        'quick_check',
-      )
+      const check = (await this.checkIntegrity()) ? 'ok' : 'failed'
       const journalMode = readPragmaString(
         this.database,
         'PRAGMA journal_mode',
@@ -1455,6 +2529,8 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       const events: MemoryEventEnvelope[] = []
       let skippedUnknownCount = 0
       for (const row of rows) {
+        if ((events.length + skippedUnknownCount) % 128 === 0)
+          await yieldToEventLoop()
         if (!CANONICAL_EVENT_TYPES.has(row.event_type)) {
           skippedUnknownCount += 1
           continue
@@ -1472,8 +2548,8 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         nextAfterEventId,
         ...(rows.length > 0
           ? {
-              rawTailEventId:
-                lastRow!.event_id as MemoryEventEnvelope['eventId'],
+              rawTailEventId: lastRow!
+                .event_id as MemoryEventEnvelope['eventId'],
             }
           : {}),
         skippedUnknownCount,
@@ -1511,11 +2587,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           schemaVersion,
         )
       }
-      const check = readPragmaString(
-        this.database,
-        'PRAGMA quick_check(1)',
-        'quick_check',
-      )
+      const check = (await this.checkIntegrity()) ? 'ok' : 'failed'
       if (check !== 'ok') {
         return unavailableHealth(
           {
@@ -1553,7 +2625,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
     return unsupported('semantic-search')
   }
 
-  async getStoreStats(request: { projectId: string }): Promise<MemoryStoreStats> {
+  async getStoreStats(request: {
+    projectId: string
+  }): Promise<MemoryStoreStats> {
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
     try {
@@ -1566,8 +2640,16 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           )
           .get(request.projectId) as { count: number }
       ).count
-      const pageCount = readPragmaNumber(this.database, 'PRAGMA page_count', 'page_count')
-      const pageSize = readPragmaNumber(this.database, 'PRAGMA page_size', 'page_size')
+      const pageCount = readPragmaNumber(
+        this.database,
+        'PRAGMA page_count',
+        'page_count',
+      )
+      const pageSize = readPragmaNumber(
+        this.database,
+        'PRAGMA page_size',
+        'page_size',
+      )
       return { eventCount: count, bytes: pageCount * pageSize }
     } catch (error) {
       if (error instanceof MemoryV2StorageError) throw error
@@ -1683,23 +2765,35 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         : new MemoryV2StorageError(classifyStorageError(error))
     }
     const fail = (message: string): never => {
-      throw new MemoryV2StorageError({ kind: 'invalid', message, retryable: false })
+      throw new MemoryV2StorageError({
+        kind: 'invalid',
+        message,
+        retryable: false,
+      })
     }
     if (
       !Array.isArray(input.eventIds) ||
       input.eventIds.length < 1 ||
       input.eventIds.length > COMPACTION_APPLY_MAX
     ) {
-      fail('The privileged compaction event list must contain 1 to 100 event IDs.')
+      fail(
+        'The privileged compaction event list must contain 1 to 100 event IDs.',
+      )
     }
     for (const id of input.eventIds) {
       if (!MemoryEventIdSchema.safeParse(id).success)
         fail('The privileged compaction event IDs are invalid.')
     }
-    if (!Array.isArray(input.archiveLines) || input.archiveLines.length !== input.eventIds.length) {
+    if (
+      !Array.isArray(input.archiveLines) ||
+      input.archiveLines.length !== input.eventIds.length
+    ) {
       fail('The privileged compaction archive lines must match the event list.')
     }
-    if (typeof input.archiveHash !== 'string' || !DIGEST_PATTERN.test(input.archiveHash)) {
+    if (
+      typeof input.archiveHash !== 'string' ||
+      !DIGEST_PATTERN.test(input.archiveHash)
+    ) {
       fail('The privileged compaction archive hash is invalid.')
     }
     if (
@@ -1713,13 +2807,18 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
     if (!draft.success || draft.data.eventType !== 'claim.archived') {
       fail('The privileged compaction archive claim is invalid.')
     }
-    const claim = draft.data as Extract<typeof draft.data, { eventType: 'claim.archived' }>
+    const claim = draft.data as Extract<
+      typeof draft.data,
+      { eventType: 'claim.archived' }
+    >
     if (claim.projectId !== input.projectId) {
       fail('The privileged compaction archive claim project does not match.')
     }
     if (
       claim.payload.archivedEventIds.length !== input.eventIds.length ||
-      claim.payload.archivedEventIds.some((id, index) => id !== input.eventIds[index])
+      claim.payload.archivedEventIds.some(
+        (id, index) => id !== input.eventIds[index],
+      )
     ) {
       fail('The privileged compaction archive claim events do not match.')
     }
@@ -1727,11 +2826,15 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       claim.payload.archiveHash !== input.archiveHash ||
       claim.payload.archivePath !== input.archivePath
     ) {
-      fail('The privileged compaction archive claim hash or path does not match.')
+      fail(
+        'The privileged compaction archive claim hash or path does not match.',
+      )
     }
     const expectedHash = `sha256:${createHash('sha256').update(stableJson(input.archiveLines)).digest('hex')}`
     if (expectedHash !== input.archiveHash) {
-      fail('The privileged compaction archive hash does not match the archive lines.')
+      fail(
+        'The privileged compaction archive hash does not match the archive lines.',
+      )
     }
     const before = await this.getStoreStats({ projectId: input.projectId })
     const placeholders = input.eventIds.map(() => '?').join(',')
@@ -1746,7 +2849,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         )
         .all(...input.eventIds, input.projectId) as Array<{ event_id: string }>
       if (existing.length !== input.eventIds.length) {
-        fail('The privileged compaction events were not found for this project.')
+        fail(
+          'The privileged compaction events were not found for this project.',
+        )
       }
       // P6 fail-closed closure verification BEFORE the delete trigger is
       // dropped: every observation referenced by a batch event must have its
@@ -1772,7 +2877,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
         try {
           payload = JSON.parse(row.payload_json) as unknown
         } catch {
-          fail('The privileged compaction batch contains a malformed event payload.')
+          fail(
+            'The privileged compaction batch contains a malformed event payload.',
+          )
         }
         batchEnvelopes.push({
           eventType: row.event_type,
@@ -1784,13 +2891,21 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       }
       const referencedObservationIds = new Set<string>()
       const batchAnchoredObservationIds = new Set<string>()
-      const batchEventIdSet = new Set(batchEnvelopes.map((envelope) => envelope.eventId))
+      const batchEventIdSet = new Set(
+        batchEnvelopes.map((envelope) => envelope.eventId),
+      )
       for (const envelope of batchEnvelopes) {
-        for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+        for (const id of observationIdsReferencedBy(
+          envelope.eventType,
+          envelope.payload,
+        )) {
           referencedObservationIds.add(id)
         }
         if (envelope.eventType === 'observation.recorded') {
-          for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+          for (const id of observationIdsReferencedBy(
+            envelope.eventType,
+            envelope.payload,
+          )) {
             batchAnchoredObservationIds.add(id)
           }
         }
@@ -1835,7 +2950,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           continue
         }
         const references = observationIdsReferencedBy(row.event_type, payload)
-        const conflict = references.find((id) => referencedObservationIds.has(id))
+        const conflict = references.find((id) =>
+          referencedObservationIds.has(id),
+        )
         if (conflict !== undefined) {
           fail(
             `Privileged compaction closure violated: shared event ${row.event_id} outside the batch references archived observation ${conflict}.`,
@@ -1849,7 +2966,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
             WHERE event_id IN (${placeholders})
               AND json_extract(metadata_json, '$.projectId') = ?${projectParamIndex}`,
         )
-        .run(...input.eventIds, input.projectId) as unknown as { changes: unknown }
+        .run(...input.eventIds, input.projectId) as unknown as {
+        changes: unknown
+      }
       if (Number(deleted.changes) !== input.eventIds.length) {
         fail('The privileged compaction delete did not remove every event.')
       }
@@ -1879,7 +2998,8 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
           prepared.sessionId,
           prepared.artifactId,
         )
-      for (const table of PROJECTION_TABLES) this.database.exec(`DELETE FROM ${table}`)
+      for (const table of PROJECTION_TABLES)
+        this.database.exec(`DELETE FROM ${table}`)
       // The usage projection must stay consistent with the surviving event log:
       // clearing the canonical events (including archived 'observation.reused'
       // events) invalidates their usage counters, so memory_usage is rebuilt
@@ -1888,6 +3008,7 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       this.database.exec('DELETE FROM memory_usage')
       // claim_dedup is rebuilt from the surviving log during the replay.
       this.database.exec('DELETE FROM claim_dedup')
+      clearKnowledgeProjection(this.database)
       setProjectionCursor(this.database, 0)
       replayProjections(this.database, Number.MAX_SAFE_INTEGER)
       this.database.exec('COMMIT')
@@ -1907,7 +3028,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
     }
     const after = await this.getStoreStats({ projectId: input.projectId })
     return {
-      archivedEventIds: [...input.eventIds] as PrivilegedCompactionResult['archivedEventIds'],
+      archivedEventIds: [
+        ...input.eventIds,
+      ] as PrivilegedCompactionResult['archivedEventIds'],
       beforeCount: before.eventCount,
       afterCount: after.eventCount,
       beforeBytes: before.bytes,
@@ -2022,6 +3145,106 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       )
       .get() as { value: string } | null
     return row ? Number(row.value) : 0
+  }
+
+  /** Repair pages commit their cursor with their data, so interruption/reopen resumes safely. */
+  private async ensureKnowledgeProjection(): Promise<void> {
+    if (this.closed) return
+    if (this.knowledgeRepair) return this.knowledgeRepair
+    this.knowledgeRepair = (async () => {
+      const producer = this.database
+        .query(
+          "SELECT value FROM memory_knowledge_metadata WHERE key='producer'",
+        )
+        .get() as { value: string } | null
+      if (producer?.value !== KNOWLEDGE_PRODUCER_VERSION)
+        throw incompatibleSchemaError()
+      const cursor = knowledgeCursor(this.database)
+      const checkpoint = this.database
+        .query(
+          "SELECT value FROM memory_knowledge_metadata WHERE key='cursorEventId'",
+        )
+        .get() as { value: string } | null
+      const anchor = cursor
+        ? (this.database
+            .query('SELECT event_id FROM memory_events WHERE sequence=?1')
+            .get(cursor) as { event_id: string } | null)
+        : null
+      if (
+        cursor > 0 &&
+        (!anchor || (checkpoint?.value && checkpoint.value !== anchor.event_id))
+      )
+        this.database
+          .transaction(() => clearKnowledgeProjection(this.database))
+          .immediate()
+      if (
+        !this.database
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge_fts'",
+          )
+          .get()
+      )
+        this.database.exec(
+          'DROP TRIGGER IF EXISTS memory_knowledge_ai;DROP TRIGGER IF EXISTS memory_knowledge_ad;DROP TRIGGER IF EXISTS memory_knowledge_au;',
+        )
+      while (!this.closed) {
+        const repaired = this.database
+          .transaction(() => {
+            const cursor = knowledgeCursor(this.database)
+            const rows = this.database
+              .query(
+                `SELECT sequence,event_id,idempotency_key,event_type,occurred_at,payload_json,metadata_json,task_id,session_id,artifact_id FROM memory_events WHERE sequence>?1 ORDER BY sequence LIMIT ?2`,
+              )
+              .all(cursor, PAGE_SIZE) as EventRow[]
+            for (const row of rows) {
+              validateCanonicalProjectionRow(row)
+              const metadata = JSON.parse(row.metadata_json) as Record<
+                string,
+                unknown
+              >
+              if (
+                metadata.schemaVersion === 2 &&
+                CANONICAL_EVENT_TYPES.has(row.event_type)
+              )
+                applyKnowledgeEvent(this.database, envelopeFromRow(row))
+              advanceKnowledgeCursor(
+                this.database,
+                row.sequence,
+                row.occurred_at,
+                row.event_id,
+              )
+            }
+            return rows.length
+          })
+          .immediate()
+        if (repaired === 0) break
+        await yieldToEventLoop()
+      }
+    })()
+    try {
+      await this.knowledgeRepair
+    } finally {
+      this.knowledgeRepair = undefined
+    }
+  }
+
+  private async ensureArchiveMigration(): Promise<number> {
+    if (this.archiveMigration) return this.archiveMigration
+    this.archiveMigration = (async () => {
+      let invalid = 0
+      while (!this.closed) {
+        const page = migrateArchivePage(this.database)
+        invalid = page.invalid
+        if (!page.remaining) break
+        await yieldToEventLoop()
+      }
+      return invalid
+    })()
+    try {
+      return await this.archiveMigration
+    } finally {
+      this.archiveMigration = undefined
+    }
   }
 }
 
@@ -2146,7 +3369,9 @@ function secureDatabaseFiles(prepared: PreparedDatabasePath): void {
   }
 }
 
-function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
+async function preflightExistingDatabase(
+  prepared: PreparedDatabasePath,
+): Promise<void> {
   if (!prepared.existingIdentity) return
   for (const path of databasePaths(prepared.databasePath)) {
     const entry = lstatExisting(path)
@@ -2163,11 +3388,6 @@ function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
       'PRAGMA user_version',
       'user_version',
     )
-    if (
-      readPragmaString(database, 'PRAGMA quick_check(1)', 'quick_check') !==
-      'ok'
-    )
-      throw corruptStoreError()
     if (version > SCHEMA_VERSION) {
       throw new MemoryV2StorageError({
         kind: 'incompatible',
@@ -2178,6 +3398,11 @@ function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
     if (version >= 1 && version <= SCHEMA_VERSION)
       validateSchemaShape(database, version)
     else if (version !== 0) throw incompatibleSchemaError()
+    // Keep the corruption gate before every writable open, but run its full
+    // database scan off the TUI thread. Worker failure also refuses the open.
+    if (!(await checkSQLiteIntegrity(prepared.databasePath))) {
+      throw corruptStoreError()
+    }
   } finally {
     database?.close()
   }
@@ -2190,6 +3415,17 @@ function validateSchemaShape(database: Database, version: number): void {
     'memory_store_capabilities',
   ]
   if (version >= 2) requiredTables.push(...PROJECTION_TABLES)
+  if (version >= 7)
+    requiredTables.push(
+      'context_archive_snapshots',
+      'context_archive_messages',
+      'context_archive_bodies',
+      'context_archive_memberships',
+      'context_archive_original_bodies',
+      'context_archive_originals',
+      'context_archive_original_refs',
+      'context_archive_cutoffs',
+    )
   const tables = database
     .query(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${requiredTables.map(() => '?').join(',')})`,
@@ -2229,6 +3465,42 @@ function validateSchemaShape(database: Database, version: number): void {
     }
   }
 
+  if (version >= 7) {
+    assertTableColumns(database, 'context_archive_snapshots', [
+      'snapshot_id',
+      'manifest_hash',
+      'provenance_json',
+      'pinned',
+      'expires_at',
+    ])
+    assertTableColumns(database, 'context_archive_original_bodies', [
+      'body_id',
+      'sha256',
+      'utf8_bytes',
+      'text',
+    ])
+    assertTableColumns(database, 'context_archive_originals', [
+      'run_id',
+      'tool_call_id',
+      'body_id',
+      'captured_at',
+      'step',
+      'tool_name',
+      'retired_reason',
+    ])
+    assertTableColumns(database, 'context_archive_original_refs', [
+      'snapshot_id',
+      'msg_index',
+      'run_id',
+      'tool_call_id',
+      'body_id',
+    ])
+    assertTableColumns(database, 'context_archive_cutoffs', [
+      'run_id',
+      'archived_at',
+      'reason',
+    ])
+  }
   const triggers = database
     .query(
       `SELECT name, sql FROM sqlite_master
@@ -2350,11 +3622,57 @@ function migrate(database: Database): void {
     database.exec(MEMORY_USAGE_DDL)
     // Additive P7 projection table: created idempotently on every open so
     // existing stores gain it without a structural migration. This build
-    // also bumps PRAGMA user_version to SCHEMA_VERSION (3) below, so a
+    // also bumps PRAGMA user_version to the current SCHEMA_VERSION below, so a
     // pre-P7 build sharing the file fails closed at its own open (version
     // > its SCHEMA_VERSION) instead of compacting/rebuilding a store whose
     // claim.reinforced protection it cannot see.
     database.exec(CLAIM_DEDUP_DDL)
+    database.exec(KNOWLEDGE_PROJECTION_DDL)
+    const hadKnowledgeFts = !!database
+      .query(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge_fts'",
+      )
+      .get()
+    try {
+      database.exec(KNOWLEDGE_FTS_DDL)
+      if (!hadKnowledgeFts)
+        database.exec(
+          "INSERT INTO memory_knowledge_fts(memory_knowledge_fts) VALUES ('rebuild')",
+        )
+    } catch {
+      /* Indexed selectors remain available without FTS5. */
+    }
+    const knowledgeProducer = database
+      .query("SELECT value FROM memory_knowledge_metadata WHERE key='producer'")
+      .get() as { value: string } | null
+    if (knowledgeProducer?.value === 'current-knowledge-1') {
+      if (
+        !database
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge_fts'",
+          )
+          .get()
+      )
+        database.exec(
+          'DROP TRIGGER IF EXISTS memory_knowledge_ai;DROP TRIGGER IF EXISTS memory_knowledge_ad;DROP TRIGGER IF EXISTS memory_knowledge_au;',
+        )
+      // Version 1 collapsed symbol occurrences in evidence freshness. Keep
+      // canonical history and resume the corrected projection from zero.
+      clearKnowledgeProjection(database)
+      database
+        .query(
+          "UPDATE memory_knowledge_metadata SET value=?1 WHERE key='producer'",
+        )
+        .run(KNOWLEDGE_PRODUCER_VERSION)
+    }
+    // Bodies and manifests migrate transactionally, with payload backfill
+    // deferred to bounded resumable pages on the archive surface.
+    migrateContextArchiveSchema(database)
+    database.exec(ARCHIVE_ORIGINAL_DDL)
+    // Additive procedural-memory table: created idempotently on every open so
+    // existing stores gain it without a structural migration. Nothing here
+    // touches the canonical event log or its append-only triggers.
+    database.exec(MEMORY_PLAYBOOKS_DDL)
     inferAndBindProject(database)
     // A v1->v2 migration replay must stay correct-and-complete: truncating it
     // would leave the projections partially applied while the migration commits,
@@ -2594,6 +3912,298 @@ const CLAIM_DEDUP_DDL = `
   CREATE INDEX IF NOT EXISTS claim_dedup_observation ON claim_dedup(observation_id);
 `
 
+/**
+ * Context-archive persistence side tables (the cross-session recall_context
+ * source). Purely additive: nothing here touches memory_events, claims,
+ * observations, projections, the MIGRATION_1 triggers, or the replay
+ * semantics — recall reads never flow back into the canonical log.
+ *
+ * PRIVACY NOTE: tool bodies persist as sanitized by the CLI's
+ * sanitizeForChatPersistence — saveChatState flushes the already-sanitized
+ * run state, so this store never persists tool bodies less redacted than
+ * the per-session run-state.json written by the same pass
+ * (cli/src/utils/run-state-storage.ts saveChatState); this store lives in
+ * the same user-local, project-bound trust domain.
+ */
+const PLAYBOOK_SELECT_COLUMNS = `playbook_id, workspace_id, task_id, title, instruction,
+       trigger_json, scope_json, status, enforcement, counters_json,
+       provenance_json, trigger_signature, expires_at, created_at, updated_at`
+
+/**
+ * Procedural-memory table (memory_playbooks): purely additive, created
+ * idempotently on every open so existing stores gain it without a structural
+ * migration. The unique (workspace_id, trigger_signature) index is the
+ * playbook upsert/dedup key; the (workspace_id, status) index serves the
+ * active-playbook lookup the runtime gate performs every turn.
+ */
+const MEMORY_PLAYBOOKS_DDL = `
+  CREATE TABLE IF NOT EXISTS memory_playbooks (
+    playbook_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    task_id TEXT,
+    title TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    trigger_json TEXT NOT NULL CHECK (json_valid(trigger_json)),
+    scope_json TEXT NOT NULL CHECK (json_valid(scope_json)),
+    status TEXT NOT NULL,
+    enforcement TEXT NOT NULL,
+    counters_json TEXT NOT NULL CHECK (json_valid(counters_json)),
+    provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+    trigger_signature TEXT NOT NULL,
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS memory_playbooks_workspace_status
+    ON memory_playbooks(workspace_id, status);
+  CREATE UNIQUE INDEX IF NOT EXISTS memory_playbooks_workspace_signature
+    ON memory_playbooks(workspace_id, trigger_signature);
+`
+
+/**
+ * Built-in seed playbooks installed per workspace by
+ * {@link BunSQLiteMemoryRepository.ensureSeedPlaybooks}. Each seed is keyed
+ * by its computeTriggerSignature(trigger, scope); the per-seed existence
+ * check in that method skips a seed already present for the workspace, so
+ * exact host-owned legacy rows are upgraded to validation receipts while
+ * operator state and text survive. User-owned rules remain independent.
+ */
+const SEED_PLAYBOOKS: ReadonlyArray<{
+  trigger: PlaybookTrigger
+  scope: PlaybookScope
+  title: string
+  instruction: string
+  status: PlaybookStatus
+  enforcement: PlaybookEnforcement
+  provenance: MemoryProvenance
+}> = [
+  {
+    trigger: {
+      tool: 'spawn_agents',
+      spawnAgentType: 'git-committer',
+      requireEvidence: [
+        {
+          kind: 'validationSucceeded',
+          validationKinds: ['ci-local', 'package-checks'],
+          withinMs: 1_800_000,
+        },
+      ],
+    },
+    scope: { repos: [] },
+    title: 'Run the repo CI check before committing',
+    instruction:
+      'Before spawning git-committer to commit or push, require a successful host validation receipt for the repository CI check or the appropriate package checks whose source and configuration dependencies still match. Reuse a valid receipt produced by another actor; otherwise run the required check.',
+    status: 'active',
+    enforcement: 'warn',
+    provenance: {
+      origin: 'migration',
+      recordedBy: 'bun-sqlite-memory-v2',
+      sourceEventIds: [],
+      metadata: {},
+    },
+  },
+  {
+    // A matching host-attested validation receipt can be reused across actors.
+    trigger: {
+      tool: 'run_terminal_command',
+      terminalAction: 'git-push',
+      requireEvidence: [
+        {
+          kind: 'validationSucceeded',
+          validationKinds: ['ci-local', 'package-checks'],
+          withinMs: 1_800_000,
+        },
+      ],
+    },
+    scope: { repos: [] },
+    title: 'Run the repo CI check before pushing directly',
+    instruction:
+      'Before a direct git push, require a successful host validation receipt for the repository CI check or the appropriate package checks with matching source and configuration dependencies. A valid receipt produced by any actor is reusable. Run the required check when no valid receipt exists; do not push after failed or skipped validation.',
+    status: 'active',
+    enforcement: 'warn',
+    provenance: {
+      origin: 'migration',
+      recordedBy: 'bun-sqlite-memory-v2',
+      sourceEventIds: [],
+      metadata: {},
+    },
+  },
+]
+
+/** Upgrade only the two exact host-owned legacy recipes; operator text and quality survive. */
+function upgradeOwnedSeedPlaybook(
+  database: Database,
+  workspaceId: string,
+  seed: (typeof SEED_PLAYBOOKS)[number],
+): void {
+  const legacyTrigger = {
+    ...seed.trigger,
+    requireEvidence: [
+      {
+        kind: 'toolSucceeded' as const,
+        tool: 'run_terminal_command',
+        commandPattern: '*check:ci-local*',
+        withinMs: 14_400_000,
+      },
+    ],
+  }
+  const legacySignature = computeTriggerSignature(legacyTrigger, seed.scope)
+  const old = database
+    .query(
+      `SELECT ${PLAYBOOK_SELECT_COLUMNS} FROM memory_playbooks WHERE workspace_id=?1 AND trigger_signature=?2`,
+    )
+    .get(workspaceId, legacySignature) as PlaybookRow | null
+  if (!old) return
+  const provenance = JSON.parse(old.provenance_json) as MemoryProvenance
+  if (
+    provenance.origin !== 'migration' ||
+    provenance.recordedBy !== 'bun-sqlite-memory-v2'
+  )
+    return
+  if (
+    stableJson(JSON.parse(old.trigger_json)) !== stableJson(legacyTrigger) ||
+    stableJson(JSON.parse(old.scope_json)) !== stableJson(seed.scope)
+  )
+    return
+  const nextSignature = computeTriggerSignature(seed.trigger, seed.scope)
+  const collision = database
+    .query(
+      `SELECT ${PLAYBOOK_SELECT_COLUMNS} FROM memory_playbooks WHERE workspace_id=?1 AND trigger_signature=?2`,
+    )
+    .get(workspaceId, nextSignature) as PlaybookRow | null
+  let counters = PlaybookCountersSchema.parse(JSON.parse(old.counters_json))
+  if (collision) {
+    const collisionProvenance = JSON.parse(
+      collision.provenance_json,
+    ) as MemoryProvenance
+    if (
+      collisionProvenance.origin !== 'migration' ||
+      collisionProvenance.recordedBy !== 'bun-sqlite-memory-v2'
+    ) {
+      // Existing operator policy owns the new identity. Preserve the old row
+      // for inspection, with its prior state recorded in provenance.
+      database
+        .query(
+          "UPDATE memory_playbooks SET status='retired',provenance_json=?1 WHERE playbook_id=?2",
+        )
+        .run(
+          JSON.stringify({
+            ...provenance,
+            metadata: {
+              ...provenance.metadata,
+              legacyStatus: provenance.metadata.legacyStatus ?? old.status,
+              seedMigration: 'validation-receipts-1',
+            },
+          }),
+          old.playbook_id,
+        )
+      return
+    }
+    const other = PlaybookCountersSchema.parse(
+      JSON.parse(collision.counters_json),
+    )
+    counters = {
+      ...counters,
+      fired: counters.fired + other.fired,
+      blocked: counters.blocked + other.blocked,
+      compliedAfterBlock:
+        counters.compliedAfterBlock + other.compliedAfterBlock,
+      falsePositives: counters.falsePositives + other.falsePositives,
+      bypassed: counters.bypassed + other.bypassed,
+      ...(counters.lastFiredAt || other.lastFiredAt
+        ? {
+            lastFiredAt: Math.max(
+              counters.lastFiredAt ?? 0,
+              other.lastFiredAt ?? 0,
+            ),
+          }
+        : {}),
+      ...(counters.lastFalsePositiveAt || other.lastFalsePositiveAt
+        ? {
+            lastFalsePositiveAt: Math.max(
+              counters.lastFalsePositiveAt ?? 0,
+              other.lastFalsePositiveAt ?? 0,
+            ),
+          }
+        : {}),
+    }
+    database
+      .query('DELETE FROM memory_playbooks WHERE playbook_id=?1')
+      .run(collision.playbook_id)
+  }
+  const originalInstruction = seed.trigger.spawnAgentType
+    ? 'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.'
+    : "Before any direct `git push` from the orchestrator, run the repository CI check yourself with run_terminal_command in this session (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) as its own command and let it succeed first. Do not delegate the check to a subagent — a subagent's runs are not visible to this check — and do not push on a red or skipped check."
+  database
+    .query(
+      'UPDATE memory_playbooks SET trigger_json=?1,trigger_signature=?2,instruction=?3,counters_json=?4,provenance_json=?5,updated_at=?6 WHERE playbook_id=?7',
+    )
+    .run(
+      JSON.stringify(seed.trigger),
+      nextSignature,
+      old.instruction === originalInstruction
+        ? seed.instruction
+        : old.instruction,
+      JSON.stringify(counters),
+      JSON.stringify({
+        ...provenance,
+        metadata: {
+          ...provenance.metadata,
+          seedMigration: 'validation-receipts-1',
+        },
+      }),
+      Date.now(),
+      old.playbook_id,
+    )
+}
+
+/** Escape LIKE wildcards so a user term matches literally. */
+function escapeLikePattern(term: string): string {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`)
+}
+
+/** Count distinct (run_id, archived_at) snapshots among scanned rows. */
+function countDistinctArchiveSnapshots(
+  rows: ContextArchiveMessageRow[],
+): number {
+  const seen = new Set<string>()
+  for (const row of rows)
+    seen.add(row.snapshot_id ?? `${row.run_id}\u0000${row.archived_at}`)
+  return seen.size
+}
+
+/**
+ * Build bounded matches from scanned message rows: each match carries a
+ * snippet centered on the first occurrence of any query term (mirroring the
+ * runtime scanner's snippet shape). Rows beyond `limit` are dropped but
+ * still count toward snapshotsSearched.
+ */
+function buildArchiveSearchMatches(
+  rows: ContextArchiveMessageRow[],
+  terms: string[],
+  limit: number,
+): ContextArchiveSearchMatch[] {
+  const matches: ContextArchiveSearchMatch[] = []
+  for (const row of rows) {
+    if (matches.length >= limit) break
+    const lowered = row.body.toLowerCase()
+    const offsets = terms
+      .map((term) => lowered.indexOf(term))
+      .filter((offset) => offset >= 0)
+    const first = offsets.length > 0 ? Math.min(...offsets) : 0
+    const start = Math.max(0, first - CONTEXT_ARCHIVE_SNIPPET_CONTEXT)
+    matches.push({
+      runId: row.run_id,
+      archivedAt: row.archived_at,
+      step: row.step ?? 0,
+      toolName: row.tool_name ?? '',
+      toolCallId: row.tool_call_id ?? '',
+      snippet: row.body.slice(start, start + CONTEXT_ARCHIVE_SNIPPET_CHARS),
+    })
+  }
+  return matches
+}
+
 function recordRuntimeCapabilities(
   database: Database,
   journalMode: string,
@@ -2676,7 +4286,7 @@ function prepareEvent(
       sessionId: value.sessionId,
     })
 
-  return {
+  const prepared: PreparedEvent = {
     eventId,
     idempotencyKey,
     eventType,
@@ -2693,6 +4303,12 @@ function prepareEvent(
       512,
     ),
   }
+  if (
+    objectValue(metadata).schemaVersion === 2 &&
+    CANONICAL_EVENT_TYPES.has(eventType)
+  )
+    envelopeFromPrepared(prepared, 1)
+  return prepared
 }
 
 function compactObject(
@@ -2740,6 +4356,7 @@ function applyProjection(
   database: Database,
   event: PreparedEvent,
   sequence: number,
+  maintainKnowledge = true,
 ): void {
   const payload =
     event.payload && typeof event.payload === 'object'
@@ -2749,6 +4366,12 @@ function applyProjection(
     event.metadata &&
     typeof event.metadata === 'object' &&
     (event.metadata as Record<string, unknown>).schemaVersion === 2
+
+  if (maintainKnowledge) {
+    if (canonical && CANONICAL_EVENT_TYPES.has(event.eventType))
+      applyKnowledgeEvent(database, envelopeFromPrepared(event, sequence))
+    advanceKnowledgeCursor(database, sequence, event.occurredAt, event.eventId)
+  }
 
   switch (event.eventType) {
     case 'task.created':
@@ -3237,9 +4860,11 @@ function upsertUsage(
       `SELECT used_count, ignored_count, last_sequence
          FROM memory_usage WHERE observation_id = ?1`,
     )
-    .get(id) as
-    | { used_count: number; ignored_count: number; last_sequence: number }
-    | null
+    .get(id) as {
+    used_count: number
+    ignored_count: number
+    last_sequence: number
+  } | null
   if (prior && sequence <= prior.last_sequence) return
   const usedCount = (prior?.used_count ?? 0) + (column === 'used_count' ? 1 : 0)
   const ignoredCount =
@@ -3258,14 +4883,7 @@ function upsertUsage(
          last_turn_id = excluded.last_turn_id,
          last_sequence = excluded.last_sequence`,
     )
-    .run(
-      id,
-      usedCount,
-      ignoredCount,
-      projectionId(mechanism),
-      turnId,
-      sequence,
-    )
+    .run(id, usedCount, ignoredCount, projectionId(mechanism), turnId, sequence)
 }
 
 /**
@@ -3281,7 +4899,9 @@ function upsertClaimDedup(
   _sequence: number,
 ): void {
   const id =
-    typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId) ? claimId : null
+    typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId)
+      ? claimId
+      : null
   if (!id || !observationId) return
   const existing = database
     .query('SELECT observation_id FROM claim_dedup WHERE claim_id = ?1')
@@ -3328,9 +4948,7 @@ function setProjectionCursor(database: Database, sequence: number): void {
 
 function readClaimDedupBackfillCursor(database: Database): number {
   const row = database
-    .query(
-      'SELECT value FROM memory_projection_metadata WHERE key = ?1',
-    )
+    .query('SELECT value FROM memory_projection_metadata WHERE key = ?1')
     .get(CLAIM_DEDUP_BACKFILL_KEY) as { value: string } | null
   const parsed = row ? Number(row.value) : 0
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
@@ -3381,7 +4999,7 @@ function backfillClaimDedup(database: Database): void {
     if (rows.length === 0) break
     for (const row of rows) {
       validateCanonicalProjectionRow(row)
-      applyProjection(database, preparedEventFromRow(row), row.sequence)
+      applyProjection(database, preparedEventFromRow(row), row.sequence, false)
       cursor = row.sequence
     }
   }
@@ -3446,6 +5064,13 @@ function eventProjectId(event: PreparedEvent): string | null {
 
 function envelopeFromRow(row: EventRow): MemoryEventEnvelope {
   const event = preparedEventFromRow(row)
+  return envelopeFromPrepared(event, row.sequence)
+}
+
+function envelopeFromPrepared(
+  event: PreparedEvent,
+  sequence: number,
+): MemoryEventEnvelope {
   if (!event.metadata || typeof event.metadata !== 'object') {
     throw new Error('Stored canonical event metadata is invalid.')
   }
@@ -3457,7 +5082,7 @@ function envelopeFromRow(row: EventRow): MemoryEventEnvelope {
     eventId: event.eventId,
     projectId: metadata.projectId,
     sessionId: metadata.sessionId,
-    sequence: row.sequence,
+    sequence,
     occurredAt: event.occurredAt,
     payload: event.payload,
   })
@@ -3479,6 +5104,32 @@ function storedEventFromRow(row: EventRow): MemoryV2StoredEvent {
     sessionId: event.sessionId ?? undefined,
     artifactId: event.artifactId ?? undefined,
   }
+}
+
+/**
+ * Rebuild one stored playbook row through MemoryPlaybookSchema: every JSON
+ * column is parsed and schema-validated, so a corrupt store throws loudly
+ * instead of surfacing a silently coerced rule to the gate.
+ */
+function playbookFromRow(row: PlaybookRow): MemoryPlaybook {
+  return MemoryPlaybookSchema.parse({
+    schemaVersion: 1,
+    playbookId: row.playbook_id,
+    workspaceId: row.workspace_id,
+    ...(row.task_id === null ? {} : { taskId: row.task_id }),
+    title: row.title,
+    instruction: row.instruction,
+    trigger: JSON.parse(row.trigger_json) as unknown,
+    scope: JSON.parse(row.scope_json) as unknown,
+    status: row.status,
+    enforcement: row.enforcement,
+    counters: JSON.parse(row.counters_json) as unknown,
+    provenance: JSON.parse(row.provenance_json) as unknown,
+    triggerSignature: row.trigger_signature,
+    ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
 }
 
 function readProjectionRows(
@@ -3523,53 +5174,6 @@ function selectorKey(selector: MemorySelector): string {
   return base
 }
 
-function scanQueryRows(database: Database, projectId: string): QueryScanResult {
-  const admission = database
-    .query(
-      `SELECT sequence,
-            length(CAST(payload_json AS BLOB)) AS payload_bytes,
-            length(CAST(metadata_json AS BLOB)) AS metadata_bytes
-       FROM memory_events
-      WHERE json_extract(metadata_json, '$.projectId') = ?1
-      ORDER BY sequence DESC
-      LIMIT ?2`,
-    )
-    .all(projectId, MAX_QUERY_EVENTS + 1) as QueryAdmissionRow[]
-  const sequences: number[] = []
-  let bytes = 0
-  let payloadBudgetReached = false
-  for (const row of admission.slice(0, MAX_QUERY_EVENTS)) {
-    const rowBytes = row.payload_bytes + row.metadata_bytes
-    if (bytes + rowBytes > MAX_QUERY_PAYLOAD_BYTES) {
-      payloadBudgetReached = true
-      break
-    }
-    sequences.push(row.sequence)
-    bytes += rowBytes
-  }
-  if (sequences.length === 0) {
-    return {
-      rows: [],
-      eventCapReached: admission.length > MAX_QUERY_EVENTS,
-      payloadBudgetReached,
-    }
-  }
-  const rows = database
-    .query(
-      `SELECT sequence, event_id, idempotency_key, event_type, occurred_at,
-            payload_json, metadata_json, task_id, session_id, artifact_id
-       FROM memory_events
-      WHERE sequence IN (${sequences.map(() => '?').join(',')})
-      ORDER BY sequence DESC`,
-    )
-    .all(...sequences) as EventRow[]
-  return {
-    rows,
-    eventCapReached: admission.length > MAX_QUERY_EVENTS,
-    payloadBudgetReached,
-  }
-}
-
 function lexicalTokens(value: string): Set<string> {
   return new Set(
     value
@@ -3594,241 +5198,53 @@ async function buildLexicalResult(
   eventCapReached: boolean,
   payloadBudgetReached: boolean,
   recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
+  projection?: KnowledgeQueryRows,
+  loadConceptStates?: (ids: string[]) => Promise<KnowledgeObservationState[]>,
 ) {
-  type ObservationState = {
-    observation: MemoryObservation
-    sourceSequence: number
-    sourceEventId: string
-    forgotten: boolean
-    superseded: boolean
-    corrected: boolean
-    pinned: boolean
-    used: number
-    ignored: number
-    reinforced: number
-    freshness: Map<
-      string,
-      {
-        state: 'verified' | 'invalid'
-        at: string
-        reason?: string
-        observedDigest?: string
-        workspaceRevision?: number
-        workspaceSnapshotId?: string
-      }
-    >
+  type ObservationState = Omit<KnowledgeObservationState, 'freshness'> & {
+    freshness: Map<string, KnowledgeObservationState['freshness'][string]>
   }
-  type TaskState = {
-    taskId: string
-    title: string
-    objective: string
-    status:
-      | 'created'
-      | 'active'
-      | 'blocked'
-      | 'completed'
-      | 'failed'
-      | 'cancelled'
-    sourceSequence: number
-    eventId: string
-  }
+  type TaskState = KnowledgeTaskState
   const observations = new Map<string, ObservationState>()
   const tasks = new Map<string, TaskState>()
-  // P7 supersession head map: observation id -> the observation id that
-  // superseded it, folded from claim.superseded events during the replay so
-  // historicalContext can resolve the tail of a supersession chain.
   const supersededBy = new Map<string, string>()
-
-  for (const event of events) {
-    if (event.eventType === 'task.created') {
-      tasks.set(event.payload.taskId, {
-        taskId: event.payload.taskId,
-        title: event.payload.title,
-        objective: event.payload.objective,
-        status: event.payload.initialStatus,
-        sourceSequence: event.sequence,
-        eventId: event.eventId,
-      })
-    } else if (event.eventType === 'task.transitioned') {
-      const task = tasks.get(event.payload.taskId)
-      if (task)
-        tasks.set(task.taskId, {
-          ...task,
-          status: event.payload.toStatus,
-          sourceSequence: event.sequence,
-          eventId: event.eventId,
-        })
-    } else if (event.eventType === 'observation.recorded') {
-      observations.set(event.payload.observation.observationId, {
-        observation: event.payload.observation,
-        sourceSequence: event.sequence,
-        sourceEventId: event.eventId,
-        forgotten: false,
-        superseded: false,
-        corrected: false,
-        pinned: false,
-        used: 0,
-        ignored: 0,
-        reinforced: 0,
-        freshness: new Map(),
-      })
-    } else if (event.eventType === 'evidence.attached') {
-      const state = observations.get(event.payload.observationId)
-      if (state)
-        state.observation = {
-          ...state.observation,
-          evidence: [
-            ...state.observation.evidence,
-            ...event.payload.evidence,
-          ].slice(0, 32),
-        }
-    } else if (event.eventType === 'claim.consolidated') {
-      for (const id of event.payload.sourceObservationIds) {
-        const source = observations.get(id)
-        if (source) source.superseded = true
-      }
-      observations.set(event.payload.canonicalObservation.observationId, {
-        observation: event.payload.canonicalObservation,
-        sourceSequence: event.sequence,
-        sourceEventId: event.eventId,
-        forgotten: false,
-        superseded: false,
-        corrected: false,
-        pinned: false,
-        used: 0,
-        ignored: 0,
-        reinforced: 0,
-        freshness: new Map(),
-      })
-    } else if (event.eventType === 'claim.corrected') {
-      const prior = observations.get(event.payload.observationId)
-      if (prior) prior.corrected = true
-      observations.set(event.payload.correction.observationId, {
-        observation: event.payload.correction,
-        sourceSequence: event.sequence,
-        sourceEventId: event.eventId,
-        forgotten: false,
-        superseded: false,
-        corrected: false,
-        pinned: prior?.pinned ?? false,
-        used: 0,
-        ignored: 0,
-        reinforced: 0,
-        freshness: new Map(),
-      })
-    } else if (event.eventType === 'claim.forgotten') {
-      for (const id of event.payload.observationIds) {
-        const state = observations.get(id)
-        if (state) state.forgotten = true
-      }
-    } else if (event.eventType === 'claim.superseded') {
-      const state = observations.get(event.payload.observationId)
-      if (state) state.superseded = true
-      supersededBy.set(
-        event.payload.observationId,
-        event.payload.supersededByObservationId,
-      )
-    } else if (event.eventType === 'claim.pinned') {
-      const state = observations.get(event.payload.observationId)
-      if (state) state.pinned = true
-    } else if (event.eventType === 'evidence.verified') {
-      const state = observations.get(event.payload.observationId)
-      state?.freshness.set(selectorKey(event.payload.selector), {
-        state: 'verified',
-        at: event.payload.verifiedAt,
-        observedDigest: event.payload.observedDigest,
-        workspaceRevision: event.payload.workspaceRevision,
-        workspaceSnapshotId: event.payload.workspaceSnapshotId,
-      })
-    } else if (event.eventType === 'evidence.invalidated') {
-      const state = observations.get(event.payload.observationId)
-      state?.freshness.set(selectorKey(event.payload.selector), {
-        state: 'invalid',
-        at: event.payload.invalidatedAt,
-        reason: event.payload.reason,
-      })
-    } else if (event.eventType === 'evidence.rebound') {
-      const state = observations.get(event.payload.observationId)
-      if (state) {
-        state.observation = {
-          ...state.observation,
-          evidence: [
-            ...state.observation.evidence.filter(
-              (e) =>
-                selectorKey(e.selector) !==
-                selectorKey(event.payload.previousSelector),
-            ),
-            event.payload.evidence,
-          ],
-        }
-        state.freshness.delete(selectorKey(event.payload.previousSelector))
-      }
-    } else if (event.eventType === 'observation.reused') {
-      // Fold the P4 usage counters into observation state so retrieval can
-      // score reusability without ever reading the memory_usage projection
-      // table directly (fold events, never tables). Unknown observation ids
-      // are ignored and malformed payloads are tolerated objectArray-style.
-      for (const entry of objectArray(event.payload.used)) {
-        const state = observations.get(
-          typeof entry.observationId === 'string'
-            ? entry.observationId
-            : String(entry.observationId ?? ''),
-        )
-        if (state) state.used += 1
-      }
-      for (const entry of objectArray(event.payload.ignored)) {
-        const state = observations.get(
-          typeof entry.observationId === 'string'
-            ? entry.observationId
-            : String(entry.observationId ?? ''),
-        )
-        if (state) state.ignored += 1
-      }
-    } else if (event.eventType === 'claim.reinforced') {
-      // Fold the P7 reinforcement counter so retrieval usefulness scoring
-      // credits reinforced claims. Unknown observation ids are ignored,
-      // mirroring the observation.reused fold branch above.
-      const state = observations.get(event.payload.observationId)
-      if (state) state.reinforced += 1
-    }
-  }
-
-  // P8 wave 2a concept corpus: a bounded snapshot of ACTIVE observations
-  // (never forgotten/superseded/corrected) offered to the advisory recall
-  // expander. observationId code-point order and the 256-entry cap keep the
-  // corpus deterministic and bounded; claimId is carried only as a strict
-  // 64-hex value from the canonical provenance metadata key.
-  const conceptCorpus: ConceptCorpusEntry[] = [...observations.values()]
-    .filter(
-      (state) => !state.forgotten && !state.superseded && !state.corrected,
-    )
-    .map((state) => {
-      const entry: ConceptCorpusEntry = {
-        observationId: state.observation.observationId,
-        kind: state.observation.kind,
-        summary: state.observation.summary,
-      }
-      if (
-        typeof state.observation.detail === 'string' &&
-        state.observation.detail.length > 0
-      )
-        entry.detail = state.observation.detail
-      const claimId = state.observation.provenance?.metadata?.claimId
-      if (typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId))
-        entry.claimId = claimId
-      return entry
+  for (let index = 0; index < (projection?.observations.length ?? 0); index++) {
+    if (index % 32 === 0) await yieldToEventLoop()
+    const state = JSON.parse(
+      projection!.observations[index]!.state_json,
+    ) as KnowledgeObservationState
+    // Parse through the canonical schema before any derived projection can be injected.
+    const observation = MemoryObservationSchema.parse(state.observation)
+    observations.set(observation.observationId, {
+      ...state,
+      observation,
+      freshness: new Map(Object.entries(state.freshness)),
     })
-    .sort((left, right) =>
-      compareUnicodeCodePoints(left.observationId, right.observationId),
-    )
-    .slice(0, 256)
-
-  // Deterministic as-of wall clock: the latest occurredAt across the admitted
-  // event page (never Date.now), so usefulness age buckets are reproducible.
-  const asOfTurnWall = events.reduce(
-    (max, e) => (e.occurredAt > max ? e.occurredAt : max),
-    '1970-01-01T00:00:00.000Z',
+    if (state.supersededBy)
+      supersededBy.set(observation.observationId, state.supersededBy)
+  }
+  for (const row of projection?.tasks ?? []) {
+    const task = JSON.parse(row.state_json) as TaskState
+    tasks.set(task.taskId, task)
+  }
+  // The optional semantic index receives the complete eligible durable corpus.
+  // Candidate ranking remains bounded; corpus admission is independent of log age.
+  const conceptCorpus: ConceptCorpusEntry[] = (projection?.corpus ?? []).map(
+    (row) => ({
+      observationId: row.observation_id,
+      kind: row.kind,
+      summary: row.summary,
+      ...(row.detail ? { detail: row.detail } : {}),
+      ...(row.claim_id && /^[0-9a-f]{64}$/.test(row.claim_id)
+        ? { claimId: row.claim_id }
+        : {}),
+    }),
   )
+  const projectedAt = projection?.metadata.find(
+    (row) => row.key === 'generatedAt',
+  )?.value
+  const asOfTurnWall =
+    projectedAt ?? events.at(-1)?.occurredAt ?? '1970-01-01T00:00:00.000Z'
 
   const queryTokens = lexicalTokens(
     [request.query, ...request.selectors.map(selectorKey)].join(' '),
@@ -3841,6 +5257,11 @@ async function buildLexicalResult(
       : never,
   ) => {
     if (freshness.state !== 'verified') return false
+    if (
+      freshness.selector &&
+      stableJson(freshness.selector) !== stableJson(evidence.selector)
+    )
+      return false
     // Strict honesty gate for every path-bearing selector (file, line-range,
     // symbol, json-pointer, chunk): the observed digest must equal the
     // evidence contentDigest (for chunk selectors this is chunk.hash, not the
@@ -3850,6 +5271,35 @@ async function buildLexicalResult(
       if (evidence.contentDigest === undefined) return false
       if (freshness.observedDigest !== evidence.contentDigest) return false
     }
+    const dependencyDigests = request.dependencyDigests
+    const dependencyKey = selectorKey(evidence.selector)
+    if (
+      dependencyDigests &&
+      Object.prototype.hasOwnProperty.call(dependencyDigests, dependencyKey) &&
+      dependencyDigests[dependencyKey] !== freshness.observedDigest
+    )
+      return false
+    // Facts follow source dependencies; current operational assertions still
+    // require the exact workspace stamp that produced their receipt.
+    const operational =
+      evidence.provenance.metadata.validityScope === 'workspace' ||
+      [
+        'git_status',
+        'run_terminal_command',
+        'run_targeted_validation',
+        'run_file_change_hooks',
+      ].includes(evidence.provenance.toolName ?? '') ||
+      evidence.artifact.classification.labels.some((label) =>
+        ['workspace-state', 'clean-worktree', 'validation-result'].includes(
+          label,
+        ),
+      )
+    if (
+      !operational &&
+      dependencyDigests &&
+      Object.prototype.hasOwnProperty.call(dependencyDigests, dependencyKey)
+    )
+      return true
     const requestHasContext =
       request.workspaceRevision !== undefined ||
       request.workspaceSnapshotId !== undefined
@@ -4054,14 +5504,18 @@ async function buildLexicalResult(
         state.observation.selectors ??
         state.observation.evidence.map(({ selector }) => selector)
       const verified = state.observation.evidence.some((evidence) => {
-        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        const freshness = state.freshness.get(
+          knowledgeFreshnessKey(evidence.selector),
+        )
         return freshness !== undefined && contextMatches(evidence, freshness)
       })
       // Digest-freshness: true only when verified evidence carries a matching
       // contentDigest (chunk.hash for chunk selectors, not the file hash) plus
       // exact revision/snapshot equality already enforced by contextMatches.
       const digestFresh = state.observation.evidence.some((evidence) => {
-        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        const freshness = state.freshness.get(
+          knowledgeFreshnessKey(evidence.selector),
+        )
         return (
           freshness !== undefined &&
           contextMatches(evidence, freshness) &&
@@ -4073,7 +5527,10 @@ async function buildLexicalResult(
       // of present evidence.excerpt tokens; zero when no excerpt is present.
       const excerptTokens = new Set<string>()
       for (const evidence of state.observation.evidence) {
-        if (typeof evidence.excerpt === 'string' && evidence.excerpt.length > 0) {
+        if (
+          typeof evidence.excerpt === 'string' &&
+          evidence.excerpt.length > 0
+        ) {
           for (const token of lexicalTokens(evidence.excerpt))
             excerptTokens.add(token)
         }
@@ -4109,8 +5566,7 @@ async function buildLexicalResult(
                 )
               ? 1
               : 0
-      const retracted =
-        state.forgotten || state.superseded || state.corrected
+      const retracted = state.forgotten || state.superseded || state.corrected
       return {
         id: state.observation.observationId,
         state,
@@ -4153,7 +5609,9 @@ async function buildLexicalResult(
       !state.superseded &&
       !state.corrected &&
       state.observation.evidence.some((evidence) => {
-        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        const freshness = state.freshness.get(
+          knowledgeFreshnessKey(evidence.selector),
+        )
         return freshness !== undefined && contextMatches(evidence, freshness)
       }),
   )
@@ -4162,7 +5620,10 @@ async function buildLexicalResult(
       !state.forgotten &&
       !state.superseded &&
       !state.corrected &&
-      state.observation.kind === 'discovery',
+      (state.observation.kind === 'discovery' ||
+        state.observation.kind === 'fact' ||
+        state.observation.kind === 'decision' ||
+        state.observation.kind === 'constraint'),
   )
   const rereadCandidates = observationCandidates
     .filter(
@@ -4171,20 +5632,28 @@ async function buildLexicalResult(
     .flatMap(({ state, selectors, ranking }) =>
       selectors
         .map((selector) => {
-          const freshness = state.freshness.get(selectorKey(selector))
+          const freshness = state.freshness.get(knowledgeFreshnessKey(selector))
           const evidence = state.observation.evidence.find(
             (item) => selectorKey(item.selector) === selectorKey(selector),
           )
           if (freshness && evidence && contextMatches(evidence, freshness))
             return null
           const rereadReason =
-            freshness?.reason === 'missing'
-              ? 'missing'
-              : freshness?.reason === 'expired'
-                ? 'expired'
-                : freshness?.state === 'invalid'
-                  ? 'changed'
-                  : 'never-verified'
+            request.dependencyDigests &&
+            Object.prototype.hasOwnProperty.call(
+              request.dependencyDigests,
+              selectorKey(selector),
+            ) &&
+            request.dependencyDigests[selectorKey(selector)] !==
+              evidence?.contentDigest
+              ? 'changed'
+              : freshness?.reason === 'missing'
+                ? 'missing'
+                : freshness?.reason === 'expired'
+                  ? 'expired'
+                  : freshness?.state === 'invalid'
+                    ? 'changed'
+                    : 'never-verified'
           return {
             observationId: state.observation.observationId,
             selector,
@@ -4291,7 +5760,7 @@ async function buildLexicalResult(
       const verifiedSelectors = [...state.freshness].filter(
         ([key, freshness]) => {
           const evidence = state.observation.evidence.find(
-            (item) => selectorKey(item.selector) === key,
+            (item) => knowledgeFreshnessKey(item.selector) === key,
           )
           return evidence !== undefined && contextMatches(evidence, freshness)
         },
@@ -4299,7 +5768,7 @@ async function buildLexicalResult(
       const verifiedEvidence = verifiedSelectors
         .map(([key]) =>
           state.observation.evidence.find(
-            (evidence) => selectorKey(evidence.selector) === key,
+            (evidence) => knowledgeFreshnessKey(evidence.selector) === key,
           ),
         )
         .filter(
@@ -4323,9 +5792,12 @@ async function buildLexicalResult(
     .slice(0, limit)
     .map(({ state, ranking }) => ({
       observation: state.observation,
-      reuseGuidance: state.pinned
-        ? 'Pinned discovery; verify selectors before reuse.'
-        : 'Verify selectors before reusing this discovery.',
+      reuseGuidance:
+        state.observation.kind === 'discovery'
+          ? state.pinned
+            ? 'Pinned discovery; verify selectors before reuse.'
+            : 'Verify selectors before reusing this discovery.'
+          : `${state.pinned ? 'Pinned unverified' : 'Unverified'} ${state.observation.kind}; verify supporting selectors before reuse.`,
       score: ranking.score,
       reasons: ranking.reasons,
     }))
@@ -4338,6 +5810,18 @@ async function buildLexicalResult(
     try {
       const expansion = await recallExpander({ request, corpus: conceptCorpus })
       if (expansion && !expansion.degraded) {
+        if (loadConceptStates) {
+          for (const state of await loadConceptStates(
+            expansion.observationIds,
+          )) {
+            const observation = MemoryObservationSchema.parse(state.observation)
+            observations.set(observation.observationId, {
+              ...state,
+              observation,
+              freshness: new Map(Object.entries(state.freshness)),
+            })
+          }
+        }
         let appended = 0
         for (const id of expansion.observationIds) {
           // The result schema caps reusableDiscovery at 100 entries; never
@@ -4345,6 +5829,17 @@ async function buildLexicalResult(
           if (appended >= 8 || reusableDiscovery.length >= 100) break
           const state = observations.get(id)
           if (!state || state.forgotten || state.superseded || state.corrected)
+            continue
+          if (request.taskId && state.observation.taskId !== request.taskId)
+            continue
+          if (
+            request.artifactKinds.length &&
+            !state.observation.evidence.some((evidence) =>
+              request.artifactKinds.includes(
+                evidence.artifact.classification.kind,
+              ),
+            )
+          )
             continue
           if (reusableDiscovery.some((e) => e.observation.observationId === id))
             continue
@@ -4514,11 +6009,38 @@ async function buildLexicalResult(
     rereadCandidates.length > limit ||
     historicalCandidates.length > limit
   const degradationReasons = [
+    ...(projection?.lexicalFallback
+      ? [
+          {
+            code: 'partial-projection' as const,
+            detail:
+              'The optional full-text index is unavailable; an indexed-scope lexical fallback was used.',
+            retryable: true,
+          },
+        ]
+      : []),
+    ...(projection &&
+    Number(
+      projection.metadata.find((row) => row.key === 'cursor')?.value ?? 0,
+    ) <
+      Number(
+        projection.metadata.find((row) => row.key === 'canonicalTail')?.value ??
+          0,
+      )
+      ? [
+          {
+            code: 'partial-projection' as const,
+            detail:
+              'The knowledge projection has not reached the canonical tail.',
+            retryable: true,
+          },
+        ]
+      : []),
     ...(resultCapReached
       ? [
           {
             code: 'result-cap-reached' as const,
-            detail: 'The deterministic result or event cap was reached.',
+            detail: 'The indexed candidate or result cap was reached.',
             retryable: false,
           },
         ]
@@ -4537,7 +6059,7 @@ async function buildLexicalResult(
     schemaVersion: 2,
     queryId: request.queryId,
     projectId: request.projectId,
-    generatedAt: events.at(-1)?.occurredAt ?? '1970-01-01T00:00:00.000Z',
+    generatedAt: asOfTurnWall,
     ...categories,
     currentCoverage,
     degradation:

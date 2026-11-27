@@ -1,0 +1,32 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+Using environment: test
+55 |   expect(request).toContain('observation:b14-a'); expect(request).toContain('observation:b14-b')
+56 |   expect([...(result.sessionState?.mainAgentState.memoryV2EmittedObservationIds ?? [])].sort()).toEqual(['observation:b14-a', 'observation:b14-b'])
+57 |   const events = await repository.listEvents({ limit: 1000 })
+58 |   if (events.status === 'error') throw new Error(events.error.message)
+59 |   const reuse = events.events.filter(event => event.eventType === 'observation.reused').map(event => event.payload as { ignored: Array<{ observationId: string; mechanism: string }> })
+60 |   expect(reuse.flatMap(event => event.ignored)).toEqual(selected === 'a' ? [{ observationId: 'observation:b14-a', mechanism: 'reread-despite' }] : [])
+                                                     ^
+error: expect(received).toEqual(expected)
+
+- [
+-   {
+-     "mechanism": "reread-despite",
+-     "observationId": "observation:b14-a",
+-   },
+- ]
++ []
+
+- Expected  - 6
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/b14-memory-usage.test.ts:60:49)
+(fail) B14 actual SDK request and native read a persists only the matching emitted-source efficiency signal [215.21ms]
+(pass) B14 actual SDK request and native read c persists only the matching emitted-source efficiency signal [82.83ms]
+
+ 1 pass
+ 1 fail
+ 23 expect() calls
+Ran 2 tests across 1 file. [992.00ms]

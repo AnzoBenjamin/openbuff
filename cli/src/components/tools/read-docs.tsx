@@ -1,5 +1,9 @@
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
+import {
+  getToolOutputRecords,
+  getStructuredErrorMessages,
+} from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig } from './types'
 
@@ -23,15 +27,33 @@ export const ReadDocsComponent = defineToolComponent({
       return { content: null }
     }
 
+    const record = getToolOutputRecords(toolBlock.outputRaw)[0]
+    const selected =
+      record?.library && typeof record.library === 'object'
+        ? (record.library as Record<string, unknown>)
+        : undefined
+    const error = getStructuredErrorMessages(toolBlock.outputRaw)[0]
+    const state = error
+      ? 'failed'
+      : toolBlock.lifecycle === 'queued' ||
+          toolBlock.lifecycle === 'running' ||
+          toolBlock.lifecycle === 'cancelled' ||
+          toolBlock.lifecycle === 'failed'
+        ? toolBlock.lifecycle
+        : typeof record?.documentation === 'string'
+          ? record.documentation.trim()
+            ? 'captured'
+            : 'empty'
+          : 'output unavailable'
     const description =
       libraryTitle && topic
         ? `${libraryTitle}: ${topic}`
         : libraryTitle || topic
 
+    const detail = `${selected?.title ?? description}${typeof selected?.id === 'string' ? ` · ${selected.id}` : ''}${typeof selected?.branch === 'string' ? ` · branch ${selected.branch}` : ''} · ${state}${error ? ` · ${error}` : ''}`
     return {
-      content: (
-        <SimpleToolCallItem name="Read Docs" description={description} />
-      ),
+      collapsedPreview: `Read Docs · ${detail}`,
+      content: <SimpleToolCallItem name="Read Docs" description={detail} />,
     }
   },
 })

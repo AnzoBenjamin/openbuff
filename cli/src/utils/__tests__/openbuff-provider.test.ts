@@ -4,20 +4,24 @@ import path from 'path'
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
-import { clearProviderConfigCacheForTest } from '@openbuff/sdk'
+import {
+  clearProviderConfigCacheForTest,
+  setModelDiscoveryCachePathForTest,
+  writeModelDiscoveryCache,
+} from '@openbuff/sdk'
 
 import { setProjectRoot } from '../../project-files'
 import {
   addCustomOpenbuffProvider,
   configureOpenbuffModelFromArgs,
+  getKnownModelOptions,
   handleOpenbuffProviderCommand,
-  handleOpenbuffProviderWizardInput,
-  startOpenbuffProviderWizard,
 } from '../openbuff-provider'
 
 const originalProjectRoot = process.cwd()
 const originalCwd = process.cwd()
 let tempDir: string | undefined
+let originalProviderConfig: string | undefined
 
 function readOpenbuffConfig() {
   return JSON.parse(
@@ -28,19 +32,24 @@ function readOpenbuffConfig() {
 describe('openbuff-provider custom setup', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-provider-cli-'))
+    originalProviderConfig = process.env.OPENBUFF_PROVIDER_CONFIG
+    process.env.OPENBUFF_PROVIDER_CONFIG = path.join(tempDir, 'openbuff.json')
     setProjectRoot(tempDir)
-    // loadProviderConfigSync() resolves config paths from process.cwd(), not
-    // getProjectRoot(). Chdir to the temp dir so the status command finds the
-    // openbuff.json that addCustomOpenbuffProvider writes there. Without this,
-    // CI (which has no openbuff.json at the repo root) fails because the status
-    // command reads "Config: not found" instead of the written config.
+    // Select the fixture config even when the runner supplies an explicit path.
     process.chdir(tempDir)
+    setModelDiscoveryCachePathForTest(
+      path.join(tempDir, 'model-discovery-cache.json'),
+    )
     clearProviderConfigCacheForTest()
   })
 
   afterEach(() => {
+    setModelDiscoveryCachePathForTest(undefined)
     setProjectRoot(originalProjectRoot)
     process.chdir(originalCwd)
+    if (originalProviderConfig === undefined)
+      delete process.env.OPENBUFF_PROVIDER_CONFIG
+    else process.env.OPENBUFF_PROVIDER_CONFIG = originalProviderConfig
     clearProviderConfigCacheForTest()
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true })
@@ -143,6 +152,48 @@ describe('openbuff-provider custom setup', () => {
     })
   })
 
+  test('keeps OpenRouter seller-qualified discovery ids bound to the OpenRouter route', () => {
+    fs.writeFileSync(
+      path.join(tempDir!, 'openbuff.json'),
+      JSON.stringify({
+        providers: {
+          openrouter: {
+            type: 'openai-compatible',
+            baseURL: 'https://openrouter.ai/api/v1',
+            models: [],
+          },
+          anthropic: {
+            type: 'anthropic-compatible',
+            baseURL: 'https://api.anthropic.com',
+            models: [],
+          },
+        },
+      }),
+    )
+    clearProviderConfigCacheForTest()
+    writeModelDiscoveryCache({
+      providerId: 'openrouter',
+      fetchedAt: '2026-11-25T00:00:00.000Z',
+      schemaVersion: 1,
+      strategy: 'openrouter',
+      endpoint: 'https://openrouter.ai/api/v1/models',
+      responseSha256: 'a'.repeat(64),
+      models: [{ id: 'anthropic/claude-sonnet-4.5' }],
+      partial: false,
+      cacheUpdated: true,
+    })
+
+    const option = getKnownModelOptions().find(
+      (candidate) => candidate.discovered,
+    )
+    expect(option).toMatchObject({
+      model: 'openrouter/anthropic/claude-sonnet-4.5',
+      providerId: 'openrouter',
+      providerModelId: 'anthropic/claude-sonnet-4.5',
+      discovered: true,
+    })
+  })
+
   test('recommends only empirically measured models by language and task', () => {
     fs.writeFileSync(
       path.join(tempDir!, 'openbuff.json'),
@@ -182,45 +233,37 @@ describe('openbuff-provider custom setup', () => {
     expect(message).toContain('buffbench-rust-v1')
   })
 
-  test('custom provider wizard validates URL and API key env before writing', () => {
-    expect(startOpenbuffProviderWizard()).toContain('Openbuff provider wizard')
-    expect(handleOpenbuffProviderWizardInput('custom')).toMatchObject({
-      done: false,
-    })
-    expect(handleOpenbuffProviderWizardInput('claude-gateway')).toMatchObject({
-      done: false,
-    })
-    expect(
-      handleOpenbuffProviderWizardInput('anthropic-compatible'),
-    ).toMatchObject({
-      done: false,
-    })
+  test('addCustomOpenbuffProvider validates URL and API key env before writing', () => {
+    // The typed wizard that used to wrap this API was retired; the
+    // validation contract (reject invalid URLs and invalid env-var names
+    // BEFORE any config write) lives here.
+    const base = {
+      id: 'claude-gateway',
+      type: 'anthropic-compatible' as const,
+      models: ['claude-sonnet-4-5'] as string[],
+    }
 
-    const invalidUrl = handleOpenbuffProviderWizardInput('not-a-url')
-    expect(invalidUrl.done).toBe(false)
-    expect(invalidUrl.message).toContain('valid base URL')
+    expect(() =>
+      addCustomOpenbuffProvider({ ...base, baseURL: 'not-a-url' }),
+    ).toThrow(/valid provider base URL/)
     expect(fs.existsSync(path.join(tempDir!, 'openbuff.json'))).toBe(false)
 
-    expect(
-      handleOpenbuffProviderWizardInput('https://cc.freemodel.dev'),
-    ).toMatchObject({
-      done: false,
-    })
-
-    const invalidEnv = handleOpenbuffProviderWizardInput('bad-key')
-    expect(invalidEnv.done).toBe(false)
-    expect(invalidEnv.message).toContain('environment variable name')
+    expect(() =>
+      addCustomOpenbuffProvider({
+        ...base,
+        baseURL: 'https://cc.freemodel.dev',
+        apiKeyEnv: 'bad-key',
+      }),
+    ).toThrow(/environment variable name/)
     expect(fs.existsSync(path.join(tempDir!, 'openbuff.json'))).toBe(false)
 
-    expect(
-      handleOpenbuffProviderWizardInput('FREEMODEL_API_KEY'),
-    ).toMatchObject({
-      done: false,
+    const message = addCustomOpenbuffProvider({
+      ...base,
+      baseURL: 'https://cc.freemodel.dev',
+      apiKeyEnv: 'FREEMODEL_API_KEY',
+      models: ['claude-sonnet-4-5'],
     })
-    const done = handleOpenbuffProviderWizardInput('claude-sonnet-4-5')
-
-    expect(done.done).toBe(true)
-    expect(done.message).toContain(
+    expect(message).toContain(
       "Custom anthropic-compatible provider 'claude-gateway' added",
     )
     expect(readOpenbuffConfig()).toMatchObject({

@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "scope": "R13 delta after preserving all exact R12 data: N05 source-bound defensive egress acceptance and additional validation evidence; 24 base and six accepted PROD tasks when both layers are restored.",
+  "ledgerSha256": "e539f480617fb4c0e4c940a247ed899a50eafac3d091e0bfa8b9e4394d749b0d",
+  "fileCount": 15,
+  "objectCount": 15,
+  "originalBytes": 76743,
+  "requiredIgnoredPathCount": 687,
+  "files": [
+    {
+      "path": ".tmp/r13/n05/actual-transport/command.log",
+      "sha256": "eb2faadae0c9ba69a76090589fe4aeb70b555a572ed65f4f098e0b7d4648bcb3",
+      "bytes": 614,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/actual-transport/invocation.json",
+      "sha256": "5afd82c9164fb68222122d2e6ff1c655b01c8419144a98391a38b1fb2f399a0c",
+      "bytes": 6281,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/actual-transport/observations.json",
+      "sha256": "abbe17895798461b42f425bdd4b9054d70596cd4f52b8fa3b3cf1ac50335ddf0",
+      "bytes": 922,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/actual-transport/packet.json",
+      "sha256": "ff7a7f8a65fec1e0b605a387a523661ab2d769d236a399ce2f91f9b04eb172bb",
+      "bytes": 5285,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/adjacent/command.log",
+      "sha256": "f2f310b41edea23be717afb6001ab18454b58ace7e7b56326b879e81ef569849",
+      "bytes": 4409,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/adjacent/invocation.json",
+      "sha256": "51977f985e7759833559a84da888f4f0759b1b7a7979a108e5cbeae1a0fae5d0",
+      "bytes": 6230,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/adjacent/packet.json",
+      "sha256": "1a17c1d10d6862c3b762bd995ec0c7f374ca04c1745b51a3283d848947ecaab7",
+      "bytes": 5236,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/frozen-suite/command.log",
+      "sha256": "a5bd87be5c88494129b1ec3018d906e52012b1a3cedb0a9c0bb32b593b51438d",
+      "bytes": 1975,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/frozen-suite/invocation.json",
+      "sha256": "8853da1b3191ab1fccff236ed547b621c360e7550fa2ab3e4357ad298b7d72f5",
+      "bytes": 6127,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/frozen-suite/packet.json",
+      "sha256": "aa179155fa0bb8d9857ff13d20b58ee6df0c3ae171723209365e8931fb90263a",
+      "bytes": 5138,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/implementation-review.json",
+      "sha256": "61c934eff94546ba447365d27581756d3aee4d952be385aa1697215d00600b9b",
+      "bytes": 7867,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/independent.json",
+      "sha256": "bedf87a0953314b1c1f08f92af6990e5f86fba07888a8a3dac133e0562694ae2",
+      "bytes": 7709,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": ".tmp/r13/n05/transport-witness.ts",
+      "sha256": "ee0420ac5f8f65b16ab093cc79fb755f7f97beff5110ddc476acb39a17541853",
+      "bytes": 4046,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N05/accepted/20261127T103417773642Z-acceptance.json",
+      "sha256": "db7c40071c7a22d305553d47644c88270fea5ead1deef64f72af5adead8d077d",
+      "bytes": 9678,
+      "mode": 420,
+      "kind": "evidence"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N05/accepted/20261127T103417773642Z-manifest.json",
+      "sha256": "0a359fac8052581ee7417ebb76184a511fa3f05190dd12378e9866ba0eb15ea1",
+      "bytes": 5226,
+      "mode": 420,
+      "kind": "evidence"
+    }
+  ],
+  "parts": [
+    {
+      "path": "objects.tar.xz.part000",
+      "bytes": 8788,
+      "sha256": "bda38e8ab5afac7e8fa30cf999994842e91de3bfc1cbbcab4d865681884a72e3"
+    }
+  ],
+  "priorManifests": [
+    {
+      "path": "docs/execution/body-roadmap/archive/r12/manifest.json",
+      "sha256": "dd333ca071777d3170b01685ed3a0a659eafdd814b29449f9b210405c68f2998"
+    }
+  ],
+  "archive": {
+    "compression": "xz",
+    "bytes": 8788,
+    "sha256": "bda38e8ab5afac7e8fa30cf999994842e91de3bfc1cbbcab4d865681884a72e3"
+  },
+  "notBundled": "Installed deps, original ELF/SDK tarball and omitted auxiliary build bytes are not restored unless referenced by the validator.",
+  "limits": [
+    "Receipt consistency only; not live-model, arbitrary replay, cross-backend fencing or multiplatform assurance."
+  ]
+}

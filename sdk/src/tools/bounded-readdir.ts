@@ -47,16 +47,31 @@ export function supportsStreamDirectory(fs: CodebuffFileSystem): boolean {
 export async function readBoundedEntries(
   fs: CodebuffFileSystem,
   directoryPath: string,
+  options: {
+    offset?: number
+    limit?: number
+    filter?: (entry: Dirent) => boolean
+  } = {},
 ): Promise<Dirent[]> {
-  const limit = MAX_LIST_DIRECTORY_ENTRIES + 1
+  const limit = (options.limit ?? MAX_LIST_DIRECTORY_ENTRIES) + 1
+  const offset = options.offset ?? 0
   const streamDirectory = resolveStreamDirectory(fs)
   if (!streamDirectory) {
     const entries = await fs.readdir(directoryPath, { withFileTypes: true })
-    return entries.slice(0, limit)
+    return (options.filter ? entries.filter(options.filter) : entries).slice(
+      offset,
+      offset + limit,
+    )
   }
 
   const entries: Dirent[] = []
+  let skipped = 0
   for await (const entry of await streamDirectory.call(fs, directoryPath)) {
+    if (options.filter && !options.filter(entry)) continue
+    if (skipped < offset) {
+      skipped++
+      continue
+    }
     entries.push(entry)
     if (entries.length === limit) break
   }

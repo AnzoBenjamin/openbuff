@@ -3,7 +3,7 @@ import z from 'zod/v4'
 import {
   $getNativeToolCallExampleString,
   isObviousEditPlaceholder,
-  jsonToolResultSchema,
+  editToolResultSchema,
   normalizeReplacementAliases,
   normalizeReplacementList,
 } from '../utils'
@@ -234,5 +234,5 @@ export const strReplaceParams = {
   description,
   inputSchema,
   providerInputSchema,
-  outputSchema: jsonToolResultSchema(updateFileResultSchema),
+  outputSchema: editToolResultSchema(updateFileResultSchema),
 } satisfies $ToolParams

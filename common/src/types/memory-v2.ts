@@ -596,6 +596,72 @@ export type ProjectionRebuildFailedPayload = z.infer<
   typeof ProjectionRebuildFailedPayloadSchema
 >
 
+// Playbook (procedural memory) event payloads — Phase 1 part A of the
+// memory overhaul. Additive only: these five kinds extend the event-kind
+// unions below without touching any existing payload or kind. All playbook
+// payloads carry the `triggerSignature` (sha256 upsert/dedup key defined in
+// ./memory-playbook.ts) so consumers can correlate events to the exact rule
+// version without loading the playbook row.
+export const PlaybookBlockedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    title: z.string().min(1).max(200),
+    tool: z.string().min(1).max(128),
+    reason: shortTextSchema,
+    triggerSignature: z.string().min(1).max(128),
+  })
+  .strict()
+export type PlaybookBlockedPayload = z.infer<
+  typeof PlaybookBlockedPayloadSchema
+>
+
+export const PlaybookBypassedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+  })
+  .strict()
+export type PlaybookBypassedPayload = z.infer<
+  typeof PlaybookBypassedPayloadSchema
+>
+
+export const PlaybookProposedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+    origin: z.string().min(1).max(256),
+  })
+  .strict()
+export type PlaybookProposedPayload = z.infer<
+  typeof PlaybookProposedPayloadSchema
+>
+
+export const PlaybookActivatedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+  })
+  .strict()
+export type PlaybookActivatedPayload = z.infer<
+  typeof PlaybookActivatedPayloadSchema
+>
+
+export const PlaybookRetiredPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+    reason: longTextSchema,
+  })
+  .strict()
+export type PlaybookRetiredPayload = z.infer<
+  typeof PlaybookRetiredPayloadSchema
+>
+
 export const SessionStartedPayloadSchema = z
   .object({
     ...payloadVersionShape,
@@ -751,6 +817,11 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
     ProjectionRebuildCompletedPayloadSchema,
   ),
   eventDraft('projection.rebuild.failed', ProjectionRebuildFailedPayloadSchema),
+  eventDraft('playbook.blocked', PlaybookBlockedPayloadSchema),
+  eventDraft('playbook.bypassed', PlaybookBypassedPayloadSchema),
+  eventDraft('playbook.proposed', PlaybookProposedPayloadSchema),
+  eventDraft('playbook.activated', PlaybookActivatedPayloadSchema),
+  eventDraft('playbook.retired', PlaybookRetiredPayloadSchema),
 ])
 export type MemoryEventDraft = z.infer<typeof MemoryEventDraftSchema>
 
@@ -791,9 +862,21 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
     'projection.rebuild.failed',
     ProjectionRebuildFailedPayloadSchema,
   ),
+  eventEnvelope('playbook.blocked', PlaybookBlockedPayloadSchema),
+  eventEnvelope('playbook.bypassed', PlaybookBypassedPayloadSchema),
+  eventEnvelope('playbook.proposed', PlaybookProposedPayloadSchema),
+  eventEnvelope('playbook.activated', PlaybookActivatedPayloadSchema),
+  eventEnvelope('playbook.retired', PlaybookRetiredPayloadSchema),
 ])
 export type MemoryEventEnvelope = z.infer<typeof MemoryEventEnvelopeSchema>
 export type MemoryEventType = MemoryEventEnvelope['eventType']
+
+export type PlaybookEventPayload =
+  | PlaybookBlockedPayload
+  | PlaybookBypassedPayload
+  | PlaybookProposedPayload
+  | PlaybookActivatedPayload
+  | PlaybookRetiredPayload
 
 // lexical-match is preferred for token overlap, semantic-match retained for backwards compat.
 export const RankingReasonSchema = z
@@ -837,6 +920,11 @@ export const MemoryRetrievalRequestSchema = z
       .max(Number.MAX_SAFE_INTEGER)
       .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
+    /** Host-observed dependency digests; unrelated workspace changes do not invalidate facts. */
+    dependencyDigests: z
+      .record(z.string().max(2_048), z.string().max(256).nullable())
+      .refine((value) => Object.keys(value).length <= 1_024)
+      .optional(),
     selectors: z.array(MemorySelectorSchema).max(32),
     artifactKinds: z.array(ArtifactClassificationSchema.shape.kind).max(16),
     includeHistorical: z.boolean(),
@@ -1380,7 +1468,29 @@ export const MemoryReuseReceiptV1Schema = z
           decision: z.enum(['skip', 'narrow', 'full']),
           served: z.number().int().nonnegative(),
           gaps: z.number().int().nonnegative(),
-          coveredStableChunkIds: z.array(z.string().min(1).max(128)).max(32).optional(),
+          reason: z.string().max(64).optional(),
+          observedReads: z
+            .array(
+              z
+                .object({
+                  path: z.string().min(1).max(1024),
+                  contentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+                  startLine: z.number().int().positive().optional(),
+                  endLine: z.number().int().positive().optional(),
+                  reason: z.enum([
+                    'unchanged-reread',
+                    'required-refresh',
+                    'unknown',
+                  ]),
+                })
+                .strict(),
+            )
+            .max(32)
+            .optional(),
+          coveredStableChunkIds: z
+            .array(z.string().min(1).max(128))
+            .max(32)
+            .optional(),
         }),
       )
       .max(32)
@@ -1389,6 +1499,13 @@ export const MemoryReuseReceiptV1Schema = z
   .strict()
 export type MemoryReuseReceiptV1 = z.infer<typeof MemoryReuseReceiptV1Schema>
 
+// Playbook event kinds are NOT added to any GC relevance allowlist yet: no
+// such allowlist (e.g. a GC_RELEVANT_EVENT_TYPES set) is defined in this
+// module, so there is no membership to opt into here. Conservative choice:
+// only the lifecycle-terminal kinds (`playbook.retired`, `playbook.blocked`)
+// would ever be GC-eligible; until a real GC consumer exists, all playbook
+// kinds are retained. Revisit when the GC handler lands (memory overhaul
+// Phase 2).
 const operatorScopeShape = {
   schemaVersion: z.literal(2),
   projectId: ProjectIdSchema,
@@ -1806,7 +1923,11 @@ export const MemoryCompactionOutcomeSchema = z.discriminatedUnion('outcome', [
       outcome: z.literal('preview'),
       candidateEventIds: z.array(MemoryEventIdSchema).max(10_000),
       candidateCount: z.number().int().nonnegative().max(10_000),
-      archiveByteEstimate: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      archiveByteEstimate: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
       warnings: z.array(z.string().min(1).max(1_024)).max(100),
     })
     .strict(),

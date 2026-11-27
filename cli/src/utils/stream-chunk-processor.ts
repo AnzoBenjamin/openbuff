@@ -31,10 +31,17 @@ export const destinationFromChunkEvent = (
   }
 
   if (event.type === 'reasoning_chunk') {
-    if (event.ancestorRunIds.length === 0) {
-      return { type: 'root', textType: 'reasoning' }
+    // Mirror `destinationFromTextEvent`: an event carrying an `agentId` belongs
+    // to that agent's block, and only an event with NO agentId is root-owned.
+    // A DIRECT child of the orchestrator has an empty `ancestorRunIds` chain
+    // (it has no ancestor runs) but a non-empty `agentId`, so keying on
+    // ancestry alone rendered its thinking at the root while its text rendered
+    // in its own block. Keying on `agentId` matches the text convention and
+    // keeps a root reasoning delta (no agentId) at the root.
+    if (event.agentId) {
+      return { type: 'agent', agentId: event.agentId, textType: 'reasoning' }
     }
-    return { type: 'agent', agentId: event.agentId, textType: 'reasoning' }
+    return { type: 'root', textType: 'reasoning' }
   }
 
   return null

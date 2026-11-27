@@ -1,33 +1,19 @@
-import fs from 'fs'
-
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import { AttachmentCard } from './attachment-card'
 import { ImageThumbnail } from './image-thumbnail'
 import { useTheme } from '../hooks/use-theme'
-import {
-  supportsInlineImages,
-  renderInlineImage,
-} from '../utils/terminal-images'
+import { supportsInlineImages } from '../utils/terminal-images'
+import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
+import { fitAttachmentName } from '../utils/attachment-names'
+import { createAttachmentDocument } from '../utils/attachment-document'
+import { useOutputReaderStore } from '../state/output-reader-store'
 
 // Image card display constants
 const MAX_FILENAME_LENGTH = 16
 const IMAGE_CARD_WIDTH = 18
 const THUMBNAIL_WIDTH = 14
 const THUMBNAIL_HEIGHT = 3
-const INLINE_IMAGE_WIDTH = 4
-const INLINE_IMAGE_HEIGHT = 3
-
-const truncateFilename = (filename: string): string => {
-  if (filename.length <= MAX_FILENAME_LENGTH) {
-    return filename
-  }
-  const lastDot = filename.lastIndexOf('.')
-  const ext = lastDot !== -1 ? filename.slice(lastDot) : ''
-  const baseName = lastDot !== -1 ? filename.slice(0, lastDot) : filename
-  const maxBaseLength = MAX_FILENAME_LENGTH - ext.length - 1 // -1 for ellipsis
-  return baseName.slice(0, maxBaseLength) + '…' + ext
-}
 
 export interface ImageCardImage {
   path: string
@@ -44,74 +30,71 @@ interface ImageCardProps {
   image: ImageCardImage
   onRemove?: () => void
   showRemoveButton?: boolean
+  onInspect?: () => void
+  onRetry?: () => void
 }
 
 export const ImageCard = ({
   image,
   onRemove,
   showRemoveButton = true,
+  onInspect,
+  onRetry,
 }: ImageCardProps) => {
   const theme = useTheme()
-  const [thumbnailSequence, setThumbnailSequence] = useState<string | null>(
-    null,
-  )
+  const { terminalWidth } = useTerminalDimensions()
+  const width = Math.max(4, Math.min(IMAGE_CARD_WIDTH, terminalWidth - 10))
+  const [thumbnailState, setThumbnailState] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading')
+  const [previewRetry, setPreviewRetry] = useState(0)
+  const [failedSource, setFailedSource] = useState<string | null>(null)
   const canShowInlineImages = supportsInlineImages()
 
-  // Load thumbnail if terminal supports inline images (iTerm2/Kitty)
-  useEffect(() => {
-    if (!canShowInlineImages) return
-    // Skip loading while image is processing or has error to avoid race condition and unnecessary failed reads
-    if ((image.status ?? 'ready') !== 'ready') return
+  const source = image.processedImage
+    ? `data:${image.processedImage.mediaType};base64,${image.processedImage.base64}`
+    : image.path.startsWith('clipboard:')
+      ? null
+      : image.path
 
-    let cancelled = false
-
-    const loadThumbnail = async () => {
-      try {
-        let base64Data: string | undefined
-
-        if (image.processedImage) {
-          base64Data = image.processedImage.base64
-        } else if (!image.path.startsWith('clipboard:')) {
-          const imageData = fs.readFileSync(image.path)
-          base64Data = imageData.toString('base64')
-        }
-
-        if (base64Data) {
-          const sequence = renderInlineImage(base64Data, {
-            width: INLINE_IMAGE_WIDTH,
-            height: INLINE_IMAGE_HEIGHT,
-            filename: image.filename,
-          })
-          if (!cancelled) {
-            setThumbnailSequence(sequence)
-          }
-        } else {
-          if (!cancelled) {
-            setThumbnailSequence(null)
-          }
-        }
-      } catch {
-        // Failed to load image, will show icon fallback
-        if (!cancelled) {
-          setThumbnailSequence(null)
-        }
-      }
-    }
-
-    loadThumbnail()
-
-    return () => {
-      cancelled = true
-    }
-  }, [image, canShowInlineImages])
-
-  const truncatedName = truncateFilename(image.filename)
+  const truncatedName = fitAttachmentName(
+    image.filename,
+    Math.min(MAX_FILENAME_LENGTH, width - 4),
+  )
+  const previewNote =
+    (image.status ?? 'ready') === 'processing'
+      ? 'processing…'
+      : image.status === 'error'
+        ? (image.note ?? 'Image failed')
+        : image.processedImage?.base64 === ''
+          ? 'Empty capture'
+          : failedSource === source ||
+              (!canShowInlineImages && thumbnailState === 'error')
+            ? 'Preview failed'
+            : image.note
 
   return (
     <AttachmentCard
-      width={IMAGE_CARD_WIDTH}
+      width={width}
       onRemove={onRemove}
       showRemoveButton={showRemoveButton}
+      onRetry={() => {
+        setFailedSource(null)
+        setThumbnailState('loading')
+        setPreviewRetry((value) => value + 1)
+        onRetry?.()
+      }}
+      onInspect={
+        onInspect ??
+        (() =>
+          useOutputReaderStore.getState().open({
+            document: createAttachmentDocument({
+              ...image,
+              kind: 'image',
+              status: image.status ?? 'ready',
+            }),
+          }))
+      }
     >
       {/* Thumbnail or icon area */}
       <box
@@ -121,14 +104,24 @@ export const ImageCard = ({
           alignItems: 'center',
         }}
       >
-        {thumbnailSequence ? (
-          <text>{thumbnailSequence}</text>
+        {canShowInlineImages &&
+        source &&
+        failedSource !== source &&
+        (image.status ?? 'ready') === 'ready' ? (
+          <image
+            source={source}
+            protocol="auto"
+            onError={() => setFailedSource(source)}
+            style={{ width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }}
+          />
         ) : (
           <ImageThumbnail
             image={image}
             width={THUMBNAIL_WIDTH}
             height={THUMBNAIL_HEIGHT}
             fallback={<text style={{ fg: theme.muted }}>img</text>}
+            onLoadState={setThumbnailState}
+            retryToken={previewRetry}
           />
         )}
       </box>
@@ -149,16 +142,19 @@ export const ImageCard = ({
         >
           {truncatedName}
         </text>
-        {((image.status ?? 'ready') === 'processing' || image.note) && (
+        {previewNote && (
           <text
             style={{
-              fg: theme.muted,
+              fg:
+                image.status === 'error' ||
+                previewNote === 'Empty capture' ||
+                previewNote === 'Preview failed'
+                  ? theme.error
+                  : theme.muted,
               wrapMode: 'none',
             }}
           >
-            {(image.status ?? 'ready') === 'processing'
-              ? 'processing…'
-              : image.note}
+            {previewNote}
           </text>
         )}
       </box>

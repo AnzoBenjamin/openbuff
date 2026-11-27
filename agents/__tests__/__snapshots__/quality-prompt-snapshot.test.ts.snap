@@ -18,3 +18,12 @@ exports[`shared craftsmanship prompt sections qualitySection is byte-stable (sna
   - If you added files or functions meant to replace existing code, remove the previous code
 - **Don't type cast as "any":** Don't cast variables as "any" (or similar for other languages). This is a bad practice that leads to bugs. Exception: when the value can truly be any type."
 `;
+
+exports[`outputHygieneSection is byte-stable (snapshot) and interpolates into both deep consumers 1`] = `
+"# Output hygiene
+
+Your visible replies and tool outputs are the product; harness bookkeeping is not.
+
+- Never echo pseudo-XML context markers or internal annotations — \`<system_warning>\`, \`<memory>\`, \`<note>\`, or any similar tag the harness injects or you are tempted to invent. If the content of such a note matters to the task, state it in plain prose instead of quoting the wrapper.
+- Internal reasoning, self-checks, and memory bookkeeping stay out of user-visible text: report conclusions, not the scaffolding that produced them."
+`;

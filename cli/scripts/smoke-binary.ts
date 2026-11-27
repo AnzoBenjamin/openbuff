@@ -333,6 +333,16 @@ async function main(): Promise<void> {
   )
   vLog('smoke-binary: tree-sitter init OK.')
 
+  // N09: the installed layout must index a TS fixture with non-empty
+  // symbols, calls and imports (needs tree-sitter-queries/*.scm shipped).
+  await requireProbe(
+    binary,
+    '--smoke-code-map',
+    /code-map smoke ok/,
+    'code-map',
+  )
+  vLog('smoke-binary: code-map symbols/calls/imports OK.')
+
   await requireProbe(binary, '--smoke-opentui', /opentui smoke ok/, 'OpenTUI')
   vLog('smoke-binary: OpenTUI native init OK.')
 

@@ -18,9 +18,21 @@ describe('createQueuedPromptDrainer (exit-path queue drain)', () => {
   test('drains every queued prompt one at a time in FIFO order', () => {
     snapshotCalls = 0
     const remaining: QueuedMessage[] = [
-      { content: 'first prompt', attachments: [] },
-      { content: 'second prompt', attachments: [] },
-      { content: 'third prompt', attachments: [] },
+      {
+        content: 'first prompt',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
+      {
+        content: 'second prompt',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
+      {
+        content: 'third prompt',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
     ]
     const saved: string[] = []
 
@@ -45,9 +57,9 @@ describe('createQueuedPromptDrainer (exit-path queue drain)', () => {
   test('a failing persist only skips its own entry and the drain continues', () => {
     snapshotCalls = 0
     const remaining: QueuedMessage[] = [
-      { content: 'keep-me-1', attachments: [] },
-      { content: 'boom', attachments: [] },
-      { content: 'keep-me-2', attachments: [] },
+      { content: 'keep-me-1', attachments: [], agentMode: 'DEFAULT' as const },
+      { content: 'boom', attachments: [], agentMode: 'DEFAULT' as const },
+      { content: 'keep-me-2', attachments: [], agentMode: 'DEFAULT' as const },
     ]
     const saved: string[] = []
 

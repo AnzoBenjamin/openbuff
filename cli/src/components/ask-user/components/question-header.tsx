@@ -8,6 +8,8 @@ import React, { memo } from 'react'
 
 import { useTerminalLayout } from '../../../hooks/use-terminal-layout'
 import { useTheme } from '../../../hooks/use-theme'
+import { wrapTextPreservingNewlines } from '../../../utils/text-layout'
+import { clipEvidenceLine } from '../../../utils/bounded-evidence'
 import { Button } from '../../button'
 
 // Overhead for the answer line: modal borders (~6) + marginLeft (3) + "↳ " (3) + quotes (2) + buffer (6)
@@ -35,11 +37,24 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
     const { terminalWidth } = useTerminalLayout()
 
     // Calculate available width for the answer text and truncate with ellipsis at end
-    const availableWidth = Math.max(20, terminalWidth - ANSWER_LINE_OVERHEAD)
-    const truncatedAnswer =
-      answerDisplay.length > availableWidth
-        ? answerDisplay.slice(0, availableWidth - 1) + '…'
-        : answerDisplay
+    const availableWidth = Math.max(1, terminalWidth - ANSWER_LINE_OVERHEAD)
+    const truncatedAnswer = clipEvidenceLine(answerDisplay, availableWidth)
+    const questionWidth = Math.max(
+      1,
+      terminalWidth - 8 - questionPrefix.length - 2,
+    )
+    const questionLines = wrapTextPreservingNewlines(
+      questionText,
+      questionWidth,
+    ).split('\n')
+    const questionPreview = questionLines
+      .slice(0, 3)
+      .map((line, index) =>
+        index === 2 && questionLines.length > 3
+          ? clipEvidenceLine(`${line} …`, questionWidth)
+          : line,
+      )
+      .join('\n')
 
     return (
       <Button
@@ -47,9 +62,10 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
         style={{
           flexDirection: 'column',
           width: '100%',
+          flexShrink: 0,
         }}
       >
-        <text>
+        <text wrapMode="none">
           <span fg={theme.muted}>{isExpanded ? '▼' : '▶'}</span>
           <span
             fg={theme.foreground}
@@ -57,7 +73,7 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
           >
             {' '}
             {questionPrefix}
-            {questionText}
+            {questionPreview}
           </span>
         </text>
         {/* Answer displayed on separate line when collapsed (like User Answers style) */}

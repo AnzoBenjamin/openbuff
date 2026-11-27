@@ -9,6 +9,8 @@ export type InputValue = {
 
 export type AskUserQuestion = {
   question: string
+  /** Complete local request evidence for the independent question reader. */
+  inspectionText?: string
   header?: string
   options:
     | string[]
@@ -39,6 +41,9 @@ export type PendingImageStatus = 'processing' | 'ready' | 'error'
 /** Image attachment with processed data */
 export type PendingImageAttachment = {
   kind: 'image'
+  id?: string
+  sourcePath?: string
+  sourceRoot?: string
   path: string
   filename: string
   status: PendingImageStatus
@@ -65,6 +70,8 @@ export type PendingTextAttachment = {
 export type PendingFileAttachment = {
   kind: 'file'
   id: string
+  sourcePath?: string
+  sourceRoot?: string
   path: string
   filename: string
   isDirectory: boolean

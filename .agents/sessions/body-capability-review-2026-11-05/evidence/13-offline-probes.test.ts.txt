@@ -1,0 +1,105 @@
+import { afterAll, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { PNG } from '/home/ben/Code/CLI/openbuff/node_modules/pngjs/lib/png.js'
+import {
+  __registerBrowserSessionForTest,
+  browserLogs,
+  stopBrowserSession,
+} from '/home/ben/Code/CLI/openbuff/sdk/src/tools/browser-logs'
+import { processImagesForMessage } from '/home/ben/Code/CLI/openbuff/cli/src/utils/image-processor'
+import { retryPendingAttachment } from '/home/ben/Code/CLI/openbuff/cli/src/utils/pending-attachments'
+
+const evidenceRoot = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const observations: Record<string, unknown> = {
+  scope: 'Two offline feature probes; no real browser, website, Blender, model, GUI, audio, or network operation.',
+}
+afterAll(() => {
+  writeFileSync(path.join(evidenceRoot, '13-offline-results.json'), JSON.stringify(observations, null, 2) + '\n')
+})
+
+test('fake CDP reveals cropped diff and diagnose observation loss', async () => {
+  const key = '13-offline-fake-cdp'
+  const fixtureDir = mkdtempSync(path.join(evidenceRoot, '13-browser-fixture-'))
+  const actual = new PNG({ width: 2, height: 1 })
+  const expected = new PNG({ width: 1, height: 1 })
+  actual.data.fill(255)
+  expected.data.fill(255)
+  actual.data[4] = 0
+  actual.data[5] = 0
+  actual.data[6] = 0
+  const actualBase64 = PNG.sync.write(actual).toString('base64')
+  const expectedBase64 = PNG.sync.write(expected).toString('base64')
+  const transport = {
+    isClosed: false,
+    async send(method: string, params: Record<string, unknown> = {}) {
+      if (method === 'Page.captureScreenshot') return { data: actualBase64 }
+      if (method === 'Runtime.evaluate') {
+        if (String(params.expression).includes('__FIXTURE_FAILURE__')) {
+          throw new Error('offline fixture evaluation failed')
+        }
+        return { result: { value: { url: 'about:blank', title: 'offline fixture' } } }
+      }
+      return {}
+    },
+    close() { this.isClosed = true },
+  }
+  const child = { exitCode: null as number | null, kill() { this.exitCode = 0; return true } }
+  const page = { targetId: 'fixture-target', sessionId: 'fixture-session', transport, eventWaiters: new Map(), executionContexts: new Map() }
+  const session = {
+    child, transport, userDataDir: fixtureDir,
+    activeTargetId: page.targetId,
+    pages: new Map([[page.targetId, page]]),
+    pagesBySessionId: new Map([[page.sessionId, page]]),
+    logs: [], networks: [], networkRequests: new Map(), logOffset: 0, networkOffset: 0,
+    recording: null, pendingEvents: new Map(), pendingEventCount: 0,
+  }
+  __registerBrowserSessionForTest(key, session as never)
+  try {
+    const diff = await browserLogs({ type: 'pixel_diff', expectedImageBase64: expectedBase64 }, key)
+    const diffJson = diff.find((part) => part.type === 'json') as any
+    expect(diffJson.value.success).toBe(true)
+    expect(diffJson.value.result).toMatchObject({ actualWidth: 2, expectedWidth: 1, totalPixels: 1, mismatchRatio: 0 })
+    observations.pixelDiff = diffJson.value.result
+
+    const diagnosis = await browserLogs({
+      type: 'diagnose',
+      steps: [
+        { label: 'image', action: { type: 'screenshot', screenshotCompression: 'png' } },
+        { label: 'failure', action: { type: 'evaluate', script: '__FIXTURE_FAILURE__' }, noJsErrors: true },
+      ],
+    }, key)
+    const diagnosisJson = diagnosis.find((part) => part.type === 'json') as any
+    const results = diagnosisJson.value.result.results
+    expect(diagnosisJson.value.success).toBe(true)
+    expect(results[0].response.screenshotAttached).toBe(true)
+    expect(results[1].response.success).toBe(false)
+    expect(diagnosis.filter((part) => part.type === 'media')).toHaveLength(0)
+    observations.diagnose = { success: diagnosisJson.value.success, mediaCount: 0, results }
+  } finally {
+    await stopBrowserSession(key)
+    rmSync(fixtureDir, { recursive: true, force: true })
+  }
+})
+
+test('failed image retry is still projected into sent message media', async () => {
+  const capture = {
+    kind: 'image' as const, id: '13-fixture-image', path: 'clipboard:unavailable',
+    filename: 'fixture.png', status: 'error' as const,
+    processedImage: { base64: 'Zml4dHVyZQ==', mediaType: 'image/png' },
+  }
+  const failed = await retryPendingAttachment(capture, '/tmp')
+  expect(failed).toMatchObject({ status: 'error', processedImage: capture.processedImage })
+  const prepared = await processImagesForMessage({
+    content: '', pendingImages: [failed as never], projectRoot: '/tmp',
+    processor: async () => { throw new Error('No filesystem processing expected') },
+    log: { warn() {}, error() {}, debug() {}, info() {}, fatal() {} } as never,
+  })
+  expect(prepared.messageContent).toEqual([{ type: 'image', image: capture.processedImage.base64, mediaType: 'image/png' }])
+  observations.failedImageRetry = {
+    status: (failed as any).status,
+    note: (failed as any).note,
+    retainedCaptureSent: prepared.messageContent?.length === 1,
+    displayAttachmentCount: prepared.attachments.length,
+  }
+})

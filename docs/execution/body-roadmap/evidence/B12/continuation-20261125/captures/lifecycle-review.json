@@ -1,0 +1,70 @@
+{
+  "review": "B12 focused lifecycle and authority continuation",
+  "mode": "read-only source review; this JSON is the only review artifact written",
+  "validation": {
+    "testsRun": false,
+    "nestedAgents": false,
+    "reportedPassingCountsIndependentlyReverified": false,
+    "formalPromotion": false,
+    "promotionBlocker": "Missing historical B02 receipt; this review does not establish source-bound/card acceptance"
+  },
+  "sourceHashes": {
+    "sdk/src/services/memory-v2/coordinator.ts": "0ab6e37008d762542b29aac0c507f6910c5e3ae032cac1e3ce007b8881f7613b",
+    "sdk/src/services/memory-v2/finish-turn.ts": "9de8b11cb8bd4554e2ab0588991a31c195845051024cce470f640a7b93264f5f",
+    "sdk/src/run.ts": "833bcd71923a02ac72318b1db2404aecd32053aa53a52cb200215ab73fa61c77",
+    "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts": "1676b4112c5ce7daa4c137e20ef0084c30444fc8b82c62ae374c48209ee47bb7",
+    "packages/agent-runtime/src/run-agent-step.ts": "c5446357ef218da155b8bc2f38f33d9a001867b6d029285c53d591541bf0f87a",
+    "packages/agent-runtime/src/util/memory-v2-context.ts": "8b5a4eda80d51eab1bf8e29ebda41a1765d7427d2114152e40d5bcbfc88df3d3",
+    "sdk/src/__tests__/memory-v2-roundtrip.test.ts": "2af549378811870a3bcc5711042de5519423548a4d85cecd53a0be4d90fbca2e",
+    "sdk/src/__tests__/memory-v2-authority-wire.test.ts": "1af01184eb55d165e4b5eb704f51c54027741a8a1c51975a6eabadb443e87221",
+    "sdk/src/__tests__/fixtures/b12-memory-agents.ts": "1ec39f21e4813f89d0d634d89d5bbad9473ef26c1bb690183227f9e383cd0b92",
+    "sdk/src/__tests__/fixtures/b12-memory-reader.ts": "781346c33987310caaa0e80b412ae1a3fa1a29049010c74a43a50a7eb086ad04"
+  },
+  "findings": [
+    {
+      "id": "B12-LIFECYCLE-RETRACTION",
+      "severity": "high",
+      "status": "confirmed by source trace; not dynamically reproduced in this review",
+      "function": "MemoryV2Coordinator.captureToolObservation",
+      "location": "sdk/src/services/memory-v2/coordinator.ts:1837",
+      "title": "Unconfirmed primary capture can still retract an existing claim",
+      "trigger": "A prepared active turn records a decision with valid same-task supersedes targets. The primary observation/reinforcement append returns failed before committing, while the secondary append succeeds. The B12 completed-native current predicate also permits this after cancellation.",
+      "trace": [
+        "The boolean result of await this.append([mainEvent], runtimeState, preparation, current) is ignored.",
+        "Target validation checks only old target existence, active status and active task ownership.",
+        "The subsequent batch can append claim.superseded and observation.reused referencing the unpersisted replacement observationId.",
+        "Bun SQLite accepts the event shapes without requiring replacement existence. applyKnowledgeEvent reads an absent head but nevertheless sets the source superseded=true.",
+        "buildLexicalResult excludes the old claim from live verified/reusable results, with no recorded replacement available."
+      ],
+      "smallestFix": "Require a true primary append result before secondary supersession/citation or other observation-dependent work. On a failed or lost acknowledgement, keep prior claims active until replacement persistence is confirmed.",
+      "testGap": "The supplied six terminal parked cases inject failures into session.ended batches, not into the primary record_decision observation followed by supersedes.",
+      "provenanceLimit": "The ignored append result predates B12; this is a concrete failure path in the B12-modified function, not asserted to be an entirely new regression."
+    },
+    {
+      "id": "B12-CHILD-AUTHORITY-FALLBACK",
+      "severity": "high",
+      "status": "confirmed by source trace; not dynamically reproduced in this review",
+      "function": "loopAgentSteps: repository preparation and buildCompiledTaskMemoryMessage",
+      "locations": [
+        "packages/agent-runtime/src/run-agent-step.ts:2184",
+        "packages/agent-runtime/src/run-agent-step.ts:2935",
+        "packages/agent-runtime/src/run-agent-step.ts:2948"
+      ],
+      "title": "A degraded V2 child can silently inject the inherited V1 shadow",
+      "trigger": "The SDK selects sqlite-v2-opt-in. A spawned child uses full/pinned parent history and inherits taskMemory. Its repository context has no valid knowledge because the repository is missing, throws or returns an invalid result; repositoryIntelligence=false also leaves it unprepared.",
+      "trace": [
+        "createAgentState clones taskMemory for full/pinned history but does not propagate memoryAuthority.",
+        "loopAgentSteps installs per-input V2 authority only inside the valid packet.knowledge branch.",
+        "An unavailable/invalid query therefore leaves the child's memoryAuthority absent.",
+        "hasCorrelatedV2Authority returns false and buildCompiledTaskMemoryMessage emits TASK_MEMORY_CONTEXT from the V1 shadow, despite the SDK's selected V2 mode."
+      ],
+      "smallestFix": "Propagate host-selected memory mode independently of retrieved knowledge into every child and correlate that selection to the child's trusted userInputId before retrieval. An absent or invalid V2 packet must suppress V1 without installing unverified context.",
+      "testGap": "The six actual provider authority cells use root agents only. The runtime degraded tests manually preinstall correlated V2 authority and do not exercise real child construction/preparation."
+    }
+  ],
+  "limits": [
+    "Strict project filesystem/read-policy work and the known memory-agent privacy red are excluded.",
+    "No additional confirmed finding in the reviewed finish helper/callers, completed-native correlation, unverified retrieval categorization, or claim-before-excerpt ordering at the supplied fixture sizes.",
+    "Supplied passing counts were not rerun or independently certified; formal B12 promotion remains blocked."
+  ]
+}

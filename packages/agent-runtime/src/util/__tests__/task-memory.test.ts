@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
+import { buildFileMutationResultFromReceiptV1 } from '@codebuff/common/tools/results/filesystem'
 import { createInitialWorkspaceState } from '@codebuff/common/types/workspace-state'
 
 import {
@@ -834,28 +836,14 @@ describe('task memory', () => {
     }))
     const memory = recordToolEvidenceInTaskMemory({
       toolName: 'read_files',
-      callId: 'call-both-kinds',
+      callId: 'fixture-call',
       output: [
         ...readFilesOutput(reads),
         {
           type: 'json',
-          value: {
-            kind: 'file_mutation_result',
-            version: 1,
-            operationId: 'op-both',
-            outcome: 'applied',
-            actions: [
-              {
-                actionId: 'a-0',
-                index: 0,
-                action: 'update',
-                path: 'src/edited.ts',
-                outcome: 'applied',
-                beforeHash: 'sha256:before',
-                afterHash: 'sha256:after',
-              },
-            ],
-          },
+          value: committedMutationFixture([
+            { path: 'src/edited.ts', content: 'edited\n' },
+          ]),
         },
       ],
     })
@@ -935,41 +923,61 @@ describe('task memory', () => {
       output: [
         {
           type: 'json',
-          value: {
-            kind: 'file_mutation_result',
+          value: buildFileMutationResultFromReceiptV1({
+            kind: 'commit_receipt',
             version: 1,
+            receiptId: 'receipt-1',
             operationId: 'op-1',
-            outcome: 'partial',
+            callId: 'call-edit-1',
+            authorityTier: 'conditional_commit',
+            status: 'failed',
             actions: [
               {
                 actionId: 'a-0',
                 index: 0,
                 action: 'update',
                 path: 'src/applied.ts',
-                outcome: 'applied',
+                status: 'committed',
                 beforeHash: 'sha256:before',
                 afterHash: 'sha256:after',
+                forward: {
+                  outcome: 'applied',
+                  afterHashes: { 'src/applied.ts': 'sha256:after' },
+                },
               },
               {
                 actionId: 'a-1',
                 index: 1,
                 action: 'delete',
                 path: 'src/removed.ts',
-                outcome: 'applied',
+                status: 'committed',
                 beforeHash: 'sha256:before',
                 afterHash: null,
+                forward: {
+                  outcome: 'applied',
+                  afterHashes: { 'src/removed.ts': null },
+                },
               },
               {
                 actionId: 'a-2',
                 index: 2,
                 action: 'update',
                 path: 'src/skipped.ts',
-                outcome: 'not_applied',
+                status: 'failed',
                 beforeHash: null,
                 afterHash: null,
+                forward: {
+                  outcome: 'not_applied',
+                  afterHashes: { 'src/skipped.ts': null },
+                },
               },
             ],
-          },
+            finalHashes: {
+              'src/applied.ts': 'sha256:after',
+              'src/removed.ts': null,
+              'src/skipped.ts': null,
+            },
+          }),
         },
       ],
     })

@@ -18,8 +18,12 @@ import {
   inferKnowledgeTaskType,
   loadRoutedKnowledgeContents,
   loadRouterTable,
-  resolveRoutedKnowledgeFiles,
 } from '@codebuff/common/util/router'
+import {
+  dedupeInstructionContents,
+  expandWithInstructionImports,
+  selectAlwaysOnInstructionFiles,
+} from '@codebuff/common/util/instruction-files'
 import { escapeString } from '@codebuff/common/util/string'
 import { z } from 'zod/v4'
 
@@ -27,6 +31,7 @@ import { getAgentTemplate } from './agent-registry'
 import {
   buildFullSpawnableAgentsSpec,
   formatCompactAgentCatalogLine,
+  formatGenericAgentInputContract,
   getModelVisibleSpawnableAgents,
 } from './prompts'
 import { PLACEHOLDER, placeholderValues } from './types'
@@ -164,9 +169,51 @@ export async function formatPrompt(
     return inserted
   }
 
+  // N08 instruction files. Ancestor and project-root files (and their
+  // `@path` imports) are always on; nested ones arrive as messages when the
+  // agent touches their directory (run-agent-step). Contexts without load
+  // records keep the legacy root-file rendering. Each rendered file is
+  // recorded in the ledger as `instruction:<path>` so /context can list it.
+  const alwaysOnInstructionEntries = (): Array<readonly [string, string]> => {
+    const keys =
+      selectAlwaysOnInstructionFiles(fileContext) ??
+      Object.keys(fileContext.knowledgeFiles).filter((filePath) =>
+        KNOWLEDGE_FILE_NAMES_LOWERCASE.includes(filePath.toLowerCase()),
+      )
+    return keys
+      .filter((key) =>
+        Object.prototype.hasOwnProperty.call(fileContext.knowledgeFiles, key),
+      )
+      .map((key) => [key, fileContext.knowledgeFiles[key]] as const)
+  }
+  const userInstructionEntries = (): Array<readonly [string, string]> =>
+    Object.entries(fileContext.userKnowledgeFiles ?? {})
+  const recordInstructionFile = (key: string, content: string) => {
+    if (!ledger) return
+    applyMeasure(ledger, {
+      category: 'knowledge',
+      label: `instruction:${key}`,
+      content,
+    })
+  }
+  const renderInstructionBlocks = (
+    entries: ReadonlyArray<readonly [string, string]>,
+    alreadyRenderedContents: Set<string> = new Set(),
+  ): string =>
+    dedupeInstructionContents(entries)
+      .filter(([, content]) => !alreadyRenderedContents.has(content))
+      .map(([key, content]) => {
+        const block = `\`\`\`${key}\n${content}\n\`\`\``
+        recordInstructionFile(key, block)
+        return block
+      })
+      .join('\n\n')
+
   const toInject: Record<PlaceholderValue, () => string | Promise<string>> = {
     [PLACEHOLDER.AGENT_NAME]: () =>
       agentTemplate ? agentTemplate.displayName || 'Unknown Agent' : 'Buffy',
+    // NOTE(P2-T1): CURRENT_DATE is non-persisted prompt content, intentionally NOT
+    // clock-injected. If prompt-identical replay is later required, thread Clock here.
     [PLACEHOLDER.CURRENT_DATE]: () => formatCurrentDate(new Date()),
     [PLACEHOLDER.FILE_TREE_PROMPT_SMALL]: () =>
       getProjectFileTreePrompt({
@@ -202,9 +249,7 @@ export async function formatPrompt(
     [PLACEHOLDER.GIT_CHANGES_PROMPT]: () =>
       getGitChangesPrompt(fileContext, ledger),
     [PLACEHOLDER.REMAINING_STEPS]: () =>
-      agentState.stepsRemaining < 0
-        ? 'unlimited (no-progress watchdog active)'
-        : `${agentState.stepsRemaining}`,
+      agentState.stepsRemaining < 0 ? 'unlimited' : `${agentState.stepsRemaining}`,
     [PLACEHOLDER.PROJECT_ROOT]: () => fileContext.projectRoot,
     [PLACEHOLDER.SYSTEM_INFO_PROMPT]: () =>
       getSystemInfoPrompt(fileContext, ledger),
@@ -213,29 +258,18 @@ export async function formatPrompt(
     [PLACEHOLDER.INITIAL_AGENT_PROMPT]: () =>
       escapeString(intitialAgentPrompt ?? ''),
     [PLACEHOLDER.KNOWLEDGE_FILES_CONTENTS]: () =>
-      Object.entries({
-        ...Object.fromEntries(
-          Object.entries(fileContext.knowledgeFiles)
-            .filter(([filePath]) => {
-              const lowerPath = filePath.toLowerCase()
-              // Root-level knowledge files only (knowledge.md, AGENTS.md, CLAUDE.md)
-              return KNOWLEDGE_FILE_NAMES_LOWERCASE.includes(lowerPath)
-            })
-            .map(([path, content]) => [path, content.trim()]),
-        ),
-        ...fileContext.userKnowledgeFiles,
-      })
-        .map(([path, content]) => {
-          return `\`\`\`${path}\n${content.trim()}\n\`\`\``
-        })
-        .join('\n\n'),
+      renderInstructionBlocks([
+        ...alwaysOnInstructionEntries(),
+        ...userInstructionEntries(),
+      ]),
     [PLACEHOLDER.ROUTED_KNOWLEDGE_FILES]: () => {
       // P0.11 task-routed knowledge loader. When `<projectRoot>/ROUTER.md`
-      // exists and has an entry for the current agent, render only the files
-      // that entry lists. Otherwise fall back to today's behavior (all root
-      // knowledge files) so this change is strictly additive. User-level
-      // knowledge files (`~/.knowledge.md`) are always merged in, matching
-      // the existing `KNOWLEDGE_FILES_CONTENTS` provider.
+      // has an entry for the current agent, render the files that entry
+      // lists (with their `@path` imports) inside the task budget. Every
+      // other instruction file in effect (ancestor and project-root files
+      // plus their imports) follows in full, then the user files, so each
+      // file reaches the prompt exactly once (N08: base2 used to render the
+      // root and user files twice through KNOWLEDGE_FILES_CONTENTS as well).
       const routerTable = loadRouterTable(fileContext.projectRoot, logger)
       const taskType = inferKnowledgeTaskType(lastUserInput)
       const routeKey = agentTemplate?.id
@@ -243,36 +277,55 @@ export async function formatPrompt(
             Object.prototype.hasOwnProperty.call(routerTable, key),
           )
         : undefined
-      const selectedFiles = routeKey
-        ? routerTable[routeKey]
-        : resolveRoutedKnowledgeFiles({
-            routerTable,
-            agentId: agentTemplate?.id,
-            taskType,
-            knowledgeFiles: fileContext.knowledgeFiles,
-            logger,
-          })
-      const routedContents = loadRoutedKnowledgeContents({
-        projectRoot: fileContext.projectRoot,
-        files: selectedFiles,
-        knowledgeFiles: fileContext.knowledgeFiles,
-        logger,
-      })
       const blocks: string[] = []
-      const projectSection = formatRoutedKnowledgeSection({
-        files: selectedFiles,
-        knowledgeFiles: routedContents,
-        maxChars: getKnowledgeBudgetChars(taskType),
-      })
-      if (projectSection) blocks.push(projectSection)
-      for (const [p, content] of Object.entries(
-        fileContext.userKnowledgeFiles ?? {},
-      )) {
-        const trimmed = (content ?? '').trim()
-        if (!trimmed) continue
-        blocks.push('```' + p + '\n' + trimmed + '\n```')
+      const rendered = new Set<string>()
+      const renderedContents = new Set<string>()
+      if (routeKey) {
+        const routedFiles = routerTable[routeKey]
+        const routedContents = loadRoutedKnowledgeContents({
+          projectRoot: fileContext.projectRoot,
+          files: routedFiles,
+          knowledgeFiles: fileContext.knowledgeFiles,
+          logger,
+        })
+        const withImports = expandWithInstructionImports(
+          fileContext,
+          routedFiles,
+        )
+        for (const key of withImports) {
+          if (
+            !(key in routedContents) &&
+            Object.prototype.hasOwnProperty.call(fileContext.knowledgeFiles, key)
+          ) {
+            routedContents[key] = fileContext.knowledgeFiles[key]
+          }
+        }
+        const routedEntries = dedupeInstructionContents(
+          withImports
+            .filter((key) => key in routedContents)
+            .map((key) => [key, routedContents[key]] as const),
+        )
+        const projectSection = formatRoutedKnowledgeSection({
+          files: routedEntries.map(([key]) => key),
+          knowledgeFiles: Object.fromEntries(routedEntries),
+          maxChars: getKnowledgeBudgetChars(taskType),
+        })
+        if (projectSection) {
+          blocks.push(projectSection)
+          for (const [key, content] of routedEntries) {
+            rendered.add(key)
+            renderedContents.add(content)
+            recordInstructionFile(key, content)
+          }
+        }
       }
-      if (blocks.length === 0) return ''
+      const rest = renderInstructionBlocks(
+        [...alwaysOnInstructionEntries(), ...userInstructionEntries()].filter(
+          ([key]) => !rendered.has(key),
+        ),
+        renderedContents,
+      )
+      if (rest) blocks.push(rest)
       return blocks.join('\n\n')
     },
     [PLACEHOLDER.PATTERNS_INDEX]: () => {
@@ -410,7 +463,7 @@ export async function getAgentPrompt<T extends StringField>(
             agentId: agentType,
             localAgentTemplates: agentTemplates,
           })
-          return formatCompactAgentCatalogLine(
+          const line = formatCompactAgentCatalogLine(
             agentType,
             template,
             params.resolveModelContextWindow?.({
@@ -418,6 +471,9 @@ export async function getAgentPrompt<T extends StringField>(
               model: template?.model,
             }),
           )
+          return agentTemplate.spawnableAgentToolMode === 'generic' && template
+            ? `${line}\n${formatGenericAgentInputContract(agentType, template)}`
+            : line
         }),
       )
       addendum += `\n\nYou can spawn the following agents:\n\n${agentDescriptions.join('\n')}`

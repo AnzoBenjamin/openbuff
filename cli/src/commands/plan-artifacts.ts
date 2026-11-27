@@ -10,9 +10,8 @@ import {
   PLAN_ARTIFACT_NAMES,
   TRI_STATE_CHECKBOX_LINE_RE,
   isValidPlanSlug,
-  readActiveSessionPointer,
+  normalizePlanState,
   readCurrentTaskAnnotation,
-  readPlanState,
   preflightPlan,
   type PlanPreflightResult,
   type PlanArtifactName,
@@ -21,6 +20,7 @@ import {
 } from '@codebuff/common/util/plan-artifacts'
 
 import { getProjectRoot } from '../project-files'
+import { assertPlanCaptureStable, isMissingPlanArtifact, openPlanDirectory, openPlanFile, openPlanFileAsync, planDirectoryPath } from './plan-artifact-io'
 
 export { PLAN_ARTIFACT_NAMES }
 
@@ -29,6 +29,173 @@ export { PLAN_ARTIFACT_NAMES }
  * bounded even when users accidentally write huge SPEC.md/LESSONS.md files.
  */
 export const MAX_ARTIFACT_BYTES = 64 * 1024
+
+type ArtifactCapture = {
+  text: string
+  bytesRead: number
+  totalBytes: number
+  truncated: boolean
+}
+
+/** Read a prefix without allocating the whole file. UTF-8 decoding drops an incomplete final code point. */
+function decodeArtifactPrefix(
+  buffer: Buffer,
+  bytesRead: number,
+  totalBytes: number,
+): ArtifactCapture {
+  const truncated = bytesRead < totalBytes
+  const decoder = new TextDecoder('utf-8')
+  const text = decoder.decode(buffer.subarray(0, bytesRead), {
+    stream: truncated,
+  })
+  return { text, bytesRead, totalBytes, truncated }
+}
+
+export function readBoundedArtifactSync(filePath: string): ArtifactCapture {
+  const file = openPlanFile(getProjectRoot(), filePath)
+  try {
+    const totalBytes = file.stat.size
+    const buffer = Buffer.alloc(Math.min(totalBytes, MAX_ARTIFACT_BYTES))
+    let bytesRead = 0
+    while (bytesRead < buffer.length) {
+      const count = fs.readSync(file.fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead)
+      if (!count) break
+      bytesRead += count
+    }
+    assertPlanCaptureStable(file.stat, fs.fstatSync(file.fd))
+    return decodeArtifactPrefix(buffer, bytesRead, totalBytes)
+  } finally { file.close() }
+}
+
+export async function readBoundedArtifact(filePath: string): Promise<ArtifactCapture> {
+  const { handle, stat } = await openPlanFileAsync(getProjectRoot(), filePath)
+  try {
+    const totalBytes = stat.size
+    const buffer = Buffer.alloc(Math.min(totalBytes, MAX_ARTIFACT_BYTES))
+    let bytesRead = 0
+    while (bytesRead < buffer.length) {
+      const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead)
+      if (!chunk.bytesRead) break
+      bytesRead += chunk.bytesRead
+    }
+    assertPlanCaptureStable(stat, await handle.stat())
+    return decodeArtifactPrefix(buffer, bytesRead, totalBytes)
+  } finally { await handle.close() }
+}
+
+/** A current-file range inspector. Adjacent UTF-8 pages overlap a boundary character. */
+export async function readPlanArtifactPage(
+  input: string,
+  name: string,
+  page = 1,
+): Promise<string> {
+  if (!(PLAN_ARTIFACT_NAMES as readonly string[]).includes(name))
+    return `Unknown artifact. Choose ${PLAN_ARTIFACT_NAMES.join(', ')}.`
+  if (
+    !Number.isSafeInteger(page) ||
+    page < 1 ||
+    page > Math.floor(Number.MAX_SAFE_INTEGER / MAX_ARTIFACT_BYTES)
+  )
+    return 'Artifact page must be a positive safe integer; each page reads at most 64 KiB plus a UTF-8 boundary overlap.'
+  const resolved = resolvePlanSessionDir(input)
+  if (!resolved.ok) return resolved.error
+  const { handle, stat } = await openPlanFileAsync(getProjectRoot(), path.join(resolved.absSessionDir, name))
+  try {
+    const totalBytes = stat.size
+    const offset = (page - 1) * MAX_ARTIFACT_BYTES
+    const pageCount = Math.max(1, Math.ceil(totalBytes / MAX_ARTIFACT_BYTES))
+    if (offset >= totalBytes && totalBytes > 0)
+      return `No bytes on page ${page}. ${resolved.sessionDir}/${name} has ${pageCount} pages (${totalBytes} bytes); choose --page 1..${pageCount}.`
+    const readOffset = Math.max(0, offset - 3)
+    const buffer = Buffer.alloc(
+      Math.min(MAX_ARTIFACT_BYTES + 6, Math.max(0, totalBytes - readOffset)),
+    )
+    const { bytesRead } = await handle.read(
+      buffer,
+      0,
+      buffer.length,
+      readOffset,
+    )
+    assertPlanCaptureStable(stat, await handle.stat())
+    let begin = Math.min(offset - readOffset, bytesRead)
+    while (begin > 0 && (buffer[begin]! & 0xc0) === 0x80) begin--
+    const end = Math.min(bytesRead, offset - readOffset + MAX_ARTIFACT_BYTES)
+    const text = new TextDecoder('utf-8').decode(buffer.subarray(begin, end), {
+      stream: readOffset + end < totalBytes,
+    })
+    return [
+      `Current local artifact · ${resolved.sessionDir}/${name}`,
+      `Page ${page}/${pageCount}; captured bytes ${readOffset + begin}–${readOffset + end} of ${totalBytes} at ${new Date().toISOString()}. Adjacent pages may overlap one UTF-8 character.`,
+      '',
+      text,
+      '',
+      `Read another range: /plan-artifact ${input} ${name} --page <1..${pageCount}>`,
+      'This is a new current-file capture; it does not replace historical recorded evidence.',
+    ].join('\n')
+  } finally {
+    await handle.close()
+  }
+}
+
+/** A catalog remains useful while refusing individual unreadable or unsafe rows. */
+export type PlanSessionCatalog = PlanSessionSummary[] & { partial?: boolean; skipped?: number }
+export function planCatalogWarning(catalog: PlanSessionSummary[]): string | null {
+  const skipped = (catalog as PlanSessionCatalog).skipped ?? 0
+  return skipped ? `Plan sessions partial: skipped ${skipped} unreadable or unsafe session${skipped === 1 ? '' : 's'}.` : null
+}
+function catalog(rows: Array<PlanSessionSummary & { mtimeMs: number }>, skipped: number): PlanSessionCatalog {
+  const result: PlanSessionCatalog = rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.slug.localeCompare(b.slug))
+    .map(({ mtimeMs: _mtimeMs, ...session }) => session)
+  if (skipped) { result.partial = true; result.skipped = skipped }
+  return result
+}
+function summarizeSession(slug: string, absSessionDir: string, artifacts: PlanArtifactName[],
+  plan: ArtifactCapture | null, state: PlanSessionState | null, activeSlug: string | null, mtimeMs: number) {
+  const progress = { done: 0, total: 0 }
+  for (const line of plan?.text.split('\n') ?? []) {
+    const match = line.match(TRI_STATE_CHECKBOX_LINE_RE)
+    if (match) { progress.total++; if (match[2]?.toLowerCase() === 'x') progress.done++ }
+  }
+  return { slug, sessionDir: `${PLAN_SESSIONS_DIR_PREFIX}${slug}`, absSessionDir, artifacts,
+    status: state?.status ?? 'unknown', currentTask: (plan ? readCurrentTaskAnnotation(plan.text) : null) ?? state?.currentTask ?? null,
+    updatedAt: state?.updatedAt ?? null, progress, progressPartial: plan?.truncated ?? false,
+    isActive: activeSlug === slug, mtimeMs } satisfies PlanSessionSummary & { mtimeMs: number }
+}
+
+/** Async list destination; bounded batches isolate per-session read failures. */
+export async function listPlanSessionsAsync(options: { signal?: AbortSignal } = {}): Promise<PlanSessionCatalog> {
+  const projectRoot = getProjectRoot()
+  let root
+  try { root = openPlanDirectory(projectRoot, '.agents/sessions') }
+  catch (error) { if (isMissingPlanArtifact(error)) return []; throw error }
+  let entries: fs.Dirent[]
+  try { entries = await fs.promises.readdir(planDirectoryPath(root), { withFileTypes: true }) }
+  finally { root.close() }
+  const activeSlug = getActivePlanSessionSlug()
+  const candidates = entries.filter(entry => entry.isDirectory() && isValidPlanSlug(entry.name))
+  const results: Array<PlanSessionSummary & { mtimeMs: number }> = []
+  let skipped = entries.filter(entry => entry.isSymbolicLink() && isValidPlanSlug(entry.name)).length
+  for (let start = 0; start < candidates.length; start += 12) {
+    options.signal?.throwIfAborted()
+    const batch = await Promise.all(candidates.slice(start, start + 12).map(async entry => {
+      const absSessionDir = path.join(projectRoot, PLAN_SESSIONS_DIR_PREFIX, entry.name)
+      let directory
+      try {
+        directory = openPlanDirectory(projectRoot, `${PLAN_SESSIONS_DIR_PREFIX}${entry.name}`)
+        const names = await fs.promises.readdir(planDirectoryPath(directory), { withFileTypes: true })
+        if (names.some(file => (PLAN_ARTIFACT_NAMES as readonly string[]).includes(file.name) && file.isSymbolicLink())) throw new Error('Unsafe plan artifact')
+        const artifacts = listPresentPlanArtifacts(absSessionDir)
+        if (!artifacts.length) return null
+        const plan = artifacts.includes('PLAN.md') ? await readBoundedArtifact(path.join(absSessionDir, 'PLAN.md')) : null
+        return summarizeSession(entry.name, absSessionDir, artifacts, plan, readStateForSession(absSessionDir, entry.name), activeSlug, fs.fstatSync(directory.fd).mtimeMs)
+      } catch { skipped++; return null }
+      finally { directory?.close() }
+    }))
+    for (const item of batch) if (item) results.push(item)
+  }
+  options.signal?.throwIfAborted()
+  return catalog(results, skipped)
+}
 
 export type PlanArtifacts = {
   /** Project-relative session directory (e.g. ".agents/sessions/foo"). */
@@ -51,34 +218,6 @@ export type PlanArtifacts = {
 // so the CLI and the runtime handler share the canonical tri-state regex.
 
 /**
- * Count progress inside a session. Returns done/total counts based on
- * checklist marks in PLAN.md (falls back to zeros if PLAN.md is absent).
- */
-function countProgress(absSessionDir: string): { done: number; total: number } {
-  const planPath = path.join(absSessionDir, 'PLAN.md')
-  if (!fs.existsSync(planPath)) return { done: 0, total: 0 }
-  const raw = fs.readFileSync(planPath, 'utf8')
-  let done = 0
-  let total = 0
-  for (const line of raw.split('\n')) {
-    const m = line.match(TRI_STATE_CHECKBOX_LINE_RE)
-    if (!m) continue
-    total += 1
-    if (m[2] === 'x' || m[2] === 'X') done += 1
-  }
-  return { done, total }
-}
-
-function readCurrentTaskForSession(absSessionDir: string): string | null {
-  const planPath = path.join(absSessionDir, 'PLAN.md')
-  if (!fs.existsSync(planPath)) return null
-  // readCurrentTaskAnnotation is pure regex matching and cannot throw, so no
-  // try/catch is needed here.
-  const raw = fs.readFileSync(planPath, 'utf8')
-  return readCurrentTaskAnnotation(raw)
-}
-
-/**
  * Read STATE.json for a session, falling back to a synthesized default
  * (active, no current task) when STATE.json is missing or unparseable.
  *
@@ -89,19 +228,25 @@ function readCurrentTaskForSession(absSessionDir: string): string | null {
 function readStateForSession(
   absSessionDir: string,
   slug: string,
-): PlanSessionState {
-  const state = !fs.existsSync(absSessionDir) ? null : readPlanState(slug)
-  if (state) return state
-  const now = new Date().toISOString()
-  return {
-    schemaVersion: 2,
-    slug,
-    status: 'active',
-    currentTask: null,
-    revision: 0,
-    checkpoint: null,
-    createdAt: now,
-    updatedAt: now,
+): PlanSessionState | null {
+  const statePath = path.join(absSessionDir, 'STATE.json')
+  try {
+    const captured = readBoundedArtifactSync(statePath)
+    if (captured.truncated) return null
+    // Normalize the verified capture; never reopen the lexical STATE.json path.
+    const raw = JSON.parse(captured.text) as Record<string, unknown>
+    if (
+      !raw ||
+      Array.isArray(raw) ||
+      typeof raw.status !== 'string' ||
+      !['active', 'paused', 'completed', 'archived'].includes(raw.status) ||
+      typeof raw.updatedAt !== 'string' ||
+      !Number.isFinite(Date.parse(raw.updatedAt))
+    )
+      return null
+    return normalizePlanState(raw, slug)
+  } catch {
+    return null
   }
 }
 
@@ -115,11 +260,13 @@ export type PlanSessionSummary = {
   /** Artifact names present in this session. */
   artifacts: PlanArtifactName[]
   /** Session lifecycle status (active / paused / completed / archived). */
-  status: PlanSessionStatus
+  status: PlanSessionStatus | 'unknown'
   /** Current task pointer (may differ from STATE.json when PLAN.md is the source of truth). */
   currentTask: string | null
   /** ISO timestamp from STATE.json (or fallback). */
-  updatedAt: string
+  updatedAt: string | null
+  /** Progress counts cover only the bounded PLAN.md prefix when true. */
+  progressPartial?: boolean
   /** Done / total checklist counts derived from PLAN.md. */
   progress: { done: number; total: number }
   /** True when this session is the project-wide active session. */
@@ -159,12 +306,12 @@ export function formatPlanSessionListRow(
 ): PlanSessionListRow {
   const progress =
     session.progress.total > 0
-      ? ` ${session.progress.done}/${session.progress.total} done`
+      ? ` ${session.progress.done}/${session.progress.total} done${session.progressPartial ? ' (plan prefix)' : ''}`
       : ''
   return {
     activeMarker: session.isActive ? ' * ' : '   ',
     badge: formatPlanStatusBadge(session.status),
-    label: `${session.slug}${progress}`,
+    label: `${session.slug}${progress}${session.status === 'unknown' ? ' · legacy/unknown state; update time unknown' : ''}`,
     current: session.currentTask ? `  current: "${session.currentTask}"` : '',
   }
 }
@@ -245,8 +392,11 @@ function planArtifactExists(
   absSessionDir: string,
   name: PlanArtifactName,
 ): boolean {
-  const artifactPath = path.join(absSessionDir, name)
-  return fs.existsSync(artifactPath) && fs.statSync(artifactPath).isFile()
+  try {
+    const file = openPlanFile(getProjectRoot(), path.join(absSessionDir, name))
+    file.close()
+    return true
+  } catch (error) { if (isMissingPlanArtifact(error)) return false; throw error }
 }
 
 /** Known plan artifacts present in an already-resolved session directory. */
@@ -262,9 +412,8 @@ function listPresentPlanArtifacts(absSessionDir: string): PlanArtifactName[] {
  * exactly once and artifact bodies are not read just to test presence.
  */
 export function hasPlanArtifactInDir(absSessionDir: string): boolean {
-  return PLAN_ARTIFACT_NAMES.some((name) =>
-    planArtifactExists(absSessionDir, name),
-  )
+  try { return PLAN_ARTIFACT_NAMES.some(name => planArtifactExists(absSessionDir, name)) }
+  catch { return false }
 }
 
 /**
@@ -273,9 +422,11 @@ export function hasPlanArtifactInDir(absSessionDir: string): boolean {
  * larger than MAX_ARTIFACT_BYTES are truncated to keep prompts bounded.
  */
 export function readPlanArtifacts(input: string): PlanArtifacts | null {
+  try {
   const resolved = resolvePlanSessionDir(input)
   if (!resolved.ok) return null
-  if (!fs.existsSync(resolved.absSessionDir)) return null
+  const directory = openPlanDirectory(getProjectRoot(), resolved.sessionDir)
+  directory.close()
 
   const files: Partial<Record<PlanArtifactName, string>> = {}
   const presentPaths: Partial<Record<PlanArtifactName, string>> = {}
@@ -288,12 +439,11 @@ export function readPlanArtifacts(input: string): PlanArtifacts | null {
       continue
     }
     const abs = path.join(resolved.absSessionDir, name)
-    const raw = fs.readFileSync(abs, 'utf8')
-    if (raw.length > MAX_ARTIFACT_BYTES) {
-      const head = raw.slice(0, MAX_ARTIFACT_BYTES)
-      const dropped = raw.length - head.length
+    const captured = readBoundedArtifactSync(abs)
+    const raw = captured.text
+    if (captured.truncated) {
       files[name] =
-        `${head}\n\n[...truncated ${dropped} chars to keep prompt bounded; read the file directly for full contents...]`
+        `${raw}\n\n[Captured the first ${captured.bytesRead} of ${captured.totalBytes} bytes; read the current artifact directly for remaining contents.]`
       truncated.push(name)
     } else {
       files[name] = raw
@@ -308,8 +458,12 @@ export function readPlanArtifacts(input: string): PlanArtifacts | null {
     presentPaths,
     missing,
     truncated,
-    preflight: files['PLAN.md'] ? preflightPlan(files['PLAN.md']) : null,
+    preflight:
+      files['PLAN.md'] && !truncated.includes('PLAN.md')
+        ? preflightPlan(files['PLAN.md'])
+        : null,
   }
+  } catch { return null }
 }
 
 /**
@@ -356,62 +510,33 @@ export function hasAnyArtifact(artifacts: PlanArtifacts | null): boolean {
  * `.agents/ACTIVE_SESSION`). Sessions without STATE.json are treated as
  * `active` by default.
  */
-export function listPlanSessions(): PlanSessionSummary[] {
+export function listPlanSessions(): PlanSessionCatalog {
   const projectRoot = getProjectRoot()
-  const sessionsRoot = path.join(projectRoot, '.agents', 'sessions')
-  if (!fs.existsSync(sessionsRoot)) return []
-
-  // The project-root resolver is wired once in setProjectRoot (see
-  // cli/src/project-files.ts), so readPlanState can locate STATE.json here.
-  const rootWithSep = sessionsRoot.endsWith(path.sep)
-    ? sessionsRoot
-    : sessionsRoot + path.sep
-
-  const activeSlug = readActiveSessionPointer()
-
-  return fs
-    .readdirSync(sessionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => {
-      const absSessionDir = path.resolve(sessionsRoot, entry.name)
-      if (!absSessionDir.startsWith(rootWithSep)) return null
-      if (!isValidPlanSlug(entry.name)) return null
-
+  let root
+  try { root = openPlanDirectory(projectRoot, '.agents/sessions') }
+  catch (error) { if (isMissingPlanArtifact(error)) return []; throw error }
+  let entries: fs.Dirent[]
+  try { entries = fs.readdirSync(planDirectoryPath(root), { withFileTypes: true }) }
+  finally { root.close() }
+  const activeSlug = getActivePlanSessionSlug()
+  const results: Array<PlanSessionSummary & { mtimeMs: number }> = []
+  let skipped = 0
+  for (const entry of entries) {
+    if (!isValidPlanSlug(entry.name)) continue
+    if (entry.isSymbolicLink()) { skipped++; continue }
+    if (!entry.isDirectory()) continue
+    const absSessionDir = path.join(projectRoot, PLAN_SESSIONS_DIR_PREFIX, entry.name)
+    let directory
+    try {
+      directory = openPlanDirectory(projectRoot, `${PLAN_SESSIONS_DIR_PREFIX}${entry.name}`)
       const artifacts = listPresentPlanArtifacts(absSessionDir)
-
-      if (artifacts.length === 0) return null
-
-      const state = readStateForSession(absSessionDir, entry.name)
-      const progress = countProgress(absSessionDir)
-      // STATE.json is the canonical source for `currentTask`, but PLAN.md's
-      // `<!-- current-task: ... -->` annotation takes precedence when present
-      // (it is updated atomically with task transitions).
-      const annotationTask = readCurrentTaskForSession(absSessionDir)
-      const currentTask = annotationTask ?? state.currentTask
-
-      const summary: PlanSessionSummary & { mtimeMs: number } = {
-        slug: entry.name,
-        sessionDir: `.agents/sessions/${entry.name}`,
-        absSessionDir,
-        artifacts,
-        status: state.status,
-        currentTask,
-        updatedAt: state.updatedAt,
-        progress,
-        isActive: activeSlug === entry.name,
-        mtimeMs: fs.statSync(absSessionDir).mtimeMs,
-      }
-      return summary
-    })
-    .filter(
-      (session): session is PlanSessionSummary & { mtimeMs: number } =>
-        session !== null,
-    )
-    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.slug.localeCompare(b.slug))
-    .map((session): PlanSessionSummary => {
-      const { mtimeMs: _mtimeMs, ...rest } = session
-      return rest
-    })
+      if (!artifacts.length) continue
+      const plan = artifacts.includes('PLAN.md') ? readBoundedArtifactSync(path.join(absSessionDir, 'PLAN.md')) : null
+      results.push(summarizeSession(entry.name, absSessionDir, artifacts, plan, readStateForSession(absSessionDir, entry.name), activeSlug, fs.fstatSync(directory.fd).mtimeMs))
+    } catch { skipped++ }
+    finally { directory?.close() }
+  }
+  return catalog(results, skipped)
 }
 
 /**
@@ -422,8 +547,7 @@ export function listPlanSessions(): PlanSessionSummary[] {
 export function readPlanSessionState(slug: string): PlanSessionState | null {
   if (!isValidPlanSlug(slug)) return null
   const dir = path.join(getProjectRoot(), '.agents', 'sessions', slug)
-  if (!fs.existsSync(dir)) return null
-  return readPlanState(slug)
+  return readStateForSession(dir, slug)
 }
 
 /**
@@ -431,7 +555,11 @@ export function readPlanSessionState(slug: string): PlanSessionState | null {
  * session is currently marked active.
  */
 export function getActivePlanSessionSlug(): string | null {
-  return readActiveSessionPointer()
+  try {
+    const captured = readBoundedArtifactSync(path.join(getProjectRoot(), '.agents', ACTIVE_SESSION_POINTER_FILENAME))
+    const slug = captured.text.trim()
+    return !captured.truncated && !/[\r\n]/.test(slug) && isValidPlanSlug(slug) ? slug : null
+  } catch { return null }
 }
 
 /**

@@ -18,6 +18,12 @@ openbuff          # primary binary
 
 Openbuff is always local/BYOK — there is no cloud-mode toggle.
 
+Agents have unrestricted filesystem access by default, including config
+directories and temporary files. Set `"sandbox": { "mode": "project" }` in
+`openbuff.json` to opt into tool-level containment. See
+[Filesystem sandbox](./configuration.md#filesystem-sandbox) for additional
+allowed paths and policy details.
+
 ## Quickstart
 
 1. Install and launch the CLI:
@@ -34,6 +40,11 @@ Openbuff is always local/BYOK — there is no cloud-mode toggle.
    vars) and `/models`.
 
 See [Getting Started](./getting-started.md) for the full walkthrough.
+
+Run `openbuff init` (or `openbuff init --cwd /path/to/project`) to create the
+starter `knowledge.md` and `.agents/types/` locally without loading provider
+configuration or starting a model run. Existing files are left unchanged;
+missing project directories and symlinked agent output directories are refused.
 
 ## Configure providers
 
@@ -97,6 +108,36 @@ attached to a TUI session via PlanLink. The available slash commands are:
 directory was deleted, or it has no plan artifacts) it prints a
 `Stale active session: <slug> ...` note pointing at `/plan-use <slug>`
 instead of silently omitting the `Active session:` line.
+
+The `/help` banner offers both the keyboard reference and **All commands**, a
+local directory generated from the same static descriptions and aliases used
+by slash completion and the router. `/plans`, `/plan-use`, `/plan-timeline` and
+`/compact` are discoverable there. Insertion-only agent/game shortcuts are
+labelled as composer insertions rather than executable commands; legacy
+publishing stays disabled and is intentionally omitted.
+
+### Plan artifact read boundary
+
+On Linux, plan prefix/paging/resume captures walk `.agents/sessions/<slug>`
+through held directory descriptors with no-follow opens. The opened file must
+be a regular, single-link artifact; symlinks, hard-linked aliases and special
+files are refused before body reads. `STATE.json` is normalized from the same
+bounded capture, and the CLI active-session pointer uses this boundary too;
+no validation read is followed by an unchecked lexical reopen. Captures check
+file identity/size/timestamps after reading, and prefixes remain capped at
+64 KiB (pages add only UTF-8 boundary overlap).
+
+Plan catalogs isolate bad rows: safe rows remain selectable, while `/plans`
+and the picker disclose skipped unreadable/unsafe sessions as partial results.
+These guards apply only to durable plan readers, not intentionally selected
+general attachments. The host-selected project root is assumed stable during
+a capture; this is not snapshot isolation from concurrent same-inode writers.
+
+The descriptor traversal currently requires Linux `/proc/self/fd`. On other
+platforms or when that mechanism is unavailable, these readers fail closed;
+a verified native read implementation is still required for cross-platform
+plan-artifact parity. Runtime plan writes, timeline-event reads and pointer
+writes are separate operations and do not gain new guarantees from this guard.
 
 For agent-driven updates, prefer `update_plan_status` for incremental
 `STATUS.md` and lesson-note edits (it preserves user prose), and reserve
@@ -175,8 +216,13 @@ ChatGPT/Codex subscription:
 
 ## How model routing works
 
-Model routing is driven entirely by `openbuff.json` / `routes.json` — there is no
-hardcoded per-agent model fallback. For each agent step:
+Model routing is driven entirely by `openbuff.json` / `routes.json`, with an
+explicit `model` passed to a run providing a captured primary override for that
+run and its descendants. It never rewrites those files or the templates and
+is not inherited by a later turn unless supplied again. Configured failover
+still applies; an invalid/unconfigured explicit override fails instead of
+silently selecting the configured primary. Without that override, each agent
+step resolves the model in this priority order:
 
 1. `modes.default` or `modes.plan` overrides the built-in root agents (`base`, `base2` in default mode; `base-plan`, `base2-plan` in plan mode).
 2. `agents[agentId]` overrides subagents and other non-mode agents when present.
@@ -283,17 +329,265 @@ provider can declare compatibility behavior:
     "supportsTools": true,
     "supportsRequiredToolChoice": true,
     "supportsStopSequences": false,
-    "stripProviderMetadata": true
+    "stripProviderMetadata": true,
+    "includeUsage": true
   }
 }
 ```
 
-- `stripCacheControl`: removes Anthropic/OpenRouter prompt-cache metadata.
+- `stripCacheControl`: removes Anthropic/OpenRouter prompt-cache metadata. Defaults to `true` for OpenAI-compatible providers and `false` for `anthropic-compatible` ones. `anthropic/*` models on `openrouter.ai` always send the markers, because OpenRouter forwards them to Anthropic.
 - `stringifyTextContent`: sends text-only user messages as a plain string.
 - `supportsTools`: set `false` for chat-only providers that reject tool schemas.
 - `supportsRequiredToolChoice`: set `false` for providers that accept tools but reject `tool_choice: "required"`.
 - `supportsStopSequences`: set `true` only for OpenAI-compatible providers that accept the `stop` request field; otherwise Openbuff enforces stop sequences locally.
 - `stripProviderMetadata`: omits Codebuff/OpenRouter-specific provider metadata.
+- `includeUsage`: canonical OpenAI and OpenRouter endpoints default this on so Openbuff requests `stream_options.include_usage` and retains a choices-free usage chunk after a tool-call finish. Set `false` to opt out. Other OpenAI-compatible endpoints omit the field unless explicitly set to `true` because some compatible servers reject it.
+- `reasoningReplay`: set to `"required"` for OpenAI-compatible endpoints that require assistant reasoning in conversation history. Openbuff retains the streamed reasoning and sends `reasoning_content` on each assistant message. This is enabled automatically for `api.ifm.ai`; set it to `"none"` to override that default. Reasoning replay increases stored history and input tokens. Earlier sessions whose reasoning was discarded cannot recover the original trace.
+
+## Model output degeneration
+
+Degeneration is garbled or degraded model output in long agentic sessions:
+repeated whitespace runs, aborted or mixed tool-call syntax, runaway
+repetition. A typical specimen: coherent text, then hundreds of repeated
+carriage returns, then aborted tool-call tag fragments (`<to`, `<tool_call`,
+`<tool_c`), then a foreign-protocol fragment (`<parameter name="path">...`).
+Degeneration is usually stochastic — retrying the turn often clears it. When
+it recurs, the triggers below are the usual suspects.
+
+### Known triggers and mitigations
+
+- **Sampling repetition loops.** Greedy (temperature-0) or
+  very-high-temperature decoding can lock into self-reinforcing repetition:
+  repeated tokens, whitespace runs, tag fragments. Retry the turn and avoid
+  temperature 0 for long sessions. On OpenAI-compatible/local endpoints set
+  a repetition penalty around 1.1 (never above ~1.3), top-p around 0.9-0.95,
+  and consider min-p 0.05-0.1. Route long tool-heavy sessions to a stronger
+  model (`/models` or `agents[agentId]` in `openbuff.json`).
+- **Context pressure.** Output quality degrades well before the hard context
+  window ("context rot"), and providers fail differently at the ceiling:
+  Anthropic returns a hard "prompt is too long" 400, Ollama silently truncates
+  prompts at its `num_ctx` default, and OpenRouter middle-truncation
+  transforms silently drop content. Keep sessions well below the window
+  (Openbuff prunes context automatically; `/usage` shows the pressure), set
+  `num_ctx` explicitly on Ollama, compact on Anthropic instead of re-sending
+  an identical oversized prompt, and prefer models whose context comfortably
+  exceeds the session.
+- **Self-hosted prefix/KV-cache bugs.** Documented garbled-output cases exist
+  for vLLM prefix caching (issues #20261, #5543) and SGLang radix cache
+  (#4175, #46259) — repeated, truncated, or garbled tokens that vanish when
+  caching is disabled. No public evidence ties corrupted output to OpenAI's
+  or Anthropic _managed_ prompt caching (their documented issues are cache
+  misses, a cost concern). If a self-hosted OpenAI-compatible endpoint
+  garbles output, disable prefix caching (vLLM `--no-enable-prefix-caching`,
+  SGLang `--disable-radix-cache`) and upgrade the engine.
+- **Quantized or small local models.** They fail non-linearly in long
+  tool-use loops even when short demos look fine, and KV-cache quantization
+  has broken tool calling on specific architectures (Ollama issues #10945,
+  #17347). Prefer Q4_K_M-or-better weight quants for coding agents, leave the
+  KV cache at f16 when tool calling stalls, use a larger model or a hosted
+  API for long sessions, and restart the local server when degradation
+  appears after long uptime.
+- **Tool-call protocol confusion.** Models trained on several serialization
+  dialects sometimes mix them mid-output (claude-code issue #49747; Qwen
+  tool-call XML inside reasoning on some vLLM setups). Use the correct
+  tool-call parser/chat template for the model on self-hosted servers, and
+  if a model persistently mixes formats, switch models or providers.
+- **EOS / stop-sequence mishandling.** Generation runs away when a server
+  ignores stop strings (llama.cpp issue #11538: multi-token stops) or when
+  `ignore_eos` is enabled. Avoid `ignore_eos`, prefer single-token stop
+  sequences, and declare `supportsStopSequences: false` for endpoints that
+  ignore stop strings so Openbuff enforces stop sequences locally.
+- **max_tokens truncation mid-tool-call.** Some servers mislabel a truncated
+  tool call as completed (vLLM issue #58228, since fixed; llama.cpp issue
+  #30773); Anthropic's documented guidance is to retry with a higher
+  max_tokens and never execute a truncated tool_use. Set a generous
+  max_tokens and treat `finish_reason: "length"` or `stop_reason: "max_tokens"`
+  plus invalid arguments as truncation — retry the turn, never execute a
+  repaired guess.
+
+### What Openbuff already does
+
+The parser stack is fail-closed: degenerated bytes never become a tool call.
+
+- Malformed tool calls never execute: the streaming parser
+  (`packages/agent-runtime/src/util/stream-xml-parser.ts`) turns invalid JSON
+  or a missing tool name into a structured parse error instead of a call.
+- A dropped call is not silent: the parse error — including a bounded
+  excerpt of the offending bytes — is persisted into the conversation as a
+  `TOOL_CALL_ERROR` message and the turn is retried, so the model can
+  correct its own malformed output instead of repeating it.
+- Unterminated content past the buffer limit is discarded without leaking
+  into the visible text stream (`tool_call_buffer_exceeded`), and a call left
+  unterminated at end of stream is reported back
+  (`tool_call_unterminated_eof`) so the model learns the call was dropped and
+  can retry with a smaller payload — never executed, never leaked into the
+  visible text stream.
+- Common JSON damage is repaired conservatively (trailing or duplicate
+  commas, `common/src/tools/params/utils.ts`), and transport-truncated
+  arguments are recovered only when the cut dropped nothing but container
+  closers — a half-written value is never guessed into existence.
+- Tool-name respellings (`tool_name` / `toolName` / `tool` / `name`) are
+  resolved instead of dropping the call.
+- Provider-reported max-token cuts are classified as truncation, not schema
+  errors.
+- Degeneration specimens — aborted tag fragments plus repeated control
+  bytes — are pinned by regression tests: they produce plain-text output and
+  zero executed tool calls.
+
+### When it happens
+
+- Retry the turn; degeneration is usually stochastic.
+- If it recurs: route the agent to a stronger model (`/models`), check
+  `/usage` for context pressure, review the provider `compatibility` flags,
+  and on local endpoints revisit sampling parameters and quantization. For
+  backup providers see `failoverModels` in
+  [docs/configuration.md](./configuration.md).
+
+Headless prompt input supports positional text, `-p`/`--prompt`, or a UTF-8
+pipe. When no explicit prompt is supplied (or the only positional argument is
+`-`), `openbuff run` reads stdin up to 1,000,000 bytes. Empty, malformed UTF-8,
+over-limit, and interactive-terminal input are refused before opening the live
+journal or SDK client; `--timeout` also bounds a stalled pipe. Explicit prompts
+do not consume stdin, and mixing positional text with `-p` is an error.
+
+`openbuff run --model <provider/model>` selects the primary model for this
+run and its descendants without changing provider configuration or agent
+templates. SDK callers pass `model` to `client.run()`. The choice is captured
+per run, including parallel calls; a continued turn without the option returns
+to configured routing. Configured failover models still apply, and invalid or
+unconfigured IDs fail rather than quietly running the configured primary.
+Remote ACP currently refuses this option explicitly because per-run model
+negotiation is not implemented; select the model on the server instead.
+
+```sh
+printf 'Inspect the local changes\n' | openbuff run --json --timeout 60
+openbuff run -p 'Inspect the local changes' --json --model my-provider/my-model
+openbuff run --continue -p 'Continue with the next task' --json
+openbuff run --continue <session-id> -p 'Return the requested JSON' --output-schema result.schema.json
+```
+
+Headless runs save a private, project-scoped conversation snapshot separately
+from TUI chats, under `projects/<project-key>/headless-sessions/` in the
+Openbuff config directory. The session ID is printed on stderr.
+`--continue [id]` restores that snapshot for a **new turn**; supply its prompt
+with `-p` or stdin. Omitted model/schema options do not inherit prior overrides.
+It does not opt into interrupted-tool replay: a disk continuation disables the
+legacy journal replay reader while retaining the new turn's writer. Transaction
+recovery and replay assurances belong to the separate journal/recovery
+features. Missing, corrupt,
+unsafe or busy selected sessions fail before provider dispatch, without a
+fresh-session fallback. Cooperative owner locks are never automatically
+reclaimed using PID or timestamp guesses.
+
+Snapshots are owner-only and capped at 64 MiB without silent transcript
+clipping. A storage outage on a fresh run warns that the result will not be
+continuable; a continued turn's save failure is a nonzero result. This store's
+verified directory-descriptor boundary currently requires Linux
+`/proc/self/fd`; unsupported hosts may still run fresh prompts without durable
+headless storage, but continuation fails closed. Existing user-owned config
+parents must be stable; the lease does not exclude arbitrary same-user editors.
+
+`--output-schema <file>` captures an explicit regular UTF-8 JSON Schema
+(draft-7, `type: "object"`, at most 64 KiB). Unsupported schema references,
+malformed input and unsafe file aliases are refused before journal/provider
+admission. The root reporting tool validates the result without changing
+child schemas or tool permissions. Without `--json`, stdout contains only the
+validated final JSON, not intermediate prose; with `--json`, streamed SDK events
+are followed by one explicit `result` event. Sparse events flush during a slow
+run. Per-request `usage` events retain missing counts as unknown rather than
+zero. Per-request streaming `usage` also carries `costStatus` (`observed`,
+`estimated`, `unknown`, or `subscription`), optional fractional `costCents`, and
+an unknown-cost reason. Configured USD token pricing works even when request
+provider metadata is stripped. Missing/malformed counts, positive unpriced
+components and missing or non-USD currency do not become zero-cost estimates; explicit
+zero-rate/zero-cost observations remain distinct. Totals in legacy finish/session
+fields are known subtotals, not proof that unpriced requests were free.
+Anthropic-compatible routes normalize cache reads and writes into disjoint
+buckets; a positive cache write is priced only when
+`cacheWriteInputPerMillionTokens` is available. Exact canonical
+OpenAI/Anthropic/OpenRouter models may obtain an offline estimate and context
+window from the checked-in models.dev snapshot; custom, unknown, or tiered-price
+routes remain unknown. There is no runtime catalog fetch. When top-level
+`spending` selects a finite policy, a separate owner-only authority reserves
+each root/descendant/retry attempt before provider dispatch and survives
+restart; strict, explicitly degraded estimated, and uncapped behavior is
+documented in [Configuration](configuration.md#provider-request-spending-admission).
+Usage telemetry alone never grants or refunds admission.
+
+Provider readiness uses the same route/credential checker and messages
+as the TUI, including explicit model selection.
+
+## Local usage observations
+
+`/usage` reports the current conversation's observed request events from this
+CLI process, including descendant run/model attribution,
+input/output/cache-read/cache-write token counts, known fractional-cost
+subtotals, unknown-cost reasons and the last prompt-build context snapshot. It
+runs locally without contacting a provider. Missing counts remain incomplete,
+subscription usage is separate, and cache-write counts remain incomplete for
+adapters that do not report them. The store retains 100 detail rows and shows
+the newest 20; cumulative observed totals and omitted-row counts remain. Only
+eight recent process-local conversations are retained. Restored sessions and
+provider failures with no usage event are not reconstructed, and this is neither
+a provider invoice nor, by itself, a durable spending-limit authority. Finite
+`spending` policy state comes from the separate request-admission record; `/usage`
+does not reconstruct, modify, or authorize that record.
+
+## Local semantic search
+
+Vector search ranks files by the similarity of their embedding vectors to a
+query, then blends that ranking with keyword matches. It can help when a query
+describes behavior without using the source's exact identifiers. It remains
+optional: keyword search works while vectors are disabled or building.
+“Stale · refreshing” means the last successful index is being served while a
+new snapshot builds; “ready” means that refresh finished.
+
+For a stronger modern local alternative to Nomic Embed Text v1.5, use
+[Qwen3-Embedding 0.6B](https://ollama.com/library/qwen3-embedding:0.6b).
+Its [model documentation](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
+includes multilingual and code retrieval. Larger 4B/8B variants trade more
+memory and CPU/GPU work for quality. The 0.6B model used about 1.4 GB on the
+reference CPU machine; a small warm-query probe took about 168 ms. This is a
+latency probe, not a repository-wide quality benchmark.
+
+Run Ollama locally, pull the model, and add these declarations to your provider
+config (or its corresponding provider/indexing fragments):
+
+```sh
+ollama serve
+# In another terminal:
+ollama pull qwen3-embedding:0.6b
+```
+
+```json
+{
+  "providers": {
+    "local-embeddings": {
+      "type": "openai-compatible",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "models": ["qwen3-embedding:0.6b"]
+    }
+  },
+  "indexing": {
+    "semantic": {
+      "enabled": true,
+      "model": "local-embeddings/qwen3-embedding:0.6b"
+    }
+  }
+}
+```
+
+Restart the CLI after changing indexing configuration. `/index` reports vector
+status; `/index explain <query>` shows ranking provenance. Initial CPU indexing
+of a large repository can take hours even when individual queries are quick.
+Loopback embedding endpoints use small serial batches to avoid HTTP timeouts.
+The index saves progress after the first batch and every 64 additional vectors,
+so interrupted builds can resume with the same model and source content.
+
+To warm the configured index outside the interactive terminal, run
+`bun scripts/warm-index.ts /path/to/project` from an Openbuff checkout. It uses
+the target project's provider configuration and preserves keyword fallback
+while building. No cloud API key is required for the Ollama setup above.
 
 ## Smoke test
 

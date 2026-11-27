@@ -46,6 +46,17 @@ through a hosted Openbuff/Codebuff service in this primary flow.
 
 **File:** `sdk/src/run.ts`
 
+The CLI requests `projectContextMode: 'paths'`: startup and continued turns
+refresh the project paths and knowledge files without parsing every source
+file for symbol scores before contacting the model. `query_index` and
+`read_subtree` still retrieve symbols on demand. SDK callers default to
+`'symbols'` and can opt into the same path-only startup mode.
+
+Run `bun scripts/benchmark-turn-startup.ts` from the repository root to
+compare both modes for initial and continued sessions without model requests.
+Recorded local preparation timings are in
+[`scripts/benchmark-turn-startup-results.json`](../scripts/benchmark-turn-startup-results.json).
+
 1. `run()` → `runOnce()` is called with the prompt, agent ID, cost mode, and
    session state.
 2. When `cwd` is present and the host did not inject a custom filesystem, the
@@ -81,7 +92,6 @@ through a hosted Openbuff/Codebuff service in this primary flow.
 
    Removed tools (`apply_patch`, `apply_smart_patch`, `read_slices`) are no
    longer registered and cannot be called. Two compatibility guarantees remain:
-
    - **Persisted histories stay interpretable.** CLI chat blocks and tool-call
      histories store `toolName` verbatim, so restored sessions can still
      contain a removed name. `getToolMetadata` in
@@ -166,6 +176,61 @@ If routing fails to match a provider entry, Openbuff fails closed with a
 clear config error. There is no hosted-backend fallback and no credit
 deduction.
 
+When a top-level or per-run `spending` policy is capped, the SDK binds one
+host-owned authority to the root and all descendants. Every retry/failover
+attempt reserves fixed-point USD capacity after route resolution and before the
+provider call. Strict mode needs known USD prices plus context/output bounds;
+estimated mode uses its explicit degraded fixed reservation; uncapped mode adds
+no admission gate. Missing/failed usage remains held, complete known usage can
+reconcile, and interrupted active attempts become held on resume. The durable
+record is separate from `AgentState.creditsUsed` telemetry and from the prunable
+run-event journal. A settled attempt that exceeds its own reservation blocks
+new capped requests even if the total is still below the cap; already admitted
+requests can still settle or overshoot remotely. This is not a billing guarantee.
+
+A host that supplies a run journal can opt into bounded generator observations
+with `createRunJournal({ path, captureProgrammaticReplay: true })`. The journal
+retains the exact serialized `handleSteps` digest (a live callable is opaque),
+identified runtime component, configuration and input digests where those values
+are plain data, and the ordered yields and explicit inputs offered to `next()`. Candidate
+model generation also records a bounded runtime request and response pair
+when these observations are available. The producer observes a generator
+return separately from a completed run. The
+capture is opt-in because reply values can include private tool results; it
+contains no duplicate copy of generator source. Unrecordable inputs and limits
+stop the tape rather than inventing a completion. A tape does not capture the
+JS heap, arbitrary host I/O, or the full dependency closure. These rows are
+observations, not permission for exact replay; unverified re-entry still fails
+closed before new effects.
+
+The SDK's separate Linux/Bun `runReplayableReads` entry point can resume an
+explicit built-in plan of project-relative `read_files` batches, without model
+or effectful tool calls. The host opens the journal with
+`openReplayableReadJournal` using an absolute file path in a private directory
+it controls (mode `0700`). The SQLite journal can contain original file text;
+keep it private and use the same SDK artifact and workspace on restart. A
+fresh process must verify the retained prefix and its original durable tail
+seal before it can claim the run once. It feeds each confirmed reply back into
+the built-in iterator in order, retaining repeated requests as distinct
+occurrences. Only the unrecorded suffix reaches dispatch. Unsealed older
+journals cannot resume; this is not a backup or protection against whole-store
+rollback. Generic agent, terminal, and MCP re-entry are not enabled by this API.
+
+The built Linux/Bun SDK also exposes `runReplayableProgram` for a small,
+versioned data-only recipe. A recipe can compose text-only model requests,
+clock and random observations, and SHA-256 over captured input or earlier
+results. The host selects one explicit OpenAI-compatible `/chat/completions`
+route. Before each attempt the host writes its exact request to the private
+SQLite journal; resume reconstructs the iterator with confirmed replies before
+one dead-owner claim can dispatch the unrecorded suffix. Missing or unmatched
+requests, changed build/input/model, and unknown recipes refuse. Unbuilt source
+cannot attest its loaded artifact. This is a separate SDK API, not a replay mode
+for `client.run()`: it does not run arbitrary JavaScript, model tool calls,
+shell/MCP work, retries, or fallback, and does not inherit `client.run()`'s
+spending configuration. Keep the journal in an owner-only directory; it can
+contain prompts and replies. No provider-side exactly-once or backup rollback
+protection is implied.
+
 ### 6. Response Flow Back to CLI
 
 1. The provider streams tokens back to the local AI SDK client.
@@ -204,6 +269,16 @@ LLM Response (tool_call)          Agent Runtime processes stream
 
 Control-plane reads and validation use the same local dispatch path. A targeted validation call must include the snapshot ID observed before execution; the SDK rejects the call if the workspace is already stale and rejects its result if files mutate while the command is running. This prevents an old compiler/test result or reviewer verdict from clearing a newer change.
 
+Before each new tool attempt, the runtime synchronizes its workspace view with
+the host, including for subagents. The attempt retains its original snapshot
+and input identity; synchronization never renews an already registered action.
+The host advances the workspace for commands with unknown effects only after
+observing target entry, including commands that later fail or are cancelled.
+Refusals before target entry do not create workspace revisions. A
+`stale-authority` refusal permits one workspace refresh per agent run; a second
+refusal stops the run. Other execution refusals stop immediately. This recovery
+budget is separate from the malformed-tool-call loop guard.
+
 ### Staged read-before-edit enforcement
 
 Edit-oriented transaction variants and compatibility handlers participate in a
@@ -212,7 +287,8 @@ strict-mode edit flows, the runtime requires a recent `read_files`
 authorization for each path before an edit is accepted:
 
 - A successful whole-file `read_files.paths` call mints a per-path
-  authorization that allows subsequent exact-match edits to that file. Range
+  authorization only from authenticated complete lossless bytes and a whole
+  raw basis. It remains usable while the exact raw hash matches. Range
   and symbol reads do not grant whole-file authorization; follow-up edits must
   carry their scoped `readCapability`.
 - Every complete read result groups its canonical content hash, exact bounds,
@@ -221,17 +297,16 @@ authorization for each path before an edit is accepted:
   model-visible result. Edit callers copy only `editAnchor.readCapability`;
   truncated results expose no anchor.
 - `basedOnRead` (the read capability returned from a fresh `read_files`
-  range) is an authenticated opaque `cap.v3` token bound to the canonical
+  range) is an authenticated opaque `cap.v4` token bound to the canonical
   project identity, normalized target path, issuing run, line range, and
-  content hash. Cross-path and cross-run replay is rejected before content
-  matching. Legacy `cap.v2` tokens and explicit range-hash objects remain
-  compatible freshness assertions only; they cannot bypass strict
-  read-before-edit for an otherwise unread path.
-- A successful edit keeps the per-path authorization for the rest of the
-  editing flow, while the runtime chains subsequent exact-match edits from the
-  latest prepared content. The authorization is path-level permission, not a
-  freshness proof: large/ambiguous follow-up edits should use the fresh
-  post-edit `basedOnRead` returned by the successful edit or re-read the range.
+  observation hash and original raw basis. Cross-path and cross-run replay is
+  rejected before matching. Historical v3 parsing supplies no fresh raw edit
+  authority; obtain a v4 read before editing. Scoped reads remain scoped even
+  when their slice covers the visible file.
+- A confirmed edit can refresh whole-file authorization from exact after-content
+  covered by a committed receipt. The runtime drops previous prepared queues and
+  verifies exact bytes again for subsequent mutations. An unchanged path in a
+  mixed transaction receives no new authority without its own confirmation.
 - Stale-anchor or anchor-not-found failures should be recovered by
   re-reading the exact target range and retrying with the new
   `basedOnRead`, not by guessing from memory. Failure responses never mint a
@@ -270,15 +345,15 @@ exposes a stable structured contract to the user:
   surrounding prose.
 - File contents themselves are not logged into gate state or transcripts;
   only the hash/byte-length marker and pass/fail status are recorded.
-- Versioned reviewer results must attest to every pending file. An omitted
-  file is blocking. A snapshot fingerprint MISMATCH is blocking only when
-  file coverage is also incomplete: a coverage-complete review reporting a
-  well-formed v3 fingerprint is trusted even when the snapshot id advanced
-  between its spawn and attestation (the reviewer may have re-read drifted
-  bytes), and the drift is recorded non-silently via
-  `collectReviewerFingerprintDrift`. A missing or non-attestable
-  fingerprint is always blocking. This matches the pinned behavior in
-  `collectReviewerAttestationIssues` (`agents/base2/gate-reviewer.ts`).
+- Versioned reviewer results must attest to every pending file and echo the
+  exact fingerprint supplied for that review's file scope. Missing files,
+  unsupported schemas, and missing or mismatched fingerprints block credit.
+  Specialist reviews also recheck the scoped bytes after the reviewer returns.
+  A protocol failure gets one reviewer-only retry, then remains blocked;
+  neither `LOOKS_GOOD`, parent-owned requirements, nor a spent retry budget
+  grants credit without attestation. Ordinary reviews require all five review
+  dimensions and nonempty requirement evidence. Eligible reduced reviews keep
+  their explicit smaller contract.
 - Missing hooks or hooks that match no changed files are surfaced as
   `REDUCED_ASSURANCE`, not ordinary validation success.
 - Explicit reviewer bypasses retain the reason, authorization timestamp,
@@ -381,3 +456,11 @@ When the user presses Escape:
 The upstream Codebuff project routed inference and authentication through a hosted server with product billing, run records, and provider proxying. That path is not part of Openbuff and the hosted web, billing, BigQuery, and free-mode product surfaces have been removed from the active workspace.
 
 Openbuff replaces that entire hop with direct, BYOK provider calls from the local process. No Openbuff credits are deducted, no run records are written to a hosted database, and no telemetry is uploaded.
+
+## Repository context and validation evidence
+
+After the host registers an actor's actual run, template and task input identity, the runtime requests a repository context packet. The host queries reusable source generations and projected knowledge, attests relevant source dependencies, resolves applicable complete procedures, and includes current validation receipts. This occurs before the actor's first model/programmatic execution and also applies to transcript-isolated children through the supervision bridge.
+
+Native compiler/test execution captures its dependency baseline before launch. Only successful trusted results with matching post-run dependencies issue validation receipts. The acting child requests current evidence from the host registry at the gate; source/configuration/tool/install changes invalidate it. Terminal procedure facts reuse the execution scanner, including routine Git staging, without introducing staging or supervisor approval requirements.
+
+A deadline, uncertain source coverage, failed lookup, or unavailable optional index produces explicit degraded context. Discovery hints and retrieved memories cannot authorize source edits or execution. The existing workspace/action authority checks remain responsible for mutations. See [repository-intelligence.md](repository-intelligence.md).

@@ -1,0 +1,3 @@
+# Preserve raw, byte-bound review records while checking ordinary source whitespace.
+.agents/sessions/body-capability-review-2026-11-05/** -text -whitespace
+docs/execution/body-roadmap/evidence/** -text -whitespace

@@ -3,9 +3,14 @@ import {
   getContentHash,
 } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { handleEditTransaction } from '../edit-transaction'
 import { getFileProcessingValues, handleWriteFile } from '../write-file'
+import { confirmedMutationOutput } from '../../../../__tests__/read-files-edit-state-fixtures'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
@@ -28,12 +33,20 @@ function capability(params: {
   startLine: number
   endLine: number
   hashedContent: string
+  rawContent?: string
+  scope?: 'lines' | 'whole'
 }): string {
   return encodeReadCapabilityToken({
     startLine: params.startLine,
     endLine: params.endLine,
     hash: getContentHash(params.hashedContent),
     scope: { projectId, path, runId },
+    rawBasis: getRawReadBasis(
+      captureTextDocument(params.rawContent ?? diskContent),
+      params.startLine,
+      params.endLine,
+      params.scope ?? 'lines',
+    ),
   })
 }
 
@@ -45,6 +58,12 @@ const fullFileRangeCapability = capability({
   startLine: 1,
   endLine: 2,
   hashedContent: 'a\nb',
+})
+const legacyWholeFileCapability = encodeReadCapabilityToken({
+  startLine: 1,
+  endLine: 3,
+  hash: getContentHash(diskContent),
+  scope: { projectId, path, runId },
 })
 
 async function runWriteFile(basedOnRead: string): Promise<{
@@ -72,9 +91,13 @@ async function runWriteFile(basedOnRead: string): Promise<{
     userId: undefined,
     userInputId: 'test-input',
     requestOptionalFile: async () => diskContent,
-    requestClientToolCall: async () => {
+    requestClientToolCall: async (toolCall: any) => {
       applied = true
-      return []
+      return confirmedMutationOutput(
+        toolCall,
+        { [path]: newContent },
+        { projectId, runId },
+      )
     },
     writeToClient: () => {},
   } as any)
@@ -84,7 +107,7 @@ async function runWriteFile(basedOnRead: string): Promise<{
     applied,
     errorMessage:
       output?.type === 'json'
-        ? String((output.value as { errorMessage?: string }).errorMessage)
+        ? String((output.value as { errorMessage?: string }).errorMessage ?? '')
         : '',
   }
 }
@@ -111,9 +134,13 @@ async function runEditTransactionWriteFile(basedOnRead: string): Promise<{
     }),
     logger,
     requestOptionalFile: async () => diskContent,
-    requestClientToolCall: async () => {
+    requestClientToolCall: async (toolCall: any) => {
       applied = true
-      return []
+      return confirmedMutationOutput(
+        toolCall,
+        { [path]: newContent },
+        { projectId, runId },
+      )
     },
     writeToClient: () => {},
   } as any)
@@ -128,7 +155,7 @@ async function runEditTransactionWriteFile(basedOnRead: string): Promise<{
       : undefined
   return {
     applied,
-    errorMessage: value ? String(value.errorMessage) : '',
+    errorMessage: value ? String(value.errorMessage ?? '') : '',
     // handleEditTransaction reports per-edit causes in failures[] and only a
     // generic summary in the top-level errorMessage.
     failureMessages: (value?.failures ?? [])
@@ -138,16 +165,37 @@ async function runEditTransactionWriteFile(basedOnRead: string): Promise<{
 }
 
 describe('write_file basedOnRead whole-file coverage', () => {
-  it('accepts a full-file range capability for a newline-terminated file', async () => {
+  it('refuses a full-looking lines capability for a newline-terminated file', async () => {
     const { applied, errorMessage } = await runWriteFile(
       fullFileRangeCapability,
     )
 
-    expect(applied).toBe(true)
-    expect(errorMessage).not.toContain(
+    expect(applied).toBe(false)
+    expect(errorMessage).toContain(
       'a range capability cannot authorize a whole-file overwrite',
     )
-    expect(errorMessage).not.toContain('stale hash')
+  })
+
+  it('accepts an explicit authenticated whole basis', async () => {
+    const result = await runWriteFile(
+      capability({
+        startLine: 1,
+        endLine: 3,
+        hashedContent: diskContent,
+        scope: 'whole',
+      }),
+    )
+    expect(result.applied).toBe(true)
+    expect(result.errorMessage).toBe('')
+  })
+
+  it('refuses a legacy v3 token with whole-file-looking bounds', async () => {
+    const result = await runWriteFile(legacyWholeFileCapability)
+    expect(legacyWholeFileCapability.startsWith('cap.v3.')).toBe(true)
+    expect(result.applied).toBe(false)
+    expect(result.errorMessage).toContain(
+      'cannot authorize a whole-file overwrite',
+    )
   })
 
   it('still rejects a proper-subset range capability', async () => {
@@ -165,25 +213,53 @@ describe('write_file basedOnRead whole-file coverage', () => {
 
   it('still rejects a whole-file-covering capability whose hash is stale', async () => {
     const { applied, errorMessage } = await runWriteFile(
-      capability({ startLine: 1, endLine: 2, hashedContent: 'x\ny' }),
+      capability({
+        startLine: 1,
+        endLine: 3,
+        hashedContent: 'x\ny\n',
+        rawContent: 'x\ny\n',
+        scope: 'whole',
+      }),
     )
 
     expect(applied).toBe(false)
     expect(errorMessage).toContain(
-      'basedOnRead did not match the current file content (stale hash)',
+      'whole-file raw bytes changed after observation',
     )
   })
 })
 
 describe('edit_transaction write_file basedOnRead whole-file coverage', () => {
-  it('accepts a full-file range capability for a newline-terminated file', async () => {
-    const { applied, errorMessage, failureMessages } =
-      await runEditTransactionWriteFile(fullFileRangeCapability)
+  it('refuses a full-looking lines capability for a newline-terminated file', async () => {
+    const { applied, failureMessages } = await runEditTransactionWriteFile(
+      fullFileRangeCapability,
+    )
 
-    expect(applied).toBe(true)
-    expect(failureMessages).toBe('')
-    expect(errorMessage).not.toContain(
+    expect(applied).toBe(false)
+    expect(failureMessages).toContain(
       'a range capability cannot authorize a whole-file overwrite',
+    )
+  })
+
+  it('accepts an explicit authenticated whole basis', async () => {
+    const result = await runEditTransactionWriteFile(
+      capability({
+        startLine: 1,
+        endLine: 3,
+        hashedContent: diskContent,
+        scope: 'whole',
+      }),
+    )
+    expect(result.applied).toBe(true)
+    expect(result.errorMessage).toBe('')
+    expect(result.failureMessages).toBe('')
+  })
+
+  it('refuses a legacy v3 token with whole-file-looking bounds', async () => {
+    const result = await runEditTransactionWriteFile(legacyWholeFileCapability)
+    expect(result.applied).toBe(false)
+    expect(result.failureMessages).toContain(
+      'cannot authorize a whole-file overwrite',
     )
   })
 

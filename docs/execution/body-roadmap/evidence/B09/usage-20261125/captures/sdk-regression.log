@@ -1,0 +1,493 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b09-cost-wire.test.ts:
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=false [35.65ms]
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=true [9.32ms]
+
+sdk/src/__tests__/b09-cost-unknown-wire.test.ts:
+(pass) B09 actual unpriced usage stays explicitly unknown rather than reporting a free request [8.74ms]
+
+sdk/src/__tests__/run-output-schema-wire.test.ts:
+Using environment: test
+(pass) actual schema output provider and source CLI controls > a prompt-only root exposes only reporting plus its prior tools and receives the actual schema [145.19ms]
+(pass) actual schema output provider and source CLI controls > missing provider usage remains unknown instead of a zero count [45.58ms]
+(pass) actual schema output provider and source CLI controls > a throwing usage observer does not retry or fail a completed provider response [56.00ms]
+(pass) actual schema output provider and source CLI controls > run-scoped schema is captured before asynchronous host dependencies can change it [54.87ms]
+(pass) actual schema output provider and source CLI controls > actual source CLI prints a schema-valid final result (event mode false) [2320.20ms]
+(pass) actual schema output provider and source CLI controls > actual source CLI prints a schema-valid final result (event mode true) [2150.17ms]
+
+sdk/src/__tests__/provider-resilience-wire.test.ts:
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: Overloaded
+      cause: undefined,
+        url: "http://127.0.0.1:42093/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 529,
+ responseHeaders: {
+  "content-length": "75",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:51 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: overload is retryable and failover-eligible > HTTP 529 then 200 recovers on the same model [20.86ms]
+{
+  type: "overloaded_error",
+  message: "Overloaded",
+}
+(pass) N07: overload is retryable and failover-eligible > SSE overloaded_error on a 200 stream retries and recovers [13.62ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 529
+      cause: undefined,
+        url: "http://127.0.0.1:33821/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 529,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:51 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 529\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 529
+      cause: undefined,
+        url: "http://127.0.0.1:33821/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 529,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:51 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 529\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 529
+      cause: undefined,
+        url: "http://127.0.0.1:33821/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 529,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:51 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 529\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: overload is retryable and failover-eligible > 529 three times with a backup configured fails over to the backup [14.79ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 429
+      cause: undefined,
+        url: "http://127.0.0.1:42571/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: undefined,
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 429,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:51 GMT",
+  "retry-after": "2",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 429\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: Retry-After > a live streaming backoff forwards decreasing remaining time and cleans up before recovery [1110.16ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 429
+      cause: undefined,
+        url: "http://127.0.0.1:40951/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 429,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:52 GMT",
+  "retry-after": "45",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 429\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: Retry-After > a 45 s delta-seconds Retry-After is honoured and reported in the retry event [7.82ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 503
+      cause: undefined,
+        url: "http://127.0.0.1:45937/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 503,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:52 GMT",
+  "retry-after": "Thu, 12 Nov 2026 09:00:45 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 503\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: Retry-After > an HTTP-date Retry-After 45 s ahead of the injected clock is honoured [8.13ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 429
+      cause: undefined,
+        url: "http://127.0.0.1:37021/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 429,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:52 GMT",
+  "retry-after": "3600",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 429\"}}",
+ isRetryable: true,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: Retry-After > a Retry-After beyond 120 s is clamped to 120 s [7.88ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 401
+      cause: undefined,
+        url: "http://127.0.0.1:46545/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 401,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:52 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 401\"}}",
+ isRetryable: false,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: a 401 failover demotes the primary for the session > default health for identical model IDs stays isolated by captured configuration [20.07ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: status 401
+      cause: undefined,
+        url: "http://127.0.0.1:42989/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 401,
+ responseHeaders: {
+  "content-length": "68",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:52 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"status 401\"}}",
+ isRetryable: false,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: a 401 failover demotes the primary for the session > custom credential ports do not share default route demotion or resolve dormant tokens [12.27ms]
+931 |       text: responseBody,
+932 |       schema: errorSchema
+933 |     });
+934 |     return {
+935 |       responseHeaders,
+936 |       value: new APICallError4({
+                       ^
+AI_APICallError: invalid x-api-key
+      cause: undefined,
+        url: "http://127.0.0.1:33901/v1/messages",
+ requestBodyValues: {
+  model: "primary",
+  max_tokens: 4096,
+  temperature: undefined,
+  top_k: undefined,
+  top_p: undefined,
+  stop_sequences: undefined,
+  system: [Array ...],
+  messages: [Array ...],
+  tools: undefined,
+  tool_choice: undefined,
+  stream: true,
+},
+ statusCode: 401,
+ responseHeaders: {
+  "content-length": "86",
+  "content-type": "application/json",
+  date: "Wed, 25 Nov 2026 21:09:52 GMT",
+},
+ responseBody: "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}",
+ isRetryable: false,
+       data: {
+  type: "error",
+  error: [Object ...],
+},
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:936:18
+      at /home/ben/Code/CLI/openbuff/node_modules/@ai-sdk/anthropic/node_modules/@ai-sdk/provider-utils/dist/index.mjs:781:34
+
+(pass) N07: a 401 failover demotes the primary for the session > later requests go straight to the backup until the registry is cleared [12.53ms]
+
+ 19 pass
+ 0 fail
+ 81 expect() calls
+Ran 19 tests across 4 files. [6.90s]

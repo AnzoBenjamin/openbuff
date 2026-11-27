@@ -20,7 +20,7 @@ permissions:
 jobs:
   # First job: Prepare production release
   release-sdk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       new_version: ${{ steps.bump_version.outputs.new_version }}
     steps:
@@ -96,7 +96,7 @@ jobs:
       - name: Set up Node.js for npm publishing
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org/
 
       - name: Publish to npm

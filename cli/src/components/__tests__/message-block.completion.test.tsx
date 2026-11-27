@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
+import { getSystemMessage } from '../../utils/message-history'
 import { MessageBlock } from '../message-block'
 
 import type { MarkdownPalette } from '../../utils/markdown-renderer'
@@ -51,6 +52,30 @@ const baseProps = {
 }
 
 describe('MessageBlock completion time', () => {
+  test('completed local command messages offer full answer copying for each content shape', () => {
+    const content = 'Permissions updated for the next run.'
+    const blocks = [{ type: 'text' as const, content }]
+    for (const message of [
+      getSystemMessage(content),
+      getSystemMessage(blocks),
+      getSystemMessage(blocks, content),
+    ]) {
+      const markup = renderToStaticMarkup(
+        <MessageBlock
+          {...baseProps}
+          messageId={message.id}
+          blocks={message.blocks}
+          content={message.content}
+          isComplete={message.isComplete}
+        />,
+      )
+
+      expect(markup).toContain(content)
+      expect(markup).toContain('Copy answer')
+      expect(markup).not.toContain('Copy partial answer')
+    }
+  })
+
   test('renders completion time and cost when complete', () => {
     const markup = renderToStaticMarkup(
       <MessageBlock
@@ -63,6 +88,14 @@ describe('MessageBlock completion time', () => {
 
     expect(markup).toContain('7s')
     expect(markup).toContain('cost $0.03')
+  })
+
+  test('renders an explicit zero cache-hit rate when complete', () => {
+    const markup = renderToStaticMarkup(
+      <MessageBlock {...baseProps} isComplete={true} cacheHitRate={0} />,
+    )
+
+    expect(markup).toContain('cache 0%')
   })
 
   test('omits completion line when not complete', () => {

@@ -64,6 +64,46 @@ export const createCodeEditor = (options: {
         // despite its attempts: helps a cheap/fast parent model decide how to
         // retry without re-deriving the cause from raw tool transcripts.
         blockedReason: { type: 'string' },
+        // A compact category for automation. `blockedReason` remains the
+        // human-readable diagnostic; this field is intentionally stable enough
+        // for a parent to decide whether a retry is meaningful.
+        failureStage: {
+          type: 'string',
+          enum: [
+            'no_edit_transaction',
+            'invalid_edit_transaction_input',
+            'edit_transaction_uncommitted',
+            'edit_recovery_exhausted',
+            'committed_receipt_unrecognized',
+          ],
+        },
+        // The last structured edit_transaction recovery packet, when a
+        // failed atomic transaction needs a fresh source snapshot.
+        recovery: {
+          type: 'object',
+          properties: {
+            paths: { type: 'array', items: { type: 'string' } },
+            preferredStrategy: { type: 'string' },
+            errorCode: { type: 'string' },
+            attempts: { type: 'number' },
+          },
+          required: ['paths', 'attempts'],
+        },
+        // Canonical commit receipt evidence, retained separately from the
+        // bounded transcript so parents do not need to infer mutation facts.
+        mutationReceipts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              operationId: { type: 'string' },
+              receiptId: { type: 'string' },
+              paths: { type: 'array', items: { type: 'string' } },
+              actionIds: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['operationId', 'receiptId', 'paths', 'actionIds'],
+          },
+        },
         messages: { type: 'array', items: {} },
         changedFiles: { type: 'array', items: { type: 'string' } },
         targetFileProgress: {
@@ -116,10 +156,12 @@ You may make edits across multiple turns. After each edit you will see whether i
 - Same-file mixed edit modes are allowed only when their original spans are disjoint and provenance maps unambiguously. The runtime rejects overlap or ambiguous provenance. For large files, prefer read_files windows/around/symbol selectors for complete cap.v3 blocks; use read_files ranges when you need an exact arbitrary line range. Use read_outline to discover structure, and pull a complete symbol only when rewrite_symbol is the intended edit. Otherwise submit replace_range with editAnchor.readCapability.
 - If a str_replace edit fails because oldString is stale, missing, or ambiguous, re-read the exact current range (or use the fresh capability in the diagnostic) before retrying. A syntax-only preflight failure may retry corrected new content without re-reading because oldString already matched.
 - If edit_transaction aborts, no files changed. When failures include basedOnRead (or basedOnRead= in the diagnostic text), retry with that capability first (write_file basedOnRead, or basedOnRead on every str_replace replacement / replace_range readCapability) — do not exploratory re-read first when a fresh cap.v3 is already echoed. Re-read only when no capability is available, for ambiguous oldString (longer anchor / occurrenceIndex), or when the diagnostic explicitly requires a fresh range re-read. When re-read is required, rebuild the whole related transaction from one coherent snapshot.
-- Edit contract: exact contiguous oldString from live read/sourceContent; multi-file abort → re-read ALL recovery.paths (requiresFreshRead) from one snapshot and rebuild the whole txn; prefer small unique anchors; large block → replace_range + readCapability; obey recovery.preferredStrategy when present.
+- Edit contract: exact contiguous oldString from live read/sourceContent; on abort follow the recovery packet's paths and requiresFreshRead, then rebuild the whole transaction; prefer small unique anchors; large block → replace_range + readCapability; obey recovery.preferredStrategy when present.
 - Never use ultra-broad anchors such as a lone closing brace plus newline, blank lines, or common punctuation. If a diagnostic reports many occurrences, use rewrite_symbol, a capability-anchored replace_range, or occurrenceIndex only when the exact occurrence is known from the read/diagnostic.
 - Put dependent edits in one transaction so they preflight together. A simple one-file change is also a one-edit transaction.
 - Keep editing until the entire request is implemented across all files. Do not stop after a single file when more files still need changes.
+- Work in small mutation waves: one file, or the smallest genuinely atomic implementation-plus-test group, per edit_transaction. Do not combine speculative documentation, cleanup, or unrelated findings into the same transaction. After each committed wave, use its receipt/post-edit capability before expanding scope.
+- If an edit_transaction returns a structured recovery packet, it committed nothing. Follow it exactly: first read every recovery path that requires a fresh snapshot, then submit one rebuilt transaction from that snapshot. The edits field must be an actual JSON array, never a string. Never reconstruct oldString anchors from memory.
 - Do not create scratch, placeholder, sentinel, or no-op files just to test whether editing works or to signal completion. Only create files that are explicitly requested or directly required by the implementation.
 - When every change has been made and all edits have applied successfully, stop: respond with a brief one-line confirmation and make no further tool calls.
 
@@ -127,7 +169,7 @@ Important: You may call read_files only for exact files you need to edit or to r
 
 Deterministic large-file editing (follow this exactly to avoid edits that fail for no apparent reason):
 - Before the first edit to a large file, prefer read_files windows/around/symbol selectors to mint complete cap.v3 blocks; use read_files ranges only for an exact arbitrary line range. Pass basedOnRead / readCapability from that read on the edit; never invent same-step sticky authority.
-- For a medium/large block replacement, copy editAnchor.readCapability from the directly read block/range into a replace_range edit. Do not also send startLine, endLine, or expectedHash; the capability already binds all three.
+- For a medium/large block replacement, copy editAnchor.readCapability from the directly read block/range into a replace_range edit. Omit startLine/endLine to replace the whole block, or provide both to target a contained subrange. Never send expectedHash.
 - For a large-file str_replace edit, use the available whole-file authorization or copy editAnchor.readCapability into basedOnRead on each replacement. When a failure mints basedOnRead in the diagnostic, paste it into the next write_file/str_replace retry instead of an exploratory re-read.
 - If a single edit's newString or replacement content would exceed roughly 30-50 KB (e.g. inserting or moving hundreds of lines), do not submit it as one monolithic edit: oversized payloads can be truncated in transport and then fail preflight with a misleading syntax error. Instead split the change into several bounded, capability-anchored edits: re-read the exact target with read_files windows/around/symbol selectors or ranges, then apply replace_range (readCapability) or str_replace (basedOnRead) in forward-ordered chunks, each anchored on a unique declaration and small enough to transmit safely, keeping the file syntactically valid between steps when possible.
 - Put several non-overlapping changes in one edit_transaction. Same-file mixed modes must refer to disjoint original spans with unambiguous mapping. Replacements within one str_replace edit apply sequentially, so consolidate overlapping expectations into one larger edit.
@@ -253,11 +295,60 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
 
       // Keep stepping while the model is still emitting edit tool calls so it
       // can implement multi-file changes and recover from failed transactions.
-      // Productive steps are unlimited by default. The runtime's repeated-step
-      // watchdog, cancellation, budgets, and subagent timeout bound runaway work.
+      // Productive steps remain unlimited; repeated identical recovery
+      // directives are bounded so a stalled provider returns a useful receipt.
+      let recoveryContinuationCount = 0
+      let lastRecoveryDirective = ''
+      let repeatedRecoveryCount = 0
+      // The same provider behavior can happen before the first mutation. For
+      // declared implementation targets, every read-only/reasoning-only
+      // completion gets another action-required turn so it cannot silently
+      // end the repair.
       while (true) {
         const result = yield 'STEP'
         agentState = result.agentState
+        // Step-capped runs must break to the receipt path immediately: the
+        // StepGenerator contract requires it, because yielding more STEP
+        // continuations past an explicit step cap re-triggers the cap forever.
+        if (result.hitStepCap) break
+        const stepMessages = agentState.messageHistory.slice(
+          initialMessageHistoryLength,
+        )
+        const recovery = getPendingTransactionRecovery(stepMessages)
+        if (result.stepsComplete && recovery) {
+          const directive = buildTransactionRecoveryDirective(recovery)
+          repeatedRecoveryCount = directive === lastRecoveryDirective
+            ? repeatedRecoveryCount + 1
+            : 1
+          lastRecoveryDirective = directive
+          if (repeatedRecoveryCount > 3) break
+          recoveryContinuationCount += 1
+          yield {
+            toolName: 'add_message',
+            input: {
+              role: 'user',
+              content: directive,
+            },
+            includeToolCall: false,
+          }
+          continue
+        }
+        if (
+          result.stepsComplete &&
+          targetFiles.length > 0 &&
+          extractChangedFiles(stepMessages).length === 0 &&
+          !hasEditTransactionResult(stepMessages)
+        ) {
+          yield {
+            toolName: 'add_message',
+            input: {
+              role: 'user',
+              content: buildActionRequiredDirective(targetFiles),
+            },
+            includeToolCall: false,
+          }
+          continue
+        }
         if (result.stepsComplete) break
       }
 
@@ -270,6 +361,9 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // as successful mutations.
       const changedFiles = extractChangedFiles(newMessages)
       const attemptedEditFiles = extractAttemptedEditFiles(newMessages)
+      const pendingRecovery = getPendingTransactionRecovery(newMessages)
+      const mutationReceipts = extractMutationReceipts(newMessages)
+      const receiptMessages = excludeEditorControlMessages(newMessages)
       const targetFileProgress = buildTargetFileProgress(
         targetFiles,
         changedFiles,
@@ -288,6 +382,14 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         changedFiles.length === 0
           ? collectFailedEditReason(newMessages, attemptedEditFiles)
           : undefined
+      const failureStage =
+        changedFiles.length === 0
+          ? collectFailureStage(
+              newMessages,
+              pendingRecovery,
+              recoveryContinuationCount,
+            )
+          : undefined
       // A repair editor receives the exact finding set in params.handoff. It
       // can claim only findings whose declared files intersect a committed
       // mutation. The runtime receipt layer independently re-verifies that
@@ -303,7 +405,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         toolName: 'set_output',
         input: {
           output: buildReceiptOutput(
-            boundMessagesForReceipt(newMessages, 60, 2000),
+            boundMessagesForReceipt(receiptMessages, 60, 2000),
           ),
         },
         includeToolCall: false,
@@ -328,7 +430,11 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           toolName: 'set_output',
           input: {
             output: buildReceiptOutput(
-              boundMessagesForReceipt(newMessages, maxMessages, maxTextChars),
+              boundMessagesForReceipt(
+                receiptMessages,
+                maxMessages,
+                maxTextChars,
+              ),
             ),
           },
           includeToolCall: false,
@@ -384,6 +490,16 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           messages,
           changedFiles,
           ...(blockedReason !== undefined ? { blockedReason } : {}),
+          ...(failureStage !== undefined ? { failureStage } : {}),
+          ...(pendingRecovery
+            ? {
+                recovery: {
+                  ...pendingRecovery,
+                  attempts: recoveryContinuationCount,
+                },
+              }
+            : {}),
+          ...(mutationReceipts.length > 0 ? { mutationReceipts } : {}),
           ...(targetFileProgress ? { targetFileProgress } : {}),
           requirementsAddressed: extractBriefListItems(
             messageHistory,
@@ -403,6 +519,333 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         const files = new Set<string>()
         visit(messages, files)
         return [...files]
+      }
+
+      function getPendingTransactionRecovery(
+        messages: unknown[],
+      ):
+        | {
+            paths: string[]
+            pendingReadPaths?: string[]
+            preferredStrategy?: string
+            errorCode?: string
+          }
+        | undefined {
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index]
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (
+            record.role !== 'tool' ||
+            record.toolName !== 'edit_transaction' ||
+            !Array.isArray(record.content)
+          ) {
+            continue
+          }
+          for (let partIndex = record.content.length - 1; partIndex >= 0; partIndex -= 1) {
+            const part = record.content[partIndex]
+            if (!part || typeof part !== 'object') continue
+            const partRecord = part as Record<string, unknown>
+            if (
+              partRecord.type !== 'json' ||
+              !partRecord.value ||
+              typeof partRecord.value !== 'object'
+            ) {
+              continue
+            }
+            const value = partRecord.value as Record<string, unknown>
+            // A merely receipt-shaped object must not suppress recovery. Only
+            // the same canonical evidence accepted for changedFiles proves a
+            // later transaction committed and made an older failure obsolete.
+            if (hasEditArtifact(value)) return undefined
+            const recovery =
+              value.recovery &&
+              typeof value.recovery === 'object' &&
+              !Array.isArray(value.recovery)
+                ? (value.recovery as Record<string, unknown>)
+                : undefined
+            const recoveryPaths = Array.isArray(recovery?.paths)
+              ? recovery.paths.filter(
+                  (path): path is string =>
+                    typeof path === 'string' && path.length > 0,
+                )
+              : []
+            const failurePaths = Array.isArray(value.failures)
+              ? value.failures
+                  .filter(
+                    (failure): failure is Record<string, unknown> =>
+                      Boolean(failure) && typeof failure === 'object',
+                  )
+                  .map((failure) => failure.path)
+                  .filter(
+                    (path): path is string =>
+                      typeof path === 'string' && path.length > 0,
+                  )
+              : []
+            const paths = [...new Set([...recoveryPaths, ...failurePaths])]
+            if (
+              paths.length > 0 &&
+              (value.requiresFreshRead === true || recovery !== undefined)
+            ) {
+              const requiresRead = value.requiresFreshRead === true ||
+                (value.requiresFreshRead !== false && recovery?.requiresFreshRead !== false)
+              const readPaths = new Set<string>()
+              for (const later of messages.slice(index + 1)) {
+                if (!later || typeof later !== 'object') continue
+                const read = later as Record<string, unknown>
+                if (read.role !== 'tool' || read.toolName !== 'read_files' || !Array.isArray(read.content)) continue
+                for (const part of read.content) {
+                  if (!part || typeof part !== 'object') continue
+                  const value = (part as Record<string, unknown>).value
+                  if (!value || typeof value !== 'object') continue
+                  const results = (value as Record<string, unknown>).results
+                  if (!Array.isArray(results)) continue
+                  for (const result of results) {
+                    if (!result || typeof result !== 'object') continue
+                    const item = result as Record<string, unknown>
+                    if (typeof item.path !== 'string' || item.status === 'error') continue
+                    const anchor = item.editAnchor as Record<string, unknown> | undefined
+                    const slices = Array.isArray(item.slices) ? item.slices : []
+                    if (typeof anchor?.readCapability === 'string' || slices.some((slice) =>
+                      slice && typeof slice === 'object' &&
+                      typeof (slice as { editAnchor?: { readCapability?: unknown } }).editAnchor?.readCapability === 'string'
+                    )) readPaths.add(item.path)
+                  }
+                }
+              }
+              const pendingReadPaths = requiresRead ? paths.filter((path) => !readPaths.has(path)) : []
+              return {
+                paths,
+                ...(pendingReadPaths.length !== paths.length && { pendingReadPaths }),
+                ...(typeof recovery?.preferredStrategy === 'string'
+                  ? { preferredStrategy: recovery.preferredStrategy }
+                  : {}),
+                ...(typeof value.errorCode === 'string'
+                  ? { errorCode: value.errorCode }
+                  : {}),
+              }
+            }
+          }
+        }
+        return undefined
+      }
+
+      function hasEditTransactionResult(messages: unknown[]): boolean {
+        return messages.some(
+          (message) =>
+            Boolean(message) &&
+            typeof message === 'object' &&
+            (message as Record<string, unknown>).role === 'tool' &&
+            (message as Record<string, unknown>).toolName ===
+              'edit_transaction',
+        )
+      }
+
+      function buildActionRequiredDirective(targetFiles: string[]): string {
+        return `<editor_action_required>This is an implementation task for: ${targetFiles.join(', ')}. No edit_transaction result has been recorded. Continue for one focused turn: read only missing exact context, then make the required edit_transaction. If the request is already satisfied, provide concrete source evidence instead; never create a placeholder or no-op edit.</editor_action_required>`
+      }
+
+      function excludeEditorControlMessages(messages: unknown[]): unknown[] {
+        return messages.filter((message) => {
+          if (!message || typeof message !== 'object') return true
+          const record = message as Record<string, unknown>
+          if (record.role !== 'user') return true
+          const content = record.content
+          if (typeof content === 'string') {
+            return !content.startsWith('<editor_')
+          }
+          if (!Array.isArray(content)) return true
+          return !content.some(
+            (part) =>
+              Boolean(part) &&
+              typeof part === 'object' &&
+              typeof (part as Record<string, unknown>).text === 'string' &&
+              (part as Record<string, string>).text.startsWith('<editor_'),
+          )
+        })
+      }
+
+      function buildTransactionRecoveryDirective(recovery: {
+        paths: string[]
+        pendingReadPaths?: string[]
+        preferredStrategy?: string
+        errorCode?: string
+      }): string {
+        const strategy = recovery.preferredStrategy
+          ? ` Prefer ${recovery.preferredStrategy}.`
+          : ''
+        const code = recovery.errorCode
+          ? ` Failure code: ${recovery.errorCode}.`
+          : ''
+        const pending = recovery.pendingReadPaths ?? recovery.paths
+        const next = pending.length
+          ? `Read the exact current source for: ${pending.join(', ')}. Then rebuild the complete transaction from the current reads.`
+          : 'Required reads are complete or unnecessary. Rebuild and submit the complete transaction using the current source and capabilities.'
+        return `<editor_recovery>Previous edit_transaction committed no files. ${next} Do not reuse oldString anchors from memory. Submit edits as a real JSON array. For replace_range, use a current readCapability; for str_replace, copy exact live text and basedOnRead.${strategy}${code}</editor_recovery>`
+      }
+
+      function hasCommittedMutationResult(value: Record<string, unknown>): boolean {
+        return (
+          (value.kind === 'commit_receipt' &&
+            value.version === 1 &&
+            value.status === 'committed') ||
+          (value.kind === 'file_mutation_result' &&
+            value.version === 1 &&
+            (value.outcome === 'applied' ||
+              value.outcome === 'partial' ||
+              value.outcome === 'rollback_incomplete'))
+        )
+      }
+
+      function extractMutationReceipts(messages: unknown[]): Array<{
+        operationId: string
+        receiptId: string
+        paths: string[]
+        actionIds: string[]
+      }> {
+        const receipts: Array<{
+          operationId: string
+          receiptId: string
+          paths: string[]
+          actionIds: string[]
+        }> = []
+        const seen = new Set<string>()
+        for (const message of messages) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (
+            record.role !== 'tool' ||
+            !isFileChangingTool(record.toolName as string) ||
+            !Array.isArray(record.content)
+          ) {
+            continue
+          }
+          for (const part of record.content) {
+            if (!part || typeof part !== 'object') continue
+            const partRecord = part as Record<string, unknown>
+            if (
+              partRecord.type !== 'json' ||
+              !partRecord.value ||
+              typeof partRecord.value !== 'object'
+            ) {
+              continue
+            }
+            const value = partRecord.value as Record<string, unknown>
+            if (!hasEditArtifact(value)) continue
+            const receipt =
+              value.kind === 'commit_receipt'
+                ? value
+                : (value.authorityReceipt as Record<string, unknown>)
+            if (
+              typeof receipt.operationId !== 'string' ||
+              typeof receipt.receiptId !== 'string'
+            ) {
+              continue
+            }
+            const key = `${receipt.operationId}:${receipt.receiptId}`
+            if (seen.has(key)) continue
+            const receiptActions = Array.isArray(receipt.actions)
+              ? receipt.actions
+              : []
+            const paths = new Set<string>()
+            const actionIds = new Set<string>()
+            const actions = Array.isArray(value.actions) ? value.actions : []
+            for (const action of actions) {
+              if (!action || typeof action !== 'object') continue
+              const entry = action as Record<string, unknown>
+              const committed = getCorrelatedReceiptAction(receiptActions, entry)
+              const applied =
+                value.kind === 'commit_receipt'
+                  ? entry.status === 'committed'
+                  : entry.outcome === 'applied'
+              const path =
+                entry.action === 'move' ? entry.destinationPath : entry.path
+              if (
+                applied &&
+                committed?.status === 'committed' &&
+                typeof path === 'string' &&
+                typeof entry.actionId === 'string'
+              ) {
+                paths.add(path)
+                actionIds.add(entry.actionId)
+              }
+            }
+            if (paths.size === 0) continue
+            seen.add(key)
+            receipts.push({
+              operationId: receipt.operationId,
+              receiptId: receipt.receiptId,
+              paths: [...paths],
+              actionIds: [...actionIds],
+            })
+          }
+        }
+        return receipts
+      }
+
+      function collectFailureStage(
+        messages: unknown[],
+        recovery: ReturnType<typeof getPendingTransactionRecovery>,
+        recoveryContinuationCount: number,
+      ):
+        | 'no_edit_transaction'
+        | 'invalid_edit_transaction_input'
+        | 'edit_transaction_uncommitted'
+        | 'edit_recovery_exhausted'
+        | 'committed_receipt_unrecognized' {
+        let sawEditTransaction = false
+        let committedUnrecognized = false
+        for (const message of messages) {
+          if (!message || typeof message !== 'object') continue
+          const record = message as Record<string, unknown>
+          if (record.role !== 'tool' || record.toolName !== 'edit_transaction') {
+            continue
+          }
+          sawEditTransaction = true
+          const parts = Array.isArray(record.content) ? record.content : []
+          for (const part of parts) {
+            if (!part || typeof part !== 'object') continue
+            const partRecord = part as Record<string, unknown>
+            if (
+              partRecord.type === 'json' &&
+              partRecord.value &&
+              typeof partRecord.value === 'object' &&
+              hasCommittedMutationResult(partRecord.value as Record<string, unknown>)
+            ) {
+              committedUnrecognized = true
+            }
+          }
+        }
+        // Recovery can end at the step cap or the repeated-directive bound.
+        if (recovery && recoveryContinuationCount > 0) {
+          return 'edit_recovery_exhausted'
+        }
+        if (committedUnrecognized) return 'committed_receipt_unrecognized'
+        if (sawEditTransaction) return 'edit_transaction_uncommitted'
+        if (containsMalformedTransactionInput(messages)) {
+          return 'invalid_edit_transaction_input'
+        }
+        return 'no_edit_transaction'
+      }
+
+      function containsMalformedTransactionInput(
+        value: unknown,
+        depth = 0,
+      ): boolean {
+        if (typeof value === 'string') {
+          return /edits[^]{0,160}(?:real JSON array|must be an? array|serialized)/i.test(
+            value,
+          )
+        }
+        if (!value || typeof value !== 'object' || depth >= 8) return false
+        if (Array.isArray(value)) {
+          return value.some((item) =>
+            containsMalformedTransactionInput(item, depth + 1),
+          )
+        }
+        return Object.values(value as Record<string, unknown>).some((item) =>
+          containsMalformedTransactionInput(item, depth + 1),
+        )
       }
 
       function extractAddressedHandoffFindingIds(

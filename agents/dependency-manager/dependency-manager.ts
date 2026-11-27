@@ -97,7 +97,7 @@ const definition: SecretAgentDefinition = {
     const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
     const packageArgs = packages.map(quote).join(' ')
     const emit = (
-      status: 'success' | 'failed' | 'unsupported' | 'invalid',
+      status: 'success' | 'partial' | 'failed' | 'unsupported' | 'invalid',
       message: string,
       extra: Record<string, unknown> = {},
     ) => ({
@@ -733,21 +733,108 @@ const definition: SecretAgentDefinition = {
         return
       }
     }
-    yield emit('success', 'Dependency operation completed successfully.', {
-      detectedManager,
-      manifests,
-      workspace: normalizedCwd,
-      manifest: selectedManifest,
-      dependencySnapshots: dependencySnapshots.map((snapshot) => ({
-        path: snapshot.path,
-        size: snapshot.content.length,
-      })),
-      rollbackRequired: false,
-      commands: commands.map((value) =>
-        value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@'),
-      ),
-      results,
-    }) as ToolCall<'set_output'>
+    // Post-operation verification: a package-manager command exiting 0 says
+    // the MANAGER succeeded, not that the task's end state holds — `bun
+    // install` exits 0 as a no-op while the lockfile may still disagree with
+    // the manifests (a bare "completed successfully" then ends the task on
+    // partial). Verify what the repository can prove: whether the dependency
+    // files actually changed, and — when this repository ships the offline
+    // dependency guards — that they still pass after the operation.
+    let postSnapshots: Array<{ path: string; content: string }> = []
+    if (snapshotPaths.length > 0) {
+      const { toolResult: postRead } = yield {
+        toolName: 'read_files',
+        input: { paths: snapshotPaths },
+        includeToolCall: false,
+      } as ToolCall<'read_files'>
+      postSnapshots = extractFileSnapshots(postRead)
+    }
+    const filesChanged = snapshotPaths.map((path) => ({
+      path,
+      changed:
+        (dependencySnapshots.find((snapshot) => snapshot.path === path)
+          ?.content ?? null) !==
+        (postSnapshots.find((snapshot) => snapshot.path === path)?.content ??
+          null),
+    }))
+    const guardChecks: Array<Record<string, unknown>> = []
+    for (const guard of [
+      { script: 'guard:dependency-provenance', file: 'scripts/dependency-provenance-guard.ts' },
+      { script: 'guard:types-declaration', file: 'scripts/types-declaration-guard.ts' },
+    ]) {
+      const { toolResult: guardScriptRead } = yield {
+        toolName: 'read_files',
+        input: { paths: [guard.file] },
+        includeToolCall: false,
+      } as ToolCall<'read_files'>
+      if (extractFileSnapshots(guardScriptRead).length === 0) continue
+      // A fixed, unchained command: the same determinism contract as the
+      // operation commands above, so verification never widens the shell
+      // surface this agent is allowed to construct.
+      const command = `bun --cwd=scripts run ${guard.script}`
+      const { toolResult: guardResult } = yield {
+        toolName: 'run_terminal_command',
+        input: {
+          command,
+          cwd: typeof params?.cwd === 'string' ? params.cwd : undefined,
+          timeout_seconds: timeoutSeconds,
+        },
+      } as ToolCall<'run_terminal_command'>
+      const guardValue = guardResult?.find((part) => part.type === 'json')
+        ?.value as Record<string, unknown> | undefined
+      guardChecks.push({
+        command,
+        exitCode: guardValue?.exitCode,
+        errorMessage: guardValue?.errorMessage,
+      })
+    }
+    const failedGuard = guardChecks.find(
+      (check) =>
+        typeof check.errorMessage === 'string' ||
+        (typeof check.exitCode === 'number' && check.exitCode !== 0),
+    )
+    if (failedGuard) {
+      yield emit(
+        'partial',
+        `Dependency operation completed but post-operation verification FAILED (${failedGuard.command} exited non-zero): the repository's dependency invariants do not hold after the operation. Do not treat the task as done — inspect the guard output and remediate.`,
+        {
+          detectedManager,
+          manifests,
+          workspace: normalizedCwd,
+          manifest: selectedManifest,
+          verification: { filesChanged, guards: guardChecks },
+          commands: commands.map((value) =>
+            value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@'),
+          ),
+          results,
+        },
+      ) as ToolCall<'set_output'>
+      return
+    }
+    yield emit(
+      'success',
+      guardChecks.length > 0
+        ? 'Dependency operation completed successfully and passed the repository dependency guards.'
+        : filesChanged.every((file) => !file.changed)
+          ? 'Dependency operation completed; no dependency file changed (the operation was a no-op for the current state).'
+          : 'Dependency operation completed successfully.',
+      {
+        detectedManager,
+        manifests,
+        workspace: normalizedCwd,
+        manifest: selectedManifest,
+        verification: { filesChanged, guards: guardChecks },
+        dependencySnapshots: dependencySnapshots.map((snapshot) => ({
+          path: snapshot.path,
+          size: snapshot.content.length,
+        })),
+        rollbackRequired: false,
+        commands: commands.map((value) =>
+          value.replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, '://[redacted]@'),
+        ),
+        results,
+      },
+    ) as ToolCall<'set_output'>
   },
 }
 

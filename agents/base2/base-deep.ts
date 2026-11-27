@@ -6,6 +6,7 @@ import { createBase2 } from './base2'
 import {
   decisionCapturePolicySection,
   gateAwarenessSection,
+  outputHygieneSection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
   qualitySection,
@@ -135,6 +136,7 @@ ${qualitySection}
 ${preReviewSelfCheckSection}
 
 ${gateAwarenessSection}
+${outputHygieneSection}
 ${decisionCapturePolicySection}
 
 ${PLACEHOLDER.FRONTEND_SECTION}

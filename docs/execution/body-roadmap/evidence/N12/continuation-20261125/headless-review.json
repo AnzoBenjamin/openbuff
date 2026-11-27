@@ -1,0 +1,35 @@
+{
+  "status": "findings",
+  "reviewMode": "read-only source review; no tests run",
+  "reviewedSourceSha256": {
+    "cli/src/utils/headless-sessions.ts": "ddc2db9b96ff6cbbd732b61b53dc42963aeee1b067a5a956cc7a199c139d9ed2",
+    "cli/src/commands/run-command.ts": "3ebd23b242c1ecbc2d5815c23d5daeedeb36cce8a4f64edf57521ff0a56627c1",
+    "cli/src/utils/run-output-schema.ts": "0df4b08939e96d5f74bcece864f3580f3e9037efe1c3d3617a0e7379db48908d",
+    "common/src/util/run-output-schema.ts": "2c38e801ea4e1bc30916d253bc11130a6f0d8fefdec83e83c1d59498ed01af7d",
+    "cli/src/cli-args.ts": "73e15a22f0fef2e97a62d1f7f735ee8c9e9abd5665e9e97d58744ee21c1907d8",
+    "cli/src/utils/openbuff-provider.ts": "eae5e6b38ad17df0c8c526f1a3886f6aa3a2bed992d7079152bf57a8ab5a3b2a",
+    "common/src/util/json-schema.ts": "fc8509c1c32f1c1f2630e161fbf8ce94b965b05c157ac0a11db4c9d6481dabfc",
+    "cli/src/utils/payload-sanitizer.ts": "2434e3d1a9f2e95de08bfbc4bce221ae89eb8922250ee17cedd438a94cb99b24"
+  },
+  "inspectedTestSha256": {
+    "cli/src/__tests__/run-continue.test.ts": "3229c083d85ece90ad29a8f9db958fc54a871b0dc0980f99f274fbd90d1a21a8",
+    "cli/src/__tests__/run-continue-wire.test.ts": "464ac8a54140852c1067d0342fda675c36cf430967300436daa854a2a81615a6",
+    "cli/src/utils/__tests__/headless-sessions.test.ts": "a82c6a61fb551a7a53cf592c830f12d6f0000fe66f2a1a63d4c5b0b4d1708be8"
+  },
+  "scopeNotes": [
+    "Run parser and readiness changes reviewed; ACP and README excluded.",
+    "No broad repository searches, wire controls, or typechecks run.",
+    "Hashes were unchanged between initial capture and final source check."
+  ],
+  "findings": [
+    {
+      "file": "common/src/util/run-output-schema.ts",
+      "lines": [63, 66],
+      "severity": "medium",
+      "title": "Literal $ref property names are incorrectly rejected as schema references",
+      "reproduction": "Select the reference-free schema {\"type\":\"object\",\"properties\":{\"$ref\":{\"type\":\"string\"}},\"required\":[\"$ref\"],\"additionalProperties\":false}. The generic JSON-copy loop reaches the properties map's $ref key and throws before validator/provider admission. This key names an output property, not a JSON Schema reference. Literal $ref keys inside const/enum values are likewise incorrectly refused.",
+      "smallestRepair": "Keep descriptor-only bounded JSON capture, but perform reference refusal in a separate schema-aware traversal over actual schema nodes; do not treat property-map names or literal annotation/const/enum data as schema keywords.",
+      "verification": "Confirmed by direct control-flow inspection; reproduction not executed."
+    }
+  ]
+}

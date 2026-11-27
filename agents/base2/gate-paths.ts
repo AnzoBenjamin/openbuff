@@ -68,15 +68,21 @@ export function gateFileSetsEqual(left: string[], right: string[]): boolean {
 
 // Returns true for reviewable source and test files. Generated code, docs,
 // config/data files (including .jsonl bookkeeping like EVENTS.jsonl), .env
-// files, and anything under docs/, evals/, or .agents/ remain excluded so the
-// final code-reviewer gate never attests to bookkeeping/docs/plan artifacts.
+// files, and anything under docs/, evals/, .agents/, or .openbuff/ (the
+// runtime-owned hidden state dir whose contents the reviewer snapshot surface
+// never exposes) remain excluded so the final code-reviewer gate never attests
+// to bookkeeping/docs/plan or runtime-state artifacts.
 // Operates on an already-normalized path (caller normalizes).
 export function isReviewableGateFile(filePath: string): boolean {
   if (/\.generated\.tsx?$/.test(filePath)) return false
   if (/\.(md|mdx|json|jsonl|yml|yaml|toml)$/.test(filePath)) return false
   if (/(^|\/)\.env($|\.)/.test(filePath)) return false
   if (filePath.startsWith('docs/')) return false
-  if (filePath.startsWith('evals/') || filePath.startsWith('.agents/')) {
+  if (
+    filePath.startsWith('evals/') ||
+    filePath.startsWith('.agents/') ||
+    filePath.startsWith('.openbuff/')
+  ) {
     return false
   }
   return /\.(?:tsx?|jsx?|mjs|cjs|py|go|rs|java|kt|kts|cs|fs|vb)$/.test(filePath)

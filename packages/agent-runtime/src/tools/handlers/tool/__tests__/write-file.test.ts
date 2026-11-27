@@ -1,16 +1,26 @@
 import { describe, expect, it } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { handleCreatePlan } from '../create-plan'
 import {
+  handleWriteFile,
   getFileProcessingValues,
+  grantWholeFileReadAuthorization,
+  hasWholeFileReadAuthorization,
+  isWholeFileReadAuthorizationFresh,
   type FileProcessingState,
 } from '../write-file'
 
 import type {
   ClientToolCall,
+  CodebuffToolCall,
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 const logger: Logger = {
   debug: () => {},
@@ -89,6 +99,52 @@ describe('handleCreatePlan', () => {
 })
 
 describe('handleWriteFile', () => {
+  it('sends BOM and dominant EOL-preserved content through the whole-file write path', async () => {
+    const raw = '\uFEFFbefore\r\nafter\r\n'
+    const clientToolCalls: ClientToolCall<'write_file'>[] = []
+    const toolCall: CodebuffToolCall<'write_file'> = {
+      toolCallId: 'write-file-eol',
+      toolName: 'write_file',
+      input: {
+        path: 'src/notes.txt',
+        instructions: 'Rewrite the note without changing its text format.',
+        content: 'updated\nafter\n',
+      },
+    }
+
+    await handleWriteFile({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState: {} as AgentState,
+      clientSessionId: 'session',
+      fileProcessingState: createFileProcessingState(),
+      fingerprintId: 'fingerprint',
+      logger,
+      prompt: undefined,
+      userId: undefined,
+      userInputId: 'input',
+      requestClientToolCall: async (clientToolCall) => {
+        clientToolCalls.push(clientToolCall)
+        return [
+          {
+            type: 'json',
+            value: { file: 'src/notes.txt', message: 'Updated file' },
+          },
+        ]
+      },
+      requestOptionalFile: async () => raw,
+      writeToClient: () => {},
+    })
+
+    expect(clientToolCalls).toHaveLength(1)
+    const writtenInput = clientToolCalls[0]?.input
+    expect(writtenInput?.type).toBe('file')
+    if (writtenInput?.type !== 'file') {
+      throw new Error('expected a whole-file client write')
+    }
+    expect(writtenInput.content).toBe('\uFEFFupdated\r\nafter\r\n')
+  })
+
   describe('getFileProcessingValues', () => {
     it('should copy file processing state values', () => {
       const state: FileProcessingState = {
@@ -118,8 +174,84 @@ describe('handleWriteFile', () => {
       }
       const result = getFileProcessingValues({
         modelVisibleReadAuthorizationHashesByPath: snapshot,
+        rawReadAuthorizationHashesByPath: snapshot,
+        modelVisibleRawReadAuthorizationHashesByPath: snapshot,
       })
       expect(result.modelVisibleReadAuthorizationHashesByPath).toEqual(snapshot)
+      expect(result.rawReadAuthorizationHashesByPath).toEqual(snapshot)
+      expect(result.modelVisibleRawReadAuthorizationHashesByPath).toEqual(
+        snapshot,
+      )
     })
+  })
+
+  it('requires a complete whole basis and rejects raw-only freshness drift', () => {
+    const path = 'src/a.ts'
+    const content = '\uFEFFone\r\ntwo\r'
+    const document = captureTextDocument(content)
+    const state = createFileProcessingState()
+    expect(grantWholeFileReadAuthorization(state, path, content)).toBe(false)
+    expect(
+      grantWholeFileReadAuthorization(
+        state,
+        path,
+        content,
+        getRawReadBasis(document, 1, document.maxCapabilityLine, 'lines'),
+      ),
+    ).toBe(false)
+    expect(hasWholeFileReadAuthorization(state, path)).toBe(false)
+    expect(
+      grantWholeFileReadAuthorization(
+        state,
+        path,
+        content,
+        getRawReadBasis(document, 1, document.maxCapabilityLine, 'whole'),
+      ),
+    ).toBe(true)
+    expect(state.readAuthorizationHashesByPath?.[path]).toBe(
+      document.observationHash,
+    )
+    expect(state.rawReadAuthorizationHashesByPath?.[path]).toBe(
+      document.rawHash,
+    )
+    expect(isWholeFileReadAuthorizationFresh(state, path, content)).toBe(true)
+    for (const drifted of ['one\r\ntwo\r', '\uFEFFone\ntwo\r']) {
+      expect(captureTextDocument(drifted).observationHash).toBe(
+        document.observationHash,
+      )
+      expect(isWholeFileReadAuthorizationFresh(state, path, drifted)).toBe(
+        false,
+      )
+    }
+  })
+
+  it('uses the model-visible raw snapshot after a later sticky read and through state hydration', () => {
+    const path = 'src/a.ts'
+    const visible = captureTextDocument('one\n')
+    const later = captureTextDocument('one\r\n')
+    const state = createFileProcessingState()
+    expect(
+      grantWholeFileReadAuthorization(
+        state,
+        path,
+        later.rawText,
+        getRawReadBasis(later, 1, later.maxCapabilityLine, 'whole'),
+      ),
+    ).toBe(true)
+    state.modelVisibleReadAuthorizationHashesByPath = {
+      [path]: visible.observationHash,
+    }
+    state.modelVisibleRawReadAuthorizationHashesByPath = {
+      [path]: visible.rawHash,
+    }
+    const hydrated = getFileProcessingValues(state)
+    expect(
+      isWholeFileReadAuthorizationFresh(hydrated, path, visible.rawText),
+    ).toBe(true)
+    expect(
+      isWholeFileReadAuthorizationFresh(hydrated, path, later.rawText),
+    ).toBe(false)
+    hydrated.modelVisibleRawReadAuthorizationHashesByPath = {}
+    expect(hasWholeFileReadAuthorization(hydrated, path)).toBe(false)
   })
 })

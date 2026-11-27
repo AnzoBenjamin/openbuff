@@ -1,0 +1,29 @@
+{
+  "notification": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "content": "Rename symbol",
+            "priority": "medium",
+            "status": "completed"
+          },
+          {
+            "content": "Run tests",
+            "priority": "medium",
+            "status": "in_progress"
+          },
+          {
+            "content": "Summarize",
+            "priority": "medium",
+            "status": "pending"
+          }
+        ]
+      }
+    }
+  }
+}

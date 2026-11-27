@@ -8,6 +8,7 @@ import type { QueuedMessage } from './use-message-queue'
 interface UseQueueUiParams {
   queuePaused: boolean
   queuedMessages: QueuedMessage[]
+  queueRemovalCount: number
   separatorWidth: number
   terminalWidth: number
 }
@@ -15,6 +16,7 @@ interface UseQueueUiParams {
 export const useQueueUi = ({
   queuePaused,
   queuedMessages,
+  queueRemovalCount,
   separatorWidth,
   terminalWidth,
 }: UseQueueUiParams) => {
@@ -28,9 +30,12 @@ export const useQueueUi = ({
   }, [shouldShowQueuePreview, queuedMessages, separatorWidth])
 
   const pausedQueueText = useMemo(() => {
+    if (queuedCount === 0 && queueRemovalCount > 0) {
+      return `${pluralize(queueRemovalCount, 'prompt')} removed · Ctrl+P → Work queue → U to undo`
+    }
     if (!queuePaused || queuedCount === 0) return undefined
-    return `${pluralize(queuedCount, 'message')} queued — your next message sends first`
-  }, [queuePaused, queuedCount])
+    return `${queuedCount} queued · Paused · next input sends first`
+  }, [queuePaused, queuedCount, queueRemovalCount])
 
   const inputPlaceholder = useMemo(() => {
     const base =
@@ -39,7 +44,7 @@ export const useQueueUi = ({
         : 'Enter a coding task or / for commands'
 
     if (queuePaused && queuedCount > 0) {
-      return 'Ctrl-C to cancel queued messages'
+      return 'Ctrl-C clears queue · Ctrl+P → Work queue to undo'
     }
 
     return base

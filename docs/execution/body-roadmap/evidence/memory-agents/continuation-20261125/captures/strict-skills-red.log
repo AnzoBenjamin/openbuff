@@ -1,0 +1,108 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:
+Using environment: dev
+30 | 
+31 | describe('strict root skill bootstrap read boundary', () => {
+32 |   test('explicit outside skills are withheld on fresh strict startup, ordinary control unchanged', async () => {
+33 |     const strict = await client(true, skills).run({ agent: reader.id, prompt: 'Probe skills' })
+34 |     expect(strict.runOutcome?.termination).toBe('completed')
+35 |     expect(strict.sessionState?.fileContext.skills).toEqual({})
+                                                         ^
+error: expect(received).toEqual(expected)
+
+- {}
++ {
++   "outside-skill": {
++     "content": 
++ "---
++ name: outside-skill
++ description: OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED
++ ---
++ OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED
++ "
++ ,
++     "description": "OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED",
++     "filePath": "/tmp/strict-skill-bootstrap-7xrnwQ/external-skills/outside-skill/SKILL.md",
++     "license": undefined,
++     "metadata": undefined,
++     "name": "outside-skill",
++   },
++ }
+
+- Expected  - 1
++ Received  + 17
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:35:53)
+(fail) strict root skill bootstrap read boundary > explicit outside skills are withheld on fresh strict startup, ordinary control unchanged [88.08ms]
+41 |   test('strict continuation removes inherited outside skill bytes without disk fallback', async () => {
+42 |     const first = await client(false, skills).run({ agent: reader.id, prompt: 'Load ordinary skills' })
+43 |     expect(JSON.stringify(first.sessionState?.fileContext.skills)).toContain(marker)
+44 |     const next = await client(true, skills).run({ agent: reader.id, prompt: 'Probe strict continuation', previousRun: first })
+45 |     expect(next.runOutcome?.termination).toBe('completed')
+46 |     expect(next.sessionState?.fileContext.skills).toEqual({})
+                                                       ^
+error: expect(received).toEqual(expected)
+
+- {}
++ {
++   "outside-skill": {
++     "content": 
++ "---
++ name: outside-skill
++ description: OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED
++ ---
++ OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED
++ "
++ ,
++     "description": "OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED",
++     "filePath": "/tmp/strict-skill-bootstrap-Xdzt7C/external-skills/outside-skill/SKILL.md",
++     "license": undefined,
++     "metadata": undefined,
++     "name": "outside-skill",
++   },
++ }
+
+- Expected  - 1
++ Received  + 17
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:46:51)
+(fail) strict root skill bootstrap read boundary > strict continuation removes inherited outside skill bytes without disk fallback [39.87ms]
+49 |     const dir = path.join(project, '.agents', 'skills', 'outside-skill')
+50 |     fs.mkdirSync(dir, { recursive: true })
+51 |     fs.linkSync(path.join(skills, 'outside-skill', 'SKILL.md'), path.join(dir, 'SKILL.md'))
+52 |     const result = await client(true, path.dirname(dir)).run({ agent: reader.id, prompt: 'Probe linked skill' })
+53 |     expect(result.runOutcome?.termination).toBe('completed')
+54 |     expect(result.sessionState?.fileContext.skills).toEqual({})
+                                                         ^
+error: expect(received).toEqual(expected)
+
+- {}
++ {
++   "outside-skill": {
++     "content": 
++ "---
++ name: outside-skill
++ description: OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED
++ ---
++ OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED
++ "
++ ,
++     "description": "OUTSIDE_SKILL_CANARY_MUST_NOT_BE_LOADED",
++     "filePath": "/tmp/strict-skill-bootstrap-YmBZYf/project/.agents/skills/outside-skill/SKILL.md",
++     "license": undefined,
++     "metadata": undefined,
++     "name": "outside-skill",
++   },
++ }
+
+- Expected  - 1
++ Received  + 17
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:54:53)
+(fail) strict root skill bootstrap read boundary > a hard-linked project skill is not loaded through raw bootstrap [18.44ms]
+
+ 0 pass
+ 3 fail
+ 7 expect() calls
+Ran 3 tests across 1 file. [880.00ms]

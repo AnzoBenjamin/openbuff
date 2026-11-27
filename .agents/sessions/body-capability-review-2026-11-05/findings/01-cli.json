@@ -1,0 +1,2675 @@
+{
+  "shardId": "01-cli",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "01-cli",
+    "subsystemIds": [
+      "cli"
+    ],
+    "files": [
+      "agents/patterns/audit-codebase.md",
+      "cli/package.json",
+      "cli/scripts/preload-opentui.ts",
+      "cli/src/__tests__/README.md",
+      "cli/src/__tests__/unit/create-run-config.test.ts",
+      "cli/src/app.tsx",
+      "cli/src/chat.tsx",
+      "cli/src/cli-args.ts",
+      "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+      "cli/src/commands/command-registry.ts",
+      "cli/src/commands/plan-artifacts.ts",
+      "cli/src/commands/router-utils.ts",
+      "cli/src/commands/router.ts",
+      "cli/src/components/__tests__/attachment-recovery.test.tsx",
+      "cli/src/components/__tests__/provider-recovery.test.tsx",
+      "cli/src/components/__tests__/session-route-recovery.test.tsx",
+      "cli/src/components/blocks/agent-block-grid.tsx",
+      "cli/src/components/blocks/blocks-renderer.tsx",
+      "cli/src/components/chat-history-screen.tsx",
+      "cli/src/components/chat-input-bar.tsx",
+      "cli/src/components/command-palette-screen.tsx",
+      "cli/src/components/plan-session-picker-screen.tsx",
+      "cli/src/components/provider-picker-screen.tsx",
+      "cli/src/components/status-bar.tsx",
+      "cli/src/data/slash-commands.ts",
+      "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts",
+      "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+      "cli/src/hooks/helpers/send-message.ts",
+      "cli/src/hooks/use-agent-validation.ts",
+      "cli/src/hooks/use-ask-user-bridge.ts",
+      "cli/src/hooks/use-chat-input.ts",
+      "cli/src/hooks/use-chat-keyboard.ts",
+      "cli/src/hooks/use-chat-messages.ts",
+      "cli/src/hooks/use-chat-streaming.ts",
+      "cli/src/hooks/use-message-queue.ts",
+      "cli/src/hooks/use-send-message.ts",
+      "cli/src/index.tsx",
+      "cli/src/services/memory-v2/provider.ts",
+      "cli/src/utils/__tests__/attach-session.test.ts",
+      "cli/src/utils/attach-session.ts",
+      "cli/src/utils/chat-history.ts",
+      "cli/src/utils/codebuff-client.ts",
+      "cli/src/utils/create-event-handler-state.ts",
+      "cli/src/utils/create-run-config.ts",
+      "cli/src/utils/env.ts",
+      "cli/src/utils/openbuff-provider.ts",
+      "cli/src/utils/pending-attachments.ts",
+      "cli/src/utils/run-state-storage.ts",
+      "cli/src/utils/sdk-event-handlers.ts",
+      "cli/src/utils/stream-chunk-processor.ts",
+      "cli/src/utils/turn-snapshots.ts",
+      "common/src/utils/ask-user-bridge.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/local-mode.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "package.json",
+      "sdk/package.json",
+      "sdk/src/client.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 296
+    },
+    {
+      "path": "cli/package.json",
+      "from": 1,
+      "to": 64
+    },
+    {
+      "path": "cli/scripts/preload-opentui.ts",
+      "from": 1,
+      "to": 41
+    },
+    {
+      "path": "cli/src/__tests__/README.md",
+      "from": 1,
+      "to": 160
+    },
+    {
+      "path": "cli/src/__tests__/unit/create-run-config.test.ts",
+      "from": 1,
+      "to": 137
+    },
+    {
+      "path": "cli/src/app.tsx",
+      "from": 158,
+      "to": 212
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 225,
+      "to": 640
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 700,
+      "to": 880
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 1260,
+      "to": 1292
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 1800,
+      "to": 2135
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "from": 2192,
+      "to": 2282
+    },
+    {
+      "path": "cli/src/cli-args.ts",
+      "from": 1,
+      "to": 250
+    },
+    {
+      "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+      "from": 1,
+      "to": 247
+    },
+    {
+      "path": "cli/src/commands/command-registry.ts",
+      "from": 1,
+      "to": 355
+    },
+    {
+      "path": "cli/src/commands/command-registry.ts",
+      "from": 1090,
+      "to": 1498
+    },
+    {
+      "path": "cli/src/commands/plan-artifacts.ts",
+      "from": 1,
+      "to": 385
+    },
+    {
+      "path": "cli/src/commands/plan-artifacts.ts",
+      "from": 389,
+      "to": 550
+    },
+    {
+      "path": "cli/src/commands/router-utils.ts",
+      "from": 1,
+      "to": 80
+    },
+    {
+      "path": "cli/src/commands/router.ts",
+      "from": 1,
+      "to": 541
+    },
+    {
+      "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+      "from": 1,
+      "to": 280
+    },
+    {
+      "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+      "from": 1,
+      "to": 384
+    },
+    {
+      "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+      "from": 1,
+      "to": 261
+    },
+    {
+      "path": "cli/src/components/blocks/agent-block-grid.tsx",
+      "from": 1,
+      "to": 112
+    },
+    {
+      "path": "cli/src/components/blocks/blocks-renderer.tsx",
+      "from": 118,
+      "to": 289
+    },
+    {
+      "path": "cli/src/components/chat-history-screen.tsx",
+      "from": 1,
+      "to": 180
+    },
+    {
+      "path": "cli/src/components/chat-input-bar.tsx",
+      "from": 1,
+      "to": 215
+    },
+    {
+      "path": "cli/src/components/chat-input-bar.tsx",
+      "from": 234,
+      "to": 302
+    },
+    {
+      "path": "cli/src/components/command-palette-screen.tsx",
+      "from": 180,
+      "to": 230
+    },
+    {
+      "path": "cli/src/components/plan-session-picker-screen.tsx",
+      "from": 1,
+      "to": 170
+    },
+    {
+      "path": "cli/src/components/provider-picker-screen.tsx",
+      "from": 140,
+      "to": 387
+    },
+    {
+      "path": "cli/src/components/status-bar.tsx",
+      "from": 125,
+      "to": 358
+    },
+    {
+      "path": "cli/src/data/slash-commands.ts",
+      "from": 1,
+      "to": 314
+    },
+    {
+      "path": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts",
+      "from": 1,
+      "to": 175
+    },
+    {
+      "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+      "from": 1,
+      "to": 178
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "from": 163,
+      "to": 646
+    },
+    {
+      "path": "cli/src/hooks/use-agent-validation.ts",
+      "from": 1,
+      "to": 200
+    },
+    {
+      "path": "cli/src/hooks/use-ask-user-bridge.ts",
+      "from": 1,
+      "to": 103
+    },
+    {
+      "path": "cli/src/hooks/use-chat-input.ts",
+      "from": 1,
+      "to": 112
+    },
+    {
+      "path": "cli/src/hooks/use-chat-keyboard.ts",
+      "from": 106,
+      "to": 345
+    },
+    {
+      "path": "cli/src/hooks/use-chat-messages.ts",
+      "from": 204,
+      "to": 277
+    },
+    {
+      "path": "cli/src/hooks/use-chat-streaming.ts",
+      "from": 125,
+      "to": 270
+    },
+    {
+      "path": "cli/src/hooks/use-message-queue.ts",
+      "from": 65,
+      "to": 127
+    },
+    {
+      "path": "cli/src/hooks/use-message-queue.ts",
+      "from": 410,
+      "to": 564
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 1,
+      "to": 959
+    },
+    {
+      "path": "cli/src/index.tsx",
+      "from": 435,
+      "to": 735
+    },
+    {
+      "path": "cli/src/services/memory-v2/provider.ts",
+      "from": 220,
+      "to": 319
+    },
+    {
+      "path": "cli/src/utils/__tests__/attach-session.test.ts",
+      "from": 1,
+      "to": 197
+    },
+    {
+      "path": "cli/src/utils/attach-session.ts",
+      "from": 1,
+      "to": 130
+    },
+    {
+      "path": "cli/src/utils/chat-history.ts",
+      "from": 135,
+      "to": 253
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 1,
+      "to": 264
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 315,
+      "to": 380
+    },
+    {
+      "path": "cli/src/utils/create-event-handler-state.ts",
+      "from": 1,
+      "to": 78
+    },
+    {
+      "path": "cli/src/utils/create-run-config.ts",
+      "from": 1,
+      "to": 330
+    },
+    {
+      "path": "cli/src/utils/env.ts",
+      "from": 83,
+      "to": 108
+    },
+    {
+      "path": "cli/src/utils/openbuff-provider.ts",
+      "from": 985,
+      "to": 1048
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 1,
+      "to": 72
+    },
+    {
+      "path": "cli/src/utils/pending-attachments.ts",
+      "from": 235,
+      "to": 627
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 350,
+      "to": 621
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 834,
+      "to": 991
+    },
+    {
+      "path": "cli/src/utils/sdk-event-handlers.ts",
+      "from": 1400,
+      "to": 1497
+    },
+    {
+      "path": "cli/src/utils/sdk-event-handlers.ts",
+      "from": 1960,
+      "to": 2065
+    },
+    {
+      "path": "cli/src/utils/stream-chunk-processor.ts",
+      "from": 1,
+      "to": 72
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 1200,
+      "to": 1239
+    },
+    {
+      "path": "common/src/utils/ask-user-bridge.ts",
+      "from": 1,
+      "to": 107
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 99,
+      "to": 104
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 288,
+      "to": 353
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1950,
+      "to": 2081
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 1,
+      "to": 107
+    },
+    {
+      "path": "docs/local-mode.md",
+      "from": 1,
+      "to": 116
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 1,
+      "to": 200
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 368,
+      "to": 390
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 145
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 175,
+      "to": 228
+    },
+    {
+      "path": "package.json",
+      "from": 1,
+      "to": 80
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 35
+    },
+    {
+      "path": "sdk/src/client.ts",
+      "from": 1,
+      "to": 73
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "interactive-chat-routing",
+      "name": "Interactive chat and mode/model switching",
+      "maturity": "usable",
+      "assurance": "static trace + unit",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/index.tsx",
+            "line": 443,
+            "detail": "Argument parsing precedes renderer/non-renderer dispatch; attach target is set before client construction."
+          },
+          {
+            "path": "cli/src/index.tsx",
+            "line": 630,
+            "detail": "serve/mcp/run/replay/dash return before renderer creation."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 734,
+            "detail": "Chat mounts useSendMessage and assigns the send callback ref."
+          },
+          {
+            "path": "cli/src/hooks/use-send-message.ts",
+            "line": 779,
+            "detail": "Builds a real SDK run configuration and invokes client.run with the abort signal and optional journal."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 1279,
+            "detail": "Mounted composer routes prompt through onSubmitPrompt."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 1928,
+            "detail": "ModelRoutePicker is mounted as an overlay."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1176,
+            "detail": "Mode command updates persistent visible mode and submits any trailing prompt with that mode."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+            "line": 25,
+            "detail": "Native component test selects model 250, preserves reasoning effort and persists the injected config."
+          },
+          {
+            "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+            "line": 107,
+            "detail": "Busy variants for prompt-producing mode/review/interview commands exercise real router with injected sender."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 33,
+            "detail": "Documents CLI preparation, SDK dispatch and Escape propagation."
+          },
+          {
+            "path": "docs/local-mode.md",
+            "line": 106,
+            "detail": "Documents provider and model route commands."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Provider-readiness failures produce an inline error; unexpected client construction and empty validation errors have the F5/F6 gaps.",
+        "loading": "Deferred registry reads settle before validation and dispatch; waiting/streaming status starts after client creation.",
+        "empty": "Router permits attachment-only input and otherwise ignores blank prompts; image-only runs receive a nonempty fallback prompt.",
+        "cancellation": "Run signal and ownership are wired; cancellation before client creation has no newly installed controller.",
+        "retry": "Explicit resubmission works on ordinary reported errors; automatic inference retry belongs to SDK/runtime; F5 can block resubmission.",
+        "permission": "Local SDK requestApproval callback is installed through createRunConfig; enforcement is outside this CLI-only assurance."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/index.tsx",
+          "line": 443,
+          "detail": "Argument parsing precedes renderer/non-renderer dispatch; attach target is set before client construction."
+        },
+        {
+          "path": "cli/src/index.tsx",
+          "line": 630,
+          "detail": "serve/mcp/run/replay/dash return before renderer creation."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 734,
+          "detail": "Chat mounts useSendMessage and assigns the send callback ref."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 779,
+          "detail": "Builds a real SDK run configuration and invokes client.run with the abort signal and optional journal."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1279,
+          "detail": "Mounted composer routes prompt through onSubmitPrompt."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1928,
+          "detail": "ModelRoutePicker is mounted as an overlay."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1176,
+          "detail": "Mode command updates persistent visible mode and submits any trailing prompt with that mode."
+        },
+        {
+          "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+          "line": 25,
+          "detail": "Native component test selects model 250, preserves reasoning effort and persists the injected config."
+        },
+        {
+          "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+          "line": 107,
+          "detail": "Busy variants for prompt-producing mode/review/interview commands exercise real router with injected sender."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 33,
+          "detail": "Documents CLI preparation, SDK dispatch and Escape propagation."
+        },
+        {
+          "path": "docs/local-mode.md",
+          "line": 106,
+          "detail": "Documents provider and model route commands."
+        }
+      ],
+      "gaps": [
+        "F3: attach uses local routing validation despite remote execution.",
+        "F5/F6: some pre-run failures do not behave like recoverable rejected submissions.",
+        "Headless/server/MCP/replay/dashboard command internals were delegated to the execution/durability shards; this assessment proves startup dispatch only."
+      ],
+      "strengths": [
+        "Normal chat is production-wired from the mounted composer to SDK execution.",
+        "Registry readiness prevents first-turn validation against an empty post-startup registry.",
+        "Non-renderer dispatch suppresses terminal OSC probing and installs stderr-safe process error handling."
+      ],
+      "assuranceEvidence": [
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "The real useSendMessage hook with an injected remote-ready client and empty local config resolves with a local provider error without invoking remote run."
+        }
+      ]
+    },
+    {
+      "id": "command-palette-skills-presets",
+      "name": "Command palette, skills and game preset discovery",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/data/slash-commands.ts",
+            "line": 34,
+            "detail": "Static menu includes diagnostic, mode, plan, history, image, attach and snapshot entries."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/data/slash-commands.ts",
+            "line": 290,
+            "detail": "Loaded skills and detected engine task presets are merged with the static list."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1493,
+            "detail": "Separate executable command registry is exported."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 390,
+            "detail": "Loaded skills re-read after registries settle."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 394,
+            "detail": "Merged command list is fed to suggestions."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 1940,
+            "detail": "Same list is passed to the mounted CommandPaletteScreen."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+            "line": 119,
+            "detail": "Real registry/router dispatch is tested with injected sender and queue."
+          },
+          {
+            "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+            "line": 138,
+            "detail": "Native plan selection overlay is exercised."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/agents-and-tools.md",
+            "line": 1957,
+            "detail": "Claims the slash-command array is authoritative for all registered commands."
+          },
+          {
+            "path": "docs/agents-and-tools.md",
+            "line": 2051,
+            "detail": "Explicitly describes game presets as editable natural-language prompts."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Unknown slash input returns suggestions as a local input error; malformed local command operations have bounded result/loading surfaces.",
+        "loading": "Registry readiness refreshes skill suggestions once asynchronous scans settle.",
+        "empty": "No engine profiles means no engine presets; empty skill map keeps the ordinary commands.",
+        "cancellation": "Overlays close without running inserted preset text; command-specific cancellation is handled by consumers.",
+        "retry": "Local diagnostic routes can be reinvoked; palette does not own SDK retries.",
+        "permission": "Engine preset selection inserts a prompt for review; executable skill/agent trust is handled by registries, not the menu."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 34,
+          "detail": "Static menu includes diagnostic, mode, plan, history, image, attach and snapshot entries."
+        },
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 290,
+          "detail": "Loaded skills and detected engine task presets are merged with the static list."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1493,
+          "detail": "Separate executable command registry is exported."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 390,
+          "detail": "Loaded skills re-read after registries settle."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 394,
+          "detail": "Merged command list is fed to suggestions."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1940,
+          "detail": "Same list is passed to the mounted CommandPaletteScreen."
+        },
+        {
+          "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+          "line": 119,
+          "detail": "Real registry/router dispatch is tested with injected sender and queue."
+        },
+        {
+          "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+          "line": 138,
+          "detail": "Native plan selection overlay is exercised."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 1957,
+          "detail": "Claims the slash-command array is authoritative for all registered commands."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 2051,
+          "detail": "Explicitly describes game presets as editable natural-language prompts."
+        }
+      ],
+      "gaps": [
+        "F8: /plans and /plan-use handlers and aliases are missing from the static suggestion/palette catalog.",
+        "Engine build/run/test/watch rows are prompt scaffolds, not independent native engine execution adapters.",
+        "Skill loading/execution policy was not audited as a language/runtime capability in this shard."
+      ],
+      "strengths": [
+        "Modes and aliases are generated from a shared modes constant.",
+        "Engine presets avoid hardcoded shell commands and preserve an editable prompt boundary.",
+        "Unknown commands fail locally even while an agent is busy."
+      ],
+      "assuranceEvidence": []
+    },
+    {
+      "id": "attachments-live-source",
+      "name": "File/folder/text/image attachments and guaranteed file-menu reads",
+      "maturity": "partial",
+      "assurance": "static trace + unit",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 2026,
+            "detail": "Palette file selection invokes addPendingFileMention and inserts visible @path text."
+          },
+          {
+            "path": "cli/src/hooks/use-chat-keyboard.ts",
+            "line": 219,
+            "detail": "Paste distinguishes copied file paths, image paths, clipboard images and ordinary text."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/utils/pending-attachments.ts",
+            "line": 522,
+            "detail": "Project file selection resolves project-contained source and records @file provenance."
+          },
+          {
+            "path": "cli/src/utils/pending-attachments.ts",
+            "line": 317,
+            "detail": "Async file/folder loader records completeness, bytes/entries and preview bounds."
+          },
+          {
+            "path": "cli/src/hooks/helpers/send-message.ts",
+            "line": 263,
+            "detail": "Preparation drains composer attachments; only ready files become model context/display attachments."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 1946,
+            "detail": "Attachments action mounts recovery UI."
+          },
+          {
+            "path": "cli/src/hooks/helpers/send-message.ts",
+            "line": 171,
+            "detail": "Model prompt labels full/truncated/metadata/shallow context and tells the model to actively read omitted source."
+          },
+          {
+            "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+            "line": 166,
+            "detail": "Recovery screen is mounted with controllable read dependency."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+            "line": 82,
+            "detail": "Mounted queue rejects late attachment retry writes after removal/undo and queue clear/restore."
+          },
+          {
+            "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+            "line": 157,
+            "detail": "Mounted composer recovery preserves draft and rejects late stale reads."
+          },
+          {
+            "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+            "line": 252,
+            "detail": "Empty/corrupt image previews retain inspect access with explicit failures."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 39,
+            "detail": "Describes attachment collection before SDK dispatch."
+          },
+          {
+            "path": "docs/agents-and-tools.md",
+            "line": 2000,
+            "detail": "Lists image attachment command surface; the image 'attach' alias in this docs row is stale relative to the current session attach command."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Read failures remain error attachments with retained earlier capture during retry; F4 consumes non-ready files on submission instead of preserving/recovering them.",
+        "loading": "Async reads expose processing status; ordinary prompts wait, prompt-producing slash commands bypass that check.",
+        "empty": "Empty files/directories receive explicit markers; metadata-only and binary files are not falsely labelled full source.",
+        "cancellation": "Recovery retries use revision/identity checks; removing/undoing a pending item cannot accept a stale result.",
+        "retry": "Recovery screen can retry/remove/undo, but a file drained by F4 is no longer available there.",
+        "permission": "Initial file attachment and retry check mandatory sensitive-file paths; project file selection uses project containment. General user-selected attachments may intentionally originate outside the project."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 2026,
+          "detail": "Palette file selection invokes addPendingFileMention and inserts visible @path text."
+        },
+        {
+          "path": "cli/src/hooks/use-chat-keyboard.ts",
+          "line": 219,
+          "detail": "Paste distinguishes copied file paths, image paths, clipboard images and ordinary text."
+        },
+        {
+          "path": "cli/src/utils/pending-attachments.ts",
+          "line": 522,
+          "detail": "Project file selection resolves project-contained source and records @file provenance."
+        },
+        {
+          "path": "cli/src/utils/pending-attachments.ts",
+          "line": 317,
+          "detail": "Async file/folder loader records completeness, bytes/entries and preview bounds."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 263,
+          "detail": "Preparation drains composer attachments; only ready files become model context/display attachments."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1946,
+          "detail": "Attachments action mounts recovery UI."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 171,
+          "detail": "Model prompt labels full/truncated/metadata/shallow context and tells the model to actively read omitted source."
+        },
+        {
+          "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+          "line": 166,
+          "detail": "Recovery screen is mounted with controllable read dependency."
+        },
+        {
+          "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+          "line": 82,
+          "detail": "Mounted queue rejects late attachment retry writes after removal/undo and queue clear/restore."
+        },
+        {
+          "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+          "line": 157,
+          "detail": "Mounted composer recovery preserves draft and rejects late stale reads."
+        },
+        {
+          "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+          "line": 252,
+          "detail": "Empty/corrupt image previews retain inspect access with explicit failures."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 39,
+          "detail": "Describes attachment collection before SDK dispatch."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 2000,
+          "detail": "Lists image attachment command surface; the image 'attach' alias in this docs row is stale relative to the current session attach command."
+        }
+      ],
+      "gaps": [
+        "F4: pending processing files and failed files can disappear without model context or a stored file attachment.",
+        "The content capture is bounded and can be shallow or metadata-only; selecting a directory does not read every source file.",
+        "The file preview's character cap and displayed byte-size label are not a complete active-read guarantee."
+      ],
+      "strengths": [
+        "File-menu selection performs a real source read instead of leaving @path as an instruction for the model to notice.",
+        "Provenance and incomplete-context warnings are delivered to the model.",
+        "Recovery tracks identity/revisions and preserves the composer draft."
+      ],
+      "assuranceEvidence": [
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "Ordinary prompts preserve a processing file; /mode:default with a trailing prompt drains it and sends only prompt text."
+        },
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "An ordinary prompt also drains an error-status file without its path/read error in model context."
+        }
+      ]
+    },
+    {
+      "id": "questions-approval-ui",
+      "name": "Questionnaire and single-use approval interaction",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/utils/create-run-config.ts",
+            "line": 259,
+            "detail": "Run config installs requestApproval; only the exact 'Allow once' answer returns true."
+          },
+          {
+            "path": "cli/src/utils/codebuff-client.ts",
+            "line": 229,
+            "detail": "ask_user override passes questions and run signal to AskUserBridge."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "common/src/utils/ask-user-bridge.ts",
+            "line": 37,
+            "detail": "Bridge creates UUID request identities, queues concurrent requests and removes abort listeners on resolution."
+          },
+          {
+            "path": "cli/src/hooks/use-ask-user-bridge.ts",
+            "line": 69,
+            "detail": "UI stores requestId as toolCallId and filters redundant catch-all options."
+          },
+          {
+            "path": "cli/src/utils/create-run-config.ts",
+            "line": 189,
+            "detail": "Full action/target/reason/risk survives compact question truncation in inspectionText."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 246,
+            "detail": "Chat mounts the bridge subscriber."
+          },
+          {
+            "path": "cli/src/components/chat-input-bar.tsx",
+            "line": 189,
+            "detail": "Input bar obtains submit/skip from the real hook."
+          },
+          {
+            "path": "cli/src/components/chat-input-bar.tsx",
+            "line": 285,
+            "detail": "Question form is keyed by request identity and binds submit/skip/stop."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+            "line": 47,
+            "detail": "Native multiple-choice/custom-input tests exercise draft retention and correction."
+          },
+          {
+            "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+            "line": 220,
+            "detail": "100-choice layout and stop/discard confirmation are exercised."
+          },
+          {
+            "path": "cli/src/__tests__/unit/create-run-config.test.ts",
+            "line": 9,
+            "detail": "Approval prompt tests check risk labels and stable Allow once option."
+          },
+          {
+            "path": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "line": 7,
+            "detail": "This named hook suite copies helper functions and does not import/mount the actual hook; it is weak assurance for identity/unsubscription behavior."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 377,
+            "detail": "Documents run cancellation path."
+          },
+          {
+            "path": "docs/agents-and-tools.md",
+            "line": 101,
+            "detail": "Describes single-use approval ownership and high-impact classification at the control plane."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Deny/custom/skip returns false for harness approval; form validation keeps input editable with visible error.",
+        "loading": "Question state pauses main elapsed timer while waiting for user input.",
+        "empty": "Custom text is always offered; duplicate 'other' options are filtered.",
+        "cancellation": "Form stop interrupts run and skips; bridge resolves pending/waiting requests as skipped on their abort signal.",
+        "retry": "Invalid form answers remain editable; a denied action requires a new request rather than replaying approval.",
+        "permission": "Approval display preserves complete target; callback checks stable Allow once label. This is UI wiring assurance only, not proof of the runtime's policy/receipt enforcement."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/create-run-config.ts",
+          "line": 259,
+          "detail": "Run config installs requestApproval; only the exact 'Allow once' answer returns true."
+        },
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 229,
+          "detail": "ask_user override passes questions and run signal to AskUserBridge."
+        },
+        {
+          "path": "common/src/utils/ask-user-bridge.ts",
+          "line": 37,
+          "detail": "Bridge creates UUID request identities, queues concurrent requests and removes abort listeners on resolution."
+        },
+        {
+          "path": "cli/src/hooks/use-ask-user-bridge.ts",
+          "line": 69,
+          "detail": "UI stores requestId as toolCallId and filters redundant catch-all options."
+        },
+        {
+          "path": "cli/src/utils/create-run-config.ts",
+          "line": 189,
+          "detail": "Full action/target/reason/risk survives compact question truncation in inspectionText."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 246,
+          "detail": "Chat mounts the bridge subscriber."
+        },
+        {
+          "path": "cli/src/components/chat-input-bar.tsx",
+          "line": 189,
+          "detail": "Input bar obtains submit/skip from the real hook."
+        },
+        {
+          "path": "cli/src/components/chat-input-bar.tsx",
+          "line": 285,
+          "detail": "Question form is keyed by request identity and binds submit/skip/stop."
+        },
+        {
+          "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+          "line": 47,
+          "detail": "Native multiple-choice/custom-input tests exercise draft retention and correction."
+        },
+        {
+          "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+          "line": 220,
+          "detail": "100-choice layout and stop/discard confirmation are exercised."
+        },
+        {
+          "path": "cli/src/__tests__/unit/create-run-config.test.ts",
+          "line": 9,
+          "detail": "Approval prompt tests check risk labels and stable Allow once option."
+        },
+        {
+          "path": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts",
+          "line": 7,
+          "detail": "This named hook suite copies helper functions and does not import/mount the actual hook; it is weak assurance for identity/unsubscription behavior."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 377,
+          "detail": "Documents run cancellation path."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 101,
+          "detail": "Describes single-use approval ownership and high-impact classification at the control plane."
+        }
+      ],
+      "gaps": [
+        "Actual hook mount, request-ID scoping and subscriber cleanup are not exercised by the legacy use-ask-user-bridge named test file.",
+        "No live runtime approval or external connector flow was performed.",
+        "Remote ACP permission requests are delegated to the SDK/execution shard."
+      ],
+      "strengths": [
+        "Question/approval identity is carried through mounted UI callbacks.",
+        "Draft input is preserved during submit/skip.",
+        "Complete approval target is inspectable even when question labels are truncated."
+      ],
+      "assuranceEvidence": []
+    },
+    {
+      "id": "streaming-tool-subagent-display",
+      "name": "Root/subagent/tool streaming and completion presentation",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/utils/create-run-config.ts",
+            "line": 251,
+            "detail": "Run configuration binds SDK chunk and event handlers."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/utils/stream-chunk-processor.ts",
+            "line": 13,
+            "detail": "Text routes by agentId, and reasoning uses the same agentId convention rather than ancestry."
+          },
+          {
+            "path": "cli/src/hooks/helpers/send-message.ts",
+            "line": 401,
+            "detail": "Batched message updater is created for the active AI message."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/components/blocks/blocks-renderer.tsx",
+            "line": 196,
+            "detail": "Tool groups have real specialized renderer consumers."
+          },
+          {
+            "path": "cli/src/components/blocks/blocks-renderer.tsx",
+            "line": 229,
+            "detail": "Agent groups render through responsive AgentBlockGrid."
+          },
+          {
+            "path": "cli/src/components/blocks/agent-block-grid.tsx",
+            "line": 50,
+            "detail": "Per-agent error boundary supports retry and inspection of retained source."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "line": 96,
+            "detail": "Actual hook test verifies an abandoned SDK result cannot repopulate a cleared conversation."
+          },
+          {
+            "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+            "line": 252,
+            "detail": "Image block preview errors are native-component tested; this is not full stream-event coverage."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/agents-and-tools.md",
+            "line": 288,
+            "detail": "Documents nested agent cards, tools, thinking, custom renderers and fallback output."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Per-block/agent render boundaries preserve inspection and retry; run errors are rendered through userError.",
+        "loading": "AI shell begins waiting then stream handlers update blocks; agent/tool cards carry ongoing state.",
+        "empty": "Empty text chunks are no-ops; empty agent groups render nothing.",
+        "cancellation": "Abort marks running agents/tools cancelled, interrupts compaction state and appends interruption notice before completion.",
+        "retry": "Render retry/inspect is separate from inference retry; SDK/runtime owns provider retries.",
+        "permission": "Tool output is evidence for display; a successful renderer is not a permission attestation."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/create-run-config.ts",
+          "line": 251,
+          "detail": "Run configuration binds SDK chunk and event handlers."
+        },
+        {
+          "path": "cli/src/utils/stream-chunk-processor.ts",
+          "line": 13,
+          "detail": "Text routes by agentId, and reasoning uses the same agentId convention rather than ancestry."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 401,
+          "detail": "Batched message updater is created for the active AI message."
+        },
+        {
+          "path": "cli/src/components/blocks/blocks-renderer.tsx",
+          "line": 196,
+          "detail": "Tool groups have real specialized renderer consumers."
+        },
+        {
+          "path": "cli/src/components/blocks/blocks-renderer.tsx",
+          "line": 229,
+          "detail": "Agent groups render through responsive AgentBlockGrid."
+        },
+        {
+          "path": "cli/src/components/blocks/agent-block-grid.tsx",
+          "line": 50,
+          "detail": "Per-agent error boundary supports retry and inspection of retained source."
+        },
+        {
+          "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+          "line": 96,
+          "detail": "Actual hook test verifies an abandoned SDK result cannot repopulate a cleared conversation."
+        },
+        {
+          "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+          "line": 252,
+          "detail": "Image block preview errors are native-component tested; this is not full stream-event coverage."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 288,
+          "detail": "Documents nested agent cards, tools, thinking, custom renderers and fallback output."
+        }
+      ],
+      "gaps": [
+        "The full 2,000+ line event handler and all block implementations were sampled, not audited line-by-line.",
+        "No provider-driven nested streaming run was performed."
+      ],
+      "strengths": [
+        "Direct-child reasoning and text remain in the same agent destination.",
+        "Specialized and generic tool renderers are actually consumed.",
+        "Per-agent rendering failure does not have to destroy the rest of the chat view."
+      ],
+      "assuranceEvidence": []
+    },
+    {
+      "id": "cancel-queue-run-ownership",
+      "name": "Cancellation and queued prompt ownership/recovery",
+      "maturity": "partial",
+      "assurance": "static trace + unit",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/hooks/use-chat-keyboard.ts",
+            "line": 146,
+            "detail": "Keyboard interrupt dispatch calls the mounted handler."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 2212,
+            "detail": "Status-bar Stop uses the same interrupt handler."
+          },
+          {
+            "path": "cli/src/hooks/use-chat-streaming.ts",
+            "line": 208,
+            "detail": "Queue sends through the current sendMessage ref."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/hooks/use-send-message.ts",
+            "line": 448,
+            "detail": "Busy ref and queue lock are set synchronously before async preparation."
+          },
+          {
+            "path": "cli/src/hooks/helpers/send-message.ts",
+            "line": 408,
+            "detail": "Abort keeps occupancy until SDK run settles and preserves authoritative continuation ordering."
+          },
+          {
+            "path": "cli/src/hooks/use-send-message.ts",
+            "line": 819,
+            "detail": "Owned aborted completion can update RunState; superseded results are ignored."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 1984,
+            "detail": "Work queue action pauses queue and mounts editor/recovery screen."
+          },
+          {
+            "path": "cli/src/hooks/use-message-queue.ts",
+            "line": 519,
+            "detail": "Rejected sends restore queue item to front and pause queue."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 575,
+            "detail": "Exit path registers queue drainer and stream signal."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "line": 24,
+            "detail": "Late old validation failure must not clear newer busy ownership."
+          },
+          {
+            "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "line": 96,
+            "detail": "Clearing a running SDK call holds occupancy until abort settles."
+          },
+          {
+            "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+            "line": 18,
+            "detail": "Removing only attachment pauses empty queue until undo."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 379,
+            "detail": "Documents Escape signal propagation and interrupted rendering."
+          }
+        ]
+      },
+      "states": {
+        "failure": "True send rejections restore/pause queue; F5 holds chain occupancy after client creation rejection; resolved pre-run failure does not trigger the queue's rejection recovery.",
+        "loading": "Queue exposes busy/paused/processing status and retained attachment read state.",
+        "empty": "Empty queued item is explicitly paused rather than dispatched.",
+        "cancellation": "SDK abort preserves run state and occupancy; queue editing/removal cancels stale pending attachment retries.",
+        "retry": "Queue UI supports restore/edit/reorder/remove/undo and resume; a failed send must communicate rejection/acceptance for that recovery to work.",
+        "permission": "Queue insertion records prompt/attachment/mode identity; it is not authorization for a classified high-impact action."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-chat-keyboard.ts",
+          "line": 146,
+          "detail": "Keyboard interrupt dispatch calls the mounted handler."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 2212,
+          "detail": "Status-bar Stop uses the same interrupt handler."
+        },
+        {
+          "path": "cli/src/hooks/use-chat-streaming.ts",
+          "line": 208,
+          "detail": "Queue sends through the current sendMessage ref."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 448,
+          "detail": "Busy ref and queue lock are set synchronously before async preparation."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 408,
+          "detail": "Abort keeps occupancy until SDK run settles and preserves authoritative continuation ordering."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 819,
+          "detail": "Owned aborted completion can update RunState; superseded results are ignored."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1984,
+          "detail": "Work queue action pauses queue and mounts editor/recovery screen."
+        },
+        {
+          "path": "cli/src/hooks/use-message-queue.ts",
+          "line": 519,
+          "detail": "Rejected sends restore queue item to front and pause queue."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 575,
+          "detail": "Exit path registers queue drainer and stream signal."
+        },
+        {
+          "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+          "line": 24,
+          "detail": "Late old validation failure must not clear newer busy ownership."
+        },
+        {
+          "path": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts",
+          "line": 96,
+          "detail": "Clearing a running SDK call holds occupancy until abort settles."
+        },
+        {
+          "path": "cli/src/components/__tests__/attachment-recovery.test.tsx",
+          "line": 18,
+          "detail": "Removing only attachment pauses empty queue until undo."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 379,
+          "detail": "Documents Escape signal propagation and interrupted rendering."
+        }
+      ],
+      "gaps": [
+        "F2: bisection occupancy is not part of the shared send gate for prompt-producing commands.",
+        "F5: client initialization rejection can leave ordinary retries queued indefinitely.",
+        "F6 and provider-readiness early returns resolve void, so unstarted queued work is removed without entering onRejected recovery.",
+        "Queued attachment images cannot round-trip binary payload through the text prompt journal; exit drain records a locating note."
+      ],
+      "strengths": [
+        "Run-owner and execution-owner identities separate conversation replacement from cooperative SDK cancellation.",
+        "Queue rejection recovery retains user data and prevents automatic retry loops.",
+        "Abort terminal block writes settle before reopening normal queue gates."
+      ],
+      "assuranceEvidence": [
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "Fault-injected getCodebuffClient rejection leaves chainBusy=true and canQueue=false."
+        }
+      ]
+    },
+    {
+      "id": "history-restore-retention",
+      "name": "Saved history browsing, restoration and retained conversation output",
+      "maturity": "partial",
+      "assurance": "static trace + unit",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1229,
+            "detail": "/history returns the real history route."
+          },
+          {
+            "path": "cli/src/app.tsx",
+            "line": 172,
+            "detail": "Selecting a saved chat closes history, resets store and sets resumeChatId."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/utils/chat-history.ts",
+            "line": 144,
+            "detail": "Async history loads initial/background batches and reports partial/unavailable reads."
+          },
+          {
+            "path": "cli/src/hooks/use-send-message.ts",
+            "line": 184,
+            "detail": "Continue effect loads state, guards late writes and hydrates context archive by identity."
+          },
+          {
+            "path": "cli/src/hooks/helpers/send-message.ts",
+            "line": 350,
+            "detail": "Every preparation hard-caps live CLI messages to the last 100."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/components/chat-history-screen.tsx",
+            "line": 96,
+            "detail": "Mounted history screen consumes loading/partial/unavailable states and deletion confirmation."
+          },
+          {
+            "path": "cli/src/hooks/use-chat-messages.ts",
+            "line": 206,
+            "detail": "Load previous only increases visible count over retained in-memory messages."
+          },
+          {
+            "path": "cli/src/utils/run-state-storage.ts",
+            "line": 897,
+            "detail": "Current retained messages are serialized to durable compatibility and envelope outputs."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+            "line": 76,
+            "detail": "Native history loading/failure/retry and delete confirmation are exercised."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 372,
+            "detail": "SDK model continuation lives in RunState.sessionState.mainAgentState.messageHistory, separately from CLI ChatMessage[]."
+          },
+          {
+            "path": "docs/architecture.md",
+            "line": 41,
+            "detail": "Local session persistence/history is an explicit CLI responsibility."
+          }
+        ]
+      },
+      "states": {
+        "failure": "History list reports partial/unavailable rows; actual restore loader returns null on failure and the mounted continue effect silently returns after App already reset/closed history.",
+        "loading": "History list has two-phase loading; prompt dispatch waits for restore promise. The restore effect has no exposed loading/error route of its own.",
+        "empty": "No saved sessions yields empty history; unavailable capture rows remain discoverable for inspection.",
+        "cancellation": "List and restore use abort/cancel identities to avoid writes after unmount or replacement.",
+        "retry": "History list offers retry; there is no explicit retry outcome from a failed selected-session restore.",
+        "permission": "Delete requires confirmation and chat ID validation; this shard did not audit all storage containment/redaction paths."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1229,
+          "detail": "/history returns the real history route."
+        },
+        {
+          "path": "cli/src/app.tsx",
+          "line": 172,
+          "detail": "Selecting a saved chat closes history, resets store and sets resumeChatId."
+        },
+        {
+          "path": "cli/src/utils/chat-history.ts",
+          "line": 144,
+          "detail": "Async history loads initial/background batches and reports partial/unavailable reads."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 184,
+          "detail": "Continue effect loads state, guards late writes and hydrates context archive by identity."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 350,
+          "detail": "Every preparation hard-caps live CLI messages to the last 100."
+        },
+        {
+          "path": "cli/src/components/chat-history-screen.tsx",
+          "line": 96,
+          "detail": "Mounted history screen consumes loading/partial/unavailable states and deletion confirmation."
+        },
+        {
+          "path": "cli/src/hooks/use-chat-messages.ts",
+          "line": 206,
+          "detail": "Load previous only increases visible count over retained in-memory messages."
+        },
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 897,
+          "detail": "Current retained messages are serialized to durable compatibility and envelope outputs."
+        },
+        {
+          "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+          "line": 76,
+          "detail": "Native history loading/failure/retry and delete confirmation are exercised."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 372,
+          "detail": "SDK model continuation lives in RunState.sessionState.mainAgentState.messageHistory, separately from CLI ChatMessage[]."
+        },
+        {
+          "path": "docs/architecture.md",
+          "line": 41,
+          "detail": "Local session persistence/history is an explicit CLI responsibility."
+        }
+      ],
+      "gaps": [
+        "F7: 100-message truncation deletes older CLI transcript blocks and those capped blocks are later persisted; visual paging cannot fetch discarded blocks.",
+        "This establishes CLI transcript retention loss only. SDK RunState, model history and compaction archive are separate; model-context loss is not established by the probe.",
+        "Selected-session restore failure is conflated with absent history: app.tsx:178 resets, use-send-message.ts:195 returns on null, run-state-storage.ts:612 catches to null.",
+        "History list searches up to 500 saved sessions; it is not a paginated unbounded catalog."
+      ],
+      "strengths": [
+        "History scans use bounded parallel I/O and preserve unavailable captures for recovery inspection.",
+        "Deleted IDs prevent background scan results from resurrecting deleted rows.",
+        "Restore and archive hydration guard late results against changed run/session identity."
+      ],
+      "assuranceEvidence": [
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "Seeding 105 CLI messages then preparing a prompt retains exactly 100 and drops oldest id; probe does not mutate or inspect model history."
+        }
+      ]
+    },
+    {
+      "id": "durable-plan-ui",
+      "name": "Durable plan discovery, resume/status and artifact drilldown",
+      "maturity": "partial",
+      "assurance": "static trace + unit",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1265,
+            "detail": "resume-plan resolves artifacts then changes visible and submitted mode to EXECUTE_PLAN."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1333,
+            "detail": "plan-status reads local status without model call."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1359,
+            "detail": "plans lists local sessions; plan-artifact pages individual local files."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/commands/plan-artifacts.ts",
+            "line": 31,
+            "detail": "Artifact capture bounded to 64 KiB prefix and page reads have safe-integer/UTF-8 boundaries."
+          },
+          {
+            "path": "cli/src/commands/plan-artifacts.ts",
+            "line": 137,
+            "detail": "Session listing uses batches of 12 and cancellation checks."
+          },
+          {
+            "path": "cli/src/commands/plan-artifacts.ts",
+            "line": 495,
+            "detail": "Complete PLAN.md prefix is preflighted; truncated plan skips deterministic preflight."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/components/plan-session-picker-screen.tsx",
+            "line": 73,
+            "detail": "Mounted picker consumes async loader, failure, retry and abort."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 1897,
+            "detail": "Picker-driven resume changes persistent visible mode before dispatch."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 2070,
+            "detail": "Plan session picker is actually mounted."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+            "line": 138,
+            "detail": "Native plan picker async loading and complete selected-path inspection are exercised."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/local-mode.md",
+            "line": 67,
+            "detail": "Documents PlanLink commands and active-session pointer."
+          },
+          {
+            "path": "docs/agents-and-tools.md",
+            "line": 321,
+            "detail": "Documents versioned state and deterministic execution readiness."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Missing target opens picker; missing/malformed artifacts give local message; F1 defeats physical path containment. One unreadable candidate in listPlanSessionsAsync rejects its whole Promise.all batch.",
+        "loading": "Picker loading state and bounded parallel scans are production-wired.",
+        "empty": "Missing sessions directory returns empty list; sessions without known regular-file artifacts are omitted.",
+        "cancellation": "Picker aborts list on unmount; list checks signals between batches.",
+        "retry": "Picker failure supports explicit retry; raw artifact reads propagate to local command operation error surface.",
+        "permission": "Lexical path resolver rejects ../ escape; it does not resolve symlink targets. Plan artifacts are read into prompts without the general active-read policy."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1265,
+          "detail": "resume-plan resolves artifacts then changes visible and submitted mode to EXECUTE_PLAN."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1333,
+          "detail": "plan-status reads local status without model call."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1359,
+          "detail": "plans lists local sessions; plan-artifact pages individual local files."
+        },
+        {
+          "path": "cli/src/commands/plan-artifacts.ts",
+          "line": 31,
+          "detail": "Artifact capture bounded to 64 KiB prefix and page reads have safe-integer/UTF-8 boundaries."
+        },
+        {
+          "path": "cli/src/commands/plan-artifacts.ts",
+          "line": 137,
+          "detail": "Session listing uses batches of 12 and cancellation checks."
+        },
+        {
+          "path": "cli/src/commands/plan-artifacts.ts",
+          "line": 495,
+          "detail": "Complete PLAN.md prefix is preflighted; truncated plan skips deterministic preflight."
+        },
+        {
+          "path": "cli/src/components/plan-session-picker-screen.tsx",
+          "line": 73,
+          "detail": "Mounted picker consumes async loader, failure, retry and abort."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1897,
+          "detail": "Picker-driven resume changes persistent visible mode before dispatch."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 2070,
+          "detail": "Plan session picker is actually mounted."
+        },
+        {
+          "path": "cli/src/components/__tests__/session-route-recovery.test.tsx",
+          "line": 138,
+          "detail": "Native plan picker async loading and complete selected-path inspection are exercised."
+        },
+        {
+          "path": "docs/local-mode.md",
+          "line": 67,
+          "detail": "Documents PlanLink commands and active-session pointer."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 321,
+          "detail": "Documents versioned state and deterministic execution readiness."
+        }
+      ],
+      "gaps": [
+        "F1: prefix/page readers can follow a session or artifact symlink outside the workspace.",
+        "F8: plans/plan-use discovery is missing from menu catalog despite live handlers.",
+        "Bounded/truncated artifact preflight is weaker than complete plan readiness; actual state execution/gate semantics are delegated to durability/orchestration shards.",
+        "Plan listing has no per-session partial failure isolation; unreadable/deleted candidate can fail otherwise readable catalog."
+      ],
+      "strengths": [
+        "Local status and page inspection need no model.",
+        "64 KiB actual reads bound allocation, expose truncation and preserve UTF-8 page boundaries.",
+        "Resume mode change is consistent between picker UI, persistent mode and submitted run."
+      ],
+      "assuranceEvidence": [
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "Harmless outside-project fixture reached through session symlink is accepted by resolver and included by both prefix and page readers."
+        }
+      ]
+    },
+    {
+      "id": "attach-detach-ui",
+      "name": "ACP attach/detach session UI",
+      "maturity": "partial",
+      "assurance": "static trace + unit",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/cli-args.ts",
+            "line": 78,
+            "detail": "Attach arguments select remote backend rather than in-process execution."
+          },
+          {
+            "path": "cli/src/index.tsx",
+            "line": 553,
+            "detail": "Attach flags/env are recorded before any client is created."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/utils/codebuff-client.ts",
+            "line": 175,
+            "detail": "Attach target constructs AcpRemoteBackend."
+          },
+          {
+            "path": "cli/src/utils/attach-session.ts",
+            "line": 50,
+            "detail": "detachSession delegates optional backend.detach and records returned session ID."
+          },
+          {
+            "path": "cli/src/utils/attach-session.ts",
+            "line": 106,
+            "detail": "attachSession delegates optional backend.attach for last module-held ID."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/data/slash-commands.ts",
+            "line": 228,
+            "detail": "Attach/detach are user-visible menu commands."
+          },
+          {
+            "path": "cli/src/hooks/use-send-message.ts",
+            "line": 679,
+            "detail": "Same TUI send path always checks local provider readiness before remote client.run."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 264,
+            "detail": "Exit chain bounds optional detach before process exit."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/utils/__tests__/attach-session.test.ts",
+            "line": 54,
+            "detail": "Injected structural backend tests verify detach ID and reattach delegation/failures."
+          },
+          {
+            "path": "cli/src/utils/__tests__/attach-session.test.ts",
+            "line": 96,
+            "detail": "Missing session ID fails without client creation."
+          }
+        ],
+        "docs": [
+          {
+            "path": "cli/src/cli-args.ts",
+            "line": 78,
+            "detail": "Source CLI contract documents live serve backend and detach/reattach."
+          },
+          {
+            "path": "docs/architecture.md",
+            "line": 49,
+            "detail": "SDK is the execution boundary for the CLI."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Detach/attach return structured never-reject outcomes; F3 prevents remote run if local config is empty/unroutable.",
+        "loading": "Remote connection/session loading is SDK/backend-owned; this shard did not perform a real socket attach.",
+        "empty": "No attach target/backend support or no detached ID has explicit unavailable/no-session outcomes.",
+        "cancellation": "Exit detach is bounded and preserves remote run by closing client transport; cooperative run abort policy belongs to ACP backend.",
+        "retry": "/attach retries the same remembered ID in the same process.",
+        "permission": "Socket path/token flags are recorded; token verification and server trust/session authorization are delegated."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/cli-args.ts",
+          "line": 78,
+          "detail": "Attach arguments select remote backend rather than in-process execution."
+        },
+        {
+          "path": "cli/src/index.tsx",
+          "line": 553,
+          "detail": "Attach flags/env are recorded before any client is created."
+        },
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 175,
+          "detail": "Attach target constructs AcpRemoteBackend."
+        },
+        {
+          "path": "cli/src/utils/attach-session.ts",
+          "line": 50,
+          "detail": "detachSession delegates optional backend.detach and records returned session ID."
+        },
+        {
+          "path": "cli/src/utils/attach-session.ts",
+          "line": 106,
+          "detail": "attachSession delegates optional backend.attach for last module-held ID."
+        },
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 228,
+          "detail": "Attach/detach are user-visible menu commands."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 679,
+          "detail": "Same TUI send path always checks local provider readiness before remote client.run."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 264,
+          "detail": "Exit chain bounds optional detach before process exit."
+        },
+        {
+          "path": "cli/src/utils/__tests__/attach-session.test.ts",
+          "line": 54,
+          "detail": "Injected structural backend tests verify detach ID and reattach delegation/failures."
+        },
+        {
+          "path": "cli/src/utils/__tests__/attach-session.test.ts",
+          "line": 96,
+          "detail": "Missing session ID fails without client creation."
+        },
+        {
+          "path": "cli/src/cli-args.ts",
+          "line": 78,
+          "detail": "Source CLI contract documents live serve backend and detach/reattach."
+        },
+        {
+          "path": "docs/architecture.md",
+          "line": 49,
+          "detail": "SDK is the execution boundary for the CLI."
+        }
+      ],
+      "gaps": [
+        "F3: intended server-side inference still requires client-side provider configuration.",
+        "lastDetachedSessionId is module-only; /attach after process restart has no persisted session selector in this slice. This is an explicit partial feature, not a hidden default-mode defect.",
+        "Passive resumed streaming and actual socket failure semantics remain unknown here; unit stubs do not establish them."
+      ],
+      "strengths": [
+        "Remote backend choice occurs before singleton creation.",
+        "Attach/detach hide backend internals behind structural SDK methods.",
+        "Exit detach and unavailable state are explicit, bounded UI contracts."
+      ],
+      "assuranceEvidence": [
+        {
+          "kind": "unit",
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "detail": "Remote-ready stub run receives zero calls under empty local provider config; local provider error appears and normal send ownership is released."
+        }
+      ]
+    },
+    {
+      "id": "context-compaction-diagnostics",
+      "name": "Context/compaction/model/status and provider diagnostics",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 591,
+            "detail": "Chat owns context-window and compaction state from runtime events."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 1097,
+            "detail": "Doctor builds typed diagnostic/capability block with a visible capture count."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/utils/sdk-event-handlers.ts",
+            "line": 1469,
+            "detail": "Context-window event maps tokens/max/compaction trigger to status state."
+          },
+          {
+            "path": "cli/src/components/provider-picker-screen.tsx",
+            "line": 330,
+            "detail": "Provider diagnostics use owned controller, partial results and cancelled-state presentation."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 2198,
+            "detail": "StatusBar is mounted with context, compaction, cost, model and Stop."
+          },
+          {
+            "path": "cli/src/components/status-bar.tsx",
+            "line": 181,
+            "detail": "Width-aware chips and active status states are consumed in real UI."
+          },
+          {
+            "path": "cli/src/chat.tsx",
+            "line": 2065,
+            "detail": "Provider picker is mounted, not merely exported."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+            "line": 321,
+            "detail": "Native diagnostic test preserves partial fast results beside hung check and cancellation."
+          },
+          {
+            "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+            "line": 356,
+            "detail": "Malformed diagnostic config has inline error and retry controls."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 193,
+            "detail": "CLI completion/status reflects local SDK run."
+          },
+          {
+            "path": "docs/local-mode.md",
+            "line": 64,
+            "detail": "Provider status and model routing are documented user controls."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Invalid config/connection checks render errors; malformed diagnostic enumeration stays in mounted picker with retry.",
+        "loading": "Waiting/working/retrying/connecting indicators and diagnostics running rows are explicit.",
+        "empty": "Unreported context/compaction stays null/Not reported rather than fabricated numeric state.",
+        "cancellation": "Diagnostics abort on cancel/unmount and reject late rows; status Stop uses run interrupt.",
+        "retry": "Diagnostic all/provider retry is UI-owned; inference retries are observed via events.",
+        "permission": "Diagnostic checks test configured providers; no secret values were read or provider tests performed during this audit."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 591,
+          "detail": "Chat owns context-window and compaction state from runtime events."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1097,
+          "detail": "Doctor builds typed diagnostic/capability block with a visible capture count."
+        },
+        {
+          "path": "cli/src/utils/sdk-event-handlers.ts",
+          "line": 1469,
+          "detail": "Context-window event maps tokens/max/compaction trigger to status state."
+        },
+        {
+          "path": "cli/src/components/provider-picker-screen.tsx",
+          "line": 330,
+          "detail": "Provider diagnostics use owned controller, partial results and cancelled-state presentation."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 2198,
+          "detail": "StatusBar is mounted with context, compaction, cost, model and Stop."
+        },
+        {
+          "path": "cli/src/components/status-bar.tsx",
+          "line": 181,
+          "detail": "Width-aware chips and active status states are consumed in real UI."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 2065,
+          "detail": "Provider picker is mounted, not merely exported."
+        },
+        {
+          "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+          "line": 321,
+          "detail": "Native diagnostic test preserves partial fast results beside hung check and cancellation."
+        },
+        {
+          "path": "cli/src/components/__tests__/provider-recovery.test.tsx",
+          "line": 356,
+          "detail": "Malformed diagnostic config has inline error and retry controls."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 193,
+          "detail": "CLI completion/status reflects local SDK run."
+        },
+        {
+          "path": "docs/local-mode.md",
+          "line": 64,
+          "detail": "Provider status and model routing are documented user controls."
+        }
+      ],
+      "gaps": [
+        "Displayed model is configured for the selected mode, not a verified receipt for every currently running subagent/provider call.",
+        "Status and diagnostic component code/tests were inspected; live model telemetry was not exercised.",
+        "Cost/compaction accounting accuracy and runtime event production are separate shard responsibilities."
+      ],
+      "strengths": [
+        "Context/compaction is event-driven rather than inferred from UI text.",
+        "Diagnostic partial results survive a hung sibling check.",
+        "Null/unavailable states are visible and cancellation discards late results."
+      ],
+      "assuranceEvidence": []
+    },
+    {
+      "id": "snapshot-undo-restore-discovery",
+      "name": "Turn snapshot, conversation undo/redo and tracked-file restore affordances",
+      "maturity": "unknown",
+      "assurance": "static trace of CLI discovery/dispatch only",
+      "trace": {
+        "entrypoint": [
+          {
+            "path": "cli/src/data/slash-commands.ts",
+            "line": 106,
+            "detail": "Conversation undo/redo labels explicitly say files are unchanged."
+          },
+          {
+            "path": "cli/src/data/slash-commands.ts",
+            "line": 240,
+            "detail": "Tracked-file undo-turn/restore are presented as previews requiring exact apply action."
+          }
+        ],
+        "implementation": [
+          {
+            "path": "cli/src/hooks/helpers/send-message.ts",
+            "line": 548,
+            "detail": "Successful run completion calls createTurnSnapshot and logs structured failure."
+          },
+          {
+            "path": "cli/src/commands/router.ts",
+            "line": 108,
+            "detail": "User shell dispatch awaits bounded pre-dispatch snapshot."
+          },
+          {
+            "path": "cli/src/commands/command-registry.ts",
+            "line": 15,
+            "detail": "Snapshot command implementation is imported; exact restore handler/backend implementation was delegated and not inspected here."
+          }
+        ],
+        "consumer": [
+          {
+            "path": "cli/src/hooks/use-send-message.ts",
+            "line": 848,
+            "detail": "Actual completion invokes handleRunCompletion where turn snapshot is triggered."
+          },
+          {
+            "path": "cli/src/commands/router.ts",
+            "line": 113,
+            "detail": "User shell dispatch proceeds after bounded pre-dispatch capture."
+          }
+        ],
+        "tests": [
+          {
+            "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+            "line": 181,
+            "detail": "Execution affordance draft preservation is tested through real router; not proof of file restore correctness."
+          }
+        ],
+        "docs": [
+          {
+            "path": "docs/request-flow.md",
+            "line": 96,
+            "detail": "Persisted tool/message histories have compatibility requirements."
+          },
+          {
+            "path": "docs/local-mode.md",
+            "line": 67,
+            "detail": "Durable plan controls coexist with independent conversation state."
+          }
+        ]
+      },
+      "states": {
+        "failure": "Snapshot failure logs structured warning; exact restore failure/apply receipt semantics were not inspected in this shard.",
+        "loading": "Pre-shell snapshot is awaited with a bounded helper; turn-end snapshot is fire-and-forget.",
+        "empty": "Menu descriptions expose preview/confirmation intent, but actual empty snapshot response is delegated.",
+        "cancellation": "Bisection has stop state and cleanup; F2 lets prompt-producing commands bypass its admission guard.",
+        "retry": "Snapshot/backend restore retry semantics are unknown here.",
+        "permission": "Labels distinguish conversation edits from tracked-file restore and require exact displayed apply action; backend permission/restore receipt enforcement is not established by labels."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 106,
+          "detail": "Conversation undo/redo labels explicitly say files are unchanged."
+        },
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 240,
+          "detail": "Tracked-file undo-turn/restore are presented as previews requiring exact apply action."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 548,
+          "detail": "Successful run completion calls createTurnSnapshot and logs structured failure."
+        },
+        {
+          "path": "cli/src/commands/router.ts",
+          "line": 108,
+          "detail": "User shell dispatch awaits bounded pre-dispatch snapshot."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 15,
+          "detail": "Snapshot command implementation is imported; exact restore handler/backend implementation was delegated and not inspected here."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 848,
+          "detail": "Actual completion invokes handleRunCompletion where turn snapshot is triggered."
+        },
+        {
+          "path": "cli/src/commands/router.ts",
+          "line": 113,
+          "detail": "User shell dispatch proceeds after bounded pre-dispatch capture."
+        },
+        {
+          "path": "cli/src/commands/__tests__/prompt-dispatch.test.ts",
+          "line": 181,
+          "detail": "Execution affordance draft preservation is tested through real router; not proof of file restore correctness."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 96,
+          "detail": "Persisted tool/message histories have compatibility requirements."
+        },
+        {
+          "path": "docs/local-mode.md",
+          "line": 67,
+          "detail": "Durable plan controls coexist with independent conversation state."
+        }
+      ],
+      "gaps": [
+        "Full tracked-file snapshot/restore/bisection correctness belongs to the durability/execution shards and is unknown here.",
+        "F2 is a verified CLI admission gap, not a claim that snapshot storage itself is absent.",
+        "Successful-turn fire-and-forget capture ordering and omitted/untracked files require backend review before rating restore usable."
+      ],
+      "strengths": [
+        "User-facing labels clearly separate transcript undo from file restore.",
+        "Snapshot creation has real normal-turn and shell entrypoint calls rather than only a planned menu row."
+      ],
+      "assuranceEvidence": []
+    }
+  ],
+  "findings": [
+    {
+      "id": "01-F1",
+      "title": "Plan artifact readers follow symlinks outside the project boundary",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/commands/plan-artifacts.ts",
+          "line": 397,
+          "detail": "resolvePlanSessionDir normalizes/path.resolves and only compares lexical prefix, with no physical path check."
+        },
+        {
+          "path": "cli/src/commands/plan-artifacts.ts",
+          "line": 96,
+          "detail": "Paged artifact reader opens the resolved path with ordinary fs.open, following symlinks."
+        },
+        {
+          "path": "cli/src/commands/plan-artifacts.ts",
+          "line": 476,
+          "detail": "Prompt artifact reader opens known artifact names through the same lexical directory."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1291,
+          "detail": "Resume embeds read artifact bodies into agent prompt."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.test.ts",
+          "line": 196,
+          "detail": "Safe fixture probe confirms a session symlink outside the project is accepted and both readers include outside bytes; see probe log."
+        }
+      ],
+      "trigger": "Open a project whose .agents/sessions/<slug> directory, or known PLAN.md artifact, is a symlink to a readable file/directory outside the project, then run /resume-plan <slug> or /plan-artifact <slug> PLAN.md.",
+      "consequence": "The declared project boundary is bypassed. Resume can send outside file bytes to the configured model without general active-read sensitive-path policy. Private-file disclosure is a conditional consequence of such a target; the audit used harmless fixture text and did not read credentials.",
+      "suggestedFix": "Resolve and validate physical project/session/artifact paths before reading, reject paths outside intended workspace/session scope, and apply mandatory sensitive-read policy to the actual target. Keep the check coupled to the opened file to address replacement races.",
+      "acceptanceProbe": "Create a harmless outside file plus session-directory and artifact-file symlinks; prefix read, page read and resume must reject outside targets while ordinary in-project artifacts still work. The existing safe probe currently shows rejection is absent."
+    },
+    {
+      "id": "01-F2",
+      "title": "Prompt-producing slash commands bypass the active bisection admission guard",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/commands/router.ts",
+          "line": 488,
+          "detail": "Registered command handler returns before ordinary prompt preflight."
+        },
+        {
+          "path": "cli/src/commands/router.ts",
+          "line": 526,
+          "detail": "Bisection guard is only after registered command dispatch."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 289,
+          "detail": "sendPromptCommand checks stream/message/chain occupancy but not active bisection."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1187,
+          "detail": "Mode trailing prompt calls shared helper directly."
+        },
+        {
+          "path": "cli/src/utils/turn-snapshots.ts",
+          "line": 1217,
+          "detail": "Cancelled bisection checks out newest snapshot tree before releasing its lock."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "line": 1,
+          "detail": "isTurnBisectionRunning=true probe blocks an ordinary prompt and dispatches /mode:default with the same prompt."
+        }
+      ],
+      "trigger": "Start /bisect-turn while no agent chain is running, then submit /mode:default <mutating request>, /resume-plan <slug>, /interview <request> or another prompt-producing registered command.",
+      "consequence": "The CLI admits an agent run while bisection is rewriting the tracked tree. A later snapshot checkout can replace edits from that concurrent run. The probe establishes admission bypass; real destructive concurrent git execution was not performed.",
+      "suggestedFix": "Put bisection/attachment preflight in the common prompt admission helper or a single lower transaction boundary used by every user, command, picker, action and queue path; preserve bisection stop/list local controls.",
+      "acceptanceProbe": "With bisection active, table-test every prompt-producing entrypoint and assert no send/queue admission capable of starting a turn; keep /bisect-turn stop/list reachable. After stopping, the same prompt must dispatch normally."
+    },
+    {
+      "id": "01-F3",
+      "title": "Attached TUI validates local providers before invoking its remote backend",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/index.tsx",
+          "line": 555,
+          "detail": "Attach target is recorded before client creation."
+        },
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 175,
+          "detail": "Attach mode selects AcpRemoteBackend, leaving inference to live serve."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 679,
+          "detail": "Provider readiness runs unconditionally for both in-process and attached clients."
+        },
+        {
+          "path": "cli/src/utils/openbuff-provider.ts",
+          "line": 1001,
+          "detail": "No local config/providers returns not-configured failure."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "line": 1,
+          "detail": "Real hook + ready remote stub + empty local config yields remoteRuns=0 and inline provider-not-configured error."
+        }
+      ],
+      "trigger": "Start a configured serve process, then attach from a TUI process that has no local provider config (or whose local routes differ from the server).",
+      "consequence": "The remote backend never receives the prompt despite being ready; users are told to configure a local provider for server-side execution.",
+      "suggestedFix": "Make readiness validation backend-owned. Check local provider routing only for in-process execution; expose and consume ACP server/session readiness/allowed models for remote runs.",
+      "acceptanceProbe": "Use a ready injected ACP backend with empty/unroutable client-local config and assert its run receives the prompt. Keep fail-closed local readiness tests for in-process execution and explicit remote connection/auth errors."
+    },
+    {
+      "id": "01-F4",
+      "title": "Submission drains non-ready file attachments without including or retaining them",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/commands/router.ts",
+          "line": 488,
+          "detail": "Slash command execution precedes processing attachment check."
+        },
+        {
+          "path": "cli/src/commands/router.ts",
+          "line": 520,
+          "detail": "Ordinary prompt preflight checks processing status, not failed status."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 263,
+          "detail": "All pending attachments are drained."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 290,
+          "detail": "Only ready file attachments enter model context."
+        },
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 321,
+          "detail": "Only ready file attachments are preserved for message display."
+        },
+        {
+          "path": "cli/src/utils/pending-attachments.ts",
+          "line": 496,
+          "detail": "Initial asynchronous completion updates only current composer attachments, so a drained processing item cannot settle there."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "line": 1,
+          "detail": "Processing slash-file and ordinary failed-file probes both remove the pending file and send only bare prompt text."
+        }
+      ],
+      "trigger": "Select a file and submit a prompt-producing slash command before its async read finishes; or submit an ordinary prompt after a selected file entered error state.",
+      "consequence": "The model receives no file bytes or failure note and the file disappears from attachment recovery/message display. A late read result cannot restore the removed item. This defeats guaranteed file-menu context at the send boundary.",
+      "suggestedFix": "Validate all captured attachments at a single admission boundary. Keep processing/failed items in recoverable state until an explicit retry/remove/approved metadata-only disposition; reserve and commit attachment drains only once an accepted send has the intended context.",
+      "acceptanceProbe": "For ordinary/slash/picker/queued sends, inject processing, ready, failed and metadata-only files. Processing/failed files must remain recoverable with visible status and no silent dispatch; ready/approved metadata captures must carry provenance and matching content exactly once."
+    },
+    {
+      "id": "01-F5",
+      "title": "Client initialization rejection leaves the turn and queue locked",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 448,
+          "detail": "Send claims chain/queue occupancy before async setup."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 598,
+          "detail": "getCodebuffClient is awaited outside the run try/finally."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 890,
+          "detail": "Owner release/safety reset begins only in the later run finally."
+        },
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 366,
+          "detail": "Factory can propagate errors; returned promise is not a never-reject contract."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 856,
+          "detail": "Mounted submit catch appends generic error without releasing send ownership."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "line": 1,
+          "detail": "Fault-injected client factory rejection preserves chainBusy=true and canQueue=false."
+        }
+      ],
+      "trigger": "getCodebuffClient rejects during initialization or lease/backend setup after message preparation.",
+      "consequence": "UI displays 'Please try again', but retries observe busy occupancy and queue behind a turn that never started. Resetting the conversation or exiting is needed to release this state. A real factory outage was not caused; the failure contract was exercised through its existing seam.",
+      "suggestedFix": "Wrap the complete owned send transaction, including client creation and streaming setup, in one owner-aware cleanup boundary; release only this send's chain/queue occupancy and retain rejected prompt/context for retry.",
+      "acceptanceProbe": "Inject a client factory rejection and assert chain/queue locks are released, visible failure is retained, attachments/draft are recoverable and the next normal submit is admitted; keep late-old-failure/new-owner tests passing."
+    },
+    {
+      "id": "01-F6",
+      "title": "Validation exceptions become silent resolved submissions",
+      "severity": "MEDIUM",
+      "domains": [
+        "error-handling",
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-agent-validation.ts",
+          "line": 187,
+          "detail": "Validation catch logs and returns {success:false, errors:[]}."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 531,
+          "detail": "Empty failure errors intentionally produce an empty validationErrors array."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 561,
+          "detail": "The failed submission returns void after release, with no user-visible error."
+        },
+        {
+          "path": "cli/src/hooks/use-message-queue.ts",
+          "line": 511,
+          "detail": "Queue item is removed before sending."
+        },
+        {
+          "path": "cli/src/hooks/use-message-queue.ts",
+          "line": 111,
+          "detail": "Queue restoration sees only rejected send promises."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "line": 1,
+          "detail": "Production-shaped empty validation failure returns with user/mode messages but no visibleFailure."
+        }
+      ],
+      "trigger": "Local validation unexpectedly throws; the real validator catch converts it to a false result with an empty error list.",
+      "consequence": "The user's cleared prompt appears in history and then work stops without a reason or retry state. For queued prompts, this resolves as successful processing, so unstarted work does not enter rejection restoration.",
+      "suggestedFix": "Return a visible sanitized validation failure with nonempty error content and communicate a rejected/not-accepted send outcome to queue ownership. Distinguish preparation/validation rejection from accepted run completion rather than using Promise<void> fulfillment for both.",
+      "acceptanceProbe": "Inject a validator exception in the mounted send/queue path. Assert visible failure reason, queue/draft/attachments retained or recoverable, no SDK invocation, correct ownership release and successful explicit retry after validator recovery."
+    },
+    {
+      "id": "01-F7",
+      "title": "The 100-message cap discards durable CLI transcript before paging can reach it",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "performance"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 350,
+          "detail": "Preparation truncates complete live ChatMessage[] to next.slice(-100)."
+        },
+        {
+          "path": "cli/src/hooks/use-chat-messages.ts",
+          "line": 206,
+          "detail": "Load previous only increases visibleMessageCount; it does not read discarded history."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 839,
+          "detail": "Completion persists currentMessages after this truncation."
+        },
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 847,
+          "detail": "Serialization persists the supplied message array rather than retaining older blocks."
+        },
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 897,
+          "detail": "Envelope and chat-messages sidecar are updated from the same serialized retained messages."
+        },
+        {
+          "path": "docs/request-flow.md",
+          "line": 372,
+          "detail": "Model continuation history is a separate RunState field."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+          "line": 1,
+          "detail": "105 seeded CLI messages plus preparation retain 100 and remove old-0; model history was not involved."
+        }
+      ],
+      "trigger": "Continue a conversation whose CLI transcript exceeds 100 messages (including mode/system/bash rows), then send another prompt and allow it to persist.",
+      "consequence": "Older visible CLI output and prior tool/agent presentation are removed from live and later saved CLI transcript; paging/searching that transcript cannot reach them. This is a bounded-retention design gap, not evidence of SDK model-history loss: RunState/model history and compaction archive are separate and unchanged by this line.",
+      "suggestedFix": "Separate rendering/working-set limits from durable transcript retention. Keep a paged archive or explicitly documented retention policy with export/recovery before trimming; do not grow the renderer's hot working set without a measured bound.",
+      "acceptanceProbe": "After >150 CLI messages and a save/reload, the oldest retained-by-policy message must be accessible through archive paging/export or the UI must explicitly disclose the retention cutoff. Separately assert SDK RunState continuity to prevent conflating the two stores."
+    },
+    {
+      "id": "01-F8",
+      "title": "Live plan list/active-session commands are absent from the advertised command catalog",
+      "severity": "LOW",
+      "domains": [
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1359,
+          "detail": "Executable registry defines /plans and alias plan-ls."
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "line": 1410,
+          "detail": "Executable registry defines /plan-use and plan-active/use-plan aliases."
+        },
+        {
+          "path": "cli/src/data/slash-commands.ts",
+          "line": 124,
+          "detail": "Static menu lists resume/update/status/artifact/lessons but its complete array has no plans or plan-use entries."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 394,
+          "detail": "Suggestions are derived from that menu array plus skills/presets."
+        },
+        {
+          "path": "cli/src/chat.tsx",
+          "line": 1941,
+          "detail": "Command palette is passed the same array."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 1957,
+          "detail": "Docs call the menu array authoritative for every registered command."
+        },
+        {
+          "path": "docs/local-mode.md",
+          "line": 78,
+          "detail": "Docs advertise /plans and /plan-use as ordinary local controls."
+        }
+      ],
+      "trigger": "Search slash suggestions or command palette for the documented plan listing or active-session selection command.",
+      "consequence": "Functional local controls are unavailable through their ordinary discovery surface; users must know hidden typed command names. Registry and catalog have drifted.",
+      "suggestedFix": "Add the missing discoverable plan commands and aliases, then derive executable and menu metadata from one command contract with explicit hidden entries rather than maintaining parallel arrays.",
+      "acceptanceProbe": "Every intended discoverable executable command, including plans/plan-use, must appear in slash suggestions and palette, resolve each alias and retain its real local dispatch behavior; explicitly exempt insertion-only or intentionally hidden commands."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Physical containment gap F1 is verified with harmless outside-project bytes. Strengths: project file-menu reads use project containment; initial attachments/retries check mandatory sensitive path policy; approvals preserve complete targets and UUID request identity. Runtime policy, token auth, connector authorization, credential storage/redaction and terminal permission enforcement were delegated and are not proven by UI wiring.",
+    "correctness": "F2/F3/F4/F6/F7/F8 are concrete current trigger/consumer mismatches. Ordinary in-process chat, registry readiness, mode/picker routing and local diagnostic controls are mounted and production-wired. Headless/server/replay internals remain delegated.",
+    "state-mutation": "Symbol run ownership, separate SDK execution occupancy, identity-guarded archive hydration, atomic normal attachment drain, stale attachment retry rejection and deleted-history filtering are valuable existing guards. F2/F4/F5/F7 identify boundaries not covered by those guards; queue restoration only sees actual promise rejection.",
+    "error-handling": "Read/load/provider/diagnostic/render error and retry surfaces are substantial. F5 leaks occupancy after client factory rejection; F6 turns validator exceptions into silent success-shaped processing. Selected-session restore null is silent after App reset. Plan list has batch-level rather than per-session failure isolation.",
+    "performance": "Inspected bounds are explicit: 64 KiB plan prefix/pages, batches of 12 plan reads and 32/16 history stats/transcript reads, file preview max 1 MiB/read and 100 KiB characters, 100 shallow directory entries, memoized renderer handler refs and visual message paging. F7 shows an unmeasured retention tradeoff implemented as transcript deletion. No latency/memory benchmark, O(n^2) claim or 'best possible' comparison is made.",
+    "dependency-hygiene": "cli/package.json declares the external libraries imported by selected CLI paths and pins Bun 1.3.5, React 19.2.0, and matching OpenTUI core/react 0.5.12. Other dependency ranges and root React overrides exist; full lock/advisory/pruned-install audit was not done here. SDK imports resolve to dist per sdk/package.json, so source-only review is not proof of shipped SDK parity. PATH Bun 1.3.14 FFI failure is a documented toolchain mismatch, not a new product finding.",
+    "test-coverage": "Picker-selected tests and bounded adjacent native component/ownership/router cases were read. Nine provider-free safe probe assertions executed under Bun 1.3.5 with the supported OpenTUI preload, 9 pass/0 fail; they assert observed failures, not desired acceptance. Legacy use-ask-user-bridge tests copy helper bodies instead of importing/mounting the hook and do not establish request-ID scope/cleanup. Existing entire CLI/CI schedule, real socket attach and live-provider flows were not run.",
+    "api-contract": "Parser/backend dispatch is explicit and protocol paths return before renderer. F1 violates physical project-boundary intent; F3 violates remote execution's client-provider independence; F8 separates executable plan handlers from advertised command catalog. /undo and /redo explicitly preserve files; tracked-file restore is separately labelled preview/exact apply. Full restore/backend contract assurance is delegated."
+  },
+  "coverageLimits": [
+    "Picker selected 18 distinct CLI files / 20 sections / 4,849 lines; every selected section was read. Adjacent evidence expands this receipt to 60 inventory files / 76 merged source sections / 13,848 inspected lines. This is selected-range inspection, not full coverage of all 685 CLI inventory files or every line of these files.",
+    "Native query_index/read_files/read_subtree audit tools are repository code and unavailable in this session; actual source inspection used shell numbered exact reads and bounded rg discovery.",
+    "Large chat.tsx, SDK event handlers, message persistence, provider and snapshot files were sampled at recorded ranges. Permission policy, credential stores, provider runtime, storage/crash recovery and snapshot restore semantics belong to other shards.",
+    "Source files and repository configuration were not changed; credentials and private config values were not read. No external models/providers, live ACP sockets or real destructive git bisection were invoked. Artifacts and harmless probe fixtures were written only under the assigned /tmp evidence/findings paths.",
+    "The safe probes use the existing legacy React hook-dispatcher/testing seam and injected SDK/provider results. They prove specific local branches, not full rendered-app/network behavior. Existing native UI tests were read, not executed as a complete suite.",
+    "CLI transcript trimming is distinguished from model continuation. No model-context loss follows from the 100-ChatMessage cap alone.",
+    "No full advisory database/lockfile/install graph or measured performance comparison was performed.",
+    "Attach/detach and inference are opt-in backend choices. Module-only reattach ID and unknown passive stream resume are partial capability boundaries, not an allegation that ordinary in-process chat is broken."
+  ],
+  "recommendedPlanWork": [
+    {
+      "priority": "P0",
+      "title": "Close physical artifact-read containment",
+      "findingIds": [
+        "01-F1"
+      ],
+      "acceptance": "Prefix/page/resume reject session/artifact symlink escapes and mandatory sensitive targets; normal local artifacts remain usable."
+    },
+    {
+      "priority": "P0",
+      "title": "Unify prompt admission across CLI entrypoints",
+      "findingIds": [
+        "01-F2",
+        "01-F4"
+      ],
+      "acceptance": "Ordinary input, command arguments, mode input, plan picker, execution action and queue share bisection and attachment-state checks; none silently loses context or admits concurrent bisection mutation."
+    },
+    {
+      "priority": "P1",
+      "title": "Make send acceptance/failure an explicit owned transaction",
+      "findingIds": [
+        "01-F5",
+        "01-F6"
+      ],
+      "acceptance": "Client/validation/preparation failure releases its own occupancy, displays a reason, preserves retriable prompt/context and restores unaccepted queue work without disturbing newer owners."
+    },
+    {
+      "priority": "P1",
+      "title": "Make attach readiness and session selection backend-owned",
+      "findingIds": [
+        "01-F3"
+      ],
+      "acceptance": "Ready serve receives prompt with empty client-local provider config; backend connection/auth/readiness errors are surfaced; decide explicitly whether reattach survives process restart."
+    },
+    {
+      "priority": "P1",
+      "title": "Separate transcript retention from render paging and restore outcome",
+      "findingIds": [
+        "01-F7"
+      ],
+      "acceptance": "Long saved transcript remains browsable under an explicit archive/retention policy; failed selected-session restore has loading/error/retry/cancel without silently presenting a fresh conversation; SDK RunState is independently validated."
+    },
+    {
+      "priority": "P2",
+      "title": "Unify discoverable command metadata and behavioral tests",
+      "findingIds": [
+        "01-F8"
+      ],
+      "acceptance": "Documented plan commands are discoverable with aliases; actual ask-user hook mount/identity/abort/cleanup receives behavioral coverage instead of duplicated helper bodies."
+    },
+    {
+      "priority": "P2",
+      "title": "Keep capability maturity grounded in backend evidence",
+      "findingIds": [],
+      "acceptance": "Rate game presets as prompt scaffolds until real detected build targets/job receipts and error/cancellation states are proven. Resolve snapshot/ACP/headless semantics with their owning shards before marking those flows usable; implementation-language expansion should follow measured subsystem needs."
+    }
+  ],
+  "verification": {
+    "kind": "provider-free safe stub probes",
+    "source": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.test.ts",
+    "log": "/tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.log",
+    "command": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun test --preload ./scripts/preload-opentui.ts --isolate /tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.test.ts",
+    "cwd": "/home/ben/Code/CLI/openbuff/cli",
+    "passed": 9,
+    "failed": 0,
+    "expectCalls": 24,
+    "interpretation": "Passing probes assert observed current defects. They are audit evidence and must not be mistaken for passing desired acceptance tests."
+  }
+}

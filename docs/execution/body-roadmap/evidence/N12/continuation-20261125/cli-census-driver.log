@@ -1,0 +1,9 @@
+(fail) real CLI protocol stdout > index.tsx: JSON errors have no startup diagnostic prefix [1207.95ms]
+(fail) real CLI protocol stdout > binary-entry.ts: JSON errors have no startup diagnostic prefix [1188.75ms]
+(fail) real CLI protocol stdout > index.tsx: JSON errors have no startup diagnostic prefix [1207.95ms]
+(fail) real CLI protocol stdout > binary-entry.ts: JSON errors have no startup diagnostic prefix [1188.75ms]
+ 4880 pass
+ 196 skip
+ 2 fail
+ 22043 expect() calls
+Ran 5078 tests across 312 files. [124.49s]

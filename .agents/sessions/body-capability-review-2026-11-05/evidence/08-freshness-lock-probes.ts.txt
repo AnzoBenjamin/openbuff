@@ -1,0 +1,96 @@
+import * as fs from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import { IndexManager } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager.ts'
+import { reclaimStaleLock } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/index-store.ts'
+
+const evidenceRoot = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixturesRoot = join(evidenceRoot, '08-fixtures')
+fs.mkdirSync(fixturesRoot, { recursive: true })
+const results: Record<string, unknown> = {
+  runtime: { bun: Bun.version, platform: process.platform },
+  snapshotId: 'ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0',
+}
+
+// 1. Even an explicit changed-path hint does not override the stat hash gate.
+{
+  const root = fs.mkdtempSync(join(fixturesRoot, 'same-stat-'))
+  const target = join(root, 'target.md')
+  const fixedTime = new Date('2020-01-01T00:00:00Z')
+  fs.writeFileSync(target, '# Alpha\n\nfirst text\n')
+  fs.utimesSync(target, fixedTime, fixedTime)
+  const manager = IndexManager.getInstance(root)
+  await manager.waitUntilReady(10_000)
+  const before = manager.getSnapshot()!
+  fs.writeFileSync(target, '# Bravo\n\nother text\n')
+  fs.utimesSync(target, fixedTime, fixedTime)
+  const diskHash = createHash('sha256').update(fs.readFileSync(target)).digest('hex')
+  manager.markPathsChanged({ changedPaths: ['target.md'], complete: true, revision: 17 })
+  await manager.waitUntilReady(10_000)
+  const afterHint = manager.getSnapshot()!
+  manager.markStale()
+  await manager.waitUntilReady(10_000)
+  const afterSweep = manager.getSnapshot()!
+  results.sameStatFreshness = {
+    root, oldHash: before.files['target.md'].hash, diskHash,
+    sameSize: before.files['target.md'].size === fs.statSync(target).size,
+    sameMtime: before.files['target.md'].mtime === fs.statSync(target).mtimeMs,
+    hashAfterPreciseHint: afterHint.files['target.md'].hash,
+    hashAfterPathlessSweep: afterSweep.files['target.md'].hash,
+    reportedRevision: afterHint.workspaceRevision,
+    status: manager.getStatus().state,
+    indexedHeadings: afterSweep.files['target.md'].headings,
+  }
+}
+
+// 2. Deterministic cooperative interleaving at the actual reclaim helper's
+// verify -> rename seam. A second actor reclaims OLD and acquires A during that
+// gap. A third actor acquires C after B displaces A and before B restores it.
+// This injects scheduling only; it does not modify the code under review.
+{
+  const root = fs.mkdtempSync(join(fixturesRoot, 'lock-reclaim-'))
+  const lockPath = join(root, '.openbuff-index.lock')
+  const oldToken = '424242:old-dead-owner\n1\n'
+  const activeToken = `${process.pid}:actor-A-live\n${Date.now()}\n`
+  const thirdToken = `${process.pid}:actor-C-live\n${Date.now()}\n`
+  fs.writeFileSync(lockPath, oldToken)
+  const originalRename = fs.promises.rename
+  const originalLink = fs.promises.link
+  let activeOwnerDisplaced = false
+  let thirdOwnerAcquiredWhileAIsActive = false
+  fs.promises.rename = (async (from, to) => {
+    if (String(from) === lockPath && String(to).includes('.reclaim.')) {
+      // Actor A won the preceding reclaim and entered its critical section.
+      fs.unlinkSync(lockPath)
+      fs.writeFileSync(lockPath, activeToken, { flag: 'wx' })
+      await originalRename(from, to)
+      activeOwnerDisplaced = fs.readFileSync(String(to), 'utf8') === activeToken
+      return
+    }
+    return originalRename(from, to)
+  }) as typeof fs.promises.rename
+  fs.promises.link = (async (from, to) => {
+    if (String(to) === lockPath) {
+      // Actor C's normal exclusive-create succeeds while A still owns effects.
+      fs.writeFileSync(lockPath, thirdToken, { flag: 'wx' })
+      thirdOwnerAcquiredWhileAIsActive = true
+    }
+    return originalLink(from, to)
+  }) as typeof fs.promises.link
+  let reclaimReturned: boolean
+  try {
+    reclaimReturned = await reclaimStaleLock(lockPath, oldToken)
+  } finally {
+    fs.promises.rename = originalRename
+    fs.promises.link = originalLink
+  }
+  const scratch = fs.readdirSync(root).find((name) => name.includes('.reclaim.'))
+  results.lockReclaim = {
+    root, reclaimReturned, activeOwnerDisplaced, thirdOwnerAcquiredWhileAIsActive,
+    namespaceOwner: fs.readFileSync(lockPath, 'utf8').split('\n')[0],
+    retainedScratchOwner: scratch ? fs.readFileSync(join(root, scratch), 'utf8').split('\n')[0] : null,
+  }
+}
+
+fs.writeFileSync(join(evidenceRoot, '08-freshness-lock-probes.json'), JSON.stringify(results, null, 2) + '\n')
+console.log(JSON.stringify(results, null, 2))

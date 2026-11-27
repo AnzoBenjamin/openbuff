@@ -12,5 +12,6 @@
       "@codebuff/agent-runtime/*": ["../packages/agent-runtime/src/*"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx"]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["sessions/**"]
 }

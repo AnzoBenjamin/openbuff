@@ -1,0 +1,34 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { auditDomains, inspectCodebaseStructure, inspectFeatureCompleteness, promoteFeatureEvidence, evaluateAuditCoverage } from '/home/ben/Code/CLI/openbuff/sdk/src/services/audit-intelligence.ts'
+
+const root = fs.mkdtempSync('/tmp/openbuff-unwired-feature-')
+for (const directory of ['cli/commands', 'sdk/src/__tests__']) fs.mkdirSync(path.join(root, directory), { recursive: true })
+// These files have matching words and are intentionally not connected by calls.
+fs.writeFileSync(path.join(root, 'cli/commands/resume-plan.ts'), 'export function resumePlan() { return "error: not implemented" }\n')
+fs.writeFileSync(path.join(root, 'sdk/src/__tests__/resume-plan.test.ts'), 'test("resume plan", () => {})\n')
+fs.writeFileSync(path.join(root, 'README.md'), '# Resume plan\nThe resume plan command will be implemented later.\n')
+const inventory = inspectCodebaseStructure(root)
+const heuristic = inspectFeatureCompleteness(root, 'resume plan', inventory)
+const attestedFiles = [...new Set(Object.values(heuristic.evidence).flat())]
+for (const file of attestedFiles) fs.readFileSync(path.join(root, file), 'utf8')
+const promotion = promoteFeatureEvidence(heuristic, inventory, attestedFiles)
+const structuralReceipt = {
+  schemaVersion: 1 as const,
+  snapshotId: inventory.snapshotId,
+  shardId: 'probe',
+  subsystemIds: inventory.subsystems.map(x => x.id),
+  files: inventory.files,
+  domains: [...auditDomains],
+}
+const coverage = evaluateAuditCoverage({ inventory, structuralReceipts: [structuralReceipt], featureRecords: [promotion.record] })
+const output = {
+  fixtureRoot: root,
+  fixtureHasRealWiring: false,
+  heuristic,
+  promoted: { verified: promotion.verified, status: promotion.record.status },
+  gate: coverage,
+  interpretation: 'The native helpers prove file-category attestation, not executable feature completeness. A green coverage result can coexist with an intentionally unimplemented feature.'
+}
+fs.writeFileSync('/tmp/openbuff-body-review-2026-11-05/evidence/completeness-probe.json', JSON.stringify(output, null, 2) + '\n')
+console.log(JSON.stringify({ heuristicStatus: heuristic.status, promoted: output.promoted, coverageComplete: coverage.complete, fixtureRoot: root, fixtureHasRealWiring: false }, null, 2))

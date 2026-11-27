@@ -38,7 +38,7 @@ async function triggerWorkflow(token: string, branch: string) {
       -H "Accept: application/vnd.github.v3+json" \
       -H "Authorization: token ${token}" \
       -H "Content-Type: application/json" \
-      https://api.github.com/repos/CodebuffAI/codebuff/actions/workflows/buffbench.yml/dispatches \
+      https://api.github.com/repos/AnzoBenjamin/openbuff/actions/workflows/buffbench.yml/dispatches \
       -d '{"ref":"${branch}"}'`
 
     const response = execSync(triggerCmd, { encoding: 'utf8' })
@@ -46,7 +46,7 @@ async function triggerWorkflow(token: string, branch: string) {
     if (response.includes('workflow_dispatch')) {
       log(`⚠️  Workflow dispatch failed: ${response}`)
       log(
-        'Please manually trigger the workflow at: https://github.com/CodebuffAI/codebuff/actions/workflows/buffbench.yml',
+        'Please manually trigger the workflow at: https://github.com/AnzoBenjamin/openbuff/actions/workflows/buffbench.yml',
       )
     } else {
       log('🎉 BuffBench workflow triggered!')
@@ -54,7 +54,7 @@ async function triggerWorkflow(token: string, branch: string) {
   } catch (err: any) {
     log(`⚠️  Failed to trigger workflow automatically: ${err.message}`)
     log(
-      'You may need to trigger it manually at: https://github.com/CodebuffAI/codebuff/actions/workflows/buffbench.yml',
+      'You may need to trigger it manually at: https://github.com/AnzoBenjamin/openbuff/actions/workflows/buffbench.yml',
     )
   }
 }
@@ -73,7 +73,7 @@ async function main() {
 
   log('')
   log(
-    'Monitor progress at: https://github.com/CodebuffAI/codebuff/actions/workflows/buffbench.yml',
+    'Monitor progress at: https://github.com/AnzoBenjamin/openbuff/actions/workflows/buffbench.yml',
   )
 }
 

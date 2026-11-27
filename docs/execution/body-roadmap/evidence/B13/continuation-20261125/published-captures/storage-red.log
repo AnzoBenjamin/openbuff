@@ -1,0 +1,83 @@
+bun test v1.4.4 (38afee6c8)
+
+src/services/memory-v2/__tests__/b13-archive-originals.test.ts:
+34 |   it('persists 30 distinct originals, reopens, and pages the exact hash and tail', async () => {
+35 |     const now = Date.now(), { root, repository } = await open()
+36 |     const request = archive('source-run', now, 30)
+37 |     const saved = await repository.persistContextArchiveSnapshots(request)
+38 |     expect(saved.status).toBe('ok')
+39 |     expect(saved.retention?.retainedBodies).toBe(30)
+                                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 30
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/cli/src/services/memory-v2/__tests__/b13-archive-originals.test.ts:39:45)
+(fail) B13 normalized original archive policy > persists 30 distinct originals, reopens, and pages the exact hash and tail [31.71ms]
+61 |   it('discloses quota cutoff and an old envelope cannot resurrect a removed original', async () => {
+62 |     const now = Date.now(), { repository } = await open({ contextArchiveRetention: { mode: 'rolling', maxBytes: 100_000 } })
+63 |     const first = archive('old', now, 1), second = archive('new', now + 1, 1)
+64 |     expect((await repository.persistContextArchiveSnapshots(first)).status).toBe('ok')
+65 |     const saved = await repository.persistContextArchiveSnapshots(second)
+66 |     expect(saved.retention?.status).toBe('cutoff')
+                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "cutoff"
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/cli/src/services/memory-v2/__tests__/b13-archive-originals.test.ts:66:37)
+(fail) B13 normalized original archive policy > discloses quota cutoff and an old envelope cannot resurrect a removed original [6.35ms]
+74 |     let now = Date.now()
+75 |     const { repository } = await open({ contextArchiveRetention: { mode: 'rolling', ttlMs: 100, maxBytes: 100_000 }, contextArchiveNow: () => now })
+76 |     const request = archive('current', now)
+77 |     expect((await repository.persistContextArchiveSnapshots(request)).status).toBe('ok')
+78 |     now += 200
+79 |     expect((await repository.loadContextArchiveSnapshots({ runId: 'current' })).snapshots).toEqual([])
+                                                                                                ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "action": "tool_result_eviction",
++     "archivedAt": 1795628725155,
++     "keepRecentSteps": 0,
++     "messages": [
++       {
++         "content": [
++           {
++             "type": "json",
++             "value": 
++ "RESULT-000
++ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx... (32548 bytes truncated) ...xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
++ TAIL-000"
++ ,
++           },
++         ],
++         "role": "tool",
++         "toolCallId": "result-0",
++         "toolName": "read_files",
++       },
++     ],
++     "reason": "deterministic tool-result eviction (stale recency)",
++     "runId": "current",
++     "snapshotId": "c31e1d06154534d96ccf2479bab124bfa6f7caff5e9457c93c5d392f859b349c",
++     "stepBase": undefined,
++     "steps": [
++       0,
++     ],
++   },
++ ]
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/cli/src/services/memory-v2/__tests__/b13-archive-originals.test.ts:79:92)
+(fail) B13 normalized original archive policy > expiry includes the current run and protected overflow refuses atomically [9.81ms]
+
+ 0 pass
+ 3 fail
+ 9 expect() calls
+Ran 3 tests across 1 file. [546.00ms]

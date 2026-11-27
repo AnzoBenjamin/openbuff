@@ -1,0 +1,1590 @@
+{
+  "shardId": "04-memory",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "04-memory",
+    "subsystemIds": [
+      ".github",
+      "agents",
+      "cli",
+      "common",
+      "docs",
+      "evals",
+      "packages",
+      "sdk"
+    ],
+    "files": [
+      ".github/workflows/ci.yml",
+      "agents/base2/base-deep.ts",
+      "agents/context-pruner.ts",
+      "cli/package.json",
+      "cli/src/commands/memory-command.ts",
+      "cli/src/hooks/use-send-message.ts",
+      "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+      "cli/src/services/memory-v2/__tests__/two-session-cold-start.test.ts",
+      "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "cli/src/services/memory-v2/concept-index.ts",
+      "cli/src/services/memory-v2/context-archive-sync.ts",
+      "cli/src/services/memory-v2/playbook-lifecycle.ts",
+      "cli/src/services/memory-v2/playbook-proposal.ts",
+      "cli/src/services/memory-v2/provider.ts",
+      "cli/src/services/memory-v2/usefulness-scorer.ts",
+      "cli/src/utils/codebuff-client.ts",
+      "cli/src/utils/env.ts",
+      "cli/src/utils/run-state-storage.ts",
+      "common/src/types/memory-playbook.ts",
+      "common/src/types/memory-v2.ts",
+      "common/src/types/session-state.ts",
+      "common/src/util/memory-artifact-policy.ts",
+      "common/src/util/usefulness-scorer.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/memory-v1-removal-readiness.md",
+      "docs/testing.md",
+      "evals/compaction-retention/scenario.test.ts",
+      "evals/memory-retention/scenario.test.ts",
+      "evals/package.json",
+      "packages/agent-runtime/package.json",
+      "packages/agent-runtime/src/memory/playbook-context.test.ts",
+      "packages/agent-runtime/src/memory/playbook-context.ts",
+      "packages/agent-runtime/src/memory/playbook-gate.ts",
+      "packages/agent-runtime/src/run-agent-step.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/query-index.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts",
+      "packages/agent-runtime/src/tools/tool-executor.ts",
+      "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+      "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+      "packages/agent-runtime/src/util/archive-recall-index.ts",
+      "packages/agent-runtime/src/util/context-archive.ts",
+      "packages/agent-runtime/src/util/context-consolidation-runner.ts",
+      "packages/agent-runtime/src/util/context-consolidation.ts",
+      "packages/agent-runtime/src/util/context-pruning.ts",
+      "packages/agent-runtime/src/util/memory-v2-context.ts",
+      "packages/agent-runtime/src/util/runtime-semantic-compaction.ts",
+      "packages/agent-runtime/src/util/task-memory.ts",
+      "packages/agent-runtime/src/util/tool-result-eviction.ts",
+      "sdk/package.json",
+      "sdk/src/run-state.ts",
+      "sdk/src/run.ts",
+      "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+      "sdk/src/services/memory-v2/__tests__/usage-observer.test.ts",
+      "sdk/src/services/memory-v2/coordinator.ts",
+      "sdk/src/services/memory-v2/event-factory.ts",
+      "sdk/src/services/memory-v2/types.ts",
+      "sdk/src/services/memory-v2/usage-observer.ts",
+      "sdk/src/services/task-memory-store.ts",
+      "sdk/src/skills/load-skills.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "from": 67,
+      "to": 100
+    },
+    {
+      "path": "agents/base2/base-deep.ts",
+      "from": 269,
+      "to": 305
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 1,
+      "to": 128
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 939,
+      "to": 1048
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 1610,
+      "to": 1740
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 2233,
+      "to": 2325
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 2656,
+      "to": 2698
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 3168,
+      "to": 3234
+    },
+    {
+      "path": "agents/context-pruner.ts",
+      "from": 3300,
+      "to": 3349
+    },
+    {
+      "path": "cli/package.json",
+      "from": 1,
+      "to": 64
+    },
+    {
+      "path": "cli/src/commands/memory-command.ts",
+      "from": 1583,
+      "to": 1712
+    },
+    {
+      "path": "cli/src/commands/memory-command.ts",
+      "from": 1879,
+      "to": 1910
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 216,
+      "to": 315
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+      "from": 192,
+      "to": 369
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/two-session-cold-start.test.ts",
+      "from": 1,
+      "to": 382
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1,
+      "to": 140
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 615,
+      "to": 810
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1262,
+      "to": 1585
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1590,
+      "to": 1857
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1897,
+      "to": 1927
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 3510,
+      "to": 3635
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 4664,
+      "to": 5645
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 5648,
+      "to": 5850
+    },
+    {
+      "path": "cli/src/services/memory-v2/concept-index.ts",
+      "from": 1,
+      "to": 60
+    },
+    {
+      "path": "cli/src/services/memory-v2/concept-index.ts",
+      "from": 197,
+      "to": 447
+    },
+    {
+      "path": "cli/src/services/memory-v2/context-archive-sync.ts",
+      "from": 1,
+      "to": 344
+    },
+    {
+      "path": "cli/src/services/memory-v2/playbook-lifecycle.ts",
+      "from": 1,
+      "to": 191
+    },
+    {
+      "path": "cli/src/services/memory-v2/playbook-proposal.ts",
+      "from": 1,
+      "to": 101
+    },
+    {
+      "path": "cli/src/services/memory-v2/provider.ts",
+      "from": 1,
+      "to": 337
+    },
+    {
+      "path": "cli/src/services/memory-v2/usefulness-scorer.ts",
+      "from": 1,
+      "to": 1
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 1,
+      "to": 240
+    },
+    {
+      "path": "cli/src/utils/env.ts",
+      "from": 1,
+      "to": 131
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 720,
+      "to": 838
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 880,
+      "to": 927
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 1002,
+      "to": 1041
+    },
+    {
+      "path": "common/src/types/memory-playbook.ts",
+      "from": 1,
+      "to": 164
+    },
+    {
+      "path": "common/src/types/memory-v2.ts",
+      "from": 1430,
+      "to": 1490
+    },
+    {
+      "path": "common/src/types/session-state.ts",
+      "from": 706,
+      "to": 748
+    },
+    {
+      "path": "common/src/util/memory-artifact-policy.ts",
+      "from": 1,
+      "to": 277
+    },
+    {
+      "path": "common/src/util/usefulness-scorer.ts",
+      "from": 1,
+      "to": 88
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1625,
+      "to": 1833
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 1,
+      "to": 265
+    },
+    {
+      "path": "docs/memory-v1-removal-readiness.md",
+      "from": 1,
+      "to": 240
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 156
+    },
+    {
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "from": 300,
+      "to": 370
+    },
+    {
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "from": 497,
+      "to": 560
+    },
+    {
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "from": 1058,
+      "to": 1156
+    },
+    {
+      "path": "evals/memory-retention/scenario.test.ts",
+      "from": 373,
+      "to": 560
+    },
+    {
+      "path": "evals/package.json",
+      "from": 1,
+      "to": 55
+    },
+    {
+      "path": "packages/agent-runtime/package.json",
+      "from": 1,
+      "to": 42
+    },
+    {
+      "path": "packages/agent-runtime/src/memory/playbook-context.test.ts",
+      "from": 61,
+      "to": 92
+    },
+    {
+      "path": "packages/agent-runtime/src/memory/playbook-context.ts",
+      "from": 1,
+      "to": 191
+    },
+    {
+      "path": "packages/agent-runtime/src/memory/playbook-gate.ts",
+      "from": 1,
+      "to": 332
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1098,
+      "to": 1209
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2507,
+      "to": 2712
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2730,
+      "to": 3202
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/query-index.ts",
+      "from": 72,
+      "to": 133
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+      "from": 1,
+      "to": 91
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts",
+      "from": 1,
+      "to": 260
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 3090,
+      "to": 3189
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+      "from": 196,
+      "to": 261
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+      "from": 491,
+      "to": 556
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+      "from": 141,
+      "to": 197
+    },
+    {
+      "path": "packages/agent-runtime/src/util/archive-recall-index.ts",
+      "from": 40,
+      "to": 110
+    },
+    {
+      "path": "packages/agent-runtime/src/util/archive-recall-index.ts",
+      "from": 175,
+      "to": 311
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-archive.ts",
+      "from": 1,
+      "to": 556
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-consolidation-runner.ts",
+      "from": 1,
+      "to": 151
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-consolidation.ts",
+      "from": 1,
+      "to": 187
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-pruning.ts",
+      "from": 127,
+      "to": 322
+    },
+    {
+      "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+      "from": 1,
+      "to": 399
+    },
+    {
+      "path": "packages/agent-runtime/src/util/runtime-semantic-compaction.ts",
+      "from": 1,
+      "to": 228
+    },
+    {
+      "path": "packages/agent-runtime/src/util/task-memory.ts",
+      "from": 340,
+      "to": 405
+    },
+    {
+      "path": "packages/agent-runtime/src/util/task-memory.ts",
+      "from": 880,
+      "to": 1261
+    },
+    {
+      "path": "packages/agent-runtime/src/util/tool-result-eviction.ts",
+      "from": 1,
+      "to": 450
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "sdk/src/run-state.ts",
+      "from": 790,
+      "to": 862
+    },
+    {
+      "path": "sdk/src/run-state.ts",
+      "from": 967,
+      "to": 1047
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 662,
+      "to": 709
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1254,
+      "to": 1285
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1378,
+      "to": 1396
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1542,
+      "to": 1587
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1888,
+      "to": 1965
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+      "from": 1,
+      "to": 92
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+      "from": 960,
+      "to": 1030
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+      "from": 1927,
+      "to": 1983
+    },
+    {
+      "path": "sdk/src/services/memory-v2/__tests__/usage-observer.test.ts",
+      "from": 1,
+      "to": 162
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 1,
+      "to": 177
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 277,
+      "to": 328
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 560,
+      "to": 1883
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 1930,
+      "to": 2165
+    },
+    {
+      "path": "sdk/src/services/memory-v2/event-factory.ts",
+      "from": 1,
+      "to": 89
+    },
+    {
+      "path": "sdk/src/services/memory-v2/types.ts",
+      "from": 1,
+      "to": 87
+    },
+    {
+      "path": "sdk/src/services/memory-v2/types.ts",
+      "from": 257,
+      "to": 313
+    },
+    {
+      "path": "sdk/src/services/memory-v2/usage-observer.ts",
+      "from": 1,
+      "to": 170
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 1,
+      "to": 235
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 251,
+      "to": 370
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 390,
+      "to": 496
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 542,
+      "to": 702
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 738,
+      "to": 838
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 868,
+      "to": 890
+    },
+    {
+      "path": "sdk/src/skills/load-skills.ts",
+      "from": 1,
+      "to": 152
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 811,
+      "to": 854
+    }
+  ],
+  "inspectionMethod": "Picker-selected exact sections plus hypothesis-directed adjacent source reads. Native audit/query_index tools are unavailable; used bounded rg and numbered filesystem reads. No source edits, credentials/private memory/logs, external requests, provider/model calls, or broad green-suite reruns.",
+  "capabilities": [
+    {
+      "id": "context-compaction",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2737,
+          "detail": "Model-aware governor paces passes and emergency override."
+        },
+        {
+          "path": "agents/context-pruner.ts",
+          "line": 3311,
+          "detail": "The shipped programmatic pruner yields bounded set_messages/task-memory DTOs with expected revision."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3109,
+          "detail": "Mechanical fallback reserves non-history message tokens and reports fit/shortfall."
+        }
+      ],
+      "trace": {
+        "entrypoint": "loopAgentSteps and manual /compact",
+        "implementation": "context-pruning.ts; agents/context-pruner.ts; runtime-semantic-compaction.ts",
+        "consumer": "provider-request message rebuild in run-agent-step.ts:2998 and :3143",
+        "tests": "evals/compaction-retention/scenario.test.ts:333,503,1058; these drive the actual generator, not a model or tool-dispatch transaction",
+        "docs": "docs/agents-and-tools.md:1647,1776,1827",
+        "states": {
+          "failure": "Pruner failures log; mechanical trim remains the fallback and exposes shortfall/recovery.",
+          "loading": "Correlated run-scoped started/progress/result events are emitted.",
+          "empty": "No substantive state results in empty/limited summaries rather than fabricated facts.",
+          "cancellation": "Shared run cancellation is forwarded; checkpoints are scheduled through the CLI. Actual killed-run resumption is not exercised here.",
+          "retry": "Governor/cooldown/no-progress pacing; archives are captured before rewrites.",
+          "permission": "Runtime prompt-only semantic path checks spawnableAgents; custom history editors must opt into full history/writeback."
+        }
+      },
+      "strengths": [
+        "Protected blocker/review/next-action state; structured revision CAS; fresh read authorization revoked after history rewrite.",
+        "The default pruner is a programmatic extractor with set_messages yields, not evidence of an extra LLM summarization call."
+      ],
+      "gaps": [
+        "Usable means bounded operational-context reduction, not lossless transcript retention. Recall selection is broken by 04-F4.",
+        "Manual /compact's direct replacement path is not observed calling archivePreCompaction; retain a recoverability acceptance probe.",
+        "Semantic extraction is bounded and text/receipt-based; repeated-generator tests do not establish end-to-end model success."
+      ]
+    },
+    {
+      "id": "archive-recall",
+      "maturity": "partial",
+      "assurance": "integration",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/util/context-archive.ts",
+          "line": 23,
+          "detail": "Separate 8 semantic/mechanical and 16 eviction snapshot caps; 200 messages; text caps 4k/64k per part."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+          "line": 45,
+          "detail": "Runtime ID/text recall consumer."
+        },
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 823,
+          "detail": "Sanitized archive flush is wired to actual chat persistence."
+        },
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 246,
+          "detail": "Durable merge at restored chat seam has object identity guards."
+        }
+      ],
+      "trace": {
+        "entrypoint": "recall_context; CLI chat save/restore/checkpoint",
+        "implementation": "context-archive.ts; archive-recall-index.ts; context-archive-sync.ts; SQLite archive side tables",
+        "consumer": "AgentState.compactionArchive -> recall_context output",
+        "tests": "context-archive.test.ts:210,510; context-archive-sync.test.ts:192; disposable evictor/SQLite three-compaction/reopen fixture",
+        "docs": "docs/agents-and-tools.md:1625",
+        "states": {
+          "failure": "Optional methods narrow/bind; failures fail open to scanner/empty or log. SQLite archive empty outcomes collapse some storage failures into empty.",
+          "loading": "CLI hydration is asynchronous and guarded against replacing a newer run.",
+          "empty": "Tool reports healthy-empty versus index fallback distinctly.",
+          "cancellation": "Read is local; archive flush remains best effort and is not a durable acknowledged run checkpoint.",
+          "retry": "Per-run transactional replace is idempotent; no awaited archive flush retry guarantee.",
+          "permission": "Archive flush uses sanitized chat state; recalled material is stale evidence and does not grant edit authority."
+        }
+      },
+      "strengths": [
+        "Full pre-tombstone copies are kept independently from semantic snapshots and retain call/step provenance.",
+        "Actual SQLite close/reopen preserves stored archive bodies; shallow array restore retains archive fields."
+      ],
+      "gaps": [
+        "04-F4 defeats exact-ID retrieval after later snapshots.",
+        "Runtime recall only sees the hydrated capped array; optional durable searchContextArchive has no consumer here. Fresh SDK hosts must preserve RunState/archive themselves or supply another roundtrip.",
+        "64k bodies and 200 messages are bounded copies, not immutable full artifacts with range reads. Per-part/media copying lacks an aggregate-byte policy; large archive scaling was not measured."
+      ]
+    },
+    {
+      "id": "persisted-task-memory-v1",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "evidence": [
+        {
+          "path": "sdk/src/run-state.ts",
+          "line": 830,
+          "detail": "Fresh SDK state loads checksum-validated V1 through injected fs and reconciles evidence."
+        },
+        {
+          "path": "sdk/src/services/task-memory-store.ts",
+          "line": 542,
+          "detail": "Merged save uses a serialized lock and fresh persisted merge base."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1906,
+          "detail": "Terminal consumer persists committed task memory even on error/cancel output."
+        }
+      ],
+      "trace": {
+        "entrypoint": "initial session creation and run terminal persistence",
+        "implementation": "task-memory-store.ts; task-memory.ts",
+        "consumer": "compileTaskMemoryContext -> protected task-memory message when no correlated V2 result",
+        "tests": "task-memory-store tests are adjacent; selected source traces locking/reconciliation/compiler; no separate green suite rerun",
+        "docs": "docs/agents-and-tools.md:1776; docs/memory-v1-removal-readiness.md:26",
+        "states": {
+          "failure": "Non-valid load collapses to no record for compatibility; inspection distinguishes invalid/unreadable/absent.",
+          "loading": "Hash reconciliation is batched and streams large files using bounded buffers.",
+          "empty": "Absent memory starts fresh and can be populated.",
+          "cancellation": "Committed terminal memory is merged for cancelled/error runs; killed-before-terminal durability is not established.",
+          "retry": "Exclusive-create lock contention has a bounded wait; checksum/revision recomputed on atomic write.",
+          "permission": "Owner-only writes, project-relative evidence containment, explicit atomic-create fs capability."
+        }
+      },
+      "strengths": [
+        "Copy-on-write revision/checksum commits, bounded relevance compilation and versioned hash migration are substantial existing machinery.",
+        "Compatibility/removal documentation does not falsely waive lossy V1 migration or claim removal readiness."
+      ],
+      "gaps": [
+        "V1 is a bounded pointer/operational ledger, not general learned truth; in-session entries require live verification before mutation.",
+        "A correlated empty V2 query suppresses it (04-F2); degraded V2 reinjects it contrary to authority metadata (04-F9).",
+        "Cross-session prose list merges can accumulate unrelated constraints; no task-outcome promotion envelope is proven."
+      ]
+    },
+    {
+      "id": "memory-v2-roundtrip",
+      "maturity": "partial",
+      "assurance": "integration",
+      "evidence": [
+        {
+          "path": "cli/src/utils/env.ts",
+          "line": 100,
+          "detail": "Current CLI default is sqlite-v2-opt-in, despite the historical opt-in label."
+        },
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 53,
+          "detail": "Provider bundle becomes actual SDK memoryV2 config with safe capture."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1263,
+          "detail": "Run prepares V2 before dispatch."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1556,
+          "detail": "Native tool output capture is wired into real SDK dispatch."
+        }
+      ],
+      "trace": {
+        "entrypoint": "CLI memory provider -> SDK config and optional external MemoryRepositoryV2",
+        "implementation": "coordinator staged preparation/capture/finish + SQLite canonical events",
+        "consumer": "run-agent-step.ts:2555 protected correlated memory message; recordToolObservation and finishTurn",
+        "tests": "coordinator unit stubs + selected SQLite store tests + disposable coordinator/real SQLite cold-start and replay fixture",
+        "docs": "docs/agents-and-tools.md:1776; current SDK MemoryV2ClientConfig contract",
+        "states": {
+          "failure": "Schema/project/query correlation, authority metadata, staged readiness and degradation protect against malformed result installation.",
+          "loading": "Repository query is awaited before dispatch; SDK races against run abort.",
+          "empty": "A valid empty query installs a correlated context and reports none degradation, masking V1.",
+          "cancellation": "Preparation generation/signal fencing prevents late staged installation; terminal decision can be parked.",
+          "retry": "CAS conflicts export a bounded canonical tail and retry twice; invalid terminal ID collision never becomes retryable.",
+          "permission": "Safe capture excludes custom/overridden/MCP outputs; paths filtered; explicit decision prose remains untrusted."
+        }
+      },
+      "strengths": [
+        "Validated/correlated DTO boundary and repository project binding prevent cross-project injection.",
+        "Native capture/canonical events are genuinely wired; this is not just a named storage scaffold."
+      ],
+      "gaps": [
+        "04-F1 prevents terminal/replay completion; 04-F2 prevents ordinary next-task retrieval; 04-F3 omits explicit decision meaning.",
+        "Fresh Node SDK clients have a repository interface but no default Bun SQLite composition, while CLI attaches through a separate backend branch.",
+        "Current-turn capture does not refresh the pre-turn memoryV2Context during later model steps."
+      ]
+    },
+    {
+      "id": "memory-retention-and-relevance",
+      "maturity": "partial",
+      "assurance": "integration",
+      "evidence": [
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 118,
+          "detail": "Lexical replay admits at most 10k events / 8 MiB payload."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 5107,
+          "detail": "Freshness/tier/usefulness/relevance candidate ordering."
+        },
+        {
+          "path": "cli/src/services/memory-v2/provider.ts",
+          "line": 83,
+          "detail": "Semantic embedding expander requires configured semantic indexing and honors parent indexing disabled."
+        },
+        {
+          "path": "cli/src/services/memory-v2/concept-index.ts",
+          "line": 415,
+          "detail": "Expansion is timeout bounded and closes its SQLite handle; abandoned writes are signal-fenced."
+        }
+      ],
+      "trace": {
+        "entrypoint": "repository.query plus configured recallExpander",
+        "implementation": "bounded event replay/ranking; concept vectors; memory-v2-context compiler",
+        "consumer": "the actual per-step prompt compiled in run-agent-step.ts:2559",
+        "tests": "two-session-cold-start.test.ts:119; memory-retention S6:373 is a hand-built DTO/read-count simulation; compiler fixture",
+        "docs": "docs/agents-and-tools.md:1776; memory-retention scenario's explicit modelCalls=0",
+        "states": {
+          "failure": "Semantic/cache/vector errors degrade to lexical prefix; resource budgets expose degradation.",
+          "loading": "Optional expansion pays an embedding query per recall and at most 32 new embedded texts by default.",
+          "empty": "No semantic model/config leaves expansion absent; no match leaves empty categories.",
+          "cancellation": "Timeout fences cache writes but embed API cancellation is not passed by this function's contract.",
+          "retry": "Invalid vectors are treated as cache misses; no held-out optimization loop.",
+          "permission": "Memory text is XML-escaped and framed as untrusted evidence; semantic matches never become verified solely by similarity."
+        }
+      },
+      "strengths": [
+        "Independent freshness categories and digest/workspace equality are more honest than unconditional reuse.",
+        "Configured embedding and lexical fallback are composed without imposing a second runtime or backend."
+      ],
+      "gaps": [
+        "04-F5 destroys repository ordering at the final consumer; 04-F7 corrupts attribution.",
+        "ASCII-oriented lexical tokens and fixed source-path strings are broad but do not prove semantic cross-language contract recall.",
+        "Concept corpus is first 256 active observation IDs, with bounded new embedding admission; ranking quality and scale are unmeasured."
+      ]
+    },
+    {
+      "id": "procedural-learning-feedback",
+      "maturity": "partial",
+      "assurance": "integration",
+      "evidence": [
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1289,
+          "detail": "Active playbooks are seeded/loaded from the configured workspace."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+          "line": 3103,
+          "detail": "Actual tool dispatch consumes deterministic playbook gate."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1942,
+          "detail": "Outcome reporter persists counters through an optional bound repository member."
+        },
+        {
+          "path": "agents/base2/base-deep.ts",
+          "line": 277,
+          "detail": "Lessons/skill editing is an instructed model workflow."
+        },
+        {
+          "path": "sdk/src/run-state.ts",
+          "line": 798,
+          "detail": "Skills are rediscovered on fresh SDK sessions."
+        }
+      ],
+      "trace": {
+        "entrypoint": "/memory playbooks/propose --apply; SDK usage and gate outcomes; base-deep lesson phase",
+        "implementation": "playbook proposal/lifecycle/status/counters; usefulness scorer; usage-observer; model-authored LESSONS/SKILL files",
+        "consumer": "active instruction band + tool gate + retrieval ordering on future query; startup skill catalog",
+        "tests": "playbook lifecycle/context/gate tests are source-reviewed; fixture exercises real counter/status/load roundtrip and correlation",
+        "docs": "docs/agents-and-tools.md; programmatic lessons instructions; public memory-playbook types",
+        "states": {
+          "failure": "Load failure installs an empty rule set; reporter never aborts the tool; gate internal failure is fail open.",
+          "loading": "Playbooks load once per prepared turn; counters persist best effort.",
+          "empty": "No playbooks => no band/verdict; no receipt => no usage draft.",
+          "cancellation": "Local counter report is fire-and-forget; usage is advisory and dropped on failed terminal append.",
+          "retry": "Operator proposal/apply previews and bounded lifecycle batches; required tool evidence can be satisfied and gated action retried.",
+          "permission": "Default gate warns; global block mode is opt-in and a rule cannot escalate it. Operator authoring owns enforcement/status/provenance."
+        }
+      },
+      "strengths": [
+        "Procedures have real dispatch consumers, preserved identity/counters and explicit warn/block downgrade policy.",
+        "Skills can carry reusable project knowledge across sessions; persisted prose should not be mistaken for a model-training update."
+      ],
+      "gaps": [
+        "04-F6 removes verified rules; 04-F8 ignores applicability; 04-F7 feedback is not trustworthy outcome evidence.",
+        "New proposals are active/inject-only, but gate skips inject-only rows, so no natural firing producer supports the lifecycle's 8-fire promotion threshold; current lifecycle tests seed counters manually.",
+        "Only toolSucceeded evidence is implemented; other evidence kinds explicitly fail unsatisfied.",
+        "No reviewed closed loop proves held-out task improvement, automatic safe policy promotion or model routing gains. Heuristic ranking changes are present but blocked by retrieval/terminal wiring defects."
+      ]
+    },
+    {
+      "id": "bounded-consolidation",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2953,
+          "detail": "Actual loop calls canary-gated background consolidator."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/context-consolidation-runner.ts",
+          "line": 83,
+          "detail": "Off unless backgroundSnapshotConsolidation is explicitly enabled."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/context-consolidation-runner.ts",
+          "line": 107,
+          "detail": "Prompt-only synthetic child has no tools/history writeback; summary is recorded on parent."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+          "line": 68,
+          "detail": "Bounded consolidation hits are additive to verbatim results."
+        }
+      ],
+      "trace": {
+        "entrypoint": "explicit agent template canary",
+        "implementation": "context-consolidation-runner.ts + context-consolidation.ts",
+        "consumer": "AgentState.contextConsolidations -> recall_context additive section",
+        "tests": "Only source/static trace here; no LLM canary call was made",
+        "docs": "docs/agents-and-tools.md:1657",
+        "states": {
+          "failure": "Failures log/drop; original archive stays available.",
+          "loading": "In-process WeakSet permits one child per parent state and does not await it.",
+          "empty": "No snapshots/off canary => no work; empty summary is ignored.",
+          "cancellation": "Child uses shared execution context; late parent-summary mutation and process restart were not live-tested.",
+          "retry": "Not-yet-covered snapshots can be selected again after failure; successful coverage is stamped by archivedAt.",
+          "permission": "Synthetic infrastructure child intentionally bypasses spawn declarations but has no tools."
+        }
+      },
+      "strengths": [
+        "Summary is explicitly separate from verbatim evidence and carries snapshot provenance; storage is 8x6k bounded."
+      ],
+      "gaps": [
+        "Optional/off-by-default is not a default learning capability.",
+        "A >24k single tool line is skipped by prompt budgeting while the resulting coverage metadata still counts all source snapshots/messages, so summary coverage needs an honest partial-work receipt.",
+        "No held-out recall improvement or live cancellation/restart assurance."
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "04-F1",
+      "title": "Terminal task transitions reuse the start event identity and permanently park V2 turns",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1130,
+          "detail": "The created->active task.transitioned event uses sourceIndex:1."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 2145,
+          "detail": "The active->terminal task.transitioned event also uses sourceIndex:1 with the same project/session/user-input identity."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/event-factory.ts",
+          "line": 27,
+          "detail": "Identity hashes project, session, user input, call ID, event type and source index; it excludes time and payload."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 821,
+          "detail": "The store correctly rejects an existing ID whose contents are not an idempotent match."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1972,
+          "detail": "Terminal state is marked finishing before append and stays parked on rejection."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 957,
+          "detail": "Preparation replays a parked terminal before any new retrieval; rejection degrades the turn and returns."
+        }
+      ],
+      "trigger": "An ordinary configured V2 turn reaches finishTurn after its startup lifecycle batch committed. The same identity collision occurs for completed, failed and cancelled terminal status.",
+      "consequence": "The whole terminal batch (query completion/failure, task transition, session end and any usage feedback) rolls back. Restoring that state replays the uncommittable batch, leaves status=finishing and installs no V2 context; subsequent capture readiness is not re-established.",
+      "suggestedFix": "Give lifecycle start and terminal transitions distinct phase-stable event identities while retaining repeat-terminal idempotency. Add a supported reconciliation strategy for already parked legacy turns; do not weaken SQLite's payload equality check.",
+      "acceptanceProbe": "Use the real SQLite repository with the coordinator: prepare, capture, finish, close/reopen, restore and prepare the next turn. Completed/failed/cancelled all reach the intended terminal state; re-finishing/replay produces no duplicate and never reuses the start transition's ID. Include repair of a checkpoint parked by the current ID scheme.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/terminalIdentity",
+      "observed": "Different occurredAt values and active/completed payloads had identical event IDs; rejection was invalid-request/idempotency conflict. Restored preparation remained finishing with lifecycle-append-failed and no context."
+    },
+    {
+      "id": "04-F2",
+      "title": "Production turn preparation filters prior-task memory out of the next decision",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1014,
+          "detail": "A normal new user input derives a new task ID; only interrupted-turn resume reuses the previous task."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1173,
+          "detail": "That newly created taskId is supplied as an exact filter on every ordinary retrieval request."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 5235,
+          "detail": "Observation candidates must have the exact requested taskId; there is no ordinary global fact/decision exception."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2534,
+          "detail": "A correlated V2 context suppresses the V1 compiled message even when the result contains no observations."
+        },
+        {
+          "path": "cli/src/services/memory-v2/__tests__/two-session-cold-start.test.ts",
+          "line": 148,
+          "detail": "The advertised cold-start reuse test queries SQLite directly without taskId, bypassing the production coordinator filter."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 5434,
+          "detail": "An optional configured semantic expander can append cross-task advisory discoveries; it does not fix ordinary lexical retrieval."
+        }
+      ],
+      "trigger": "A new CLI/SDK turn or fresh session asks about a path/claim learned in a different V2 task, with no semantic recall expander configured.",
+      "consequence": "The observation is durable and queryable by the store, but ordinary turn context omits it and reports degradation=none. Fixing persistence alone cannot enable cross-task reuse or outcome-guided learning at the next turn. A mostly empty correlated V2 result also masks available V1 operational memory.",
+      "suggestedFix": "Separate current-task correlation/ranking boosts from an explicit exact task filter. Perform a bounded project-wide knowledge query for new work, retain scope/freshness filtering, and keep active operational task state available independently.",
+      "acceptanceProbe": "Through the production coordinator plus real SQLite, learn a public fixture path/decision in turn A, finish, close/reopen and ask relevant turn B. B must inject the applicable prior observation without raw task-ID knowledge; unrelated tasks stay out through relevance policy, not blanket exclusion. Exercise semantic recall disabled/enabled and V1 shadow present/absent.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/taskIsolation",
+      "observed": "Cold coordinator injection contained zero observations with degradation none; a correlated query to the same reopened store without taskId returned the prior discovery.",
+      "scopeClarification": "This is the V2 observation retrieval path. Home/project knowledge files and skill discovery are independent and continue to load. Taskless V2 observations would also fail the exact-task predicate; optional advisory semantic expansion is a separate bypass."
+    },
+    {
+      "id": "04-F3",
+      "title": "Explicit decision capture persists identity metadata but discards the decision and excerpt",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts",
+          "line": 197,
+          "detail": "The native handler records the actual kind-prefixed text in V1 task memory."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts",
+          "line": 243,
+          "detail": "Successful output explicitly echoes text, evidenceSelectors and optional excerpt."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1480,
+          "detail": "The coordinator reads echoed text for claim identity/dedup."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1546,
+          "detail": "Persisted evidence excerpts are synthesized tool/path/count descriptions, not the echoed excerpt."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 1623,
+          "detail": "Canonical observation summary/detail contain only tool name, path counts and output digest; decision text is not copied."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+          "line": 1968,
+          "detail": "Current capture tests assert kind and selectors, not preservation of the decision's meaning."
+        }
+      ],
+      "trigger": "The model calls record_decision with a meaningful decision/rationale and optional evidence excerpt under safe V2 capture.",
+      "consequence": "Canonical V2 memory and its semantic/lexical projections cannot recall what was decided or why. V1 memory and transcript copies mitigate total loss, but V2 authority cannot independently retain the advertised decision content.",
+      "suggestedFix": "Persist bounded explicit record_decision text/rationale and its approved excerpt in the canonical observation/evidence fields. Keep generic tool capture minimal; preserve untrusted-evidence framing, path validation and length limits.",
+      "acceptanceProbe": "Run native record_decision -> SDK capture -> real SQLite export/query -> compiler -> close/reopen. Assert exact rationale and bounded excerpt survive in the intended V2 fields and prompt; test dedup/reinforcement and supersession without relying on V1 import.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/decisionBody",
+      "observed": "Handler success and V1 text retention were true; serialized V2 event contained neither DECISION_SENTINEL nor PUBLIC_EXCERPT_SENTINEL."
+    },
+    {
+      "id": "04-F4",
+      "title": "Later compaction snapshots shadow full-result recall with an archived tombstone",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2676,
+          "detail": "Eviction archives the original body before replacing message history with tombstones."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2806,
+          "detail": "The next semantic pass archives that already tombstoned history."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/context-archive.ts",
+          "line": 182,
+          "detail": "Pre-compaction capture copies tool messages without excluding tombstones."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/context-archive.ts",
+          "line": 525,
+          "detail": "Exact-ID recall scans all archive kinds newest-first and returns the first matching ID, regardless of body completeness."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+          "line": 45,
+          "detail": "The model-visible tool takes this exact-ID path whenever toolCallId is supplied."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+          "line": 492,
+          "detail": "Duplicate-ID tests use hand-built eviction snapshots, not eviction followed by pre-compaction capture."
+        }
+      ],
+      "trigger": "A stale result is evicted, then a semantic/mechanical pass archives the tombstoned message under the same call ID while its original eviction snapshot remains retained.",
+      "consequence": "recall_context(toolCallId=...) returns the newer tombstone, often telling the caller to use recall again, instead of the still-stored original. Independent eviction retention caps do not protect selection semantics. Keyword recall can still be a workaround.",
+      "suggestedFix": "Prefer the original eviction payload for exact-call recovery, or represent original/body-completeness explicitly and skip pointer-only/slimmed copies. Preserve immutable identity and provenance across later snapshots.",
+      "acceptanceProbe": "Use the real evictor at its default six-step recency threshold, archive its original result, run three pre-compaction captures, persist, close/reopen and call recall_context by ID. Return the original body/provenance before and after reopen; cover slimmed receipts and partial-body copies as well.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/archiveSelection",
+      "observed": "Original was recoverable before compaction and remained stored after three snapshots, but exact-ID recall returned a tombstone afterward and after SQLite reopen."
+    },
+    {
+      "id": "04-F5",
+      "title": "Prompt compilation alphabetizes ranked retrieval and clips away the most relevant item",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "performance",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 5107,
+          "detail": "The repository computes a deterministic relevance/freshness/usefulness ordering for observation candidates."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 5429,
+          "detail": "Semantic additions are deliberately appended after the lexical reusableDiscovery prefix."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+          "line": 237,
+          "detail": "Verified categories are sorted by JSON string content before compilation."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+          "line": 277,
+          "detail": "Reusable discoveries are likewise sorted by JSON content, losing repository order and advisory tail position."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+          "line": 365,
+          "detail": "The root character budget clips the resulting category block from its beginning."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+          "line": 168,
+          "detail": "Tests incorrectly treat ranked DTO category arrays as semantically unordered."
+        }
+      ],
+      "trigger": "A ranked query result contains enough long items to exceed the compiler's 12,000-character budget, or a semantic advisory item's ID sorts ahead of a lexical match.",
+      "consequence": "The final model input favors JSON/ID order instead of the retrieval policy. The best relevant constraint may be omitted, while optional semantic recall can reorder/displace the intended lexical prefix.",
+      "suggestedFix": "Preserve ranked category order; canonicalize only genuinely unordered nested metadata. Budget complete selected items in priority order and return an emitted-observation receipt so usage accounting knows what was actually shown.",
+      "acceptanceProbe": "Supply a valid ranked DTO with one highest-priority z-ID item followed by eight long low-priority a-ID items. At the production compiler budget, the highest-priority item survives and advisory additions never displace the lexical prefix. Check determinism without declaring rank arrays unordered.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/compilerRank",
+      "observed": "Nine schema-valid discoveries with highest first compiled to exactly 12,000 characters, retained LOW_RELEVANCE_0 and omitted HIGH_RELEVANCE_SENTINEL. Increasing the budget alone made the high item reappear."
+    },
+    {
+      "id": "04-F6",
+      "title": "Verifying an effective playbook removes it from both instruction and gate consumers",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/services/memory-v2/playbook-lifecycle.ts",
+          "line": 142,
+          "detail": "An active enforced rule meeting effectiveness thresholds transitions to verified."
+        },
+        {
+          "path": "cli/src/commands/memory-command.ts",
+          "line": 1690,
+          "detail": "The real operator apply path persists that status through setPlaybookStatus."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 1601,
+          "detail": "Runtime listPlaybooks selects only status=active."
+        },
+        {
+          "path": "packages/agent-runtime/src/memory/playbook-context.ts",
+          "line": 137,
+          "detail": "The instruction compiler drops schema-valid verified rows."
+        },
+        {
+          "path": "packages/agent-runtime/src/memory/playbook-gate.ts",
+          "line": 289,
+          "detail": "The deterministic gate also skips every status except active."
+        },
+        {
+          "path": "packages/agent-runtime/src/memory/playbook-context.test.ts",
+          "line": 77,
+          "detail": "A unit test explicitly locks in disappearance of verified rules."
+        }
+      ],
+      "trigger": "An operator applies the lifecycle evaluator's verify transition to a rule whose gate counters demonstrate effectiveness.",
+      "consequence": "The supposedly successful learned procedure disappears from subsequent load, prompt instruction and gate enforcement, even though it was neither retired nor expired.",
+      "suggestedFix": "Model verification quality independently from activation, or consistently treat verified as active across repository, compiler and gate consumers. Keep retirement and expiry as the deactivation conditions.",
+      "acceptanceProbe": "Create/load a rule, record the effectiveness thresholds, apply the actual verify transition, close/reopen and reload. It stays present and still gates the same action, while retired/expired rules remain absent.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/playbookVerification",
+      "observed": "The real lifecycle returned verify; after persistence status was verified, gate-facing row count dropped from two to one and compiling the verified row returned zero characters."
+    },
+    {
+      "id": "04-F7",
+      "title": "Usage feedback labels unrelated full reads as ignored memory",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/memory-v2/usage-observer.ts",
+          "line": 119,
+          "detail": "Any receipt.full>=1 marks every non-used retrieved verified/discovery observation ignored; no attempted path/chunk overlap is required."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 2064,
+          "detail": "That correlation is folded into terminal observation.reused drafts."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 4876,
+          "detail": "Ignored counters are replayed into each observation's usage state."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 5124,
+          "detail": "Usefulness affects candidate ordering before lexical relevance."
+        },
+        {
+          "path": "common/src/util/usefulness-scorer.ts",
+          "line": 82,
+          "detail": "Ignored counts subtract from usefulness."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/__tests__/usage-observer.test.ts",
+          "line": 142,
+          "detail": "The current test asserts this cohort-wide negative attribution rather than observing a relevant reread."
+        }
+      ],
+      "trigger": "A turn is served memory for chunk A and performs a legitimate full read for an unrelated missing target B, without a skip/narrow for A.",
+      "consequence": "A is recorded as reread-despite even though it was not reread. Coupled with compilation clipping, unshown items can receive the same negative label. Counters do change ranking, but they are not reliable measures of model use or task improvement.",
+      "suggestedFix": "Correlate only emitted records against actual attempted/covered source identities; distinguish unrelated reads, necessary freshness refresh, shown-but-unobserved and explicit rejection. Preserve unknown instead of manufacturing negative evidence.",
+      "acceptanceProbe": "Serve A, perform a full read of B and assert no ignored signal for A. Then explicitly reread A despite a current reusable excerpt and assert the intended signal. Add clipping and freshness-refresh cases; validate held-out task success separately from read savings.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/negativeUsage",
+      "observed": "A bounded fixture with one known chunk and one full-read receipt carrying no covered identity produced an ignored/reread-despite signal."
+    },
+    {
+      "id": "04-F8",
+      "title": "Playbook scope is accepted and stored but does not constrain runtime application",
+      "severity": "MEDIUM",
+      "domains": [
+        "security",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/types/memory-playbook.ts",
+          "line": 33,
+          "detail": "The public scope schema accepts repository, glob and agent-type restrictions."
+        },
+        {
+          "path": "cli/src/services/memory-v2/playbook-proposal.ts",
+          "line": 36,
+          "detail": "Authoring accepts that scope as a validated proposal field."
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "line": 1598,
+          "detail": "Runtime loading filters only the bound workspace, status and expiry, not scope restrictions."
+        },
+        {
+          "path": "packages/agent-runtime/src/memory/playbook-context.ts",
+          "line": 133,
+          "detail": "All valid active rules are vouched as operator instructions without evaluating applicability."
+        },
+        {
+          "path": "packages/agent-runtime/src/memory/playbook-gate.ts",
+          "line": 288,
+          "detail": "The gate checks status, expiry, enforcement and trigger, but never scope."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+          "line": 3103,
+          "detail": "The actual consumer supplies no current paths/agent identity to resolve glob or agent scope."
+        }
+      ],
+      "trigger": "An operator authors a rule limited to another repository, Rust paths or a particular agent type, then runs its matching tool trigger outside that declared scope in the same bound workspace.",
+      "consequence": "The rule is still injected and can warn/block outside its intended applicability. This undermines reusable language-specific procedures and the public promise of scope-limited playbooks. No OS sandbox escape is claimed.",
+      "suggestedFix": "Apply a canonical scope evaluator before both prompt selection and deterministic gating, supplying current project/agent/path context. If a restriction cannot yet be evaluated, reject or visibly declare it unsupported instead of silently accepting it.",
+      "acceptanceProbe": "For the same trigger, vary repository, glob and current agent independently. Out-of-scope calls receive no instruction/verdict; an in-scope call retains its existing warn/block behavior. Unsupported applicability is explicit and survives serialization.",
+      "assurance": "integration",
+      "probeArtifact": "evidence/04-memory-fixture-result.json#/playbookVerification/mismatchedScopeGateVerdictCount",
+      "observed": "The gate produced a verdict for a schema-shaped rule restricted to another public fixture project, Rust globs and a Rust specialist."
+    },
+    {
+      "id": "04-F9",
+      "title": "Degraded V2 authority silently reinjects V1 despite reporting no fallback",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/memory-v2/types.ts",
+          "line": 32,
+          "detail": "The public configuration contract says unavailable opt-in V2 injects nothing rather than falling back to V1."
+        },
+        {
+          "path": "sdk/src/services/memory-v2/coordinator.ts",
+          "line": 826,
+          "detail": "Degradation clears memoryV2Context but preserves active=sqlite-v2-opt-in and fallbackOccurred=false."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2526,
+          "detail": "The authoritative-context helper returns undefined when cleared V2 context fails parsing."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2534,
+          "detail": "The V1 compiler gate is taskMemory && !getCorrelatedAuthoritativeV2(state), so degraded opt-in state receives a V1 message."
+        },
+        {
+          "path": "cli/src/utils/codebuff-client.ts",
+          "line": 66,
+          "detail": "Provider-open failure under opt-in is intentionally passed to the SDK as a V2 config without a repository."
+        }
+      ],
+      "trigger": "V2 storage open, migration, lifecycle append or query fails while a valid V1 compatibility task-memory record is available.",
+      "consequence": "Provider-facing request construction emits V1 memory, while authority state and documented degraded semantics still say V2 is active and no fallback occurred. Human/client consumers cannot accurately know the source used.",
+      "suggestedFix": "Choose and document one degradation policy, then make request construction and authority telemetry agree: either suppress V1 under opt-in failure or perform an explicit supported fallback with active source/fallback fields updated. Keep active operational memory policy deliberate.",
+      "acceptanceProbe": "At the real request-construction seam, prepare opt-in V2 with no repository and populated V1 memory; inspect captured messages and authority event. Repeat query throw/invalid result/lifecycle failure, with V1 present/absent. Reported authority must match the injected source.",
+      "assurance": "static trace",
+      "coverageLimit": "The Boolean branch is directly visible; no provider-facing run was invoked to probe this additional issue."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Schema and query/project correlation, escaped untrusted evidence, safe native-only capture, project-relative path policy and sanitized owner-only persistence are valuable safeguards. Playbook instructions are a separate trusted operator channel whose accepted scope is not enforced (04-F8). No sandbox escape or secret exfiltration is claimed.",
+    "correctness": "Production composition, not basic helper presence, is the limiting factor: terminal identity collision, exact-task exclusion, discarded decision meaning, shadowed archive payload, ranking loss, misattributed feedback and verified-rule disappearance are demonstrated or directly traced.",
+    "state-mutation": "Transactional SQLite append refuses conflicting IDs rather than corrupting events. V1 revisions/checksum/merge locks, staged preparation and CLI hydration identity guards are strengths. Parked finishing state (04-F1) and verified status transitions (04-F6) are coherent locally but unusable across real consumers.",
+    "error-handling": "Best-effort optional archive methods and embedding fallback keep foreground tasks moving, with healthy-empty vs index fallback available. Nonretryable terminal collision remains parked indefinitely; some archive storage failures collapse to empty. V2 failure metadata and V1 request fallback disagree (04-F9).",
+    "performance": "Budgets are real: capped archives/body text, query event/payload admission, compiler character budgets, cached vectors, bounded embeddings and governor pacing. No latency/RSS measurement was made. Final rank clipping (04-F5), per-call FTS rebuild after flattening and absence of total archive-byte/media bounds merit measured workload probes, not assumed optimizations.",
+    "dependency-hygiene": "Memory store relies on Bun's built-in SQLite; runtime recall dynamically imports it and falls back to the scanner outside Bun. Node V1 persistence and public repository DTOs provide portability. Workspace manifests were read; no undeclared external memory dependency or known CVE was established. The fixture ran Bun 1.3.14, not the repository's pinned 1.3.5/OpenTUI ABI path.",
+    "test-coverage": "Existing tests substantiate bounded helpers and generator retention; SQLite cold-start tests query the store directly, coordinator tests use stubs, and memory retention S6 simulates read savings from hand-built DTOs with modelCalls=0. Those seams miss F1-F8. The disposable fixture supplies real coordinator/store, status/load and eviction/reopen integration evidence, but not an actual killed CLI/model task.",
+    "api-contract": "Current optional MemoryRepositoryV2 methods are narrowed/bound, strict versioned schemas validate boundaries, and V1 removal docs preserve compatibility. Accepted playbook scope and verified status conflict with consumers; degraded authority disagrees with injected source; ranked result order is not respected by compiler. Foreign-language protocol version/encoding/receipt negotiation is not implemented in these memory paths."
+  },
+  "strengths": [
+    "Retain the existing compaction governor, read-authorization revoke and revision-CAS task-memory replacement.",
+    "Retain owner-only local persistence, canonical event equality/project binding and generation-fenced installation; repair coordinator identity rather than weakening storage invariants.",
+    "Retain separate stale/verified/discovery categories and the bounded configured semantic expander.",
+    "Retain operator procedure authoring and skills as inspectable artifacts; add trustworthy applicability/outcome evidence before describing them as proven learning."
+  ],
+  "coverageLimits": [
+    "All 18 picker-selected ranges were read, with targeted adjacent reads. Large coordinator/repository/pruner files remain sampled; schema/open/migration/security helpers, replay/GC, all V1 writers and generated release bundle wiring were not fully audited.",
+    "61 current-inventory files are represented; receipt is inspection evidence, not complete line-by-line audit or a guarantee for the whole subsystem.",
+    "No live model, process-kill/CLI resume, ACP attach roundtrip, installed Node SDK artifact, Windows/macOS, concurrent process archive flush, RSS/latency or held-out learning benchmark was run.",
+    "SQLite fixture closes/reopens real handles and restores fixture state; that is stronger than a DTO-only test but weaker than real process death with uncertain external effects.",
+    "Global home/project knowledge and skills are independent of exact-task V2 retrieval; no claim is made that every memory path is absent.",
+    "Optional semantic recall and background consolidation are configured/canary paths; neither was exercised against an external embedder/model.",
+    "Historical plans were context only; structuralReceipt contains current inventory files. No repository source fixes were performed."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "memory-terminal-integrity",
+      "priority": "P0",
+      "problem": "04-F1: ordinary terminal append cannot commit and restored turn cannot progress.",
+      "sourceAnchors": [
+        "sdk/src/services/memory-v2/coordinator.ts:1130",
+        "sdk/src/services/memory-v2/coordinator.ts:2145",
+        "sdk/src/services/memory-v2/event-factory.ts:27"
+      ],
+      "intendedBehavior": "Distinct start/terminal identity, idempotent terminal replay and supported reconciliation of currently parked checkpoints.",
+      "smallestScope": "TypeScript event identity/cursor/checkpoint logic plus real SQLite coordinator integration tests.",
+      "prerequisites": [],
+      "languageDecision": "Repair in TypeScript; no new persistence sidecar required.",
+      "acceptanceProbes": [
+        "Prepare/capture/finish/reopen/restore/new turn succeeds for completed/failed/cancelled.",
+        "Same terminal replay is idempotent; different start/terminal payloads have different IDs.",
+        "Existing parked checkpoints can resume without weakening canonical-event equality."
+      ],
+      "regressionChecks": [
+        "Existing append equality/CAS/project correlation and terminal replay unit tests."
+      ],
+      "completionEvidence": "Saved real SQLite event export and restored coordinator state demonstrating intended terminal and next active turn.",
+      "stopDeferRule": "Do not expand memory/learning runtime until this native roundtrip passes."
+    },
+    {
+      "id": "memory-next-turn-use",
+      "priority": "P0",
+      "problem": "04-F2/F3/F9: stored facts do not reach the next relevant decision with truthful authority.",
+      "sourceAnchors": [
+        "sdk/src/services/memory-v2/coordinator.ts:1173",
+        "sdk/src/services/memory-v2/coordinator.ts:1623",
+        "packages/agent-runtime/src/run-agent-step.ts:2534"
+      ],
+      "intendedBehavior": "Current operational task state and applicable project knowledge are independently compiled; explicit decision rationale/excerpts persist; injected source matches authority metadata.",
+      "smallestScope": "Coordinator query options, explicit decision DTO mapping and final request-message selection; maintain compatibility stores.",
+      "prerequisites": [
+        "memory-terminal-integrity"
+      ],
+      "languageDecision": "TypeScript and current SQLite schema/DTO evolution only; keep runtime-neutral public contracts.",
+      "acceptanceProbes": [
+        "Turn A learns TS/Python/Rust fixture decisions; relevant turn B after reopen receives them with semantic recall disabled.",
+        "Unrelated/stale/superseded items remain correctly excluded or marked reread.",
+        "Actual captured request messages agree with authority under unavailable/invalid/query failure states."
+      ],
+      "regressionChecks": [
+        "Migration losslessness/checksum, custom/MCP safe-capture exclusion, strict query/project correlation and V1 compatibility."
+      ],
+      "completionEvidence": "Fixture exports plus exact emitted-message/observation receipts, including warm/cold and changed-source cases.",
+      "stopDeferRule": "Keep V1 removal and new ML/routing surfaces deferred until cross-turn behavior is proven."
+    },
+    {
+      "id": "memory-recovery-and-selection",
+      "priority": "P1",
+      "problem": "04-F4/F5: recoverable original content and best retrieved items are not selected.",
+      "sourceAnchors": [
+        "packages/agent-runtime/src/util/context-archive.ts:525",
+        "packages/agent-runtime/src/util/memory-v2-context.ts:277",
+        "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts:45"
+      ],
+      "intendedBehavior": "Exact IDs resolve original/body completeness, ranked categories preserve order, emitted items have an explicit receipt, archive limits are honest.",
+      "smallestScope": "Runtime archive selection and compiler; then optional canonical immutable artifact/range-recall seam for outputs beyond bounded archive copies.",
+      "prerequisites": [
+        "memory-next-turn-use"
+      ],
+      "languageDecision": "Use TS to repair selection; choose storage/foreign sidecar only after measured artifact-size/RSS workload justifies it.",
+      "acceptanceProbes": [
+        "Default-recency eviction -> three compactions -> SQLite reopen -> original by-ID recall.",
+        "Top-ranked item survives root/child/small-window budgets; semantic tail never displaces lexical prefix.",
+        "Large outputs report retained range/bytes and truncation; manual compact has a recoverable archive path."
+      ],
+      "regressionChecks": [
+        "Separate per-kind retention caps, provenance/legacy archive restore, FTS failure-open and compiler escape/determinism tests."
+      ],
+      "completionEvidence": "Original-body digest/range receipt and exact selected-observation set before/after restart.",
+      "stopDeferRule": "Do not claim lossless full-result recall for capped copies or add a second memory index before a consumer uses it."
+    },
+    {
+      "id": "procedural-applicability-feedback",
+      "priority": "P1",
+      "problem": "04-F6/F7/F8 plus unwired inject-only firing: procedure learning cannot be judged reliably.",
+      "sourceAnchors": [
+        "cli/src/services/memory-v2/playbook-lifecycle.ts:142",
+        "packages/agent-runtime/src/memory/playbook-gate.ts:288",
+        "sdk/src/services/memory-v2/usage-observer.ts:119"
+      ],
+      "intendedBehavior": "Verified quality retains activation; scope applies equally to instructions and gates; feedback identifies actually emitted/attempted evidence; shadow proposals have a real observed-match producer.",
+      "smallestScope": "Shared lifecycle/applicability truth, receipt correlation and non-enforcing shadow observations; preserve operator apply decision.",
+      "prerequisites": [
+        "memory-next-turn-use",
+        "memory-recovery-and-selection"
+      ],
+      "languageDecision": "TS deterministic policy first; a Python statistics worker must consume versioned immutable outcome receipts, not raw mutable counters.",
+      "acceptanceProbes": [
+        "Verified -> reopen -> still active, scoped rules apply only in declared project/path/agent.",
+        "Unrelated/full freshness refresh creates no spurious ignored signal.",
+        "Inject-only rules observe clean matches without warn/block and can earn an operator promotion proposal."
+      ],
+      "regressionChecks": [
+        "Warn/default and downgrade-only block behavior, retirement/expiry, safe proposal parsing and counter/report failure isolation."
+      ],
+      "completionEvidence": "Stored rule activation/quality state, applicability decision receipt and per-observation usage attribution.",
+      "stopDeferRule": "Do not label raw read counters or written LESSONS.md as demonstrated task improvement."
+    },
+    {
+      "id": "memory-held-out-polyglot-evidence",
+      "priority": "P2",
+      "problem": "Current retention/read-savings evaluations bypass production wiring and do not prove learned behavior improvement.",
+      "sourceAnchors": [
+        "cli/src/services/memory-v2/__tests__/two-session-cold-start.test.ts:148",
+        "evals/memory-retention/scenario.test.ts:517",
+        "evals/compaction-retention/scenario.test.ts:333"
+      ],
+      "intendedBehavior": "A model can retain applicable constraints across repeated compaction/restart and improve held-out work with bounded cost and faithful receipts.",
+      "smallestScope": "Small fixture harness driving canonical CLI/SDK lifecycle with configurable local model, matched cold/warm baselines and immutable trace/evidence references.",
+      "prerequisites": [
+        "memory-terminal-integrity",
+        "memory-next-turn-use",
+        "memory-recovery-and-selection",
+        "procedural-applicability-feedback"
+      ],
+      "languageDecision": "Target TS/Python/Rust cooperation fixtures first. Add an implementation language only for a measured capability gain; keep one run/effect authority and versioned schemas, digest/position encodings, cancellation and typed errors.",
+      "acceptanceProbes": [
+        "Contract change spanning TS host/Python consumer/Rust sidecar survives three compactions and actual disposable process restart.",
+        "Held-out successful task rate, stale-action rate, unnecessary human interruptions and latency/cost/RSS compared to cold/no-memory baselines.",
+        "Promotion improves measured outcomes without leaking task-specific evidence into unrelated scopes."
+      ],
+      "regressionChecks": [
+        "Deterministic helper retention, external-mutation freshness, archive/terminal reconciliation and policy applicability."
+      ],
+      "completionEvidence": "Saved raw SDK/CLI trace, source/artifact revisions, emitted observation/effect receipts and paired workload metrics.",
+      "stopDeferRule": "A scaffold, hand-seeded DTO simulation or extra language does not complete this package; defer general online training until the baseline body passes."
+    }
+  ],
+  "probeReceipts": [
+    {
+      "command": "bun /tmp/openbuff-body-review-2026-11-05/evidence/04-memory-fixture.ts",
+      "runtime": "Bun 1.3.14 Linux x64",
+      "exitCode": 0,
+      "assurance": "bounded DI integration, real SQLite close/reopen; no provider/model calls",
+      "source": "evidence/04-memory-fixture.ts",
+      "result": "evidence/04-memory-fixture-result.json",
+      "description": "Executable reproduction asserts the observed defects, not that product behavior is correct. New fixture root per run; no private or external IO."
+    }
+  ]
+}

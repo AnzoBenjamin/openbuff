@@ -1,0 +1,18 @@
+4 tests failed:
+(fail) packaged language WASM coverage > (unnamed) [18.00ms]
+(fail) parseFileStructure > extracts structures for PHP, Swift, and Kotlin [2.00ms]
+(fail) parseFileStructure > extracts GDScript functions, classes, and variables (Godot 4.x) [1.00ms]
+(fail) parseFileStructure > extracts GDScript enums and inner class definitions
+
+ 154 pass
+ 4 fail
+ 814 expect() calls
+Ran 158 tests across 11 files. [1066.00ms]
+failure 117: (fail) packaged language WASM coverage > (unnamed) [18.00ms]
+failure 199: (fail) parseFileStructure > extracts structures for PHP, Swift, and Kotlin [2.00ms]
+failure 212: (fail) parseFileStructure > extracts GDScript functions, classes, and variables (Godot 4.x) [1.00ms]
+failure 225: (fail) parseFileStructure > extracts GDScript enums and inner class definitions
+failure 258: (fail) packaged language WASM coverage > (unnamed) [18.00ms]
+failure 259: (fail) parseFileStructure > extracts structures for PHP, Swift, and Kotlin [2.00ms]
+failure 260: (fail) parseFileStructure > extracts GDScript functions, classes, and variables (Godot 4.x) [1.00ms]
+failure 261: (fail) parseFileStructure > extracts GDScript enums and inner class definitions

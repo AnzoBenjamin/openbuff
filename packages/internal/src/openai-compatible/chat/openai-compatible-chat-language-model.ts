@@ -5,7 +5,6 @@ import {
   createJsonErrorResponseHandler,
   createJsonResponseHandler,
   generateId,
-  isParsableJson,
   parseProviderOptions,
   postJsonToApi,
 } from '@ai-sdk/provider-utils'
@@ -17,6 +16,7 @@ import { mapOpenAICompatibleFinishReason } from './map-openai-compatible-finish-
 import { openaiCompatibleProviderOptions } from './openai-compatible-chat-options'
 import { defaultOpenAICompatibleErrorStructure } from '../openai-compatible-error'
 import { prepareTools } from './openai-compatible-prepare-tools'
+import { StreamingJsonCompletion } from '../../utils/streaming-json-completion'
 
 import type { OpenAICompatibleChatModelId } from './openai-compatible-chat-options'
 import type { ProviderErrorStructure } from '../openai-compatible-error'
@@ -61,6 +61,7 @@ export type OpenAICompatibleChatConfig = {
    * Some strict OpenAI-compatible APIs reject the content part array form.
    */
   stringifyTextContent?: boolean
+  reasoningReplay?: boolean
 }
 
 const TOOL_CALL_METADATA_KEYS = new Set(['index', 'id', 'type', 'function'])
@@ -106,7 +107,7 @@ type OpenAICompatibleStreamErrorData = {
   type?: string | null
   param?: unknown
   code?: string | number | null
-  status?: string | null
+  status?: string | number | null
   details?: unknown[] | null
 }
 
@@ -120,6 +121,7 @@ function stringifyErrorMetadata(metadata: Record<string, unknown>): string {
 
 function createOpenAICompatibleStreamError(
   error: OpenAICompatibleStreamErrorData,
+  responseHeaders: Record<string, string> = {},
 ): Error {
   const metadata = Object.fromEntries(
     Object.entries({
@@ -140,9 +142,20 @@ function createOpenAICompatibleStreamError(
     trimmedMetadataText
       ? `${error.message} ${trimmedMetadataText}`
       : error.message,
+    { cause: error },
   )
   streamError.name = 'OpenAICompatibleStreamError'
-  return streamError
+  const status = Number(error.status)
+  return Object.assign(streamError, metadata, {
+    ...(error.status != null &&
+    (typeof error.status === 'number' || /^[1-5]\d{2}$/.test(error.status)) &&
+    Number.isInteger(status) &&
+    status >= 100 &&
+    status <= 599
+      ? { statusCode: status }
+      : {}),
+    responseHeaders,
+  })
 }
 
 export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
@@ -290,6 +303,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
         // messages:
         messages: convertToOpenAICompatibleChatMessages(prompt, {
           stringifyTextContent: this.config.stringifyTextContent,
+          reasoningReplay: this.config.reasoningReplay,
         }),
 
         // tools:
@@ -450,6 +464,8 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
         arguments: string
       }
       hasFinished: boolean
+      pendingEmptyObject: boolean
+      jsonCompletion: StreamingJsonCompletion
       providerMetadata?: SharedV2ProviderMetadata
     }> = []
 
@@ -481,6 +497,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
     }
     let isFirstChunk = true
     const providerOptionsName = this.providerOptionsName
+    const includeUsage = this.config.includeUsage === true
     let isActiveReasoning = false
     let isActiveText = false
     let finishEmitted = false
@@ -509,6 +526,14 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
       for (const toolCall of toolCalls.filter(
         (toolCall) => !toolCall.hasFinished && toolCall.function?.name,
       )) {
+        if (toolCall.pendingEmptyObject) {
+          controller.enqueue({
+            type: 'tool-input-delta',
+            id: toolCall.id,
+            delta: toolCall.function.arguments,
+          })
+          toolCall.pendingEmptyObject = false
+        }
         controller.enqueue({
           type: 'tool-input-end',
           id: toolCall.id,
@@ -554,6 +579,66 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
       finishEmitted = true
     }
 
+    function appendToolArguments(
+      toolCall: (typeof toolCalls)[number],
+      argDelta: string,
+      controller: TransformStreamDefaultController<LanguageModelV2StreamPart>,
+    ) {
+      if (
+        !toolCall.pendingEmptyObject &&
+        toolCall.function.arguments.length === 0 &&
+        /^\s*\{\s*\}\s*$/.test(argDelta)
+      ) {
+        toolCall.function.arguments += argDelta
+        toolCall.pendingEmptyObject = true
+        return
+      }
+      if (toolCall.pendingEmptyObject) {
+        if (argDelta.trim().length === 0) {
+          toolCall.function.arguments += argDelta
+          return
+        }
+        // Some proxies send a complete empty placeholder and then the real
+        // object. Do not publish the placeholder until it is clear whether it
+        // was the actual call: streamed input deltas cannot be retracted.
+        if (argDelta.trimStart().startsWith('{')) {
+          toolCall.function.arguments = ''
+          toolCall.jsonCompletion = new StreamingJsonCompletion()
+        } else {
+          controller.enqueue({
+            type: 'tool-input-delta',
+            id: toolCall.id,
+            delta: toolCall.function.arguments,
+          })
+        }
+        toolCall.pendingEmptyObject = false
+      }
+      toolCall.function.arguments += argDelta
+      if (argDelta.length > 0) {
+        controller.enqueue({
+          type: 'tool-input-delta',
+          id: toolCall.id,
+          delta: argDelta,
+        })
+      }
+      if (
+        toolCall.jsonCompletion.isParsable(
+          toolCall.function.arguments,
+          argDelta,
+        )
+      ) {
+        controller.enqueue({ type: 'tool-input-end', id: toolCall.id })
+        controller.enqueue({
+          type: 'tool-call',
+          toolCallId: toolCall.id ?? generateId(),
+          toolName: toolCall.function.name,
+          input: toolCall.function.arguments,
+          providerMetadata: toolCall.providerMetadata,
+        })
+        toolCall.hasFinished = true
+      }
+    }
+
     const chunkSchema = this.chunkSchema
     return {
       stream: response.pipeThrough(
@@ -565,7 +650,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
             controller.enqueue({ type: 'stream-start', warnings })
           },
 
-          transform(chunk: ParseResult<z.infer<typeof chunkSchema>>, controller) {
+          transform(
+            chunk: ParseResult<z.infer<typeof chunkSchema>>,
+            controller,
+          ) {
             // Emit raw chunk if requested (before anything else)
             if (options.includeRawChunks) {
               controller.enqueue({ type: 'raw', rawValue: chunk.rawValue })
@@ -595,7 +683,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
               finishReason = 'error'
               controller.enqueue({
                 type: 'error',
-                error: createOpenAICompatibleStreamError(value.error),
+                error: createOpenAICompatibleStreamError(
+                  value.error,
+                  responseHeaders,
+                ),
               })
               return
             }
@@ -717,52 +808,50 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                   // phantom call holds the orphaned argument suffix.
                   //
                   // To be robust, treat a delta with a falsy name for an
-                  // unknown index as a continuation of the most-recently
-                  // created unfinished tool call: append its arguments there
-                  // (which typically completes the truncated JSON) instead of
-                  // creating a phantom bucket. If there is no unfinished call
-                  // to attach to, drop the stray fragment rather than throwing.
+                  // unknown index as a continuation of an unfinished tool
+                  // call and append its arguments there (which typically
+                  // completes the truncated JSON) instead of creating a
+                  // phantom bucket. When several calls are unfinished, the
+                  // suffix goes to the call whose accumulated arguments are
+                  // still syntactically incomplete (unmatched container
+                  // depth > 0): a call whose JSON already closed cannot own
+                  // further text, and blindly appending to the merely-newest
+                  // call corrupts its arguments while leaving the earlier
+                  // truncated call broken (reliability finding
+                  // openai-compat-continuation-mis-merge). When eligibility
+                  // is ambiguous, drop the stray fragment rather than
+                  // guessing.
                   if (
                     toolCallDelta.function?.name == null ||
                     toolCallDelta.function.name === ''
                   ) {
-                    let lastUnfinished: (typeof toolCalls)[number] | undefined
-                    for (let j = toolCalls.length - 1; j >= 0; j--) {
-                      const candidate = toolCalls[j]
-                      if (candidate != null && !candidate.hasFinished) {
-                        lastUnfinished = candidate
-                        break
-                      }
-                    }
+                    const unfinished = toolCalls.filter(
+                      (candidate) =>
+                        candidate != null && !candidate.hasFinished,
+                    )
+                    // Prefer the primary (latched) counter; a merged argument
+                    // body that already canonicalized its first serialized
+                    // value reports unmatchedContainerDepth === 0 even while
+                    // a SECOND serialized value appended to the same stream is
+                    // still unclosed, so fall back to the never-latched
+                    // unmatchedDepthAfterClose before treating the target as
+                    // ambiguous (reliability finding
+                    // streaming-json-completion-mode-latch-drops-container-tracking-across-fragments).
+                    const continuationTarget =
+                      unfinished.find(
+                        (candidate) =>
+                          candidate.jsonCompletion.unmatchedContainerDepth >
+                            0 ||
+                          candidate.jsonCompletion.unmatchedDepthAfterClose > 0,
+                      ) ?? (unfinished.length === 1 ? unfinished[0] : undefined)
 
-                    if (lastUnfinished != null) {
+                    if (continuationTarget != null) {
                       const argDelta = toolCallDelta.function?.arguments ?? ''
-                      if (argDelta.length > 0) {
-                        lastUnfinished.function!.arguments += argDelta
-                        controller.enqueue({
-                          type: 'tool-input-delta',
-                          id: lastUnfinished.id,
-                          delta: argDelta,
-                        })
-                      }
-
-                      if (
-                        lastUnfinished.function?.name != null &&
-                        isParsableJson(lastUnfinished.function.arguments)
-                      ) {
-                        controller.enqueue({
-                          type: 'tool-input-end',
-                          id: lastUnfinished.id,
-                        })
-                        controller.enqueue({
-                          type: 'tool-call',
-                          toolCallId: lastUnfinished.id ?? generateId(),
-                          toolName: lastUnfinished.function.name,
-                          input: lastUnfinished.function.arguments,
-                          providerMetadata: lastUnfinished.providerMetadata,
-                        })
-                        lastUnfinished.hasFinished = true
-                      }
+                      appendToolArguments(
+                        continuationTarget,
+                        argDelta,
+                        controller,
+                      )
                     }
 
                     continue
@@ -785,6 +874,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                       arguments: toolCallDelta.function.arguments ?? '',
                     },
                     hasFinished: false,
+                    pendingEmptyObject: /^\s*\{\s*\}\s*$/.test(
+                      toolCallDelta.function.arguments ?? '',
+                    ),
+                    jsonCompletion: new StreamingJsonCompletion(),
                     providerMetadata,
                   }
 
@@ -795,7 +888,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                     toolCall.function?.arguments != null
                   ) {
                     // send delta if the argument text has already started:
-                    if (toolCall.function.arguments.length > 0) {
+                    if (
+                      toolCall.function.arguments.length > 0 &&
+                      !toolCall.pendingEmptyObject
+                    ) {
                       controller.enqueue({
                         type: 'tool-input-delta',
                         id: toolCall.id,
@@ -805,7 +901,13 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
 
                     // check if tool call is complete
                     // (some providers send the full tool call in one chunk):
-                    if (isParsableJson(toolCall.function.arguments)) {
+                    if (
+                      !toolCall.pendingEmptyObject &&
+                      toolCall.jsonCompletion.isParsable(
+                        toolCall.function.arguments,
+                        toolCall.function.arguments,
+                      )
+                    ) {
                       controller.enqueue({
                         type: 'tool-input-end',
                         id: toolCall.id,
@@ -837,38 +939,8 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                   providerMetadata,
                 )
 
-                if (toolCallDelta.function?.arguments != null) {
-                  toolCall.function!.arguments +=
-                    toolCallDelta.function?.arguments ?? ''
-                }
-
-                // send delta
-                controller.enqueue({
-                  type: 'tool-input-delta',
-                  id: toolCall.id,
-                  delta: toolCallDelta.function.arguments ?? '',
-                })
-
-                // check if tool call is complete
-                if (
-                  toolCall.function?.name != null &&
-                  toolCall.function?.arguments != null &&
-                  isParsableJson(toolCall.function.arguments)
-                ) {
-                  controller.enqueue({
-                    type: 'tool-input-end',
-                    id: toolCall.id,
-                  })
-
-                  controller.enqueue({
-                    type: 'tool-call',
-                    toolCallId: toolCall.id ?? generateId(),
-                    toolName: toolCall.function.name,
-                    input: toolCall.function.arguments,
-                    providerMetadata: toolCall.providerMetadata,
-                  })
-                  toolCall.hasFinished = true
-                }
+                const argDelta = toolCallDelta.function?.arguments ?? ''
+                appendToolArguments(toolCall, argDelta, controller)
               }
             }
 
@@ -876,9 +948,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
             // chunk for a tool-call turn but keep the SSE connection open
             // instead of closing with [DONE]. Once the provider has explicitly
             // said the assistant turn ended because of tool calls, all useful
-            // tool-call data has arrived; finish locally so agent tool
-            // execution can continue across providers.
-            if (finishReason === 'tool-calls') {
+            // tool-call data has arrived. When usage was requested, however,
+            // a later choices-free chunk can contain token counts, so wait for
+            // stream completion instead of discarding it.
+            if (finishReason === 'tool-calls' && !includeUsage) {
               emitFinish(controller)
               controller.terminate()
             }

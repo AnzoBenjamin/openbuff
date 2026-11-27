@@ -1,0 +1,28 @@
+{
+  "_note": "Semantic vector (§8 GV-03): a plain ACP client sends the GV-01 initialize without clientCapabilities._meta. The agent then emits no extension data: this result equals GV-02's result with agentCapabilities._meta removed. No ext is emitted unless negotiated.",
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": false,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "close": {}
+      }
+    },
+    "agentInfo": {
+      "name": "openbuff",
+      "title": "Openbuff",
+      "version": "2.0.0"
+    },
+    "authMethods": []
+  }
+}

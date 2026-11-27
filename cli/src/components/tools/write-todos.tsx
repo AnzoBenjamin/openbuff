@@ -1,6 +1,7 @@
 import { TextAttributes } from '@opentui/core'
 
 import { defineToolComponent } from './types'
+import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 import { useTheme } from '../../hooks/use-theme'
 
 import type { ToolRenderConfig } from './types'
@@ -78,18 +79,35 @@ export const WriteTodosComponent = defineToolComponent({
     if (Array.isArray(input?.todos)) {
       todos = input.todos.filter(
         (todo: any) =>
+          todo !== null &&
           typeof todo === 'object' &&
           typeof todo.task === 'string' &&
           typeof todo.completed === 'boolean',
       )
     }
 
-    if (todos.length === 0) {
-      return { content: null }
-    }
+    const error = getStructuredErrorMessages(toolBlock.outputRaw)[0]
+    const authoritative = toolBlock.lifecycle === 'succeeded' && !error
+    const status = error
+      ? `persistence failed · ${error}`
+      : authoritative
+        ? 'saved active list'
+        : `${toolBlock.lifecycle ?? 'outcome unknown'} · requested list`
+    const summary = `TODOs · ${todos.length} requested · ${status}`
 
     return {
-      content: <WriteTodosItem todos={todos} />,
+      collapsedPreview: summary,
+      content: (
+        <box style={{ flexDirection: 'column', width: '100%' }}>
+          <text>{summary}</text>
+          <WriteTodosItem
+            todos={todos.map((todo) => ({
+              ...todo,
+              completed: authoritative && todo.completed,
+            }))}
+          />
+        </box>
+      ),
     }
   },
 })

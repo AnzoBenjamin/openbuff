@@ -39,6 +39,9 @@ export interface AgentDefinition {
    */
   model?: ModelName
 
+  /** Maximum inference steps for this agent. Omitted/-1 adds no ceiling; tighter host/remaining budgets still apply. */
+  maxSteps?: number
+
   /** Maximum subagent nesting depth. Defaults to the runtime limit. */
   maxSpawnDepth?: number
 
@@ -322,6 +325,8 @@ export interface AgentDefinition {
       agentState: AgentState
       toolResult: ToolResultOutput[] | undefined
       stepsComplete: boolean
+      /** True when stepsComplete is due to an explicit fixed step cap; break out instead of continuing, or the cap re-triggers forever. */
+      hitStepCap?: boolean
       nResponses?: string[]
     }
   >

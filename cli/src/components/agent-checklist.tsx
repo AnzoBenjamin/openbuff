@@ -14,76 +14,6 @@ const SYMBOLS = {
   CHECKBOX_UNCHECKED: '☐',
 } as const
 
-// Recursively count local dependencies for an agent
-function countDependencies(
-  agentId: string,
-  agentDefinitions: Map<string, { spawnableAgents?: string[] }>,
-  localAgentIds: Set<string>,
-  visited: Set<string>,
-): number {
-  if (visited.has(agentId)) return 0
-  visited.add(agentId)
-
-  const definition = agentDefinitions.get(agentId)
-  const spawnableAgents = definition?.spawnableAgents ?? []
-
-  let count = 0
-  for (const spawnableId of spawnableAgents) {
-    const simpleId = getSimpleAgentId(spawnableId)
-    if (localAgentIds.has(simpleId) && !visited.has(simpleId)) {
-      count +=
-        1 +
-        countDependencies(simpleId, agentDefinitions, localAgentIds, visited)
-    }
-  }
-
-  return count
-}
-
-// Build dependency tree for an agent
-interface DepTreeNode {
-  id: string
-  displayName: string
-  children: DepTreeNode[]
-}
-
-function buildDepTree(
-  agentId: string,
-  agents: LocalAgentInfo[],
-  agentDefinitions: Map<string, { spawnableAgents?: string[] }>,
-  localAgentIds: Set<string>,
-  ancestorIds: Set<string>,
-): DepTreeNode[] {
-  const definition = agentDefinitions.get(agentId)
-  const spawnableAgents = definition?.spawnableAgents ?? []
-
-  const newAncestorIds = new Set(ancestorIds)
-  newAncestorIds.add(agentId)
-
-  const children: DepTreeNode[] = []
-  for (const spawnableId of spawnableAgents) {
-    const simpleId = getSimpleAgentId(spawnableId)
-    if (localAgentIds.has(simpleId) && !newAncestorIds.has(simpleId)) {
-      const agent = agents.find((a) => a.id === simpleId)
-      if (agent) {
-        children.push({
-          id: agent.id,
-          displayName: agent.displayName,
-          children: buildDepTree(
-            simpleId,
-            agents,
-            agentDefinitions,
-            localAgentIds,
-            newAncestorIds,
-          ),
-        })
-      }
-    }
-  }
-
-  return children
-}
-
 export type VisibleAgentRow =
   | { kind: 'agent'; key: string; agent: LocalAgentInfo }
   | {
@@ -93,51 +23,112 @@ export type VisibleAgentRow =
       displayName: string
       depth: number
       isLast: boolean
+      reference?: 'shared' | 'cycle' | 'limited'
     }
 
-function flattenDepTree(
-  nodes: DepTreeNode[],
-  parentKey: string,
-  depth = 0,
-): VisibleAgentRow[] {
-  return nodes.flatMap((node, index) => {
-    const key = `${parentKey}/${node.id}:${index}`
-    return [
-      {
-        kind: 'dependency' as const,
-        key,
-        agentId: node.id,
-        displayName: node.displayName,
-        depth,
-        isLast: index === nodes.length - 1,
-      },
-      ...flattenDepTree(node.children, key, depth + 1),
-    ]
-  })
+export function countDependencies(
+  agentId: string,
+  agentDefinitions: Map<string, { spawnableAgents?: string[] }>,
+  localAgentIds: Set<string>,
+): number {
+  const visited = new Set([agentId])
+  const stack = [agentId]
+  while (stack.length) {
+    const parent = stack.pop()!
+    for (const id of agentDefinitions.get(parent)?.spawnableAgents ?? []) {
+      const child = getSimpleAgentId(id)
+      if (localAgentIds.has(child) && !visited.has(child)) {
+        visited.add(child)
+        stack.push(child)
+      }
+    }
+  }
+  return visited.size - 1
 }
 
+/** Expand each unique dependency once; repeated DAG edges stay short links. */
 export function buildVisibleAgentRows(params: {
   allAgents: LocalAgentInfo[]
   filteredAgents: LocalAgentInfo[]
   agentDefinitions: Map<string, { spawnableAgents?: string[] }>
   expandedAgentIds: Set<string>
+  maxDependencyRows?: number
 }): VisibleAgentRow[] {
-  const localAgentIds = new Set(params.allAgents.map((agent) => agent.id))
-  return params.filteredAgents.flatMap((agent): VisibleAgentRow[] => [
-    { kind: 'agent', key: agent.id, agent },
-    ...(params.expandedAgentIds.has(agent.id)
-      ? flattenDepTree(
-          buildDepTree(
-            agent.id,
-            params.allAgents,
-            params.agentDefinitions,
-            localAgentIds,
-            new Set(),
-          ),
-          agent.id,
-        )
-      : []),
-  ])
+  const agents = new Map(params.allAgents.map((agent) => [agent.id, agent]))
+  const rows: VisibleAgentRow[] = []
+  const limit = Math.max(1, Math.min(2000, params.maxDependencyRows ?? 2000))
+  for (const agent of params.filteredAgents) {
+    rows.push({ kind: 'agent', key: agent.id, agent })
+    if (!params.expandedAgentIds.has(agent.id)) continue
+    const seen = new Set([agent.id])
+    const ancestors = new Set([agent.id])
+    type Frame = {
+      id: string
+      children: readonly string[]
+      index: number
+      depth: number
+    }
+    const stack: Frame[] = [
+      {
+        id: agent.id,
+        children: params.agentDefinitions.get(agent.id)?.spawnableAgents ?? [],
+        index: 0,
+        depth: 0,
+      },
+    ]
+    let emitted = 0
+    while (stack.length) {
+      const frame = stack[stack.length - 1]
+      if (frame.index >= frame.children.length) {
+        ancestors.delete(frame.id)
+        stack.pop()
+        continue
+      }
+      const index = frame.index++
+      const id = getSimpleAgentId(frame.children[index])
+      const child = agents.get(id)
+      if (!child) continue
+      if (emitted >= limit) {
+        rows.push({
+          kind: 'dependency',
+          key: `${agent.id}:limit`,
+          agentId: agent.id,
+          displayName:
+            'Dependency link limit reached; expand a specific agent to inspect its links',
+          depth: 0,
+          isLast: true,
+          reference: 'limited',
+        })
+        break
+      }
+      const reference = ancestors.has(id)
+        ? 'cycle'
+        : seen.has(id)
+          ? 'shared'
+          : undefined
+      rows.push({
+        kind: 'dependency',
+        key: `${agent.id}:${frame.id}:${id}:${index}`,
+        agentId: id,
+        displayName: child.displayName,
+        depth: Math.min(frame.depth, 12),
+        isLast: frame.index === frame.children.length,
+        reference,
+      })
+      emitted++
+      if (!reference) {
+        seen.add(id)
+        ancestors.add(id)
+        stack.push({
+          id,
+          children: params.agentDefinitions.get(id)?.spawnableAgents ?? [],
+          index: 0,
+          depth: frame.depth + 1,
+        })
+      }
+    }
+  }
+  return rows
 }
 
 interface AgentChecklistProps {
@@ -186,17 +177,12 @@ export const AgentChecklist: React.FC<AgentChecklistProps> = ({
   // Calculate dependency count for each agent
   const dependencyCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const agent of allAgents) {
-      const count = countDependencies(
-        agent.id,
-        agentDefinitions,
-        localAgentIds,
-        new Set(),
-      )
+    for (const agent of filteredAgents) {
+      const count = countDependencies(agent.id, agentDefinitions, localAgentIds)
       counts.set(agent.id, count)
     }
     return counts
-  }, [allAgents, agentDefinitions, localAgentIds])
+  }, [filteredAgents, agentDefinitions, localAgentIds])
 
   const visibleRows = useMemo(
     () =>
@@ -253,7 +239,7 @@ export const AgentChecklist: React.FC<AgentChecklistProps> = ({
     else if (focusedBottom > currentScroll + viewportHeight) {
       scrollbox.scrollTop = focusedBottom - viewportHeight
     }
-  }, [focusedIndex, visibleRows.length])
+  }, [focusedIndex, visibleRows.length, maxHeight])
 
   if (filteredAgents.length === 0) {
     return (
@@ -336,7 +322,13 @@ export const AgentChecklist: React.FC<AgentChecklistProps> = ({
                     attributes: isFocused ? TextAttributes.BOLD : undefined,
                   }}
                 >
-                  {symbol} {displayText}
+                  {symbol}{' '}
+                  {row.reference === 'shared'
+                    ? 'shared · '
+                    : row.reference === 'cycle'
+                      ? 'cycle · '
+                      : ''}
+                  {displayText}
                 </text>
               </Button>
             )

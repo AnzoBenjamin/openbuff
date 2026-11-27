@@ -1,0 +1,10 @@
+[package]
+name = "openbuff-intelligence"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+rusqlite = { version = "=0.42.0", features = ["bundled"] }

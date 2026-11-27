@@ -1,0 +1,10 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/run-output-schema-node.test.ts:
+(pass) Node cjs consumes per-run model, schema, usage and previousRun [1756.30ms]
+(pass) Node esm consumes per-run model, schema, usage and previousRun [3014.32ms]
+
+ 2 pass
+ 0 fail
+ 18 expect() calls
+Ran 2 tests across 1 file. [4.78s]

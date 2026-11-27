@@ -84,6 +84,21 @@ export const AGENT_PERSONAS = {
     displayName: 'Sam the Synthesizer',
     purpose: 'Synthesizes audit finding files into a cross-cutting report.',
   } as const,
+  'knowledge-retriever': {
+    displayName: 'Knowledge Retriever',
+    purpose:
+      'Retrieves scoped source, index, knowledge-file and host memory evidence without edits.',
+  } as const,
+  'knowledge-reviewer': {
+    displayName: 'Knowledge Reviewer',
+    purpose:
+      'Independently checks knowledge claims and proposes evidence-backed changes without applying them.',
+  } as const,
+  'memory-manager': {
+    displayName: 'Memory Manager',
+    purpose:
+      'Joins read-only retrieval and review into operator-approval-required memory and knowledge proposals.',
+  } as const,
   'context-pruner': {
     displayName: 'Context Pruner',
     purpose: 'Prunes and summarizes conversation context between steps.',
@@ -227,8 +242,9 @@ export const AGENT_NAME_TO_TYPES = Object.entries(AGENT_NAMES).reduce(
 
 /**
  * Sentinel used when no explicit maxAgentSteps cap is configured. Productive
- * runs are unlimited by default; repeated identical steps are handled by the
- * runtime loop watchdog instead of an unconditional counter.
+ * runs are unlimited by default; a configured maxAgentSteps fixed cap and
+ * budget enforcement are what bound runaway runs — no runtime loop watchdog
+ * exists.
  */
 export const MAX_AGENT_STEPS_DEFAULT = -1
 

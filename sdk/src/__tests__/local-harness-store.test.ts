@@ -97,7 +97,64 @@ describe('LocalHarnessStore', () => {
     expect(listed.diagnostics[0]?.quarantinedPath).toBeDefined()
     expect(fs.existsSync(corruptPath)).toBe(false)
     expect(fs.existsSync(listed.diagnostics[0]!.quarantinedPath!)).toBe(true)
+    expect(store.listWithDiagnostics('repo-1', 'tasks').diagnostics).toEqual(
+      listed.diagnostics,
+    )
+    const restarted = new LocalHarnessStore(root)
+    expect(restarted.listWithDiagnostics('repo-1', 'tasks')).toEqual(listed)
+    expect(() => restarted.read('repo-1', 'tasks', 'task-bad')).toThrow(
+      'Quarantined harness record',
+    )
   })
+
+  test.each(['open', 'finding.tmp.tail'])(
+    'direct corrupt reads preserve diagnostics across instances for %s',
+    (id) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-harness-'))
+      roots.push(root)
+      const filePath = path.join(root, 'repo-1', 'findings', `${id}.json`)
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, '{bad')
+      expect(() =>
+        new LocalHarnessStore(root).read('repo-1', 'findings', id),
+      ).toThrow()
+      const diagnostics = new LocalHarnessStore(root).listWithDiagnostics(
+        'repo-1',
+        'findings',
+      ).diagnostics
+      expect(diagnostics).toHaveLength(1)
+      expect(diagnostics[0]?.filePath).toBe(filePath)
+      // A lost sidecar still leaves durable raw quarantine evidence.
+      fs.unlinkSync(`${diagnostics[0]!.quarantinedPath}.diagnostic.json`)
+      fs.writeFileSync(
+        `${diagnostics[0]!.quarantinedPath}.diagnostic.json.tmp.${process.pid}.00000000-0000-4000-8000-000000000000`,
+        '{unfinished sidecar',
+      )
+      const legacy = new LocalHarnessStore(root).listWithDiagnostics(
+        'repo-1',
+        'findings',
+      )
+      expect(legacy.diagnostics).toHaveLength(1)
+      expect(legacy.diagnostics[0]).toMatchObject({
+        filePath,
+        message: 'Quarantined harness record; original diagnostic unavailable.',
+      })
+      fs.writeFileSync(
+        `${diagnostics[0]!.quarantinedPath}.diagnostic.json`,
+        '{broken',
+      )
+      const broken = new LocalHarnessStore(root)
+      expect(
+        broken.listWithDiagnostics('repo-1', 'findings').diagnostics[0],
+      ).toMatchObject({
+        filePath,
+        message: 'Corrupt persisted harness diagnostic; evidence unavailable.',
+      })
+      expect(() => broken.read('repo-1', 'findings', id)).toThrow(
+        'Quarantined harness record',
+      )
+    },
+  )
 
   test('serializes compare-and-swap across processes', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-harness-'))
@@ -169,7 +226,9 @@ describe('LocalHarnessStore', () => {
   })
 
   test('lock reclaim verifies the recorded owner is dead, not just stale mtime', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-harness-lock-'))
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-harness-lock-'),
+    )
     roots.push(root)
     const store = new LocalHarnessStore(root)
     const internal = store as unknown as {
@@ -200,10 +259,9 @@ describe('LocalHarnessStore', () => {
   })
 
   test('release is ownership-verified: a stale holder does not delete a stolen lock', () => {
-    const root = fs.mkdtempSync(path.join(
-      os.tmpdir(),
-      'openbuff-harness-lock2-',
-    ))
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-harness-lock2-'),
+    )
     roots.push(root)
     const store = new LocalHarnessStore(root)
     const lockPath = path.join(root, 'repo-1', 'approvals.lock')
@@ -230,10 +288,9 @@ describe('LocalHarnessStore', () => {
   })
 
   test('reclaim deletes the lock dir only when the displaced owner is still dead', async () => {
-    const root = fs.mkdtempSync(path.join(
-      os.tmpdir(),
-      'openbuff-harness-lock3-',
-    ))
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-harness-lock3-'),
+    )
     roots.push(root)
     const store = new LocalHarnessStore(root)
     const internal = store as unknown as {
@@ -247,7 +304,11 @@ describe('LocalHarnessStore', () => {
     fs.mkdirSync(lockPath, { recursive: true })
     fs.writeFileSync(
       path.join(lockPath, 'owner.json'),
-      JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: 'live' }),
+      JSON.stringify({
+        pid: process.pid,
+        acquiredAt: Date.now(),
+        token: 'live',
+      }),
     )
     expect(internal.reclaimStaleFilesystemLock(lockPath)).toBe(false)
     expect(fs.existsSync(lockPath)).toBe(true)
@@ -279,10 +340,9 @@ describe('LocalHarnessStore', () => {
   })
 
   test('reclaim removes the displaced scratch lock dir when the restore races a newer waiter', () => {
-    const root = fs.mkdtempSync(path.join(
-      os.tmpdir(),
-      'openbuff-harness-lock4-',
-    ))
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-harness-lock4-'),
+    )
     roots.push(root)
     const store = new LocalHarnessStore(root)
     const internal = store as unknown as {
@@ -294,7 +354,11 @@ describe('LocalHarnessStore', () => {
     fs.mkdirSync(lockPath, { recursive: true })
     fs.writeFileSync(
       path.join(lockPath, 'owner.json'),
-      JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: 'live' }),
+      JSON.stringify({
+        pid: process.pid,
+        acquiredAt: Date.now(),
+        token: 'live',
+      }),
     )
 
     // Simulate a newer waiter re-acquiring the lock path between the

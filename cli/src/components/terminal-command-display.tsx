@@ -8,6 +8,8 @@ import { formatTimeout } from '../utils/format-timeout'
 import { wrapTextToVisualLines } from '../utils/text-layout'
 
 interface TerminalCommandDisplayProps {
+  showCommandHeader?: boolean
+  outputLabel?: string
   command: string
   output: string | null
   /** Whether to show an expandable "Show more" button for long output */
@@ -20,6 +22,7 @@ interface TerminalCommandDisplayProps {
   cwd?: string
   jobId?: string
   status?: string
+  exitCode?: number
   detached?: boolean
   logFile?: string
   /** Timeout in seconds for the command */
@@ -33,6 +36,8 @@ interface TerminalCommandDisplayProps {
  * Used in both the ghost message (pending bash) and message history.
  */
 export const TerminalCommandDisplay = ({
+  showCommandHeader = true,
+  outputLabel,
   command,
   output,
   expandable = true,
@@ -41,6 +46,7 @@ export const TerminalCommandDisplay = ({
   cwd,
   jobId,
   status,
+  exitCode,
   detached,
   logFile,
   timeoutSeconds,
@@ -81,6 +87,7 @@ export const TerminalCommandDisplay = ({
   const metadata = [
     cwd ? `cwd ${cwd}` : undefined,
     status ? `status ${status}` : undefined,
+    exitCode !== undefined ? `exit ${exitCode}` : undefined,
     jobId ? `job ${jobId}` : undefined,
     detached !== undefined ? (detached ? 'detached' : 'attached') : undefined,
     logFile ? `log ${logFile}` : undefined,
@@ -90,7 +97,8 @@ export const TerminalCommandDisplay = ({
   if (!output) {
     return (
       <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-        {commandHeader}
+        {showCommandHeader && commandHeader}
+        {outputLabel && <text fg={theme.secondary}>{outputLabel}</text>}
         {metadata.length > 0 ? (
           <text fg={theme.muted}>{metadata.join(' · ')}</text>
         ) : null}
@@ -129,7 +137,8 @@ export const TerminalCommandDisplay = ({
 
   return (
     <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      {commandHeader}
+      {showCommandHeader && commandHeader}
+      {outputLabel && <text fg={theme.secondary}>{outputLabel}</text>}
       {metadata.length > 0 ? (
         <text fg={theme.muted}>{metadata.join(' · ')}</text>
       ) : null}

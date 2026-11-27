@@ -1,319 +1,470 @@
 # Openbuff SDK
 
-Openbuff is a local-first, BYOK coding-agent SDK. Filesystem tools run against
-the host-provided `CodebuffFileSystem`; provider credentials and model routing
-remain under the host's control.
+Openbuff is a local-first, BYOK coding-agent SDK: tools run locally and model
+requests go directly to your configured provider. There is **no hosted
+Openbuff backend or inference fallback**. Configure a provider first, then
+save the [shared example setup](#shared-example-setup) alongside each example.
 
-## Recommended filesystem setup
+## Quickstart
 
-New runs default to structured `read_files` v1 results. Use
-`filesystemResultFormat: 'legacy-v0'` only for an existing compatibility
-integration. During agent runs, complete reads carry authenticated `cap.v3`
-tokens bound to the current project, normalized path, and run; SDK callers
-should treat them as opaque and copy them only to the matching edit target.
+Save as `quickstart.ts`; after the setup below, run `bun quickstart.ts`.
 
-When `run()` receives a `cwd` and no custom `fsSource`, the SDK creates a
-workspace-scoped mutation broker under the harness state directory. The broker
-supplies bounded line-range reads plus cooperative, inter-process conditional
-commit/delete/move and exclusive-create authority:
-
+<!-- sdk-example: quickstart.ts -->
 ```ts
-import { run } from '@openbuff/sdk'
-
-await run({
-  cwd: process.cwd(),
-  filesystemResultFormat: 'structured-v1',
-  agent: 'base2',
-  prompt: 'Update the project',
-})
+import { OpenbuffClient, type PrintModeEvent } from '@openbuff/sdk'
+import { clientOptions } from './example-setup'
+const client = new OpenbuffClient(clientOptions)
+try {
+  const result = await client.run({ agent: 'base2', prompt: 'Say hello without running tools.',
+    handleEvent: (event: PrintModeEvent) => { if (event.type === 'text') process.stdout.write(event.text) } })
+  if (result.output.type === 'error') throw new Error(result.output.message)
+  console.log('\nFinal output:', JSON.stringify(result.output))
+} catch (error) { console.error(error); process.exitCode = 1 }
 ```
 
-`createNodeFileSystem()` used by itself intentionally omits conditional
-mutations and makes guarded updates fail closed. Hosts that need the same
-brokered adapter outside `run()` can construct it explicitly:
+`handleEvent` receives `PrintModeEvent` progress, including streamed `text`
+and per-request `usage` events. Usage counts are omitted when unavailable;
+`complete: true` means valid input/output counts were reported, not that cache
+counts or remote cost are known. `result.output` is the final discriminated result, not just a string.
+A resolved promise is not proof of success: inspect error output as above and
+catch rejected calls. Execution completion also does not prove task acceptance;
+see [outcomes and cancellation](#outcomes-and-cancellation).
 
-```ts
-import { createNodeFileSystem, WorkspaceMutationBroker } from '@openbuff/sdk'
+## Configure the examples
 
-const mutationBroker = await WorkspaceMutationBroker.create({
-  cwd: process.cwd(),
-  stateDir: '/path/to/openbuff/state/harness',
-})
-const fsSource = createNodeFileSystem({ mutationBroker })
-```
+Install the SDK in your application with `bun add @openbuff/sdk` (or
+`npm install @openbuff/sdk`). The SDK supports Node.js 20.3+; these TypeScript
+examples use Bun to run TypeScript directly.
 
-This is cooperative CAS among participating Openbuff processes, not absolute
-kernel-enforced filesystem CAS. External editors can bypass the broker, so
-workspace revision checks and filesystem watching remain the backstop for
-outside mutations.
+This concrete configuration expects an Ollama server already listening on
+`127.0.0.1:11434`, with `qwen3:8b` and `qwen3-coder:30b` installed. If needed,
+install those models with `ollama pull qwen3:8b` and
+`ollama pull qwen3-coder:30b`, and start the server with `ollama serve`.
+Save this as `openbuff.json` in the directory where you run the examples:
 
-Custom adapters should implement the optional capabilities they can guarantee:
-
-- `readTextRange` enables bounded reads of files larger than 10 MB.
-- `streamDirectory` keeps `list_directory` lazy, stopping one entry past the
-  listing cap instead of materializing every directory entry. Implementers must
-  (1) release the directory handle from the iterator's `return()` — the method
-  breaking out of `for await` invokes, which async generators and Node's `Dir`
-  already do — and (2) set `readdirView` to the adapter's own `readdir`. A
-  `readdirView` that is not the adapter's current `readdir` (for example after
-  a decorating adapter overrides `readdir`) makes callers ignore the capability
-  and fall back to full `readdir` materialization, with no diagnostic.
-- `createFileExclusive` prevents create collisions.
-- `conditionalCommit` prevents lost updates between validation and overwrite.
-- `conditionalDelete` guards deletions with an exact-byte expected hash.
-- `conditionalMove` requires the source hash and an absent destination.
-
-Declare `streamDirectory` only when you can guarantee both obligations above:
-the iterator releases its handle from `return()`, and `readdirView` is the
-adapter's current `readdir`. A mis-paired `readdirView` silently disables the
-capability — callers fall back to full `readdir` materialization with no
-diagnostic. Confirm the finished wiring with `supportsStreamDirectory()`, not
-by checking member presence:
-
-```ts
-import type fs from 'fs'
-import type { Dirent } from 'fs'
-import { supportsStreamDirectory } from '@openbuff/sdk'
-import type { CodebuffFileSystem } from '@openbuff/sdk'
-
-// Virtual directory store: path -> entries. Both views below serve this store.
-const directories = new Map<string, Dirent[]>()
-
-// The adapter's own `readdir` (a real one carries the full fs.promises
-// overload set, elided here).
-const readdir = (path: fs.PathLike): Promise<Dirent[]> =>
-  Promise.resolve(directories.get(String(path)) ?? [])
-
-// Breaking out of `for await` calls the generator's built-in `return()`, releasing the handle.
-async function* iterate(path: fs.PathLike): AsyncGenerator<Dirent> {
-  yield* directories.get(String(path)) ?? []
+<!-- sdk-example-config: openbuff.json -->
+```json
+{
+  "defaultModel": "local/qwen3:8b",
+  "providers": {
+    "local": {
+      "type": "openai-compatible",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "models": ["qwen3:8b", "qwen3-coder:30b"]
+    }
+  },
+  "sandbox": { "mode": "project" },
+  "indexing": { "enabled": false }
 }
-
-const streamDirectory: NonNullable<CodebuffFileSystem['streamDirectory']> =
-  Object.assign((path: fs.PathLike) => iterate(path), { readdirView: readdir })
-
-const adapter = { readdir, streamDirectory }
-console.log(supportsStreamDirectory(adapter)) // true
 ```
 
-Tools that require a host process, such as terminal commands and configured
-validation hooks, are separate from the filesystem adapter. Virtual or remote
-hosts should override or disable process-backed tools when the local process
-does not represent the same workspace.
+For a BYOK HTTPS provider, configure its endpoint, supported models and
+`apiKeyEnv`, and supply that environment variable privately. Do not put keys
+in prompts, source files, transcripts or child-command environment overrides.
+A local HTTP endpoint must be recognized as local and keyless; credentials
+require HTTPS. See [local/BYOK provider setup](../docs/local-mode.md) and
+[configuration](../docs/configuration.md) for other providers and routing.
 
-## High-impact action approvals
+### Shared example setup
 
-Approval behavior is controlled by `approvalMode`:
+**All TypeScript fences in this README are complete files**, with the names
+shown above them. Save this one as `example-setup.ts` in the same directory as
+`quickstart.ts`, `structured-output.ts`, `continuation.ts` and `deadline.ts`.
+It is their only shared dependency; it can also be run with
+`bun example-setup.ts` (it exports options and does not start a model run).
 
-- `balanced` (default) allows routine dependency changes, commits, feature
-  branch pushes, pull requests, ordinary downloads, normal pipelines/tests, and
-  staged-only `git restore --staged` without prompting. It asks only for truly
-  destructive workspace/history shapes (for example `git reset --hard`,
-  `git clean -fd`, worktree-mutating restore, recursive deletes), default-branch
-  pushes, deployments, releases, migrations, uploads/remote shells, and
-  interpreter-eval / detached-process shapes — not ordinary pipes, command
-  substitution in project scripts, or background jobs.
-- `strict` asks for every classified package, Git, remote, or destructive
-  effect.
-- `allow-all` auto-approves classified effects while retaining non-negotiable
-  project containment, secret filtering, no global/system installs, staged
-  path ownership, and no force/delete pushes.
-
-When approval is required, hosts can provide `requestApproval`; the callback
-pauses the same tool call and returns a decision. Approved actions receive a
-single-use receipt bound to the repository, workspace, root run, exact action
-target, and current workspace snapshot, then continue immediately.
-
-The CLI wires `requestApproval` to its existing in-run question UI. SDK hosts
-may instead pre-create receipts with `HarnessApprovalService` and pass their IDs
-through `approvalReceiptIds`. A receipt for a different command, run,
-workspace, or snapshot is rejected; an agent cannot mint or broaden its own
-approval.
-
-## Terminal command permission profiles
-
-**Note:** In the bundled runtime, all agents currently execute their terminal
-commands under the `full-access` profile. The runtime handler
-(`packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts`)
-hardcodes `permission_profile: 'full-access'` for every agent, so the per-agent
-profile gates described below (`read-only`, `workspace-write`, `git-commit`,
-`dependency-mutation`, `validation-diagnosis`, `tmux-test`,
-`librarian-read-only`) are **not** enforced for bundled agents. Under
-`full-access`, `evaluateTerminalCommandPolicy` bypasses every policy gate: no
-path-containment/traversal checks, no temp restriction, no
-read-only/env-dump/shell-indirection/sed/dependency/git denials, and no
-per-profile allowlists. The profile catalog below is therefore the SDK helper's
-contract, not the bundled per-agent enforcement: the profiles still exist in the
-policy code and remain callable via the exported `evaluateTerminalCommandPolicy`
-helper, so SDK hosts can still invoke any profile directly. The separate
-high-impact-action approval gate (previous section) is UNCHANGED and still
-applies on top of `full-access`.
-
-`run_terminal_command` is gated by the exported
-`evaluateTerminalCommandPolicy` helper, which decides whether a command may
-run under an agent's permission profile. Hosts can call it directly to
-evaluate the same policy outside the tool:
-
+<!-- sdk-example: example-setup.ts -->
 ```ts
-const decision = evaluateTerminalCommandPolicy({
-  command: 'git status',
-  mode: 'assistant',
-  permissionProfile: 'git-commit',
-  projectRoot: process.cwd(),
-  allowedPaths: ['src/index.ts'],
-})
-// decision: { allowed: true } | { allowed: false, reason: string }
+import path from 'node:path'
+import type { AgentDefinition, OpenbuffClientOptions } from '@openbuff/sdk'
+
+// SDK hosts supply definitions; this is a minimal prompt-only example agent.
+const base2: AgentDefinition = {
+  id: 'base2',
+  displayName: 'Example base2',
+  systemPrompt: 'Answer the user directly. Use the reporting tool when an output schema is supplied.',
+  toolNames: [],
+  outputMode: 'last_message',
+}
+const cwd = process.cwd()
+export const clientOptions: OpenbuffClientOptions = {
+  cwd,
+  agentDefinitions: [base2],
+  projectContextMode: 'paths',
+  harnessStateDir: path.join(cwd, '.openbuff', 'harness'),
+  handleEvent: (event) => { if (event.type === 'error') console.error(event.message) },
+  hostConfiguration: {
+    environment: { ...process.env },
+    platform: process.platform,
+    invocationCwd: cwd,
+    projectRoot: cwd,
+    home: { kind: 'none' },
+    globals: { kind: 'disabled' },
+    selection: {
+      kind: 'explicit',
+      path: path.resolve(cwd, process.env.OPENBUFF_PROVIDER_CONFIG ?? 'openbuff.json'),
+      required: true,
+    },
+    trust: { ancestorConfig: false, projectReadableRoots: false },
+  },
+}
 ```
 
-Inputs:
+The SDK host owns its agent definitions; it does not automatically populate
+the CLI's full agent registry. This setup defines a minimal **prompt-only**
+agent named `base2` so the examples are self-contained. It is not the CLI's
+full coding/orchestration agent. Coding hosts should supply their reviewed
+agent definitions and tool permissions through `agentDefinitions`.
 
-- `command` — the shell command line to evaluate.
-- `mode` — `'assistant'` enforces the policy; `'user'` is always allowed
-  (direct user input is not gated here).
-- `permissionProfile` — one of the profiles below.
-- `projectRoot` — the workspace root used for path-containment checks.
-- `cwd` — optional in-project working directory. When provided, relative
-  `..` tokens under `workspace-write` and `validation-diagnosis` resolve
-  against this directory instead of `projectRoot`. The resolved path must
-  still stay inside `projectRoot`; `cd ..` from the repo root stays denied.
-- `allowedPaths` — optional owned-path allowlist, required for `git add`
-  and `git restore --staged` under `git-commit`.
+This host explicitly selects the provider file you reviewed, disables home and
+global discovery, and keeps harness state in the current workspace. Set the
+existing `OPENBUFF_PROVIDER_CONFIG` variable to select a different reviewed
+file. Explicit selection is a host trust decision, not permission to trust
+arbitrary repository-supplied configuration. It does not automatically trust
+project agents, skills or MCP startup. The sample disables indexing because
+these prompts need no repository retrieval; ordinary coding hosts can enable
+it. No example setup step creates or modifies user-global configuration.
 
-Profiles:
+## Per-run model and validated structured output
 
-- `read-only` — inspection only. Blocks filesystem, Git, dependency, network,
-  package/system, deployment, and process mutations, shell interpreter
-  escapes, and unsafe redirection. `/dev/null` and file-descriptor redirects
-  are tolerated.
-- `librarian-read-only` — `read-only` plus a single narrow exception: a
-  depth-1 `git clone` of a GitHub repo into a `/tmp/librarian-…` directory.
-- `validation-diagnosis` — `read-only` relaxed for debugging: in-project `..`
-  references are allowed (segments that escape the project root are still
-  rejected), and `>`/`>>`/heredoc writes are permitted only to plain,
-  expansion-free paths that resolve inside the project.
-- `git-commit` — inspect/fetch Git state, stage explicit owned paths, create a
-  non-`--amend` commit with `-m`/`--message`, and perform an explicit
-  non-force branch push. `git add` and `git restore --staged` paths must be
-  an exact subset of `allowedPaths`; broad flags, dot staging, options, and
-  globs are forbidden.
-  Whole-subject placeholder commit messages such as bare `probe`, `wip`,
-  `test`, `tmp`, `update`, or `misc` are denied; real imperative subjects that
-  merely contain those words stay allowed. Safe single-command branch/switch,
-  create, safe delete (`branch -d`), merge, cherry-pick, stash, soft/mixed
-  reset, tag create, and staged restore are allowed. Data-loss and history
-  rewrite shapes stay denied (`reset --hard`, force/delete branch, `clean`,
-  path checkout, rebase, amend, stash drop/clear, config writes, force switch,
-  strategy overrides, worktree restore). Shell composition is allowed only
-  between allowlisted read-only git inspection commands; staging, commit, and
-  push remain single-command-only. Active substitution and unquoted
-  redirection stay blocked.
-- `dependency-mutation` — supported ecosystem dependency operations only
-  (npm/pnpm/yarn/bun, uv/poetry, pip, cargo, go, dotnet, bundler, composer,
-  swift, dart/flutter, mix, maven, gradle). Global/user-level installs, shell
-  composition, and multi-line commands are blocked.
-- `tmux-test` — inspection under a shell that cannot mutate the workspace.
-  File writers, archive extractors, interpreters, compound shell syntax,
-  active expansion/substitution, non-`/dev/null` redirects, and non-inspect
-  Git commands are denied. Fixture creation is not authorized through the
-  shell; use a dedicated terminal executor with private fixture creation.
-  Outside-absolute-path containment and env-dump denial still apply.
-- `workspace-write` — general workspace writes. Everyday bash (`for`/`if`/
-  `while`/`case`, pipelines, and normal control flow) is allowed. In-project
-  `..` references are allowed, including `cd ..` from a contained `cwd` that
-  still lands inside the project; escaping segments are rejected. Command and
-  process substitution (`$(...)`, backticks, `<(...)`) are inspected for env
-  dumps rather than denied wholesale, so `echo $(date)` is allowed while
-  `echo $(printenv)` is not. `gh pr create` and other GitHub PR mutation verbs
-  are allowed here (they remain denied on `read-only` and stay routine in
-  balanced harness approval).
-- `full-access` — bypasses the policy gates. Use only through an explicit
-  full-access workflow.
+Run `bun structured-output.ts` with the shared setup. `model` selects a
+configured primary for this run and its descendants without changing agent
+templates or provider files. Configured failover still applies. Invalid or
+unconfigured model IDs fail instead of silently selecting another primary.
 
-Containment applied to every non-`full-access` profile, including `tmux-test`:
-path traversal (`..` segments, per the profile rules above) and absolute paths
-that resolve outside the project root (with `/tmp`, `/bin`, `/usr/bin`, and
-`/dev/null` exempted) are always denied.
+<!-- sdk-example: structured-output.ts -->
+```ts
+import { OpenbuffClient } from '@openbuff/sdk'
+import { clientOptions } from './example-setup'
 
-In addition, every non-`full-access` profile except `tmux-test` always denies
-privilege escalation (`sudo`/`su`), system package managers, root deletion,
-force/delete pushes, and shell indirection (`eval`/`source`/`<shell> -c`).
-Environment dumps (`env`/`printenv`/bare `set`/`export`, including wrapped,
-path, busybox, execution-wrapper, double-quoted substitution, and process-
-substitution forms such as `command printenv`, `env printenv`, `nice env`, or
-`cat <(printenv)`; option-only `set -euo pipefail` and workspace-style
-`export NAME[=value]` / `env NAME=value <utility>` remain allowed where the
-profile permits) are denied for every non-`full-access` profile, including
-`tmux-test`. Under `workspace-write` only, active `$()` / backticks /
-process substitution are not treated as dumps unless a substitution body or
-remaining segment actually dumps the environment; unextractable substitutions
-do not fail closed as env-dump. `read-only`, `librarian-read-only`,
-`validation-diagnosis`, `tmux-test`, `git-commit`, and `dependency-mutation`
-still fail closed on substitution and unparseable composition for env-dump.
-Under `read-only` / `librarian-read-only` / `validation-diagnosis`,
-env mutation forms such as `export NAME=value` and `env NAME=value cmd` are
-also denied. The `tmux-test` profile still skips the other workspace deny
-patterns because it is governed by its own stricter no-shell-write guard
-described above. When a command is denied, `reason` names the specific rule
-that blocked it.
+const client = new OpenbuffClient(clientOptions)
+try {
+  const result = await client.run({
+    agent: 'base2',
+    model: 'local/qwen3-coder:30b',
+    prompt: 'Return a greeting as summary and an empty changedFiles array. Do not run workspace tools.',
+    outputSchema: {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: {
+        summary: { type: 'string', minLength: 1 },
+        changedFiles: { type: 'array', items: { type: 'string' }, maxItems: 10 },
+      },
+      required: ['summary', 'changedFiles'],
+      additionalProperties: false,
+    },
+  })
+  if (result.output.type === 'error') throw new Error(result.output.message)
+  if (result.output.type !== 'structuredOutput' || result.output.value === null)
+    throw new Error('No validated structured output was returned')
+  console.log('Structured output:', JSON.stringify(result.output.value))
+} catch (error) {
+  console.error(error)
+  process.exitCode = 1
+}
+```
 
-### Harness classification and basher (`workspace-write`) pitfalls
+`outputSchema` is a **root-only, per-run JSON Schema draft-7 contract** with
+`type: 'object'`. The SDK captures plain, acyclic JSON before asynchronous
+setup, bounded to 64 KiB, 4,096 nodes and depth 32. Inline the schema: actual
+schema-reference `$ref` keywords, including local references, are refused; no
+external references are fetched. Ordinary output-property names and literal
+annotation/constant data may contain `$ref`. Accessors, serialization hooks, unsupported dialects and invalid
+schemas are refused rather than executed or silently relaxed.
 
-- Harness high-impact classification (`classifyTerminalHarnessAction`) no longer
-  treats ordinary pipes, `$(...)` / backticks, or trailing `&` as
-  `arbitrary-code`; interpreter `-e`/`-c` and `nohup`/`setsid` still do.
-- `git restore --staged` is not high-impact; bare/worktree/patch restore is
-  `workspace-delete`.
-- **Basher (`workspace-write`) operational pitfalls:**
-  - Prefer a project file + `bun path/to/script` over `bun -e` / `node -e`
-    (those are classified as `arbitrary-code` and need approval in balanced
-    mode).
-  - Do not embed multi-KB heredocs or live `$()` that dump env in the basher
-    `params.command` string — env dumps (`env`/`printenv`/bare `set`) stay
-    denied even when ordinary `$(date)` / `$(pwd)` substitutions and `gh pr`
-    are allowed under `workspace-write` and are not high-impact harness
-    actions. Author files with edit tools; run short commands.
-  - Durable local check (from monorepo root): `bun run check:ci-local` (the early-gates bundle: tool defs + memory-drift + sync-agent-config).
+The runtime supplies the root reporting tool and validates its structured
+output without coercing types, adding defaults or removing extra properties.
+Check for non-null `structuredOutput` as above; an arbitrary last message or
+missing output is not a validated result. This option does not install a
+schema on templates or descendants. These examples use the in-process backend;
+they do not imply ACP remote model/schema negotiation.
 
-## Search tool working directory
+## Continue a conversation
 
-`code_search` and `find_files_matching_content` accept a `cwd` that sets the
-search root. The `cwd` is resolved with `realpath` and is not required to stay
-inside the project root, so a search can target a parent, sibling, or other
-external directory. Two cases still return an error result:
+Run `bun continuation.ts`. Pass the **whole returned `RunState`** as
+`previousRun`, not just its output. Treat session state as private: it can
+contain source, prompts and tool history. Keep it with its owning workspace
+and do not treat restored state as fresh approval or read authority.
 
-- a `cwd` that resolves to a file rather than a directory, and
-- a `cwd` that does not exist or cannot be read.
+<!-- sdk-example: continuation.ts -->
+```ts
+import { OpenbuffClient } from '@openbuff/sdk'
+import { clientOptions } from './example-setup'
 
-This relaxation applies only to the two content-search tools. Path containment
-for `run_terminal_command` and the other read/exec tools is unchanged (see the
-permission profiles above).
+const client = new OpenbuffClient(clientOptions)
+try {
+  const first = await client.run({
+    agent: 'base2',
+    model: 'local/qwen3-coder:30b',
+    prompt: 'Remember the word ORCHID-27; repeat it without tools.',
+  })
+  if (first.output.type === 'error') throw new Error(first.output.message)
+  const next = await client.run({
+    agent: 'base2',
+    prompt: 'What word did I ask you to remember? Answer without tools.',
+    previousRun: first,
+  })
+  if (next.output.type === 'error') throw new Error(next.output.message)
+  console.log('Continued output:', JSON.stringify(next.output))
+} catch (error) {
+  console.error(error)
+  process.exitCode = 1
+}
+```
 
-## Mutation events
+The second turn keeps conversation context but returns to configured model
+routing. Run-scoped `model` and `outputSchema` do **not** persist through
+`previousRun`; supply them again when wanted. Live workspace context is
+refreshed, and restored security maps are sanitized.
 
-Use `onFilesystemMutation` for precise, awaited cache/index synchronization.
-It receives the tool/call/operation identity and confirmed paths, actions, and
-hashes. `onFilesChanged` remains as a compatibility callback.
+## Reference
 
-External mutation overrides are conservatively reported as `unconfirmed`
-unless the host supplies `verifyExternalMutation` and attests the canonical v1
-result. This keeps remote-workspace integrations possible without trusting
-self-certified mutation results by default.
+### Host configuration, credentials and trust
 
-## Result and cancellation semantics
+Each run captures host configuration, provider credentials and read roots
+before setup. Without explicit `hostConfiguration`, the SDK uses normal
+local configuration discovery. `configReadFs` can inject the synchronous
+configuration reader; it does not silently fall back to another reader.
+An unreadable required selection makes the run unavailable. Disabled globals
+read no global config or OAuth store; `home: { kind: 'none' }` also disables
+home knowledge/agent discovery.
 
-- `applied` means the SDK verified final state and issued an authority receipt.
-- `not_applied` means authority proved no requested action was committed.
-- `unconfirmed` means the host or compatibility boundary cannot establish disk
-  state; re-read before retrying.
-- Run interruption and filesystem outcome are separate. A mutation may report
-  an authoritative result after the run is interrupted.
-- Native reads, images, patches, and validation hooks receive the run abort
-  signal. Once a portable filesystem commit has started, hosts must still use
-  the returned canonical result to determine final disk state.
+`env` and `inheritEnv` control child commands, **not** SDK provider selection
+or credentials. `inheritEnv: false` supplies only the chosen child environment
+before credential scrubbing; an explicit `undefined` removes an entry. Keep
+provider credentials on the host-only configuration/credential boundary.
+Neither child environment control nor tool filtering is OS isolation.
 
-## Public helpers
+Project configuration can only tighten policy until trusted. SDK hosts can
+select `trustProjectConfig`; with explicit `hostConfiguration`, use its
+`trust.projectConfig` instead (`'trusted'` or `'untrusted'`). Ancestor config
+trust, additional readable-root trust and execution trust are separate grants.
+Do not grant them merely because a model or repository asks.
 
-The root package exports structured read helpers, mutation helpers,
-`FilesystemAuthority`, capability detection/types, the Node adapter, and the
-complete `ToolHelpers` namespace. Override descriptor/context types are also
-public for reusable host integrations.
+### Filesystem broker and authenticated read anchors
+
+Filesystem tools operate through `CodebuffFileSystem`. With `cwd`, no custom
+`fsSource`, and an available harness state root, a run creates a
+workspace-scoped `WorkspaceMutationBroker` for the Node adapter. The ordinary
+state root is the Openbuff config directory's `state/harness`; the shared
+setup chooses `.openbuff/harness` instead. Broker failures leave guarded
+mutations fail-closed, not silently unguarded.
+
+Structured `read_files` v1 results are the native run surface. Fresh complete
+reads carry **opaque authenticated `cap.v4` read anchors**, bound to the
+project, normalized path, run and authenticated original raw basis. Copy an
+anchor only to its matching edit target; never construct or decode one as a
+host authorization shortcut. Whole-file writes need a whole-file basis;
+line/structural reads retain scoped authority. Truncated reads mint no fresh
+edit authority. Exact confirmed after-content receipts can refresh raw
+authority; invalidation removes stale anchors. Historical anchors do not
+provide fresh raw edit authority.
+
+The broker provides conditional commit/delete/move and exclusive create.
+This is **cooperative CAS among participating Openbuff processes**, not
+kernel-enforced exclusion against external editors. Workspace revision checks
+and filesystem watching remain the backstop for outside changes. The bare
+`createNodeFileSystem()` deliberately omits conditional mutation authority.
+For direct host use, create a `WorkspaceMutationBroker` with your workspace
+and owned state directory, then pass it as the Node adapter's `mutationBroker`.
+Broker/journal factories capture bootstrap host authority once; observed Git
+identity or an observed non-Git filesystem fallback selects the workspace.
+Permission/I/O errors, empty Git responses and execution refusals cannot
+silently select a different identity.
+
+Custom adapters should declare only capabilities they can guarantee:
+
+| Capability | Required guarantee |
+| --- | --- |
+| `readTextRange` | Bounded text-range reads, including files larger than 10 MB. |
+| `streamDirectory` | A promise of an async iterable; its `return()` releases directory handles, and `readdirView` is the adapter's current `readdir`. |
+| `createFileExclusive` | Collision-free exclusive creation. |
+| `conditionalCommit` | Exact expected-state check and guarded overwrite. |
+| `conditionalDelete` | Exact-byte expected-hash deletion. |
+| `conditionalMove` | Expected source hash and absent destination. |
+
+A mis-paired `readdirView` silently disables lazy directory streaming and
+falls back to full materialization. Check the completed adapter with
+`supportsStreamDirectory()`, not member presence. Virtual/remote filesystem
+hosts must separately override or disable process-backed tools when the local
+process does not represent that workspace. `code_search` and
+`find_files_matching_content` accept a realpath-resolved, existing directory
+`cwd` outside the project; missing, unreadable or file roots fail. This does
+not relax containment for terminal or other read/exec tools.
+
+### Sandbox and execution enforcement
+
+Agent filesystem access is **unrestricted by default**. The sample explicitly
+opts into `sandbox.mode: 'project'`, a tool-level containment policy. Trusted
+`sandbox.allowPaths` grants additional writable paths; `readableRoots` grants
+read-only exceptions. See [filesystem sandbox](../docs/configuration.md#filesystem-sandbox).
+The portable backend applies path checks and a scrubbed child environment,
+but does not enforce OS filesystem/network isolation or certify process-tree
+death. A remote filesystem adapter alone cannot change that.
+
+`executionProfile` declares policy, preferred backend and required capabilities;
+missing required capabilities return unavailable rather than proving isolation.
+Native execution requires a verified host installation and supported platform.
+Plan-lineage terminal commands require verified native read-only enforcement;
+portable fallback, approval and terminal overrides cannot bypass that gate.
+See [execution backend](../docs/configuration.md#execution-backend).
+`recordExecution` separates planned, admitted, dispatched and observed starts;
+only an actual runtime PID/event is an observed start, not dispatch or reuse.
+
+### High-impact action approvals and terminal profiles
+
+`approvalMode` chooses how classified terminal effects are admitted:
+
+- `balanced` (default): routine dependency changes, commits, feature-branch
+  pushes, pull requests, downloads, reads, project scripts, pipelines/tests
+  and staged-only restore do not prompt. Destructive workspace/history
+  operations, default-branch pushes, deployment/release/migration,
+  uploads/remote shells, interpreter evaluation and unknown executable adapters
+  require approval. Ordinary pipes, project-script substitution and normal
+  background jobs are not automatically arbitrary code.
+- `strict`: asks for every classified package, Git, remote or destructive effect.
+- `allow-all`: auto-approves classified effects, but is not a sandbox or a
+  bypass for mandatory authority, containment or protected-action checks.
+
+`requestApproval` pauses the same tool call and returns a decision. A grant
+issues a single-use receipt bound to repository, workspace, root run, exact
+action and current snapshot. Hosts may pre-create receipts with
+`HarnessApprovalService` and supply `approvalReceiptIds`. Wrong-scope or stale
+receipts are rejected; agents cannot mint or broaden them. Client-origin MCP
+process startup requires its separate approval, not merely tool approval.
+
+The runtime forwards an agent's `terminalPermissionProfile` to terminal
+handlers/overrides. Declared `read-only` and `workspace-write` policies are
+additional upper bounds on the captured host profile, not replacements.
+Task-specific profiles are not all runtime-bound yet. The exported
+`evaluateTerminalCommandPolicy` can evaluate their lexical rules directly;
+its `mode: 'user'` bypass and `full-access` result are not proof of OS safety.
+
+| Profile | Lexical policy summary |
+| --- | --- |
+| `read-only` | Inspection; no writes, dependency/Git mutation, unsafe redirection or interpreter escapes. |
+| `workspace-write` | General contained writes and ordinary shell flow; environment dumps still denied. |
+| `validation-diagnosis` | Inspection plus contained debug-output writes and in-project parent references. |
+| `git-commit` | Owned-path staging, meaningful non-amend commits and explicit non-force feature pushes; no data-loss/history rewrite. |
+| `dependency-mutation` | Supported ecosystem dependency operations; no global installs or composed shell payloads. |
+| `tmux-test` | Strict inspection; shell fixture creation is not authorized. |
+| `librarian-read-only` | Read-only plus a narrow shallow GitHub clone into a librarian temporary directory. |
+| `full-access` | Bypasses lexical policy gates; approvals still apply. |
+
+For policy evaluation, `projectRoot` anchors containment, optional `cwd`
+resolves relative paths, and `allowedPaths` is required for owned Git staging.
+Non-full-access rules retain outside-path/escape and environment-dump denials;
+exact exceptions differ by profile. Prefer authored project scripts over
+inline interpreter evaluation. Approval classification and lexical policy
+are distinct checks, neither of which provides OS enforcement.
+
+### Deadlines and process lifetimes
+
+`runTimeoutMs` opts into an overall wall-clock deadline beginning **before
+configuration capture**; omitted means no automatic run timeout.
+`maxAgentSteps` and `maxMissingOutputRetries` are explicit budgets, not new
+default cutoffs. Finite parent deadlines and caller cancellation still apply.
+
+To include earlier asynchronous preparation, capture a deadline first and
+pass `runDeadline`. This complete example deliberately selects 30 seconds;
+run it with `bun deadline.ts` and the shared setup:
+
+<!-- sdk-example: deadline.ts -->
+```ts
+import { access } from 'node:fs/promises'
+import { captureRunDeadline, OpenbuffClient } from '@openbuff/sdk'
+import { clientOptions } from './example-setup'
+
+try {
+  const deadline = captureRunDeadline(30_000)
+  if (!deadline.ok) throw new Error(deadline.cause)
+  await access(process.cwd())
+  const client = new OpenbuffClient(clientOptions)
+  const result = await client.run({
+    agent: 'base2',
+    prompt: 'Say ready without running tools.',
+    runDeadline: deadline.value,
+  })
+  if (result.output.type === 'error') throw new Error(result.output.message)
+  console.log('Deadline output:', JSON.stringify(result.output))
+} catch (error) {
+  console.error(error)
+  process.exitCode = 1
+}
+```
+
+A concurrent `runTimeoutMs` can shorten the captured expiry. Seeds must come
+from the same loaded SDK clock instance; expired, malformed or foreign-clock
+seeds refuse before configuration/native setup. They contain clock coordinates,
+not credentials or authorization tokens.
+
+Direct process helpers need registered host execution authority. Use
+`createConfiguredDirectHostExecution` for a configuration-based host boundary,
+or `createDirectHostExecution` for an explicitly selected host context. Pass
+its `executionContext`, captured `terminalShell` and launch metadata to
+`runTerminalCommand`; context-free helpers return a structured refusal.
+
+SYNC stdin is closed (prompts read EOF). Omitting `timeout_seconds` adds no
+automatic local timeout. Explicit tool caps include approval/startup; a
+selected `terminalTimeoutPolicy.defaultSyncSeconds` starts after admission.
+`maxSeconds` and `allowUnbounded` select further host limits. Configured hooks
+have no default local time cap; a positive `timeoutSeconds` opts into one.
+Finite parent caps and cancellation still apply. Hook inference runs only
+when `autoFileChangeHooks` is explicitly true. See
+[terminal timeout policy](../docs/configuration.md#terminal-timeout-policy).
+A SYNC result can carry `idleOutputHint` after 30 seconds without output;
+timeout/cancellation preserves partial output.
+
+Attached BACKGROUND jobs (`detach: false`) end with the host process on
+natural exit, explicit exit and SIGINT/SIGTERM/SIGHUP. Without another signal
+handler, SDK cleanup precedes exit with 128 + signal number. Detachment
+transfers ownership to a registered session receiver before admission; its
+receiver lifetime and original finite cap survive the host. This does not
+certify OS process-tree death. Run-owned LSP/MCP request leases can be released
+when a waiter cancels while the registered run still owns the process; every
+terminal run path ends the run lifetime and closes captured MCP clients.
+Sharing remains scoped to host, owner, configuration and lifetime.
+
+### Outcomes and cancellation
+
+Use a caller-owned `AbortSignal` through `signal` to request cancellation.
+Native reads, images, patches and hooks receive the run signal. Portable
+filesystem commits already in progress can still finish; cancellation is
+cooperative, not a rollback guarantee.
+
+- `runOutcome` describes execution termination; `taskAcceptance` separately
+  describes accepted/rejected/unknown task evidence. `actionOutcomes` describes
+  individual tool attempts; `executionCleanup` carries physical cleanup facts.
+- Mutation `applied` means final state was verified and an authority receipt
+  issued; `not_applied` means authority proved no requested action committed.
+- `unconfirmed` means final disk state cannot be established; re-read before
+  retrying. An authoritative mutation result can arrive after interruption.
+- `onFilesystemMutation` is awaited for precise confirmed path/action/hash
+  synchronization; `onFilesChanged` is a best-effort compatibility callback.
+- External mutation overrides remain `unconfirmed` unless the host's
+  `verifyExternalMutation` attests the canonical v1 result. Self-certified
+  remote results do not automatically acquire local authority.
+
+### Public helpers and executable documentation tests
+
+The package root exports `OpenbuffClient`, `run`, structured read/mutation
+helpers, `FilesystemAuthority`, broker/journal factories, Node adapters,
+capability detection/types and the `ToolHelpers` namespace, plus the public
+run/configuration/tool contracts needed by host integrations.
+
+From this checkout, execute and typecheck **every TypeScript fence**:
+
+```sh
+bun --no-env-file --no-install test ./sdk/e2e/readme-examples.test.ts
+```
+
+The test runs the actual SDK/runtime with a keyless loopback fake provider,
+owned temporary workspaces/config/harness directories, forbidden external
+fetches and bounded child deadlines. It checks natural child exit and cleanup,
+streaming/final output, model selection, structured validation and continuation.
+No user HOME/config changes, model mocks, installs or builds are needed.
+For an already-built public-consumer rerun, explicitly select its index:
+
+```sh
+OPENBUFF_README_SDK_INDEX="$PWD/sdk/dist/index.mjs" bun --no-env-file --no-install test ./sdk/e2e/readme-examples.test.ts
+```

@@ -4,6 +4,12 @@ import { EditTransactionComponent } from './edit-transaction'
 import { GlobComponent } from './glob'
 import { GitStatusComponent } from './git-status'
 import { ListDirectoryComponent } from './list-directory'
+import {
+  FindReferencesComponent,
+  GoToDefinitionComponent,
+  HoverTypeComponent,
+  WorkspaceSymbolComponent,
+} from './language-intelligence'
 import { QueryIndexComponent } from './query-index'
 import { ReadDocsComponent } from './read-docs'
 import { ReadFilesComponent } from './read-files'
@@ -13,6 +19,7 @@ import { RunFileChangeHooksComponent } from './run-file-change-hooks'
 import { RunTerminalCommandComponent } from './run-terminal-command'
 import { SkillComponent } from './skill'
 import { SpawnAgentsComponent } from './spawn-agents'
+import { SetOutputComponent } from './set-output'
 import { StrReplaceComponent } from './str-replace'
 import { SuggestFollowupsComponent } from './suggest-followups'
 import { TaskCompleteComponent } from './task-completed'
@@ -23,6 +30,36 @@ import {
   KillJobComponent,
   ReadLogsComponent,
 } from './background-job-tools'
+import { CheckBackgroundAgentComponent } from './check-background-agent'
+import { ListJobsComponent } from './list-jobs'
+import {
+  CreatePlanComponent,
+  EvaluateAuditCoverageComponent,
+  GitBranchComponent,
+  InspectCodebaseStructureComponent,
+  InspectFeatureCompletenessComponent,
+  ReadOutlineComponent,
+  RecordDecisionComponent,
+  RunTargetedValidationComponent,
+  UpdatePlanStatusComponent,
+  WebSearchComponent,
+  WriteAuditFindingsComponent,
+} from './plan-intelligence-tools'
+import {
+  GetAffectedTestsComponent,
+  GetBuildTargetsComponent,
+  GetChangeReviewBundleComponent,
+  GetTaskComponent,
+  InspectEnvironmentComponent,
+  InspectWorkspaceComponent,
+} from './harness-intelligence-tools'
+import {
+  CodeActionComponent,
+  ExtractSymbolComponent,
+  RenameSymbolComponent,
+  RewriteSymbolComponent,
+} from './semantic-edit-tools'
+import { RecallContextComponent } from './recall-context'
 
 import type { ToolRenderConfig, ToolRenderOptions, ToolBlock } from './types'
 import type { ChatTheme } from '../../types/theme-system'
@@ -81,11 +118,18 @@ const toolComponentRegistry = new Map<
   [GitStatusComponent.toolName, GitStatusComponent],
   [ListDirectoryComponent.toolName, ListDirectoryComponent],
   [QueryIndexComponent.toolName, QueryIndexComponent],
+  [GoToDefinitionComponent.toolName, GoToDefinitionComponent],
+  [FindReferencesComponent.toolName, FindReferencesComponent],
+  [HoverTypeComponent.toolName, HoverTypeComponent],
+  [WorkspaceSymbolComponent.toolName, WorkspaceSymbolComponent],
   [RunFileChangeHooksComponent.toolName, RunFileChangeHooksComponent],
   [RunTerminalCommandComponent.toolName, RunTerminalCommandComponent],
   [CheckJobComponent.toolName, CheckJobComponent],
   [ReadLogsComponent.toolName, ReadLogsComponent],
   [KillJobComponent.toolName, KillJobComponent],
+  [CheckBackgroundAgentComponent.toolName, CheckBackgroundAgentComponent],
+  [ListJobsComponent.toolName, ListJobsComponent],
+  [RecallContextComponent.toolName, RecallContextComponent],
   [ReadDocsComponent.toolName, ReadDocsComponent],
   [ReadFilesComponent.toolName, ReadFilesComponent],
   [ReadSubtreeComponent.toolName, ReadSubtreeComponent],
@@ -104,6 +148,35 @@ const toolComponentRegistry = new Map<
   ['apply_smart_patch', ApplyPatchComponent],
   [SkillComponent.toolName, SkillComponent],
   [SpawnAgentsComponent.toolName, SpawnAgentsComponent],
+  [SetOutputComponent.toolName, SetOutputComponent],
+  // Semantic / LSP edit tools: one shared apply core, one published result
+  // shape, one renderer family (cli/src/components/tools/semantic-edit-tools.tsx).
+  [RenameSymbolComponent.toolName, RenameSymbolComponent],
+  [CodeActionComponent.toolName, CodeActionComponent],
+  [ExtractSymbolComponent.toolName, ExtractSymbolComponent],
+  [RewriteSymbolComponent.toolName, RewriteSymbolComponent],
+  // Harness / audit-intelligence observation tools.
+  [InspectWorkspaceComponent.toolName, InspectWorkspaceComponent],
+  [GetChangeReviewBundleComponent.toolName, GetChangeReviewBundleComponent],
+  [GetTaskComponent.toolName, GetTaskComponent],
+  [InspectEnvironmentComponent.toolName, InspectEnvironmentComponent],
+  [GetAffectedTestsComponent.toolName, GetAffectedTestsComponent],
+  [GetBuildTargetsComponent.toolName, GetBuildTargetsComponent],
+  // Plan artifacts, audit coverage, and validation evidence.
+  [CreatePlanComponent.toolName, CreatePlanComponent],
+  [UpdatePlanStatusComponent.toolName, UpdatePlanStatusComponent],
+  [RecordDecisionComponent.toolName, RecordDecisionComponent],
+  [WriteAuditFindingsComponent.toolName, WriteAuditFindingsComponent],
+  [GitBranchComponent.toolName, GitBranchComponent],
+  [ReadOutlineComponent.toolName, ReadOutlineComponent],
+  [WebSearchComponent.toolName, WebSearchComponent],
+  [InspectCodebaseStructureComponent.toolName, InspectCodebaseStructureComponent],
+  [
+    InspectFeatureCompletenessComponent.toolName,
+    InspectFeatureCompletenessComponent,
+  ],
+  [EvaluateAuditCoverageComponent.toolName, EvaluateAuditCoverageComponent],
+  [RunTargetedValidationComponent.toolName, RunTargetedValidationComponent],
 ])
 
 /**

@@ -1,0 +1,19 @@
+common/src/types/memory-v2.ts 267ms
+common/src/types/session-state.ts 53ms (unchanged)
+common/src/util/playbook-applicability.ts 13ms
+common/src/util/playbook-scope-glob.ts 22ms
+common/src/util/__tests__/playbook-applicability.test.ts 13ms
+sdk/src/services/memory-v2/usage-observer.ts 11ms
+sdk/src/services/memory-v2/__tests__/usage-observer.test.ts 19ms
+sdk/src/services/memory-v2/__tests__/b14-usage.test.ts 8ms
+sdk/src/services/memory-v2/__tests__/coordinator.test.ts 227ms
+sdk/src/services/memory-v2/coordinator.ts 128ms
+sdk/src/__tests__/b14-memory-usage.test.ts 18ms
+sdk/src/services/repository-intelligence.ts 36ms
+packages/agent-runtime/src/util/memory-read-observation.ts 5ms
+packages/agent-runtime/src/util/memory-v2-context.ts 26ms
+packages/agent-runtime/src/util/__tests__/memory-read-observation.test.ts 5ms
+packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts 41ms
+packages/agent-runtime/src/orchestration/discovery-coordinator.ts 53ms
+packages/agent-runtime/src/tools/handlers/tool/read-files.ts 39ms
+cli/src/services/memory-v2/__tests__/b14-procedure-lifecycle.test.ts 42ms

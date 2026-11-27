@@ -1,0 +1,2279 @@
+{
+  "shardId": "05-durability",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "05-durability",
+    "subsystemIds": [
+      "cli",
+      "sdk",
+      "packages",
+      "common",
+      "docs",
+      "scripts",
+      "agents"
+    ],
+    "files": [
+      "agents/base2/base2.ts",
+      "agents/patterns/audit-codebase.md",
+      "cli/src/commands/dash-command.ts",
+      "cli/src/commands/replay-command.ts",
+      "cli/src/commands/router.ts",
+      "cli/src/commands/run-command.ts",
+      "cli/src/commands/snapshot-commands.ts",
+      "cli/src/hooks/helpers/send-message.ts",
+      "cli/src/hooks/use-send-message.ts",
+      "cli/src/index.tsx",
+      "cli/src/serve-command.ts",
+      "cli/src/utils/__tests__/turn-checkpoint.test.ts",
+      "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "cli/src/utils/attach-session.ts",
+      "cli/src/utils/codebuff-client.ts",
+      "cli/src/utils/run-journal-path.ts",
+      "cli/src/utils/run-state-storage.ts",
+      "cli/src/utils/turn-snapshots.ts",
+      "common/src/protocol/acp-ext-v1.ts",
+      "common/src/testing/fixtures/agent-runtime.ts",
+      "common/src/types/session-state.ts",
+      "common/src/util/plan-artifacts.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/local-mode.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts",
+      "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+      "packages/agent-runtime/src/orchestration/__tests__/workflow-engine.test.ts",
+      "packages/agent-runtime/src/orchestration/workflow-engine.ts",
+      "packages/agent-runtime/src/run-agent-step.ts",
+      "packages/agent-runtime/src/run-programmatic-step.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "packages/agent-runtime/src/tools/stream-parser.ts",
+      "packages/agent-runtime/src/tools/tool-executor.ts",
+      "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+      "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts",
+      "packages/agent-runtime/src/util/background-resume.ts",
+      "packages/agent-runtime/src/util/run-journal.ts",
+      "packages/agent-runtime/src/util/run-replay-driver.ts",
+      "packages/agent-runtime/src/util/workspace-path-leases.ts",
+      "scripts/harness-smoke.mjs",
+      "sdk/package.json",
+      "sdk/src/__tests__/acp-client.test.ts",
+      "sdk/src/__tests__/acp-session-data.test.ts",
+      "sdk/src/__tests__/run-journal-wiring.test.ts",
+      "sdk/src/__tests__/serve-bridge.test.ts",
+      "sdk/src/__tests__/serve-socket.test.ts",
+      "sdk/src/__tests__/task-memory-store.test.ts",
+      "sdk/src/client.ts",
+      "sdk/src/client/acp-client.ts",
+      "sdk/src/dash/__tests__/dash-server.test.ts",
+      "sdk/src/dash/provider.ts",
+      "sdk/src/dash/server.ts",
+      "sdk/src/impl/agent-runtime.ts",
+      "sdk/src/run.ts",
+      "sdk/src/serve/bridge.ts",
+      "sdk/src/serve/serve.ts",
+      "sdk/src/serve/socket-listener.ts",
+      "sdk/src/services/acp/acp-agent.ts",
+      "sdk/src/services/acp/ext-methods.ts",
+      "sdk/src/services/acp/session-data.ts",
+      "sdk/src/services/harness-intelligence.ts",
+      "sdk/src/services/local-harness-store.ts",
+      "sdk/src/services/run-resume-driver.ts",
+      "sdk/src/services/task-memory-store.ts",
+      "sdk/src/services/workspace-journal.ts",
+      "sdk/src/tools/get-task.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 8524,
+      "to": 8574
+    },
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 147
+    },
+    {
+      "path": "cli/src/commands/dash-command.ts",
+      "from": 84,
+      "to": 299
+    },
+    {
+      "path": "cli/src/commands/replay-command.ts",
+      "from": 1,
+      "to": 254
+    },
+    {
+      "path": "cli/src/commands/router.ts",
+      "from": 84,
+      "to": 125
+    },
+    {
+      "path": "cli/src/commands/run-command.ts",
+      "from": 1,
+      "to": 261
+    },
+    {
+      "path": "cli/src/commands/snapshot-commands.ts",
+      "from": 1,
+      "to": 121
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "from": 486,
+      "to": 565
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 294,
+      "to": 327
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 650,
+      "to": 851
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 913,
+      "to": 933
+    },
+    {
+      "path": "cli/src/index.tsx",
+      "from": 546,
+      "to": 697
+    },
+    {
+      "path": "cli/src/serve-command.ts",
+      "from": 101,
+      "to": 219
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-checkpoint.test.ts",
+      "from": 1,
+      "to": 233
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "from": 336,
+      "to": 420
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "from": 557,
+      "to": 625
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "from": 669,
+      "to": 850
+    },
+    {
+      "path": "cli/src/utils/attach-session.ts",
+      "from": 1,
+      "to": 130
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 153,
+      "to": 205
+    },
+    {
+      "path": "cli/src/utils/run-journal-path.ts",
+      "from": 1,
+      "to": 320
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 698,
+      "to": 730
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 1001,
+      "to": 1168
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 91,
+      "to": 213
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 262,
+      "to": 768
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 815,
+      "to": 867
+    },
+    {
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 213,
+      "to": 303
+    },
+    {
+      "path": "common/src/testing/fixtures/agent-runtime.ts",
+      "from": 34,
+      "to": 75
+    },
+    {
+      "path": "common/src/testing/fixtures/agent-runtime.ts",
+      "from": 207,
+      "to": 286
+    },
+    {
+      "path": "common/src/types/session-state.ts",
+      "from": 590,
+      "to": 635
+    },
+    {
+      "path": "common/src/util/plan-artifacts.ts",
+      "from": 230,
+      "to": 347
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 85,
+      "to": 115
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1776,
+      "to": 1840
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 33,
+      "to": 64
+    },
+    {
+      "path": "docs/local-mode.md",
+      "from": 64,
+      "to": 125
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 20,
+      "to": 99
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 15,
+      "to": 22
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 34,
+      "to": 42
+    },
+    {
+      "path": "node_modules/@agentclientprotocol/sdk/dist/acp.js",
+      "from": 995,
+      "to": 1015
+    },
+    {
+      "path": "node_modules/@agentclientprotocol/sdk/dist/acp.js",
+      "from": 1164,
+      "to": 1178
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts",
+      "from": 1710,
+      "to": 2048
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+      "from": 1,
+      "to": 103
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+      "from": 2110,
+      "to": 2169
+    },
+    {
+      "path": "packages/agent-runtime/src/orchestration/__tests__/workflow-engine.test.ts",
+      "from": 1,
+      "to": 162
+    },
+    {
+      "path": "packages/agent-runtime/src/orchestration/workflow-engine.ts",
+      "from": 1,
+      "to": 212
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 985,
+      "to": 1099
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1577,
+      "to": 2035
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2240,
+      "to": 2301
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2371,
+      "to": 2397
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 119,
+      "to": 151
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 448,
+      "to": 490
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 970,
+      "to": 1058
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 1132,
+      "to": 1158
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+      "from": 50,
+      "to": 114
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+      "from": 247,
+      "to": 283
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 153,
+      "to": 182
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "from": 420,
+      "to": 482
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/stream-parser.ts",
+      "from": 675,
+      "to": 735
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 3696,
+      "to": 3738
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 3740,
+      "to": 3785
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+      "from": 267,
+      "to": 565
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+      "from": 574,
+      "to": 581
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "from": 664,
+      "to": 793
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "from": 2621,
+      "to": 2718
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "from": 3134,
+      "to": 3195
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts",
+      "from": 1,
+      "to": 207
+    },
+    {
+      "path": "packages/agent-runtime/src/util/background-resume.ts",
+      "from": 1,
+      "to": 357
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 50,
+      "to": 114
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 201,
+      "to": 226
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 520,
+      "to": 615
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 1350,
+      "to": 1449
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 1655,
+      "to": 1933
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 2290,
+      "to": 2425
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-replay-driver.ts",
+      "from": 1,
+      "to": 295
+    },
+    {
+      "path": "packages/agent-runtime/src/util/workspace-path-leases.ts",
+      "from": 1,
+      "to": 177
+    },
+    {
+      "path": "scripts/harness-smoke.mjs",
+      "from": 1,
+      "to": 180
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 90
+    },
+    {
+      "path": "sdk/src/__tests__/acp-client.test.ts",
+      "from": 326,
+      "to": 390
+    },
+    {
+      "path": "sdk/src/__tests__/acp-session-data.test.ts",
+      "from": 735,
+      "to": 830
+    },
+    {
+      "path": "sdk/src/__tests__/acp-session-data.test.ts",
+      "from": 1161,
+      "to": 1240
+    },
+    {
+      "path": "sdk/src/__tests__/run-journal-wiring.test.ts",
+      "from": 1,
+      "to": 63
+    },
+    {
+      "path": "sdk/src/__tests__/run-journal-wiring.test.ts",
+      "from": 165,
+      "to": 266
+    },
+    {
+      "path": "sdk/src/__tests__/run-journal-wiring.test.ts",
+      "from": 300,
+      "to": 418
+    },
+    {
+      "path": "sdk/src/__tests__/serve-bridge.test.ts",
+      "from": 37,
+      "to": 81
+    },
+    {
+      "path": "sdk/src/__tests__/serve-socket.test.ts",
+      "from": 111,
+      "to": 419
+    },
+    {
+      "path": "sdk/src/__tests__/task-memory-store.test.ts",
+      "from": 553,
+      "to": 754
+    },
+    {
+      "path": "sdk/src/__tests__/task-memory-store.test.ts",
+      "from": 1239,
+      "to": 1416
+    },
+    {
+      "path": "sdk/src/client.ts",
+      "from": 24,
+      "to": 73
+    },
+    {
+      "path": "sdk/src/client/acp-client.ts",
+      "from": 274,
+      "to": 513
+    },
+    {
+      "path": "sdk/src/dash/__tests__/dash-server.test.ts",
+      "from": 99,
+      "to": 139
+    },
+    {
+      "path": "sdk/src/dash/__tests__/dash-server.test.ts",
+      "from": 339,
+      "to": 418
+    },
+    {
+      "path": "sdk/src/dash/provider.ts",
+      "from": 1,
+      "to": 249
+    },
+    {
+      "path": "sdk/src/dash/server.ts",
+      "from": 576,
+      "to": 690
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 134,
+      "to": 225
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 244,
+      "to": 257
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 328,
+      "to": 343
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 371,
+      "to": 399
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 664,
+      "to": 704
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1020,
+      "to": 1155
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1370,
+      "to": 1595
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1898,
+      "to": 1917
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2180,
+      "to": 2268
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2293,
+      "to": 2408
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2625,
+      "to": 2654
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2955,
+      "to": 2975
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 145,
+      "to": 216
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 735,
+      "to": 820
+    },
+    {
+      "path": "sdk/src/serve/serve.ts",
+      "from": 1,
+      "to": 157
+    },
+    {
+      "path": "sdk/src/serve/socket-listener.ts",
+      "from": 1,
+      "to": 511
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 228,
+      "to": 283
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 650,
+      "to": 933
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 995,
+      "to": 1087
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 1205,
+      "to": 1345
+    },
+    {
+      "path": "sdk/src/services/acp/ext-methods.ts",
+      "from": 25,
+      "to": 121
+    },
+    {
+      "path": "sdk/src/services/acp/session-data.ts",
+      "from": 695,
+      "to": 808
+    },
+    {
+      "path": "sdk/src/services/acp/session-data.ts",
+      "from": 878,
+      "to": 1011
+    },
+    {
+      "path": "sdk/src/services/acp/session-data.ts",
+      "from": 1017,
+      "to": 1189
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 2360,
+      "to": 2552
+    },
+    {
+      "path": "sdk/src/services/local-harness-store.ts",
+      "from": 1,
+      "to": 396
+    },
+    {
+      "path": "sdk/src/services/run-resume-driver.ts",
+      "from": 1,
+      "to": 227
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 38,
+      "to": 129
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 542,
+      "to": 825
+    },
+    {
+      "path": "sdk/src/services/workspace-journal.ts",
+      "from": 1,
+      "to": 100
+    },
+    {
+      "path": "sdk/src/tools/get-task.ts",
+      "from": 1,
+      "to": 67
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "05-C1",
+      "name": "Normal TUI/headless run journals",
+      "maturity": "usable",
+      "assurance": "integration",
+      "entrypoint": "cli/src/index.tsx:651 / use-send-message.ts:704",
+      "implementation": "cli/src/utils/run-journal-path.ts:73 -> createRunJournal WAL SQLite",
+      "realConsumer": "SDK run.ts:1391 -> runtime LLM/programmatic/spawn boundaries -> dash/replay",
+      "tests": [
+        "run-journal.test.ts:2621",
+        "use-send-message-journal.test.ts:1 (discovered; not an exact suite read)",
+        "run-journal-wiring.test.ts:1"
+      ],
+      "docs": [
+        "docs/request-flow.md:60",
+        "run-journal-path.ts inline contract"
+      ],
+      "states": {
+        "loading": "Lazy open at actual TUI run start; headless open before getClient.",
+        "failure": "Open failure warns and continues without a journal; residual write failures vary by caller.",
+        "empty": "Fresh SQLite schema and empty runs are handled.",
+        "cancellation": "Parent cleanup closes the connection; detached lifetime gap is 05-F3.",
+        "retry": "SQLite bounded busy handling; write retention and optional batching.",
+        "permission": "An unavailable local journal does not block the run.",
+        "ownership": "Writer and reader share one parent-turn connection."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/run-journal-path.ts",
+          "line": 18,
+          "detail": "One canonical journal path for TUI/headless/dash/replay."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/run-journal.ts",
+          "line": 565,
+          "detail": "Busy timeout; WAL/schema reopen gate and connection durability settings."
+        }
+      ],
+      "strengths": [
+        "Real production consumer wiring, monotonic journal identity, bounded retention and close cleanup."
+      ],
+      "gaps": [
+        "Programmatic/model boundary asymmetry (05-F2); detached child connection ownership (05-F3)."
+      ],
+      "assuranceDetail": "Executed temporary in-memory journal integration probes; inspected default CLI wiring and SQLite tests, not a live/killed CLI run."
+    },
+    {
+      "id": "05-C2",
+      "name": "Mid-turn main checkpoints",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "TUI restored chat -> loadCheckpoint -> matching prompt -> createRunConfig",
+      "implementation": "run-state-storage.ts atomic queued save/load/clear",
+      "realConsumer": "use-send-message.ts:735 -> SDK resumeInterruptedTurn -> loopAgentSteps",
+      "tests": [
+        "turn-checkpoint.test.ts:1"
+      ],
+      "docs": [
+        "run-state-storage.ts:706",
+        "docs/agents-and-tools.md:1827"
+      ],
+      "states": {
+        "loading": "Turn ID must match a restored message; same effective prompt must match before main state is used.",
+        "failure": "Malformed/missing file returns null; persistence errors warn non-fatally.",
+        "empty": "No checkpoint resumes ordinary saved state.",
+        "cancellation": "Cooperative terminal state is saved and checkpoint clear is serialized.",
+        "retry": "Different prompt discards the old checkpoint; interrupted prompt reuses main state.",
+        "permission": "Disk failure degrades to in-memory continuation.",
+        "ownership": "Per-chat path; pending writes and unlink are serialized."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 1011,
+          "detail": "Checkpoint bytes are captured synchronously then written atomically."
+        },
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 1155,
+          "detail": "Clear drains in-flight writes before unlink."
+        }
+      ],
+      "strengths": [
+        "Real round-trip and no-resurrection coverage; stale prompt/turn guards."
+      ],
+      "gaps": [
+        "Main run ID remint bypasses completed replay (05-F1).",
+        "No actual kill/restart checkpoint-to-live-effect test in inspected suites."
+      ]
+    },
+    {
+      "id": "05-C3",
+      "name": "Completed programmatic tool replay / uncertain effects",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "executeSingleToolCall",
+      "implementation": "toolResultForInput structural input plus completed occurrence lookup",
+      "realConsumer": "Programmatic handleSteps dispatch; not the model-native/custom dispatch guard",
+      "tests": [
+        "run-journal.test.ts:664",
+        "run-journal-wiring.test.ts:188"
+      ],
+      "docs": [
+        "run-journal.ts:1738",
+        "background-resume.ts:13"
+      ],
+      "states": {
+        "loading": "Completed tool pairs can be looked up from a reopened stream.",
+        "failure": "In-flight/missing result resolves undefined and permits live execution.",
+        "empty": "Unknown inputs have no replay result.",
+        "cancellation": "An applied effect can outlive/cross its result-record window.",
+        "retry": "Completed matches are consumed by occurrence; no generic unknown-effect reconciliation.",
+        "permission": "Background rerun whitelist excludes non-rerunnable types; it does not provide a general external-effect receipt.",
+        "ownership": "Requires original durable run ID and replay position."
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/util/run-journal.ts",
+          "line": 1738,
+          "detail": "Deterministic completed input/occurrence lookup."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1556,
+          "detail": "Optional Memory V2 trace records observation after dispatch."
+        }
+      ],
+      "strengths": [
+        "Correlation-reuse and input-order guards in the SQLite reader; pre-effect forceFlush seam."
+      ],
+      "gaps": [
+        "05-F1 / 05-F2; model/custom/MCP P2 boundaries missing.",
+        "Filesystem broker receipts and optional Memory V2 traces are separate, valuable mechanisms."
+      ]
+    },
+    {
+      "id": "05-C4",
+      "name": "Background own-journal reconstruction and re-drive",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "loopAgentSteps loop-entry resume report",
+      "implementation": "background-resume.ts linkage + latest llm_request reconstruction",
+      "realConsumer": "run-agent-step.ts:1707 launches a real detached loop with pinned original child run ID",
+      "tests": [
+        "background-resume.test.ts:267",
+        "background-agent-jobs.test.ts:1843"
+      ],
+      "docs": [
+        "background-resume.ts module contract"
+      ],
+      "states": {
+        "loading": "Find parent job-to-child linkage and latest child request history before launch.",
+        "failure": "Missing template/linkage/history logs a distinct degradation; no invented prompt.",
+        "empty": "No linkage/no request means no relaunch.",
+        "cancellation": "Re-drive gets an independent signal; checkpoint callback is removed.",
+        "retry": "Same-process reservations suppress concurrent launches; settled child journal markers suppress later passes.",
+        "permission": "Only configured rerunnable/read-only agent types are automatically respawned.",
+        "ownership": "Pinned original child ID; reconstructed state/settlement is only partially durable."
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1722,
+          "detail": "Real loop relaunch with pinnedRunId and a new independent AbortSignal."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/background-resume.ts",
+          "line": 36,
+          "detail": "Supervised JSON transport does not provide child journal handles."
+        }
+      ],
+      "strengths": [
+        "Actual live loop DI tests exist beyond the pure engine fixtures; original identity and missing-history states are handled honestly."
+      ],
+      "gaps": [
+        "05-F3; process-supervised background children have no own journal linkage.",
+        "Original process job registry is not recreated; only intent/receipt settlement is available.",
+        "Fresh state is reconstructed from transcript, not a complete child machine/checkpoint."
+      ]
+    },
+    {
+      "id": "05-C5",
+      "name": "Foreground own-journal child resume",
+      "maturity": "unwired",
+      "assurance": "static trace",
+      "entrypoint": "RunResumeReport child dispositions",
+      "implementation": "run-replay-driver.ts optional handler walk",
+      "realConsumer": "Runtime replayChild and SDK reDriveChild only log attempts",
+      "tests": [
+        "run-journal-wiring.test.ts:313"
+      ],
+      "docs": [
+        "run-resume-driver.ts:12",
+        "run-replay-driver.ts:36"
+      ],
+      "states": {
+        "loading": "Interrupted/completed/unknown child dispositions are classified.",
+        "failure": "Foreground restart is recorded as requiring live state; no launch.",
+        "empty": "Unknown child is skipped.",
+        "cancellation": "No resumed coroutine exists at this seam to cancel.",
+        "retry": "In-flight child can be planned again on later resumes.",
+        "permission": "No effect replay permission decision is executed.",
+        "ownership": "Parent journal lacks the child executable state/prompt at SDK adapter."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/services/run-resume-driver.ts",
+          "line": 101,
+          "detail": "Production foreground reDriveChild logs only."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1918,
+          "detail": "Runtime foreground replay seam is logging-only."
+        }
+      ],
+      "strengths": [
+        "Explicitly documented gap; driver distinguishes skips and handler failures."
+      ],
+      "gaps": [
+        "No foreground resume-from-own-journal production execution; success counts mean handoff to a seam, not completed resumed work."
+      ]
+    },
+    {
+      "id": "05-C6",
+      "name": "Persisted advisory workflow telemetry",
+      "maturity": "unwired",
+      "assurance": "static trace",
+      "entrypoint": "base2 emitGateTelemetry",
+      "implementation": "workflow-engine.ts revisioned advisory statechart",
+      "realConsumer": "base2.ts:8536 requests safe member absent from runtime generator params",
+      "tests": [
+        "workflow-engine.test.ts:1"
+      ],
+      "docs": [
+        "workflow-engine.ts:1",
+        "common/types/session-state.ts:604"
+      ],
+      "states": {
+        "loading": "AgentState has serializable workflowStates fields.",
+        "failure": "Safe helper can return structured illegal-transition errors in isolation.",
+        "empty": "Initial advisory state is idle.",
+        "cancellation": "No active workflow executor or restart scheduler lives in this engine.",
+        "retry": "Revisions/transitions are deterministic when the helper is called.",
+        "permission": "This metadata is not an approval/completion authority.",
+        "ownership": "Main AgentState persistence would retain it if wired."
+      },
+      "evidence": [
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 8536,
+          "detail": "Consumer only calls transitionBase2GateSafe."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 476,
+          "detail": "Runtime injects transitionBase2Gate."
+        }
+      ],
+      "strengths": [
+        "Useful pure versioned helper and explicit advisory authority boundary."
+      ],
+      "gaps": [
+        "05-F8; helper unit tests do not establish shipped injection."
+      ]
+    },
+    {
+      "id": "05-C7",
+      "name": "Committed task-memory V1 and workspace journal persistence",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "entrypoint": "initialSessionState / SDK post-run persistRunTaskMemory",
+      "implementation": "task-memory-store.ts locked merge + atomic rename; WorkspaceJournalService + LocalHarnessStore CAS",
+      "realConsumer": "run.ts:1022/1138 hydrates workspace state; run.ts:1906 persists committed memory after terminal result",
+      "tests": [
+        "task-memory-store.test.ts:553",
+        "task-memory-store.test.ts:1239"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:1776",
+        "task-memory-store.ts inline contracts"
+      ],
+      "states": {
+        "loading": "Fresh session hydrates task memory and persisted workspace moves/revision.",
+        "failure": "Store/schema/lock failures skip save or warn; caller can receive undefined.",
+        "empty": "Missing memory/cwd causes no write.",
+        "cancellation": "Committed memory is saved for cooperative error/abort outputs too.",
+        "retry": "Monotonic merge composes concurrent saves and does not resurrect pruned evidence.",
+        "permission": "Owner-only data file; adapters need explicit exclusive-create and atomic rename capabilities.",
+        "ownership": "File lock plus in-process queue; dead V1 lock is deliberately not auto-deleted."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1906,
+          "detail": "Actual post-run persistence call, including aborted committed memory."
+        },
+        {
+          "path": "sdk/src/services/task-memory-store.ts",
+          "line": 706,
+          "detail": "Owner-only unique temp file and rename."
+        },
+        {
+          "path": "sdk/src/services/local-harness-store.ts",
+          "line": 368,
+          "detail": "Store update requires revision progression under a lock."
+        }
+      ],
+      "strengths": [
+        "Working disk merge/CAS plumbing and owner-only records; injected filesystem is honored for task-memory saves."
+      ],
+      "gaps": [
+        "A killed V1 lock owner leaves a permanent fail-closed save outage without an automatic recovery surface (test at 672 deliberately pins this).",
+        "Hard-kill loses committed memory since the last disk save/checkpoint; this is not a complete durable run scheduler.",
+        "Memory quality/V2 retention is assigned to pair04."
+      ]
+    },
+    {
+      "id": "05-C8",
+      "name": "Persisted plan/task artifacts",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "get_task and PlanLink session selection",
+      "implementation": "common/util/plan-artifacts.ts STATE.json / PLAN.md / STATUS.md",
+      "realConsumer": "SDK run.ts:2963 dispatches getTask, which reads active session/preflight/state",
+      "tests": [],
+      "docs": [
+        "docs/local-mode.md:83",
+        "docs/agents-and-tools.md:87"
+      ],
+      "states": {
+        "loading": "Explicit session or ACTIVE_SESSION pointer resolves plan artifacts.",
+        "failure": "Missing/invalid slug/session produces structured get_task errors; malformed state reads null.",
+        "empty": "No active session is explicit; PLAN-less session has null preflight.",
+        "cancellation": "Artifacts are local records, not background work owners.",
+        "retry": "STATE.json revisions increment and temp rename commits.",
+        "permission": "Task read requires a valid slug and configured cwd.",
+        "ownership": "Multiple plan/task representations coexist; ordinary STATE writer has no cross-process CAS."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/get-task.ts",
+          "line": 61,
+          "detail": "Real consumer returns plan state and preflight."
+        },
+        {
+          "path": "common/src/util/plan-artifacts.ts",
+          "line": 272,
+          "detail": "STATE update reads/replaces locally with revision increment."
+        }
+      ],
+      "strengths": [
+        "Real user/model read path and durable editable artifacts."
+      ],
+      "gaps": [
+        "Artifact persistence does not establish executable workflow scheduling or automatic crash recovery.",
+        "Broad task/control-plane consistency and lifecycle claims belong to pair12."
+      ]
+    },
+    {
+      "id": "05-C9",
+      "name": "Turn/shell snapshots, previewed undo/restore, bisection",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "Successful TUI turn / user shell / restore commands",
+      "implementation": "turn-snapshots.ts private Git index and ref, preview token, bisection lock",
+      "realConsumer": "send-message.ts:548 / router.ts:108 / snapshot-commands.ts:57",
+      "tests": [
+        "turn-snapshots.test.ts:336",
+        "turn-snapshots.test.ts:557",
+        "turn-snapshots.test.ts:669"
+      ],
+      "docs": [
+        "snapshot-commands.ts:101",
+        "turn-snapshots.ts contracts"
+      ],
+      "states": {
+        "loading": "Requires a Git repo with HEAD; retained chain listing is bounded.",
+        "failure": "Capture/preview/restore return structured outcomes; warnings are latched.",
+        "empty": "Unchanged tree skips; missing target/parent is explicit.",
+        "cancellation": "Bisection tests verify normal cancellation restores newest snapshot and releases its lock.",
+        "retry": "Apply revalidates preview token/current tracked differences; timeout capture continues detached.",
+        "permission": "Explicit preview/apply token and untracked collision refusal.",
+        "ownership": "Private index preserves HEAD/real index; snapshot publication lacks shared producer serialization."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/utils/turn-snapshots.ts",
+          "line": 192,
+          "detail": "Preview revalidation before apply."
+        },
+        {
+          "path": "cli/src/commands/snapshot-commands.ts",
+          "line": 105,
+          "detail": "Target-absent files are retained by explicit product contract."
+        }
+      ],
+      "strengths": [
+        "Useful real Git materialization and user controls; index/HEAD/untracked preservation tested."
+      ],
+      "gaps": [
+        "05-F9; full deletion-aware rollback is absent by disclosed design. Hard-kill bisection recovery was not verified.",
+        "Untracked content is not snapshotted; absent target paths are retained intentionally.",
+        "Retention writes repo-global refs/replace; this side effect is disclosed."
+      ]
+    },
+    {
+      "id": "05-C10",
+      "name": "ACP stdio/authenticated socket service transport",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "entrypoint": "openbuff serve -> runAcpServeCommand",
+      "implementation": "runServe -> createServeBridge -> AgentSideConnection",
+      "realConsumer": "Protocol prompt handler calls the real OpenbuffClient.run",
+      "tests": [
+        "serve-socket.test.ts:111",
+        "serve-socket.test.ts:235",
+        "acp-client.test.ts:326"
+      ],
+      "docs": [
+        "serve-command.ts:125",
+        "serve.ts:11"
+      ],
+      "states": {
+        "loading": "Explicit user-started service; configured provider client and local containment root.",
+        "failure": "Auth/token/path/permission violations refuse the connection/startup.",
+        "empty": "New session/capability baseline is available.",
+        "cancellation": "Same-connection prompt AbortController and pending reverse requests are cleaned.",
+        "retry": "Concurrent same-connection prompts fail and can retry after settlement.",
+        "permission": "Safe socket parent, 0600 socket, constant-time token check; project trust/client MCP policy explicit.",
+        "ownership": "Socket close waits for server connections; no independent daemon owner."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/serve-command.ts",
+          "line": 173,
+          "detail": "Real session-data and client composition."
+        },
+        {
+          "path": "sdk/src/serve/socket-listener.ts",
+          "line": 122,
+          "detail": "OS directory safety and lock gate."
+        },
+        {
+          "path": "sdk/src/serve/bridge.ts",
+          "line": 790,
+          "detail": "Approval/elicitation teardown."
+        }
+      ],
+      "strengths": [
+        "Real optional transport service, not a stub; local token, redaction and permission controls."
+      ],
+      "gaps": [
+        "05-F4/05-F5/05-F6 affect executable session continuity and restart.",
+        "Socket shutdown does not explicitly destroy all clients before server.close."
+      ]
+    },
+    {
+      "id": "05-C11",
+      "name": "ACP durable receipt/gate reload",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "session/load -> derived loadHandler",
+      "implementation": "AcpSessionData JSONL mirror and restore",
+      "realConsumer": "ACP receipts/gate/capability extensions",
+      "tests": [
+        "acp-session-data.test.ts:735",
+        "acp-session-data.test.ts:1161"
+      ],
+      "docs": [
+        "acp-agent.ts:1281",
+        "session-data.ts:1017"
+      ],
+      "states": {
+        "loading": "Restore validates JSONL line types/redaction and merges concurrently recorded state.",
+        "failure": "Bad lines skipped; read failure returns false; queued write failures are swallowed.",
+        "empty": "Missing session succeeds through default loader rather than reporting absent.",
+        "cancellation": "No exposed durable-write drain/close at service shutdown.",
+        "retry": "Fill-only live merge prevents stale journal overwrite.",
+        "permission": "Session ID path validation and redaction-clean receipt schemas.",
+        "ownership": "One instance serializes writes; full rewrites truncate the same file in place."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "line": 731,
+          "detail": "Best-effort serialized write queue."
+        },
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "line": 798,
+          "detail": "Rewrite uses in-place writeFile."
+        },
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "line": 1135,
+          "detail": "Live receipt union is bounded and avoids replacement."
+        }
+      ],
+      "strengths": [
+        "Useful persisted redacted projections; concurrent restore/record merge is tested."
+      ],
+      "gaps": [
+        "05-F4; no transcript/run-state recovery and hasJournal reflects configuration rather than verified storage health.",
+        "In-place rewrite and unacknowledged queued writes are not a hard-crash durability boundary.",
+        "Workspace main-lane revision map is not rehydrated by restore's receipt loop."
+      ]
+    },
+    {
+      "id": "05-C12",
+      "name": "ACP attach/detach live continuity",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "--attach / detachSession / attachSession / detachOnExit",
+      "implementation": "AcpRemoteBackend socket initialize/new/load/prompt/cancel",
+      "realConsumer": "TUI client backend and CLI attach-session utilities",
+      "tests": [
+        "acp-client.test.ts:326",
+        "attach-session.test.ts:1"
+      ],
+      "docs": [
+        "acp-client.ts:462",
+        "attach-session.ts:26"
+      ],
+      "states": {
+        "loading": "Remote backend lazily connects; detached ID triggers session/load.",
+        "failure": "Disconnected/closed/failed RPC returns error RunState/outcome.",
+        "empty": "No target/session/last ID is explicit.",
+        "cancellation": "Current signal maps to session/cancel; a reloaded connection loses old controller ownership.",
+        "retry": "Attach reconnects by last ID; process restart loses the module-only detached ID.",
+        "permission": "Authenticated same-user local socket; remote permission callback is unsupported.",
+        "ownership": "Backend stores ID/cwd in memory; server controllers are per connection."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/client/acp-client.ts",
+          "line": 467,
+          "detail": "Detach destroys transport but retains ID."
+        },
+        {
+          "path": "cli/src/utils/attach-session.ts",
+          "line": 30,
+          "detail": "Last detached ID is module state only."
+        }
+      ],
+      "strengths": [
+        "Real transport/resource teardown and structured attach/no-session outcomes."
+      ],
+      "gaps": [
+        "05-F5; no join/control/history continuity for an in-flight old turn."
+      ]
+    },
+    {
+      "id": "05-C13",
+      "name": "Dashboard recorded-run inspection/export",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "openbuff dash -> runDashCommand",
+      "implementation": "journal-backed provider + actual loopback HTTP listener/export",
+      "realConsumer": "/api/runs/events/source plus optional receipt/gate projections",
+      "tests": [
+        "dash-server.test.ts:99",
+        "dash-server.test.ts:339"
+      ],
+      "docs": [
+        "docs/testing.md:177",
+        "dash-command.ts:112"
+      ],
+      "states": {
+        "loading": "One startup file/open check; missing journal is not created by dash.",
+        "failure": "Absent/unavailable source has distinct status and stderr hints; request failures become 500.",
+        "empty": "No reader gives empty runs; default receipt/gate seams are empty/null.",
+        "cancellation": "SIGINT/SIGTERM release listener and reader.",
+        "retry": "Absent/unavailable reader is not auto-reopened; restart is needed.",
+        "permission": "Loopback only; nonempty token required, GET-only authenticated data.",
+        "ownership": "Own read connection; no run execution or daemon supervision."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/commands/dash-command.ts",
+          "line": 201,
+          "detail": "Default CLI only wires journal reader, not receipt/gate sources."
+        },
+        {
+          "path": "sdk/src/dash/server.ts",
+          "line": 664,
+          "detail": "Actual listener bound to loopback."
+        },
+        {
+          "path": "sdk/src/dash/provider.ts",
+          "line": 235,
+          "detail": "Response bounds follow full events() hydration."
+        }
+      ],
+      "strengths": [
+        "Real recorded run visibility, bounded details, clear source states and local auth."
+      ],
+      "gaps": [
+        "05-F10 affects machine-readable replay; default dashboard is not a full control-plane consumer.",
+        "Serving latest 2000 events still loads all retained events before slicing; no measured scale assurance."
+      ]
+    },
+    {
+      "id": "05-C14",
+      "name": "Live spawn path ownership",
+      "maturity": "partial",
+      "assurance": "integration",
+      "entrypoint": "spawn_agents / spawn_agent_inline writable handoff",
+      "implementation": "workspace-path-leases.ts process-local map + AgentState records",
+      "realConsumer": "Spawn acquisition, rollback/settle release and loop-entry reconciliation",
+      "tests": [
+        "workspace-path-leases.test.ts:1"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:101"
+      ],
+      "states": {
+        "loading": "Lease requested only for nonempty writable scope.",
+        "failure": "Overlap throws; rollback releases unlaunched claims.",
+        "empty": "No writable paths creates no lease.",
+        "cancellation": "Settled/rolled-back spawn releases; missing runtime record becomes interrupted on loop entry.",
+        "retry": "Unknown/non-active/foreign-owner extension rejects.",
+        "permission": "Cooperative declared writable scope, not an OS sandbox.",
+        "ownership": "Process-local only; no production heartbeat."
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+          "line": 470,
+          "detail": "Actual spawn acquisition."
+        }
+      ],
+      "strengths": [
+        "Works for overlapping same-process child scopes; structured durable status and release tests."
+      ],
+      "gaps": [
+        "05-F7; expiry/liveness mismatch and independent process maps."
+      ]
+    },
+    {
+      "id": "05-C15",
+      "name": "Durable workspace lease authority in default runs",
+      "maturity": "unwired",
+      "assurance": "static trace",
+      "entrypoint": "Exported SDK WorkspaceLeaseService",
+      "implementation": "LocalHarnessStore locked disk ownership token, generation and expiry",
+      "realConsumer": "Public SDK helper can be called explicitly; no runtime/spawn production caller found",
+      "tests": [
+        "harness-intelligence.test.ts:1365 (discovered, not read in full)"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:101",
+        "harness-intelligence.ts:2372"
+      ],
+      "states": {
+        "loading": "Caller explicitly supplies repository/workspace/run/task IDs and store.",
+        "failure": "Live conflicting lease, stale token/status, or expired renewal throws.",
+        "empty": "No record permits initial acquisition.",
+        "cancellation": "Caller must release ownership; default run does not manage it.",
+        "retry": "Expired records can be abandoned and reacquired under kind lock.",
+        "permission": "Owner token and revision checks use private store records.",
+        "ownership": "Real disk helper; absent composition into default child path leases."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2426,
+          "detail": "Disk acquire runs under kind lock with ownership generation/token."
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2473,
+          "detail": "Renew verifies ownership/active/expiry."
+        }
+      ],
+      "strengths": [
+        "A real reusable optional SDK service, not a stub."
+      ],
+      "gaps": [
+        "Default model body never acquires/renews these workspace leases; the live spawn mechanism uses 05-C14 instead."
+      ]
+    },
+    {
+      "id": "05-C16",
+      "name": "Workspace lane creation/landing",
+      "maturity": "absent",
+      "assurance": "static trace",
+      "entrypoint": "Negotiated _openbuff.dev/lanes methods",
+      "implementation": "Versioned schemas and synthetic single main lane projection",
+      "realConsumer": "ACP lanes/list returns main; create/land return capability_disabled",
+      "tests": [
+        "ext-methods.test.ts:333 (discovered)"
+      ],
+      "docs": [
+        "common/protocol/acp-ext-v1.ts:213",
+        "ext-methods.ts:82"
+      ],
+      "states": {
+        "loading": "Lanes extension names negotiate even while operations are unsupported.",
+        "failure": "create/land fail with -32601 capability_disabled.",
+        "empty": "Main lane always exists as a projection.",
+        "cancellation": "No lane execution to cancel.",
+        "retry": "Retry cannot enable an absent operation.",
+        "permission": "Capability map reports supported=false.",
+        "ownership": "No worktree lane owner/land transaction exists at this entrypoint."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 1270,
+          "detail": "Create/land explicitly refuse."
+        },
+        {
+          "path": "common/src/protocol/acp-ext-v1.ts",
+          "line": 297,
+          "detail": "Lanes support false."
+        }
+      ],
+      "strengths": [
+        "Honest disabled operation contract and stable wire shapes."
+      ],
+      "gaps": [
+        "Negotiation/listing is a scaffold, not isolation/cooperation/landing capability."
+      ]
+    },
+    {
+      "id": "05-C17",
+      "name": "Durable daemon/scheduler owning runs across client/process lifetimes",
+      "maturity": "absent",
+      "assurance": "static trace",
+      "entrypoint": "No daemon command/authority found in assigned inventory and consumer searches",
+      "implementation": "Explicit foreground serve/dash commands; child process supervision is separate",
+      "realConsumer": "Users may run/manage serve externally; no default run-owner daemon traced",
+      "tests": [
+        "scripts/harness-smoke.mjs (classifier only)"
+      ],
+      "docs": [
+        "serve.ts:11",
+        "docs/testing.md:177"
+      ],
+      "states": {
+        "loading": "User starts serve/dash manually.",
+        "failure": "Crash/restart session ownership is incomplete; stale socket lock blocks startup.",
+        "empty": "No autonomous job queue/scheduler state is read at boot in these entrypoints.",
+        "cancellation": "Client/connection-local controls do not survive owner process loss.",
+        "retry": "No automatic killed-run executor was traced.",
+        "permission": "Existing local listeners enforce token/path policy.",
+        "ownership": "No service-wide durable run owner is composed by default."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/index.tsx",
+          "line": 630,
+          "detail": "Serve is an explicit foreground service dispatch."
+        },
+        {
+          "path": "cli/src/index.tsx",
+          "line": 693,
+          "detail": "Dash is a separate reader command."
+        },
+        {
+          "path": "scripts/harness-smoke.mjs",
+          "line": 4,
+          "detail": "Smoke only classifies/evaluates policy."
+        }
+      ],
+      "strengths": [
+        "Real optional services and separate supervised-child infrastructure should be preserved."
+      ],
+      "gaps": [
+        "Names and smoke tests do not establish daemon recoverability; cross-process durable run execution remains absent in this scope."
+      ],
+      "scope": "Default run-owner daemon. This does not judge pair03 process-supervised children, sidecar supervisors, or external OS service managers."
+    }
+  ],
+  "findings": [
+    {
+      "id": "05-F1",
+      "title": "Main checkpoint continuation replaces the journal identity before completed-tool replay",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 735,
+          "detail": "Matching checkpoint restores mainAgentState and sets resumeInterruptedTurn=true."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1963,
+          "detail": "Only pinnedRunId skips startAgentRun; normal checkpoint continuation mints and assigns a new runId at 1973."
+        },
+        {
+          "path": "sdk/src/impl/agent-runtime.ts",
+          "line": 381,
+          "detail": "Production startAgentRun returns a fresh local-run UUID."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 983,
+          "detail": "Completed-result lookup uses the now-current agentState.runId."
+        },
+        {
+          "path": "sdk/src/__tests__/run-journal-wiring.test.ts",
+          "line": 234,
+          "detail": "Wiring test manually supplies the old runId to the reader instead of executing checkpoint continuation."
+        }
+      ],
+      "trigger": "A process dies after a programmatic tool_result was committed but before the next checkpoint; the TUI reloads the older checkpoint and resends its matching prompt.",
+      "consequence": "Observed DI: replay lookup runs under a new ID while the original completed result remains present. Inference: re-derived non-idempotent programmatic calls can execute again because the old result is unreachable to this guard.",
+      "suggestedFix": "Pin the interrupted main run's durable identity, with an explicit fresh-turn versus resume contract; preserve/reconstruct replay position against that journal rather than reminting it.",
+      "acceptanceProbe": "Seed an original journal and older main checkpoint; resume through the real SDK/loop with a unique production-style startAgentRun; assert the completed effect's counter stays one, the old stream remains authoritative, and a subsequent new user turn gets a fresh identity.",
+      "probe": "evidence/05-durability-probes.test.ts :: main-checkpoint-run-id"
+    },
+    {
+      "id": "05-F2",
+      "title": "Model-driven tool dispatch lacks P2 journal boundaries and uncertain-effect reconciliation",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "inference",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/stream-parser.ts",
+          "line": 706,
+          "detail": "Model-native calls enter executeToolCall directly; custom/MCP calls use executeCustomToolCall at 731."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 1042,
+          "detail": "tool_call/tool_result journal boundaries and completed-result replay live in executeSingleToolCall's programmatic path."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+          "line": 3719,
+          "detail": "Shared executor only force-flushes an optional writer; it does not append tool boundary events."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1466,
+          "detail": "Production SDK dispatch calls handleToolCall without P2 journal writer/reader; its signature at 2180–2265 has none."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1556,
+          "detail": "Optional Memory V2 observation runs after handled output; it is not the P2 replay contract."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2354,
+          "detail": "MCP dispatch calls the external tool and returns output directly."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/run-journal.ts",
+          "line": 1765,
+          "detail": "No completed match means live re-execution; no ambiguous-effect receipt is returned."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+          "line": 713,
+          "detail": "The kill-9-labelled fixture appends B's intent without executing B pre-crash."
+        }
+      ],
+      "trigger": "A model-selected shell/custom/MCP operation applies, then the process dies before the next recoverable transcript/result; or a programmatic effect applies between its intent and result records.",
+      "consequence": "Observed DI: model read_files runs and enters history while the P2 journal has only llm_request/llm_response/step_boundary. Static production trace confirms no SDK compensation for these missing boundaries. Inference: restart cannot distinguish 'not applied' from 'applied but unacknowledged' and may repeat non-idempotent effects.",
+      "suggestedFix": "Put effect intent/result recording at a shared native/custom/MCP dispatch boundary. Persist a stable operation identity and classify uncertain results explicitly; reconcile supported external effects or require a concrete user decision before repeating them. Keep filesystem broker recovery separate and reuse its receipts where applicable.",
+      "acceptanceProbe": "Use a DI counter and a real temporary journal; kill a helper after the counter increments but before its result receipt. Restart the actual dispatcher and assert no blind repeat: it must reconcile, report an unknown outcome, or request the required decision. Include native model tools, programmatic tools, custom tools and MCP.",
+      "probe": "evidence/05-durability-probes.test.ts :: model-tool-journal-coverage",
+      "scope": "P2 run-journal/replay coverage. This finding does not claim filesystem broker receipts, process-job records, or optional Memory V2 traces are absent."
+    },
+    {
+      "id": "05-F3",
+      "title": "Parent turn cleanup closes the shared journal while detached children are still running",
+      "severity": "HIGH",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "inference",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/use-send-message.ts",
+          "line": 923,
+          "detail": "The TUI closes the journal at the parent run promise-chain end."
+        },
+        {
+          "path": "cli/src/commands/run-command.ts",
+          "line": 250,
+          "detail": "Headless command also closes the journal when its parent run returns."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 175,
+          "detail": "Detached child receives the same journal writer/reader references."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1722,
+          "detail": "Own-journal re-drive is deliberately launched detached with inherited params."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/run-journal.ts",
+          "line": 1418,
+          "detail": "After close, append silently returns."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/run-journal.ts",
+          "line": 1817,
+          "detail": "Close contract explicitly acknowledges that an outliving child stops journaling."
+        }
+      ],
+      "trigger": "A background agent, including a resumed child, outlives the successful/cancelled parent turn whose CLI opened its journal.",
+      "consequence": "Its later requests, results, and terminal tail are dropped. Inference: a later process restart may reconstruct stale child history, leave a respawn marker unsettled, or lose the result; avoiding closed-database exceptions does not preserve child durability.",
+      "suggestedFix": "Give journals session/process ownership with child-aware reference counting, or give each detached child an independently owned connection. Persist settlement to the current durable parent/session record rather than only mutating a captured old AgentState.",
+      "acceptanceProbe": "Hold a child on a DI gate, let the parent return and perform real CLI cleanup, release the child, reopen the disk journal, and assert the child's final result/tail and parent settlement exist. Repeat with cooperative parent cancellation."
+    },
+    {
+      "id": "05-F4",
+      "title": "ACP prompts and session/load do not restore an executable conversation",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/serve/bridge.ts",
+          "line": 754,
+          "detail": "Each prompt calls client.run without previousRun, onCheckpoint or P2 journal handles; returned RunState is discarded."
+        },
+        {
+          "path": "sdk/src/client.ts",
+          "line": 46,
+          "detail": "SDK conversation continuation requires passing previousRun."
+        },
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "line": 704,
+          "detail": "Durable ACP store contains receipt, gate, capability and workspace-revision maps, not the transcript/main AgentState."
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 895,
+          "detail": "Chat-history replay requires optional historyLoader, which runServe does not wire."
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 1304,
+          "detail": "Derived loader ignores restoreFromJournal=false."
+        },
+        {
+          "path": "common/src/protocol/acp-ext-v1.ts",
+          "line": 299,
+          "detail": "Resume/replay advertisement derives from journalAvailable."
+        },
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "line": 968,
+          "detail": "hasJournal checks only whether journalDir was configured."
+        }
+      ],
+      "trigger": "Send a follow-up in one ACP session, or load its ID after a serve restart, including an ID with no journal.",
+      "consequence": "Observed DI: the second prompt carries no prior RunState; an absent session loads successfully with {} while journal availability is advertised. The model's prior conversation and executable workflow state do not continue even though receipt/gate projections can reload.",
+      "suggestedFix": "Create a per-session durable RunState/transcript owner; route previousRun and checkpoint/journal handles through it and provide the actual history loader. Advertise executable resume only when this path is available, and return typed missing/corrupt-session outcomes.",
+      "acceptanceProbe": "Run two DI prompts where the second depends on a first-turn constraint, then restart the service over a temp store and load the ID. Assert the core sees that constraint, history is replayed, checkpoints use the same session, and invented/missing IDs fail distinctly.",
+      "probe": "evidence/05-durability-probes.test.ts :: acp-session-continuity"
+    },
+    {
+      "id": "05-F5",
+      "title": "ACP reattachment loses running-turn cancellation ownership and bypasses the prompt guard",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "inference",
+      "evidence": [
+        {
+          "path": "sdk/src/serve/socket-listener.ts",
+          "line": 340,
+          "detail": "Every socket creates a fresh ACP agent with its own private session map."
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 661,
+          "detail": "Run AbortControllers are stored in that per-connection map."
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 886,
+          "detail": "Loading on a fresh connection creates a record with a null controller; it only preserves an existing same-connection controller."
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 1017,
+          "detail": "The concurrent-prompt guard checks that connection-local controller."
+        },
+        {
+          "path": "sdk/src/client/acp-client.ts",
+          "line": 467,
+          "detail": "Detach destroys the owned transport and keeps the session ID for load on a new connection."
+        },
+        {
+          "path": "sdk/src/services/acp/acp-agent.ts",
+          "line": 1072,
+          "detail": "Cancel addresses only the current connection's session record."
+        },
+        {
+          "path": "sdk/src/__tests__/acp-client.test.ts",
+          "line": 379,
+          "detail": "Socket detach test waits until the prompt completed; it does not exercise a live reattachment."
+        }
+      ],
+      "trigger": "Detach/reconnect or connect another authorized client and load an ID while the original long tool/model turn remains live.",
+      "consequence": "Observed DI with two production-style agents sharing one store: cancellation on the loaded session does not abort the original run, and a second prompt is admitted before the first settles. Inference: two runs can mutate the same served workspace with no session-level guard or usable control over the first.",
+      "suggestedFix": "Own running turns in a service-wide session registry and attach connection sinks/controllers to that owner. Define detach and disconnect semantics explicitly; a new client must observe/join/cancel the same turn and preserve the per-session prompt exclusion.",
+      "acceptanceProbe": "Hold a first run on a gate; disconnect and reconnect through the actual socket backend; load its ID and attempt cancel/another prompt. Assert cancel reaches the original controller and a new prompt is rejected until settlement or explicitly queued.",
+      "probe": "evidence/05-durability-probes.test.ts :: acp-reattach-running-owner",
+      "assuranceLimit": "The DI probe uses two connection-level agents; no real socket disconnect was executed. Installed ACP 1.5 legacy adapter passes params to implementation.prompt without its connection request signal; vendor code is excluded from the structural receipt."
+    },
+    {
+      "id": "05-F6",
+      "title": "A killed socket service leaves an anonymous lock that blocks restart indefinitely",
+      "severity": "MEDIUM",
+      "domains": [
+        "error-handling",
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/serve/socket-listener.ts",
+          "line": 129,
+          "detail": "Socket lock is exclusively created but receives no PID/token/owner record."
+        },
+        {
+          "path": "sdk/src/serve/socket-listener.ts",
+          "line": 131,
+          "detail": "Any existing lock is refused before stale-socket cleanup."
+        },
+        {
+          "path": "sdk/src/serve/socket-listener.ts",
+          "line": 137,
+          "detail": "Lock removal is only graceful cleanup or bind/setup error handling."
+        },
+        {
+          "path": "sdk/src/__tests__/serve-socket.test.ts",
+          "line": 342,
+          "detail": "Cleanup coverage closes gracefully; it does not kill a lock owner."
+        }
+      ],
+      "trigger": "The serve process is SIGKILLed or crashes after acquiring socketPath.lock; the user restarts serve at the same socket path.",
+      "consequence": "Observed DI: the production startup path refuses an otherwise safe directory containing that anonymous stale lock. An actual process kill cannot execute releaseLock, so automatic restart remains blocked until manual cleanup.",
+      "suggestedFix": "Use a crash-recoverable, ownership-verified lock with a recorded owner and safe stale-owner reconciliation, reusing proven store lock patterns. Surface recoverable stale-lock versus live-owner conflict distinctly.",
+      "acceptanceProbe": "Launch a temp socket service, wait for ownership, SIGKILL the helper, restart at the identical path and verify successful bind without deleting another live owner's lock. Also cover stale socket/non-socket refusal and permission failure.",
+      "probe": "evidence/05-durability-probes.test.ts :: socket-stale-lock"
+    },
+    {
+      "id": "05-F7",
+      "title": "Live child path leases expire because production spawns never heartbeat them",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/util/workspace-path-leases.ts",
+          "line": 17,
+          "detail": "Default lease TTL is thirty minutes."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/workspace-path-leases.ts",
+          "line": 45,
+          "detail": "The next acquisition sweeps expired runtime leases without checking child liveness."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+          "line": 470,
+          "detail": "Real batch spawn acquires a lease and only releases it in settle/rollback paths."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+          "line": 262,
+          "detail": "Inline spawn uses the same acquire/release pattern."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/workspace-path-leases.ts",
+          "line": 123,
+          "detail": "Extension helper exists; repository consumer search found only tests calling it."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 113,
+          "detail": "Productive subagent durations are unbounded by default."
+        }
+      ],
+      "trigger": "A writable child runs past the thirty-minute TTL and another child requests an overlapping path.",
+      "consequence": "Observed shortened-TTL DI: overlap is admitted while the original durable lease still says active. The advertised exclusive child scope ceases to exclude a still-running writer. Separate processes also have independent path maps; the exported disk-backed WorkspaceLeaseService is not wired into spawns.",
+      "suggestedFix": "Tie lease renewal/release to actual child supervision and cancellation; route participating processes through one durable lease authority if cross-process ownership is promised. Preserve fencing/generation checks so an expired owner cannot resume writing after a replacement acquires.",
+      "acceptanceProbe": "With an injected clock, keep one writable child live across multiple TTLs, request overlap, and assert refusal until terminal settlement. Exercise abrupt owner death, lost renewal, cancellation and a stale owner's attempted renewal.",
+      "probe": "evidence/05-durability-probes.test.ts :: lease-expiry-live-owner"
+    },
+    {
+      "id": "05-F8",
+      "title": "Shipped base2 requests a workflow helper that the runtime does not inject",
+      "severity": "MEDIUM",
+      "domains": [
+        "api-contract",
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 476,
+          "detail": "Control-plane generator params expose transitionBase2Gate."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 8536,
+          "detail": "Shipped consumer exclusively reads transitionBase2GateSafe."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 8537,
+          "detail": "A typeof function guard skips all workflowStates updates when that member is absent."
+        },
+        {
+          "path": "packages/agent-runtime/src/orchestration/__tests__/workflow-engine.test.ts",
+          "line": 125,
+          "detail": "Tests exercise the safe helper in isolation, not its injected production name."
+        }
+      ],
+      "trigger": "A normal base2 gate telemetry event tries to advance its persisted advisory workflow.",
+      "consequence": "No advisory state/revision update or structured illegal-transition result is recorded through this branch. This is an unwired telemetry/resumability feature; it does not establish a defect in the authoritative generator gate (owned by pair03).",
+      "suggestedFix": "Expose the safe helper under the member name the serialized consumer expects and give the injected control-plane contract one typed/shared definition.",
+      "acceptanceProbe": "Drive the real runProgrammaticStep-to-shipped-base2 path without manually adding the helper; assert workflowStates revision advances and an illegal transition persists a structured error while authoritative gate behavior remains unchanged."
+    },
+    {
+      "id": "05-F9",
+      "title": "Concurrent snapshot producers can orphan a snapshot they report as created",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "inference",
+      "evidence": [
+        {
+          "path": "cli/src/hooks/helpers/send-message.ts",
+          "line": 548,
+          "detail": "Successful-turn snapshot runs fire-and-forget before the queue is released."
+        },
+        {
+          "path": "cli/src/utils/turn-snapshots.ts",
+          "line": 461,
+          "detail": "Each producer separately reads the private ref's current parent."
+        },
+        {
+          "path": "cli/src/utils/turn-snapshots.ts",
+          "line": 488,
+          "detail": "Publication uses unconditional update-ref without an expected old SHA."
+        },
+        {
+          "path": "cli/src/utils/turn-snapshots.ts",
+          "line": 428,
+          "detail": "Guard excludes bisection but does not serialize concurrent snapshot producers."
+        },
+        {
+          "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+          "line": 669,
+          "detail": "Concurrency coverage concerns bisection ownership, not two snapshot publications."
+        }
+      ],
+      "trigger": "Two CLI processes, or a slow prior-turn snapshot and another producer, capture distinct trees and read the same private-ref tip before publishing.",
+      "consequence": "Observed DI: both return created but publish sibling commits with the same parent through unconditional update-ref. Inference: only the last remains in the listed chain; one successful recovery point can disappear, and a slow end-turn capture can contain later mutations.",
+      "suggestedFix": "Serialize capture and publication per repository and compare-and-swap the expected ref tip. Define a bounded turn/shell snapshot barrier; cancel or mark late captures accurately instead of letting them publish a later tree as an earlier boundary.",
+      "acceptanceProbe": "Use two temp-repo producers with barriers at parent read/publication; assert both successful snapshots remain in one chain or one fails/retries explicitly. Queue a fast mutating next turn behind a slow capture and verify turn attribution.",
+      "probe": "evidence/05-durability-probes.test.ts :: snapshot-concurrent-publish"
+    },
+    {
+      "id": "05-F10",
+      "title": "JSON replay emits empty assistant text for the runtime's response record shape",
+      "severity": "MEDIUM",
+      "domains": [
+        "api-contract",
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1089,
+          "detail": "Runtime llm_response stores {messageId, fullResponse}."
+        },
+        {
+          "path": "cli/src/commands/replay-command.ts",
+          "line": 87,
+          "detail": "JSON mapper reads only payload.text or payload.message, falling back to empty text."
+        },
+        {
+          "path": "cli/src/commands/replay-command.ts",
+          "line": 235,
+          "detail": "The mapper is the actual --json replay/export consumer."
+        }
+      ],
+      "trigger": "Run openbuff replay <id> --json against an ordinary journalled plain assistant response produced by the runtime.",
+      "consequence": "Observed DI with the production payload shape: replay exits zero and emits {type:'text',text:''}; the retained assistant answer disappears from the machine-readable replay/evaluation fixture.",
+      "suggestedFix": "Define and share a versioned journal response schema that explicitly stores model-visible text; make replay consume it and handle existing fullResponse rows deliberately without re-executing tools.",
+      "acceptanceProbe": "Journal a plain response through the real loop, replay --json, and assert the original visible text and ordering survive. Include legacy rows, tool-containing responses and empty/error records.",
+      "probe": "evidence/05-durability-probes.test.ts :: replay-response-field"
+    }
+  ],
+  "domainAssessment": {
+    "security": "Considered socket directory ownership/permissions, token gates, ACP session ID containment, restored wire redaction/schema checks, snapshot untracked collisions and cooperative ownership. Existing auth/path/redaction controls are strengths. No new injection/auth bypass claim is made; path leases are cooperative rather than OS isolation. Live external effects and private state were not accessed.",
+    "correctness": "Observed main resume ID replacement, model-tool P2 journal asymmetry, ACP state loss/false missing-session load, connection-local controller loss, lease expiry, snapshot publication race and replay response-field mismatch. Background own-journal relaunch is a real partial feature; foreground re-drive is a logging seam.",
+    "state-mutation": "Traced checkpoint capture/queue/clear, parent journal close versus detached children, ACP merge/queues/controllers, LocalHarnessStore CAS, task-memory file lock, workflow state writes and Git private-ref update. Atomic rename and locked merges are useful; lifetime/ownership boundaries remain incomplete.",
+    "error-handling": "Normal CLI journal open failures warn and continue; reader/restore failures degrade differently. ACP queued writes swallow errors and in-place rewrites have no hard-crash acknowledgement/drain boundary. Socket stale locks block restart. V1 memory locks deliberately refuse even orphaned residue, preserving exclusion but leaving an indefinite save outage without a recovery surface. No generalized uncertain external-effect outcome is exposed.",
+    "performance": "Inspected prepared statements, indexed bounded tails, retention caps, dashboard bounded listings/details, batched journal/stdio paths, lease sweeps and ACP bounded receipts. Dashboard getRunEvents calls full events() before slicing; optional response bounds do not establish bounded hydration. ACP map/queue lifetime and in-place full rewrite lack measured workload assurance. No benchmark, latency, CPU or memory magnitude is claimed.",
+    "dependency-hygiene": "SDK declares @agentclientprotocol/sdk ^1.5.0 and Zod, and the journal uses Bun's built-in SQLite with structural injection. Installed ACP 1.5 legacy adapter was inspected only to resolve connection-signal behavior; it is not in the pinned structural receipt. Floating dependency/API compatibility and Node/Windows packaging were not executed; no vulnerability assertion is invented.",
+    "test-coverage": "All 38 selected ranges, including selected checkpoint/SQLite/ACP restoration tests, were read. Existing tests cover actual disk round-trips, graceful reopen, temp Git materialization, controlled cancellation, same-process path leases and seeded background loop integration. The kill-9-labelled effect fixture does not kill/apply its incomplete effect. Eight isolated DI probes passed (24 assertions); these verify wiring/behavior but not real provider, process-kill or live transport restart recovery.",
+    "api-contract": "Direct member/schema drift: transitionBase2GateSafe versus injected transitionBase2Gate; llm_response.fullResponse versus replay.text/message. ACP loadSession can accept an absent session while resume/replay advertisement depends only on configured journalDir. Remote RunState has no sessionState; durable projections are not an executable session contract. Lanes advertise unsupported=false and return capability_disabled consistently."
+  },
+  "strengths": [
+    {
+      "title": "Atomic checkpoint clear/write ordering",
+      "evidence": [
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 1011
+        },
+        {
+          "path": "cli/src/utils/run-state-storage.ts",
+          "line": 1155
+        }
+      ],
+      "why": "Captures one snapshot before queued I/O and drains in-flight rename before clearing, preventing corrupted/resurrected checkpoints."
+    },
+    {
+      "title": "Real merged durable task memory and local CAS",
+      "evidence": [
+        {
+          "path": "sdk/src/services/task-memory-store.ts",
+          "line": 554
+        },
+        {
+          "path": "sdk/src/services/local-harness-store.ts",
+          "line": 368
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1906
+        }
+      ],
+      "why": "Concurrent saves derive distinct revisions under exclusion, preserve committed abort contributions, and protect owner-only data."
+    },
+    {
+      "title": "Actual partial background relaunch",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1707
+        },
+        {
+          "path": "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts",
+          "line": 1897
+        }
+      ],
+      "why": "Pinned child identity, no invented prompt on missing linkage/history, and real loop DI tests are stronger than marker-only scaffolds."
+    },
+    {
+      "title": "Useful snapshot human controls",
+      "evidence": [
+        {
+          "path": "cli/src/utils/turn-snapshots.ts",
+          "line": 192
+        },
+        {
+          "path": "cli/src/commands/snapshot-commands.ts",
+          "line": 105
+        }
+      ],
+      "why": "Preview/current-content revalidation, untracked collision refusal and private index preserve user control and existing Git state within disclosed scope."
+    },
+    {
+      "title": "Real optional ACP/dash services with redacted projections",
+      "evidence": [
+        {
+          "path": "cli/src/serve-command.ts",
+          "line": 173
+        },
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "line": 1135
+        },
+        {
+          "path": "sdk/src/dash/server.ts",
+          "line": 664
+        }
+      ],
+      "why": "Production listeners/consumers exist; receipt validation/live merge, local token controls and source-unavailable states are valuable foundations."
+    }
+  ],
+  "coverageLimits": [
+    "Inspection receipt covers 73 current inventory files via bounded exact ranges, not a full-line audit of every listed file. All 38 picker-selected ranges are covered; adjacent reads are enumerated. Native retrieval/audit tools are unavailable in this Codex session; root will validate the native structural receipt through exported repository code.",
+    "Existing repository suites were inspected, not rerun. Only the 8-case isolated DI audit file was executed (Bun 1.3.14, 24 assertions, 0 failures). Fake providers throw/return controlled values; Git runner is injected. No real root-repo Git changes, credentials/private local state, external API, or live-provider run was used.",
+    "No actual SIGKILL/restart of the CLI/service, ACP socket detach while a provider call is live, Node public package invocation, Windows transport, or daemon boot was exercised. The socket-lock probe supplies the exact anonymous residue shape instead of killing a real listener.",
+    "Installed node_modules/@agentclientprotocol/sdk/dist/acp.js was read at 995–1015 and 1164–1178 to confirm the legacy adapter passes params without its request signal. This non-inventory dependency is excluded from structuralReceipt.files.",
+    "Provider routing and generator terminal-state authority are owned by pairs02/03; journal/lease/serialization consequences are assessed here only. Memory quality/compaction/V2 retention belongs to pair04; mutation exact-byte authority to pair06; process/OS containment to pair09; broad task/control-plane completeness to pair12.",
+    "Default TUI/headless run journaling is separate from optional SDK journal injection. Foreground resume adapters report attempts, not actual resumed child execution. The separate exported WorkspaceLeaseService is real for explicit SDK callers but unwired into default spawns.",
+    "Snapshot materialization deliberately retains target-absent tracked paths and excludes untracked files; it is not a full deletion-aware rollback. Retention's repo-global refs/replace mutation is disclosed. Hard-kill bisection restoration was not verified.",
+    "ACP JSONL has real receipt/gate reload and fill-only live merge, but its queue is best-effort, full rewrites truncate in place, and no shutdown acknowledgement/drain is exposed. Its main-lane revision map is not rehydrated by the restore receipt loop. These are capability limits beyond the ranked session/control defects.",
+    "Dashboard default CLI wires only the run-journal source; receipt/gate seams remain empty/null unless explicitly supplied. An absent reader is checked at startup and not automatically opened after another process creates the journal. Pagination/hydration at realistic retained-history size is unmeasured.",
+    "Plan/task artifact persistence is traced through get_task and STATE.json, not promoted into durable workflow execution. Ordinary writePlanState increments/replaces state without a cross-process CAS; pair12 owns broader task-source consistency.",
+    "V1 memory persistence correctly fails closed on an orphaned exclusive-create lock; its test deliberately requires that result. The resulting indefinite save outage requires explicit safe recovery design rather than blindly deleting lock residue."
+  ],
+  "probeRuns": [
+    {
+      "path": "evidence/05-durability-probes.test.ts",
+      "log": "evidence/05-durability-probes.log",
+      "command": "NODE_ENV=test OPENBUFF_CONFIG_DIR=/tmp/openbuff-body-review-2026-11-05/evidence/05-probe-config bun test /tmp/openbuff-body-review-2026-11-05/evidence/05-durability-probes.test.ts --timeout 10000",
+      "runtime": "bun 1.3.14",
+      "cases": 8,
+      "assertions": 24,
+      "passed": 8,
+      "failed": 0,
+      "assurance": "integration (DI)",
+      "limits": "Real loop/helpers and in-memory SQLite; two connection-level agents/fake client, simulated stale lock, shortened lease TTL, fake Git. No live provider/socket restart/actual kill."
+    }
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "05-P1",
+      "problem": "Main and ACP continuation lack one durable executable session identity/state owner (05-F1/F4/F5).",
+      "sourceAnchors": [
+        "cli/src/hooks/use-send-message.ts:735",
+        "packages/agent-runtime/src/run-agent-step.ts:1963",
+        "sdk/src/serve/bridge.ts:754",
+        "sdk/src/services/acp/acp-agent.ts:886"
+      ],
+      "intendedBehavior": "Interrupted main ID, prior RunState, current turn/controller and transcript belong to one durable session independent of client sinks.",
+      "smallestScope": "Define session/run record and explicit fresh-turn/resume transition; integrate TUI checkpoint and ACP bridge/load/attach paths.",
+      "prerequisites": [
+        "Retain existing journal/checkpoint formats with explicit version migration.",
+        "Coordinate pair03 lifecycle outputs and pair12 task-source contract."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Older-checkpoint completed effect replay uses original ID.",
+        "Two ACP prompts retain first-turn constraint.",
+        "Reconnect to active turn preserves cancel/exclusion.",
+        "Absent/corrupt session fails distinctly."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Actual killed-helper/reopened-session artifacts plus DI and transport receipts; no completion based only on loader {} or seam counts.",
+      "stopOrDefer": "Defer daemon/lane expansion until identity/control acceptance passes."
+    },
+    {
+      "id": "05-P2",
+      "problem": "P2 effect boundaries miss model/custom/MCP dispatch and do not reconcile applied-but-unacknowledged effects (05-F2).",
+      "sourceAnchors": [
+        "packages/agent-runtime/src/tools/stream-parser.ts:706",
+        "packages/agent-runtime/src/run-programmatic-step.ts:1042",
+        "sdk/src/run.ts:1466"
+      ],
+      "intendedBehavior": "Every covered effect has stable intent/outcome identity; unknown non-idempotent outcomes are reconciled or explicitly decided before repeat.",
+      "smallestScope": "Move generic effect journal boundary to shared dispatch, integrate existing filesystem broker receipts, classify replay policy by operation rather than agent name alone.",
+      "prerequisites": [
+        "05-P1 original run/operation identity.",
+        "Pair06 broker receipt contract and pair09 shell/job control seams."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Kill after harmless external counter increment before result; no blind repeat.",
+        "Cover model, programmatic, custom and MCP families.",
+        "Journal outage reports recoverability honestly."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Persistent effect receipts and an actual process-kill recovery test for the unknown window.",
+      "stopOrDefer": "Do not promise universal exactly-once external effects; unsupported reconciliation must stay observable and fail closed for repeat."
+    },
+    {
+      "id": "05-P3",
+      "problem": "Background result/tail recording dies with parent-turn connection lifetime (05-F3).",
+      "sourceAnchors": [
+        "cli/src/hooks/use-send-message.ts:923",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts:175",
+        "packages/agent-runtime/src/run-agent-step.ts:1722"
+      ],
+      "intendedBehavior": "Detached children retain owned journal access and durably settle into the current parent/session.",
+      "smallestScope": "Add session/child reference counting or independent child connections and durable settlement; transport journal/effect operations through supervised bridge where needed.",
+      "prerequisites": [
+        "05-P1 durable parent/session owner.",
+        "Pair03 supervised-child boundary."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Parent completes/cancels, child later settles, disk reopen shows result/tail.",
+        "Supervisor child crash/restart has own journal/linkage.",
+        "No stale captured-parent settlement overwrite."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Reopened disk events, parent intent/receipt and cleanup ownership proof.",
+      "stopOrDefer": "Preserve documented rerunnable background policy; keep unsafe re-drive gated."
+    },
+    {
+      "id": "05-P4",
+      "problem": "Socket locks and ACP best-effort rewrite/queue lack crash-safe lifecycle acknowledgment (05-F6 and 05-C11).",
+      "sourceAnchors": [
+        "sdk/src/serve/socket-listener.ts:129",
+        "sdk/src/services/acp/session-data.ts:731",
+        "sdk/src/services/acp/session-data.ts:798"
+      ],
+      "intendedBehavior": "Service restart safely reconciles dead locks; acknowledged durable writes survive killed rewrites; failures and shutdown ownership are observable.",
+      "smallestScope": "Adopt ownership-verified lock protocol; atomic ACP journal replacement/drain/error status; close active connections under explicit serve ownership.",
+      "prerequisites": [
+        "05-P1 determines which session records are authoritative."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Kill locked helper then bind same path; live owner is never stolen.",
+        "Kill overflow journal rewrite and retain prior complete state.",
+        "Storage denial does not advertise healthy durable resume.",
+        "Connected client shutdown is bounded."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Actual temp-service kill/restart and journal rewrite fault artifacts.",
+      "stopOrDefer": "An external OS service manager is allowed; do not call a foreground listener a durable daemon."
+    },
+    {
+      "id": "05-P5",
+      "problem": "Spawn path leases expire without production heartbeats; disk service is separate (05-F7).",
+      "sourceAnchors": [
+        "packages/agent-runtime/src/util/workspace-path-leases.ts:45",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts:470",
+        "sdk/src/services/harness-intelligence.ts:2426"
+      ],
+      "intendedBehavior": "Live participating child ownership remains exclusive across TTLs and restarts, with replacement fencing.",
+      "smallestScope": "Tie renewal/release to child supervision; integrate disk authority only where cross-process ownership is promised; keep simple same-process path scope checks.",
+      "prerequisites": [
+        "05-P1 run owner identity.",
+        "Pair03 supervision/liveness and pair06 mutation fencing."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Live child across several TTLs excludes overlap.",
+        "Dead owner is reclaimed safely.",
+        "Expired prior owner cannot renew/write after replacement.",
+        "Cancel/error release exactly once."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Injected-clock and two-process ownership receipts, not just helper heartbeat calls.",
+      "stopOrDefer": "Do not equate cooperative locks with OS isolation; defer broader lane authority until this works."
+    },
+    {
+      "id": "05-P6",
+      "problem": "Safe workflow helper/member mismatch blocks advisory state writes (05-F8).",
+      "sourceAnchors": [
+        "packages/agent-runtime/src/run-programmatic-step.ts:476",
+        "agents/base2/base2.ts:8536"
+      ],
+      "intendedBehavior": "Shipped generator receives the safe typed helper and persists successful/rejected advisory transitions.",
+      "smallestScope": "Align the two-member boundary and add one real runtime-to-shipped-generator behavior probe.",
+      "prerequisites": [],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Workflow revision advances without manually injecting a test-only member.",
+        "Illegal transition persists structured error.",
+        "Authoritative gate behavior stays unchanged."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Persisted workflowStates and telemetry from a real shipped consumer.",
+      "stopOrDefer": "Do not promote advisory state to authoritative finalization during this repair."
+    },
+    {
+      "id": "05-P7",
+      "problem": "Snapshot captures/publications are not serialized (05-F9).",
+      "sourceAnchors": [
+        "cli/src/hooks/helpers/send-message.ts:548",
+        "cli/src/utils/turn-snapshots.ts:461"
+      ],
+      "intendedBehavior": "Successful snapshot points are retained in one chain and attributed to the intended turn/shell boundary.",
+      "smallestScope": "Use repository lock/CAS publication and bounded capture barrier; retain current explicit partial materialization contract.",
+      "prerequisites": [
+        "Pair06 repository mutation/lock integration."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Two concurrent producers retain both or retry/fail explicitly.",
+        "Slow capture versus next-turn mutation preserves attribution.",
+        "Timeout cannot publish a mislabeled later tree.",
+        "Existing preview/index/HEAD/untracked guarantees pass."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Temp Git commit/ref chain plus barrier-controlled turn attribution evidence.",
+      "stopOrDefer": "Deletion-aware transactional restore is a separate optional package; do not silently widen current restore semantics."
+    },
+    {
+      "id": "05-P8",
+      "problem": "Replay schema drift and dashboard optional sources weaken retained evidence (05-F10/05-C13).",
+      "sourceAnchors": [
+        "packages/agent-runtime/src/run-agent-step.ts:1089",
+        "cli/src/commands/replay-command.ts:87",
+        "cli/src/commands/dash-command.ts:201"
+      ],
+      "intendedBehavior": "Recorded visible text and operation evidence survive machine replay; dashboard reports actual source capability/state.",
+      "smallestScope": "Share versioned response schema and legacy mapping; integrate receipt/gate provider from the canonical owner; paginate before hydration where needed.",
+      "prerequisites": [
+        "05-P1 for default receipt/gate source ownership; response-field repair can land independently."
+      ],
+      "languageDecision": "Repair in TypeScript; keep one session/effect authority and version JSON boundaries. No language migration prerequisite.",
+      "acceptanceProbes": [
+        "Real-loop plain assistant answer survives --json replay in order.",
+        "Tool-containing/legacy/empty/error records map deliberately.",
+        "Absent-to-created source transition is explicit.",
+        "Large retained run reads bounded pages before mapping."
+      ],
+      "regressionChecks": "Run the relevant existing journal/checkpoint/ACP/snapshot/lease suites after new behavioral probes; preserve current optional-host and local-only contracts.",
+      "completionEvidence": "Replay export comparison and source/provider read-count evidence.",
+      "stopOrDefer": "No new monitoring surface until data/control semantics are truthful."
+    }
+  ]
+}
+

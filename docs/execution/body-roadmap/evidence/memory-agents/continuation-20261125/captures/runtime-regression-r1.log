@@ -1,0 +1,653 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts:
+(pass) loopAgentSteps > loads a tool tier between model steps without widening the initial surface [77.00ms]
+(pass) loopAgentSteps > routes spawned subagent model requests by stable agent type [5.87ms]
+(pass) loopAgentSteps > B02 stops a zero cost budget naturally without output correction or inference [2.67ms]
+(pass) loopAgentSteps > B02 finalizes a fatal generator as failed once and preserves its partial output [2.80ms]
+(pass) loopAgentSteps > B02 stops an exhausted step budget once before any generator tool dispatch [1.82ms]
+(pass) loopAgentSteps > B02 prevents generator restart and correction after the final permitted provider step [6.57ms]
+(pass) loopAgentSteps > B02 completes successful work on the final permitted provider step [8.00ms]
+(pass) loopAgentSteps > B02 candidate generation consumes the selected provider-step budget [3.62ms]
+(pass) loopAgentSteps > B02 candidate generation stops once after an observed token budget exhaustion [2.65ms]
+(pass) loopAgentSteps > B02 a single candidate request can finish on its final permitted step [3.11ms]
+(pass) loopAgentSteps > B02 preserves task rejection independently of a happy generator completion [2.31ms]
+(pass) loopAgentSteps > B02 retains a failed action after verified tool recovery and accepted task completion [11.00ms]
+(pass) loopAgentSteps > stops an infinite sequence of identical invalid tool calls [8.50ms]
+(pass) loopAgentSteps > allows correction after invalid tool calls [7.81ms]
+(pass) loopAgentSteps > resets the error streak when invalid arguments change [9.43ms]
+(pass) loopAgentSteps > does not treat repeated provider errors as identical invalid tool calls [5.89ms]
+(pass) loopAgentSteps > compares full invalid arguments, not just identical validation excerpts [8.23ms]
+(pass) loopAgentSteps > still stops repeated identical malformed XML tool calls [5.14ms]
+(pass) loopAgentSteps > calls the LLM once after STEP [12.67ms]
+(pass) loopAgentSteps > retries a prompt-only structured agent that ends without set_output [8.11ms]
+(pass) loopAgentSteps > preserves set_output when thinker harvest finds no plain assistant text [4.91ms]
+(pass) loopAgentSteps > harvests thinker plain-text final answer into structured output [3.87ms]
+(pass) loopAgentSteps > reports the resolved BYOK model context window before the LLM request [4.83ms]
+(pass) loopAgentSteps > preserves a pre-seeded contextWindowTokens when no resolver dep is present [3.35ms]
+(pass) loopAgentSteps > forwards a request-time SDK trim as a context_request_trim event [3.81ms]
+(pass) loopAgentSteps > stamps a nested run lineage on the context_request_trim event [3.42ms]
+(pass) loopAgentSteps > publishes the same compaction budget on context_window as on the compaction event [12.63ms]
+(pass) loopAgentSteps > keeps the window-derived compaction trigger when maxContextLength clamps max below it [3.48ms]
+(pass) loopAgentSteps > keeps the unknown-window fallback trigger above a small configured window [4.07ms]
+(pass) loopAgentSteps > runs semantic programmatic compaction before the mechanical brake [8.56ms]
+(pass) loopAgentSteps > does not report below-trigger semantic reductions as context compaction [5.84ms]
+(pass) loopAgentSteps > uses the injected small-model semantic budget before the first request [4.87ms]
+(pass) loopAgentSteps > emits exactly one run-correlated compaction status pair for an announced pass [5.32ms]
+(pass) loopAgentSteps > settles the compaction status when a pass declines to compact [7.34ms]
+(pass) loopAgentSteps > reports a failed generator-driven pruner on the parent compaction settle [23.46ms]
+(pass) loopAgentSteps > settles the compaction status exactly once when the programmatic step throws [3.66ms]
+(pass) loopAgentSteps > stamps a nested run lineage on compaction status and result events [5.40ms]
+(pass) loopAgentSteps > emits monotonic compaction progress strictly inside an announced pass [5.06ms]
+(pass) loopAgentSteps > emits no compaction progress for an iteration that announces no pass [5.52ms]
+(pass) loopAgentSteps > emits a recovery-rich event when emergency mechanical trim is required [10.30ms]
+(pass) loopAgentSteps > reports compaction thrash in the reason after two unproductive compactions [13.71ms]
+(pass) loopAgentSteps > does not report an announced semantic pass that reclaimed nothing as a compaction [9.02ms]
+(pass) loopAgentSteps > caps further semantic compaction for the turn after a zero-reclaim announced pass [8.05ms]
+(pass) loopAgentSteps > revokes implicit read authorizations when eviction rewrites read bodies out of history [29.82ms]
+(pass) loopAgentSteps > emits compaction progress only while an announced pass is unsettled [8.51ms]
+(pass) loopAgentSteps > leaves semantic compaction unsuppressed when a pass genuinely shrinks history [4.56ms]
+(pass) loopAgentSteps > resets suppressSemanticCompaction at loop entry [3.60ms]
+(pass) loopAgentSteps > announces and settles a runtime-driven semantic pass for a prompt-only template [11.32ms]
+(pass) loopAgentSteps > reports semantic_compaction when the runtime-driven pruner shrinks history [8.92ms]
+(pass) loopAgentSteps > stops announcing the runtime-driven pruner once the governor paces it [15.34ms]
+(pass) loopAgentSteps > skips the runtime-driven pruner when the template does not declare context-pruner [6.67ms]
+(pass) loopAgentSteps > spawns the declared publisher/version-qualified pruner for the runtime-driven pass [14.69ms]
+(pass) loopAgentSteps > injects the operative pruner contract for a publisher/version-qualified pruner [9.79ms]
+(pass) loopAgentSteps > paces inline pruner spawns under the governor for a publisher/version-qualified id [20.73ms]
+(pass) loopAgentSteps > runs the re-armed second pass after a productive pass and cooldown regrowth [27.76ms]
+(pass) loopAgentSteps > validates a suppressed pruner spawn before returning the anti-thrash skip envelope [3.35ms]
+(pass) loopAgentSteps > keeps the turn alive and settles when the runtime-driven pruner fails [6.14ms]
+(pass) loopAgentSteps > captures only the trusted root prompt and replaces a hydrated goal once [3.57ms]
+(pass) loopAgentSteps > uses the structured compaction envelope and newest pinned memory for /compact [3.63ms]
+(pass) loopAgentSteps > populates contextBudgetLedger on prompt-build turns and keeps it on cached-prompt turns [7.26ms]
+(pass) loopAgentSteps > keeps the saved system prompt when resuming an interrupted turn [7.15ms]
+(pass) loopAgentSteps > rebuilds legacy cached system prompts without a template identity [2.97ms]
+(pass) loopAgentSteps > clears template identity when using an inherited parent prompt [3.07ms]
+(pass) loopAgentSteps > annotates the retained contextBudgetLedger on a /compact turn [6.55ms]
+(pass) loopAgentSteps > degraded or malformed correlated V2 authority never injects the V1 shadow [6.36ms]
+(pass) loopAgentSteps > selects exactly one correlated prompt authority and defaults legacy states to V1 [16.83ms]
+(pass) loopAgentSteps > injects exactly one bounded active-playbooks band beside the authoritative V2 context [10.48ms]
+(pass) loopAgentSteps > rebuilds one bounded V2 context message per model iteration without accumulation [4.38ms]
+(pass) loopAgentSteps > repeats the missing-output nudge until the step cap ends the loop [4.64ms]
+(pass) loopAgentSteps > caps the missing-output nudge at maxMissingOutputRetries and returns a null structured value [3.31ms]
+(pass) loopAgentSteps > injects a retry message that names the recorded set_output rejection [31.30ms]
+(pass) loopAgentSteps > corrects a verdict-less stored reviewer receipt in the same child [5.81ms]
+(pass) loopAgentSteps > bounds repeated invalid reviewer receipts and reports schema_invalid [5.99ms]
+(pass) loopAgentSteps > repairs other reviewer schema errors without repeating the review [4.02ms]
+(pass) loopAgentSteps > lets a reviewer correct a rejected replacement after an earlier valid receipt [4.83ms]
+(pass) loopAgentSteps > does not require a verdict for a valid advisory specialist receipt [3.00ms]
+(pass) loopAgentSteps > repairs a reviewer-family specialist even when its id and stale output omit reviewer [3.30ms]
+(pass) loopAgentSteps > injects the generic missing-output message when there is no recorded rejection [9.80ms]
+(pass) loopAgentSteps > retries once and succeeds when the stream ends empty with no executed tool call [1006.06ms]
+(pass) loopAgentSteps > surfaces the exact failure output when attempt 2 also ends empty [1008.68ms]
+(pass) loopAgentSteps > does not retry when a tool call executed before the empty end [4.84ms]
+(pass) loopAgentSteps > compacts once before the retry when context exceeds 0.7 of the window [1018.65ms]
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts:
+Using environment: dev
+(pass) runProgrammaticStep > inline compaction outcome feedback > reports completed for an inline pruner receipt with status completed [2.65ms]
+(pass) runProgrammaticStep > inline compaction outcome feedback > reports failed for an inline pruner receipt with status failed [0.83ms]
+(pass) runProgrammaticStep > inline compaction outcome feedback > reports skipped for an inline pruner receipt with status cancelled [0.28ms]
+(pass) runProgrammaticStep > inline compaction outcome feedback > reports failed for an inline pruner receipt with status cancelled [0.18ms]
+(pass) runProgrammaticStep > inline compaction outcome feedback > reports a bounded failure when the inline pruner call throws [0.62ms]
+(pass) runProgrammaticStep > generator lifecycle > [B02 cancellation] aborted end_turn cannot complete or resume the generator [0.61ms]
+(pass) runProgrammaticStep > generator lifecycle > [B02 cancellation] aborted read_files cannot complete or resume the generator [0.29ms]
+(pass) runProgrammaticStep > generator lifecycle > [B02 cancellation] aborted STEP_TEXT cannot complete or resume the generator [0.90ms]
+(pass) runProgrammaticStep > generator lifecycle > [B02 cancellation] a generator that catches its own abort cannot return completed [0.34ms]
+(pass) runProgrammaticStep > generator lifecycle > [B02 cancellation] an actual AbortError remains cancellation without an aborted signal [0.53ms]
+(pass) runProgrammaticStep > generator lifecycle > should create new generator when none exists [0.32ms]
+(pass) runProgrammaticStep > generator lifecycle > should not reuse existing generator for same agent [0.31ms]
+(pass) runProgrammaticStep > generator lifecycle > should handle STEP_ALL generator state [0.26ms]
+(pass) runProgrammaticStep > generator lifecycle > should throw error when template has no handleStep [0.07ms]
+(pass) runProgrammaticStep > executionSource trust boundary > throws for a database-loaded template with a string handleSteps and never executes it [0.07ms]
+(pass) runProgrammaticStep > executionSource trust boundary > throws for a template with an unlisted executionSource and a string handleSteps [0.07ms]
+(pass) runProgrammaticStep > executionSource trust boundary > materializes and runs string handleSteps for a trusted local executionSource [3.65ms]
+(pass) runProgrammaticStep > executionSource trust boundary > materializes and runs string handleSteps for the bundled executionSource [0.18ms]
+(pass) runProgrammaticStep > executionSource trust boundary > materializes and runs string handleSteps when executionSource is undefined (legacy local loader) [0.14ms]
+(pass) runProgrammaticStep > tool execution > rejects undeclared tools yielded by handleSteps [0.29ms]
+(pass) runProgrammaticStep > tool execution > allows explicitly declared hidden programmatic tools [0.27ms]
+(pass) runProgrammaticStep > tool execution > should not add tool call message for add_message tool [0.46ms]
+(pass) runProgrammaticStep > tool execution > should execute single tool call [0.27ms]
+(pass) runProgrammaticStep > tool execution > should serialize default programmatic tool results as neutral context before STEP [0.57ms]
+(pass) runProgrammaticStep > tool execution > should not add neutral context for default programmatic tools when no LLM step follows [0.38ms]
+(pass) runProgrammaticStep > tool execution > should add find_files tool result to messageHistory [0.60ms]
+(pass) runProgrammaticStep > tool execution > should execute multiple tool calls in sequence [0.46ms]
+(pass) runProgrammaticStep > tool execution > should comprehensively test STEP_ALL functionality with multiple tools and state management [1.41ms]
+(pass) runProgrammaticStep > tool execution > should pass tool results back to generator [0.34ms]
+(pass) runProgrammaticStep > current invocation result ownership > does not return or journal a preceding result when the current result is absent [0.72ms]
+(pass) runProgrammaticStep > current invocation result ownership > does not return or journal a preceding result when the current result is foreign [0.18ms]
+(pass) runProgrammaticStep > current invocation result ownership > retains the current missing external refusal with includeToolCall=%s [2.01ms]
+(pass) runProgrammaticStep > current invocation result ownership > retains the current missing external refusal with includeToolCall=%s [0.66ms]
+(pass) runProgrammaticStep > current invocation result ownership > retains the current schema-invalid external refusal with includeToolCall=%s [17.74ms]
+(pass) runProgrammaticStep > current invocation result ownership > retains the current schema-invalid external refusal with includeToolCall=%s [4.07ms]
+(pass) runProgrammaticStep > generator control flow > should handle STEP value to break execution [0.36ms]
+(pass) runProgrammaticStep > generator control flow > should handle generator completion [0.21ms]
+(pass) runProgrammaticStep > generator control flow > should end turn when end_turn tool is called [0.21ms]
+(pass) runProgrammaticStep > state management > should preserve agent state changes [0.22ms]
+(pass) runProgrammaticStep > state management > should preserve message history [0.30ms]
+(pass) runProgrammaticStep > error handling > B02 the shipped serialized base2 generator records an illegal advisory transition durably [27.15ms]
+(pass) runProgrammaticStep > error handling > should handle generator errors gracefully [0.31ms]
+(pass) runProgrammaticStep > error handling > should handle tool execution errors [0.25ms]
+(pass) runProgrammaticStep > error handling > should handle non-Error exceptions [0.13ms]
+1441 |           'test-agent': schemaTemplate as unknown as AgentTemplate,
+1442 |         },
+1443 |       })
+1444 | 
+1445 |       expect(result.endTurn).toBe(true)
+1446 |       expect(result.agentState.output).toEqual({
+                                              ^
+error: expect(received).toEqual(expected)
+
+- {
+-   "count": 42,
+-   "message": "Task completed successfully",
+-   "status": "success",
+- }
++ undefined
+
+- Expected  - 5
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts:1446:40)
+(fail) runProgrammaticStep > output schema validation > should validate output against outputSchema when using setOutput [3.11ms]
+(pass) runProgrammaticStep > output schema validation > should handle invalid output that fails schema validation [1.31ms]
+(pass) runProgrammaticStep > output schema validation > should work with agents that have no outputSchema [1.00ms]
+(pass) runProgrammaticStep > output schema validation > lets an in-project write outside the declared scope proceed instead of blocking it [6.56ms]
+(pass) runProgrammaticStep > output schema validation > still hard-blocks a write whose path escapes the project [1.07ms]
+(pass) runProgrammaticStep > output schema validation > allows in-project reads outside the declared read scope with a non-blocking warning [4.66ms]
+(pass) runProgrammaticStep > output schema validation > softens in-project filesystem scope mismatches to warnings for reads and writes [4.01ms]
+(pass) runProgrammaticStep > output schema validation > should work with outputMode structured_output but no outputSchema defined [1.05ms]
+(pass) runProgrammaticStep > stepsComplete parameter > should pass stepsComplete=false by default [0.36ms]
+(pass) runProgrammaticStep > stepsComplete parameter > should pass stepsComplete=true when specified [0.22ms]
+(pass) runProgrammaticStep > stepsComplete parameter > should handle post-processing when stepsComplete=true [0.27ms]
+(pass) runProgrammaticStep > stepsComplete parameter > should clear STEP_ALL mode when stepsComplete=true [0.20ms]
+(pass) runProgrammaticStep > continued stepping after completion > should allow agent to continue with STEP after initial completion [0.35ms]
+(pass) runProgrammaticStep > continued stepping after completion > should allow agent to continue with STEP_ALL after initial completion [0.39ms]
+(pass) runProgrammaticStep > continued stepping after completion > should handle complex post-processing workflow [0.79ms]
+(pass) runProgrammaticStep > yield value validation > should reject invalid yield values [0.58ms]
+(pass) runProgrammaticStep > yield value validation > should reject yield values with wrong types [0.46ms]
+(pass) runProgrammaticStep > yield value validation > should reject GENERATE_N with non-positive n [0.52ms]
+(pass) runProgrammaticStep > yield value validation > should reject GENERATE_N with negative n [0.33ms]
+(pass) runProgrammaticStep > yield value validation > should accept valid STEP literal [0.16ms]
+(pass) runProgrammaticStep > yield value validation > should accept valid STEP_ALL literal [0.14ms]
+(pass) runProgrammaticStep > yield value validation > should accept valid STEP_TEXT object and continue to next step [0.25ms]
+(pass) runProgrammaticStep > yield value validation > should feed an empty toolResult to the next step after a zero-segment STEP_TEXT [0.38ms]
+(pass) runProgrammaticStep > yield value validation > should surface malformed STEP_TEXT tool calls as response errors [0.36ms]
+(pass) runProgrammaticStep > yield value validation > persists actionable guidance for nameless STEP_TEXT tool calls [0.35ms]
+(pass) runProgrammaticStep > yield value validation > should repair separators in STEP_TEXT tool calls before execution [0.32ms]
+(pass) runProgrammaticStep > yield value validation > should accept valid GENERATE_N object [0.16ms]
+(pass) runProgrammaticStep > yield value validation > should accept valid tool call object [0.18ms]
+(pass) runProgrammaticStep > yield value validation > should accept tool call with includeToolCall option [0.20ms]
+(pass) runProgrammaticStep > yield value validation > should reject random string values [0.21ms]
+(pass) runProgrammaticStep > yield value validation > should reject null yield values [0.19ms]
+(pass) runProgrammaticStep > yield value validation > should reject undefined yield values [0.15ms]
+(pass) runProgrammaticStep > yield value validation > should reject tool call without toolName [0.21ms]
+(pass) runProgrammaticStep > yield value validation > should reject tool call without input [0.26ms]
+(pass) runProgrammaticStep > logging and context > should log agent execution start [0.17ms]
+(pass) runProgrammaticStep > logging and context > should generate unique agent step ID [0.20ms]
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts:
+Using environment: dev
+(pass) tool executor input and scope helpers > includes every read_files selector in filesystem scope checks [4.23ms]
+(pass) tool executor input and scope helpers > canonicalizes symlinks outside the project so scope checks can deny them [0.61ms]
+(pass) tool executor input and scope helpers > repairs stringified and allowlisted bare-string tool inputs [1.70ms]
+(pass) tool executor input and scope helpers > returns a validation error for malformed string tool input [0.68ms]
+(pass) write_todos tool > preserves fuzzy threshold decisions and yields during long comparisons [8.82ms]
+(pass) write_todos tool > matches the original edit-distance decisions for substitutions and insertions [4.89ms]
+(pass) write_todos tool > serializes overlapping checklist updates without losing either [1.82ms]
+(pass) write_todos tool > returns current incoming todos as the visible active summary [5.23ms]
+(pass) runAgentStep - set_output tool > should set output with simple key-value pair [6.17ms]
+(pass) runAgentStep - set_output tool > supplies set_output to structured agents that omitted it from toolNames [1.82ms]
+(pass) runAgentStep - set_output tool > should set output with complex data [1.80ms]
+(pass) runAgentStep - set_output tool > should replace existing output data [1.58ms]
+(pass) runAgentStep - set_output tool > should handle empty output parameter [1.64ms]
+(pass) runAgentStep - set_output tool > blocks suggest_followups when the agent gate has not allowed it yet [1.35ms]
+(pass) runAgentStep - set_output tool > allows suggest_followups after the agent gate has allowed it [1.27ms]
+(pass) runAgentStep - set_output tool > blocks git-committer spawn when the validation/reviewer gate has not passed [3.51ms]
+(pass) runAgentStep - set_output tool > filters git-committer from a mixed spawn_agents batch while proceeding with other agents [15.76ms]
+(pass) runAgentStep - set_output tool > filters only the overlapping git-committer from a green mixed spawn_agents batch [5.67ms]
+(pass) runAgentStep - set_output tool > blocks git-committer for malformed dirty metadata while retaining helpers [12.38ms]
+(pass) runAgentStep - set_output tool > blocks git-committer when owned_paths cover an uncommitted-unvalidated file even though the gate is green [0.94ms]
+(pass) runAgentStep - set_output tool > allows git-committer when owned_paths do not cover any uncommitted-unvalidated file [2.01ms]
+(pass) runAgentStep - set_output tool > allows git-committer despite an uncommitted-unvalidated file when commitScopeBypassAuthorized is true [1.65ms]
+(pass) runAgentStep - set_output tool > blocks git-committer for a post-authorization dirty file even when commitScopeBypassAuthorized is true [1.25ms]
+(pass) runAgentStep - set_output tool > blocks git-committer when owned_paths mix a recorded and an unrecorded dirty file under an authorized bypass [0.89ms]
+(pass) runAgentStep - set_output tool > allows git-committer with empty owned_paths under an authorized bypass [1.53ms]
+(pass) runAgentStep - set_output tool > allows git-committer when an owned path only shares a non-segment prefix with a dirty file [1.27ms]
+(pass) runAgentStep - set_output tool > blocks git-committer when an alias-form owned_path resolves to an uncommitted-unvalidated file [3.19ms]
+(pass) runAgentStep - set_output tool > fails closed and blocks git-committer when every published dirty entry canonicalizes away [0.73ms]
+(pass) runAgentStep - set_output tool > warns when a spawn_agents entry exceeds the soft payload size limit [31.92ms]
+(pass) runAgentStep - set_output tool > blocks suggest_followups after same-step file edits even when the gate started open [4.92ms]
+(pass) runAgentStep - set_output tool > retracts canSuggestFollowups on agentState after a file-changing tool executes [1.95ms]
+(pass) runAgentStep - set_output tool > allows in-project reads outside the repair-editor read scope [4.21ms]
+(pass) runAgentStep - set_output tool > still hard-blocks writes that escape the project via the filesystem write scope [1.52ms]
+(pass) runAgentStep - set_output tool > still hard-blocks reads that escape the project via the filesystem read scope [1.20ms]
+(pass) runAgentStep - set_output tool > hard-blocks reads that escape the project even when the agent has no filesystemScope [1.04ms]
+(pass) runAgentStep - set_output tool > blocks project escapes through the windows selector [1.14ms]
+(pass) runAgentStep - set_output tool > blocks project escapes through the around selector [0.83ms]
+(pass) runAgentStep - set_output tool > blocks project escapes through the symbol selector [0.74ms]
+(pass) runAgentStep - set_output tool > does not hard-block reads of an openbuff-owned temp path [1.95ms]
+(pass) runAgentStep - set_output tool > does not hard-block writes to a temp path via the write exemption [2.23ms]
+(pass) runAgentStep - set_output tool > still hard-blocks a non-exempt read tool with a temp cwd (code_search) [1.63ms]
+(pass) runAgentStep - set_output tool > does not hard-block reads of a non-openbuff absolute temp sibling [2.03ms]
+(pass) runAgentStep - set_output tool > still hard-blocks a read path outside both the project and every temp root [0.39ms]
+(pass) runAgentStep - set_output tool > does not hard-block reads of an allowlisted external path [2.19ms]
+2677 |         agentTemplate: unscopedAgent,
+2678 |         agentState,
+2679 |         prompt: 'Write into the allowlisted external root',
+2680 |       })
+2681 | 
+2682 |       expect(chunks).toContainEqual(
+                            ^
+error: expect(received).toContainEqual(expected)
+
+Expected to contain: ObjectContaining {
+  type: "error",
+  message: StringContaining "was blocked by the unscoped-agent filesystem write scope",
+}
+Received: [
+  {
+    type: "tool_call",
+    toolCallId: "E3FJ8wEZPDo",
+    toolName: "write_file",
+    input: {
+      path: "/tmp/.containment-test-scratch/external-read-backstop-write-OhgpDy/notes.txt",
+      instructions: "Write into an allowlisted read-only root",
+      content: "export const blocked = true\n",
+    },
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    includeToolCall: true,
+  }, {
+    type: "tool_result",
+    toolCallId: "E3FJ8wEZPDo",
+    toolName: "write_file",
+    output: [
+      {
+        type: "json",
+        value: {
+          kind: "file_mutation_result",
+          version: 1,
+          operationId: "E3FJ8wEZPDo:legacy",
+          outcome: "unconfirmed",
+          actions: [
+            {
+              actionId: "E3FJ8wEZPDo:legacy:0",
+              index: 0,
+              action: "update",
+              path: "/tmp/.containment-test-scratch/external-read-backstop-write-OhgpDy/notes.txt",
+              outcome: "unconfirmed",
+              beforeHash: null,
+              afterHash: null,
+              error: {
+                code: "application_rejected",
+                message: "write_file path traversal blocked: unsafe path \"/tmp/.containment-test-scratch/external-read-backstop-write-OhgpDy/notes.txt\" must be a non-empty project-relative path without traversal, absolute/drive/UNC syntax, or NUL bytes.",
+                retryable: true,
+                recovery: "read_again",
+              },
+            }
+          ],
+          authorityTier: null,
+          errors: [
+            {
+              code: "application_rejected",
+              message: "write_file path traversal blocked: unsafe path \"/tmp/.containment-test-scratch/external-read-backstop-write-OhgpDy/notes.txt\" must be a non-empty project-relative path without traversal, absolute/drive/UNC syntax, or NUL bytes.",
+              retryable: true,
+              recovery: "read_again",
+            }
+          ],
+          freshCapabilities: [],
+        },
+      }
+    ],
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    actionOutcome: {
+      actionId: "E3FJ8wEZPDo",
+      attemptId: "E3FJ87cXwfk",
+      runId: "test-run-id",
+      toolName: "write_file",
+      basis: {
+        inputHash: "sha256:2a3a5e8a1c78d6a89e086c88a7c2dce1c514ad34cf635da89a36b8be0d436259",
+        workspaceRevision: 0,
+      },
+      outcome: "uncertain",
+      cause: {
+        code: "application_rejected",
+        message: "write_file path traversal blocked: unsafe path \"/tmp/.containment-test-scratch/external-read-backstop-write-OhgpDy/notes.txt\" must be a non-empty project-relative path without traversal, absolute/drive/UNC syntax, or NUL bytes.",
+      },
+      effect: {
+        status: "unobserved",
+        receiptIds: [],
+        confirmedPaths: [],
+      },
+    },
+  }, {
+    type: "tool_call",
+    toolCallId: "E3FJ9NM5M4A",
+    toolName: "end_turn",
+    input: {},
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    includeToolCall: true,
+    queued: true,
+  }, {
+    type: "tool_start",
+    toolCallId: "E3FJ9NM5M4A",
+  }, {
+    type: "tool_result",
+    toolCallId: "E3FJ9NM5M4A",
+    toolName: "end_turn",
+    output: [
+      {
+        type: "json",
+        value: {
+          message: "Turn ended.",
+        },
+      }
+    ],
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    actionOutcome: {
+      actionId: "E3FJ9NM5M4A",
+      attemptId: "E3FJ9B-yPhk",
+      runId: "test-run-id",
+      toolName: "end_turn",
+      basis: {
+        inputHash: "sha256:035183f670d8a1677597856be62d6deeb67c5f1c91ed80369e42ede97ebfe088",
+        workspaceRevision: 0,
+      },
+      outcome: "succeeded",
+      effect: {
+        status: "unobserved",
+        receiptIds: [],
+        confirmedPaths: [],
+      },
+    },
+  }
+]
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts:2682:22)
+(fail) runAgentStep - set_output tool > still hard-blocks writes to an allowlisted external path [2.34ms]
+2743 |         agentTemplate: unscopedAgent,
+2744 |         agentState,
+2745 |         prompt: 'Read a non-allowlisted external sibling path',
+2746 |       })
+2747 | 
+2748 |       expect(chunks).toContainEqual(
+                            ^
+error: expect(received).toContainEqual(expected)
+
+Expected to contain: ObjectContaining {
+  type: "error",
+  message: StringContaining "was blocked by the unscoped-agent filesystem read scope",
+}
+Received: [
+  {
+    type: "tool_call",
+    toolCallId: "E3FJ9Yz0SUA",
+    toolName: "read_files",
+    input: {
+      paths: [ "/tmp/.containment-test-scratch/external-read-backstop-sibling-PT38Xl-evil/notes.txt" ],
+    },
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    includeToolCall: true,
+  }, {
+    type: "tool_result",
+    toolCallId: "E3FJ9Yz0SUA",
+    toolName: "read_files",
+    output: [
+      {
+        type: "json",
+        value: {
+          kind: "read_files_result",
+          version: 1,
+          status: "error",
+          summary: {
+            requested: 1,
+            ok: 0,
+            partial: 0,
+            failed: 1,
+            uniquePaths: 1,
+          },
+          results: [
+            {
+              selector: "file",
+              requestIndex: 0,
+              path: "/tmp/.containment-test-scratch/external-read-backstop-sibling-PT38Xl-evil/notes.txt",
+              status: "error",
+              error: {
+                code: "outside_project",
+                message: "read_files path traversal blocked: unsafe path \"/tmp/.containment-test-scratch/external-read-backstop-sibling-PT38Xl-evil/notes.txt\" must be a non-empty project-relative path without traversal, absolute/drive/UNC syntax, or NUL bytes.",
+                retryable: false,
+              },
+            }
+          ],
+        },
+      }
+    ],
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    actionOutcome: {
+      actionId: "E3FJ9Yz0SUA",
+      attemptId: "E3FJ9WEfxGw",
+      runId: "test-run-id",
+      toolName: "read_files",
+      basis: {
+        inputHash: "sha256:bc907a21876b4b97dac9053af2cf37008d99a7dcae3b7a945af99c36ea3d7ca7",
+        workspaceRevision: 0,
+      },
+      outcome: "failed",
+      cause: {
+        code: "outside_project",
+        message: "read_files path traversal blocked: unsafe path \"/tmp/.containment-test-scratch/external-read-backstop-sibling-PT38Xl-evil/notes.txt\" must be a non-empty project-relative path without traversal, absolute/drive/UNC syntax, or NUL bytes.",
+      },
+      effect: {
+        status: "unobserved",
+        receiptIds: [],
+        confirmedPaths: [],
+      },
+    },
+  }, {
+    type: "tool_call",
+    toolCallId: "E3FJ9jJPNac",
+    toolName: "end_turn",
+    input: {},
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    includeToolCall: true,
+    queued: true,
+  }, {
+    type: "tool_start",
+    toolCallId: "E3FJ9jJPNac",
+  }, {
+    type: "tool_result",
+    toolCallId: "E3FJ9jJPNac",
+    toolName: "end_turn",
+    output: [
+      {
+        type: "json",
+        value: {
+          message: "Turn ended.",
+        },
+      }
+    ],
+    agentId: "main-agent",
+    parentAgentId: undefined,
+    actionOutcome: {
+      actionId: "E3FJ9jJPNac",
+      attemptId: "E3FJ9gfdCpQ",
+      runId: "test-run-id",
+      toolName: "end_turn",
+      basis: {
+        inputHash: "sha256:035183f670d8a1677597856be62d6deeb67c5f1c91ed80369e42ede97ebfe088",
+        workspaceRevision: 0,
+      },
+      outcome: "succeeded",
+      effect: {
+        status: "unobserved",
+        receiptIds: [],
+        confirmedPaths: [],
+      },
+    },
+  }
+]
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts:2748:22)
+(fail) runAgentStep - set_output tool > still hard-blocks reads of a non-allowlisted external sibling [2.24ms]
+(pass) runAgentStep - set_output tool > still hard-blocks code_search with an absolute cwd inside an allowlisted external root [1.21ms]
+(pass) runAgentStep - set_output tool > still allows read_files for an absolute path inside an allowlisted external root [1.93ms]
+(pass) runAgentStep - set_output tool > hard-blocks find_files_matching_content with an absolute cwd outside the project [1.63ms]
+(pass) runAgentStep - set_output tool > blocks suggest_followups after same-step rewrite_symbol edits when the gate started open [2.27ms]
+(pass) runAgentStep - set_output tool > blocks file edits after same-step suggest_followups in gated final response steps [1.42ms]
+(pass) runAgentStep - set_output tool > blocks rewrite_symbol after same-step suggest_followups in gated final response steps [1.19ms]
+(pass) runAgentStep - set_output tool > blocks non-file tools after same-step suggest_followups in gated final response steps [1.37ms]
+(pass) runAgentStep - set_output tool > blocks non-terminal tools across batches after suggest_followups is emitted [1.04ms]
+(pass) runAgentStep - set_output tool > blocks custom/MCP tools after same-step suggest_followups while end_turn still succeeds [1.44ms]
+(pass) runAgentStep - set_output tool > blocks custom/MCP tools after same-step suggest_followups while task_completed still succeeds [1.64ms]
+(pass) runAgentStep - set_output tool > should handle handleSteps with one tool call and STEP_ALL [0.69ms]
+(pass) runAgentStep - set_output tool > should spawn agent inline that deletes last two assistant messages [8.95ms]
+(pass) processStream queued custom/MCP tool tool_start > emits tool_start for a custom/MCP tool queued behind an in-flight write (RF-1) [10.02ms]
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/tools/__tests__/native-tool-observation.test.ts:
+(pass) runtime-local completed native observation > the real local handler is observed once, awaited before UI, with the minted actor and call [8.19ms]
+(pass) runtime-local completed native observation > captures userInputId and ownership before the first workspace await; observer snapshots cannot mutate the result [4.62ms]
+(pass) runtime-local completed native observation > model input and inherited identities cannot replace the runtime-minted owner [6.10ms]
+(pass) runtime-local completed native observation > absent/throwing/rejecting observer preserves the actual result (undefined) [0.87ms]
+(pass) runtime-local completed native observation > absent/throwing/rejecting observer preserves the actual result (() => {
+    throw Error("observer threw");
+  }) [1.32ms]
+(pass) runtime-local completed native observation > absent/throwing/rejecting observer preserves the actual result (() => Promise.reject(Error("observer rejected"))) [0.56ms]
+(pass) runtime-local completed native observation > a timed-out metadata observer cannot hang productive work or leak a late rejection [2003.98ms]
+(pass) runtime-local completed native observation > invalid/failed local record is never observed ({"text":"","kind":"decision","evidenceSelectors":["src/storage.ts"]}) [0.80ms]
+(pass) runtime-local completed native observation > invalid/failed local record is never observed ({"text":"A decision without its rationale","kind":"decision","evidenceSelectors":["src/storage.ts"]}) [1.02ms]
+(pass) runtime-local completed native observation > invalid/failed local record is never observed ({"text":"Use SQLite because decisions must survive process restarts","kind":"decision","evidenceSelectors":[".openbuff/private.json"]}) [0.58ms]
+(pass) runtime-local completed native observation > malformed, recovered handler failures and delegated native outputs are excluded [3.07ms]
+(pass) runtime-local completed native observation > observer failures preserve native credits and cannot alter mutation authority [1.27ms]
+(pass) runtime-local completed native observation > settled observers clear the metadata timer and leave no abort-listener imbalance [0.92ms]
+(pass) runtime-local completed native observation > an external custom tool named record_decision does not use the local observation seam [0.76ms]
+(pass) runtime-local completed native observation > cancellation after the local effect keeps its result and observer, but stops the next dispatch [0.91ms]
+(pass) runtime-local completed native observation > cancellation while observing preserves completed bookkeeping without replacing the signal [0.87ms]
+(pass) runtime-local completed native observation > pre-dispatch cancellation still records no local effect or observation [0.46ms]
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts:
+(pass) compileMemoryV2Context > a high-ranked complete claim and rationale survive bulky verified excerpts [7.46ms]
+(pass) compileMemoryV2Context > is deterministic, bounded, sanitized, and retains warnings and explanations [1.60ms]
+(pass) compileMemoryV2Context > prioritizes correctness categories when the root budget overflows [1.08ms]
+(pass) compileMemoryV2Context > is byte-identical across all semantically unordered DTO arrays without mutating input [5.21ms]
+(pass) compileMemoryV2Context > is deterministic at exact root and child budget boundaries [3.25ms]
+(pass) compileMemoryV2Context > preserves selector granularity in verified output [0.43ms]
+(pass) compileMemoryV2Context > keeps the highest ranked complete fact before clipping instead of canonical ID order [0.42ms]
+(pass) compileMemoryV2Context > preserves score ordering across every ranked result category with deterministic ties [2.22ms]
+(pass) compileMemoryV2Context > schema-validates before compiling [0.65ms]
+(pass) compileMemoryV2Context > renders [currentCoverage] section when items are present [0.93ms]
+(pass) compileMemoryV2Context > omits [currentCoverage] section when array is empty [0.55ms]
+(pass) compileMemoryV2Context > includes bounded verified excerpt in verifiedKnowledge section [0.53ms]
+(pass) compileMemoryV2Context > renders chunk range digest excerpt and verifiedAt in verifiedKnowledge [1.14ms]
+(pass) compileMemoryV2Context > renders revision and snapshot in currentCoverage when present [0.57ms]
+(pass) countConceptAdvisoryEntries > is 0 for a context without concept-advisory entries [0.26ms]
+(pass) countConceptAdvisoryEntries > counts only reusableDiscovery entries carrying the concept-advisory code [0.28ms]
+(pass) countConceptAdvisoryEntries > the produced receipt satisfies its own schema with the counter set [0.86ms]
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/supervision/__tests__/bridge.test.ts:
+(pass) parent↔child bridge round-trip (P2-T8b) > bridged requestToolCall returns the handler result verbatim; trackEvent resolves [7.43ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > handler throw: arrives child-side as a rejection carrying the thrown text (no hang) [1.15ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > SYNCHRONOUS handler throw: a structured error reply, the socket stays usable (never an uncaught parent crash) [1.15ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > unknown method (outside BRIDGE_METHODS): a structured unknown-bridge-method failure, not a crash [0.93ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > markers: logger/signal markers rehydrate into live parent values; functions are dropped [1.44ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > collision-proof sentinel: agent-authored __openbuffBridge-keyed params (legacy shape or a forged nonce) cross the bridge verbatim — never substituted with live values [1.02ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > sendAction markers: nested logger/signal wire markers rehydrate into live parent values (no marker garbage reaches the real dep) [101.27ms]
+[parent-bridge] warn: promptAiSdkStream reply truncated at the stream-chunk byte budget (kept under the 16 MiB per-message cap) {"collectedChunks":11,"budgetBytes":12582912}
+[child-bridge] warn: bridge stream reply was truncated: the parent dropped chunk bytes past BRIDGE_MAX_STREAM_CHUNKS_BYTES to stay under the 16 MiB per-message cap {"deliveredChunks":11}
+(pass) parent↔child bridge round-trip (P2-T8b) > LEGACY full-collection promptAiSdkStream stays BYTE-IDENTICAL (P2-T8c): a stream past BRIDGE_MAX_STREAM_CHUNKS_BYTES truncates (truncated: true) and still returns the result — driven through a PARTIAL table so the child wrapper exercises its REAL fallback [227.22ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > bridged requestFiles forwards capabilityIssuer verbatim so the parent mints cap.v3 editAnchors (child-minted-cap-v3 repair) [1.44ms]
+(pass) parent↔child bridge round-trip (P2-T8b) > server close() cancels the in-flight promptAiSdkStream: the provider iterator is torn down (finally runs) and its rehydrated signal aborted (stream-iterator-not-cancelled-on-bridge-close repair) [14.59ms]
+(pass) bridge fail-closed behavior (P2-T8b) > malformed line from the child: the server destroys the connection promptly [2.24ms]
+(pass) bridge fail-closed behavior (P2-T8b) > malformed line from the parent: subsequent client calls reject promptly (fail-closed) [0.99ms]
+[child-bridge] warn: bridge socket error; failing closed {"error":"write EPIPE"}
+(pass) bridge fail-closed behavior (P2-T8b) > close(): unlinks the socket file and subsequent calls reject promptly [1.48ms]
+(pass) fire-and-forget notify budget (P2-T8b notify-drop repair) > notify saturation: the overflowing notification gets a structured bridge_notify_overflow failure reply while request traffic keeps its own budget [63.86ms]
+[child-bridge] warn: bridge notify failure: the parent refused/dropped a fire-and-forget notification {"id":"notify-trackEvent-1","error":"notify-nope"}
+(pass) fire-and-forget notify budget (P2-T8b notify-drop repair) > a failure reply to a fire-and-forget notify is logged LOUDLY on stderr, never silently swallowed [101.57ms]
+(pass) ndjson framing primitives (P2-T8b) > encodeBridgeMessage: a string past the 16 MiB cap throws oversized [30.36ms]
+(pass) ndjson framing primitives (P2-T8b) > encodeBridgeMessage: a non-JSON-serializable value throws malformed [0.14ms]
+(pass) ndjson framing primitives (P2-T8b) > createNdjsonLineReader: emits one onLine per complete line in a single chunk [0.11ms]
+(pass) ndjson framing primitives (P2-T8b) > createNdjsonLineReader: buffers a partial line and emits it on the completion chunk [0.06ms]
+(pass) ndjson framing primitives (P2-T8b) > createNdjsonLineReader: fires onProtocolError for a line beyond the cap [25.80ms]
+(pass) missingChildCallbackDeps gate (P2-T8b) > a request without rpcSocketPath reports every callback dep missing [0.15ms]
+(pass) missingChildCallbackDeps gate (P2-T8b) > a request with rpcSocketPath supplies the full bridged set (empty missing list) [0.04ms]
+(pass) bridged promptAiSdkStructured schema conversion (fail-closed, P2-T8b) > toBridgeJsonSchema: an unrepresentable zod schema THROWS instead of silently widening to { type: "object" } [0.30ms]
+(pass) bridged promptAiSdkStructured schema conversion (fail-closed, P2-T8b) > toBridgeJsonSchema: a representable zod schema still converts (happy path intact) [0.31ms]
+(pass) bridged promptAiSdkStructured schema conversion (fail-closed, P2-T8b) > bridged promptAiSdkStructured REJECTS when the zod schema cannot be converted; the parent handler is never reached [4.04ms]
+(pass) bridged promptAiSdkStructured schema conversion (fail-closed, P2-T8b) > bridged promptAiSdkStructured: a representable zod schema crosses as real JSON Schema (never the widened fallback) [1.62ms]
+(pass) bridged promptAiSdkStructured schema conversion (fail-closed, P2-T8b) > parent handler: promptAiSdkStructured wire params WITHOUT a schema throw (never widen to { type: "object" }) [0.29ms]
+(pass) bridged serialization fail-closed (structured re-validation + fetch body) > bridged promptAiSdkStructured: a schema-violating parent reply REJECTS with a clear authored-schema message (JSON-Schema round trip drops refinements/transforms) [1.44ms]
+(pass) bridged serialization fail-closed (structured re-validation + fetch body) > bridged promptAiSdkStructured: a conforming parent reply passes re-validation and the value is parsed through the authored schema [1.15ms]
+(pass) bridged serialization fail-closed (structured re-validation + fetch body) > bridged fetch: a non-string init.body (binary/FormData) REJECTS with a fail-closed message BEFORE any network call [1.11ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > bridged addAgentStep: a live Date startTime crosses the nonce-stamped date marker and the parent real dep receives a live Date (never {}) [1.10ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > no-nonce legacy wire: a live Date crosses as its ISO string data (the JSON.stringify-native shape), never {} [0.85ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > date-marker collision immunity: agent-authored __openbuffBridge:'date' objects (forged nonce, extra members, non-string iso) cross verbatim — never rehydrated into a Date [1.03ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > createBridgeDateWireMarker / isBridgeDateWireMarker: exact-shape exact-nonce recognition (collision-proof sentinel) [0.11ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > findNonRoundTripSafeResultPaths: names function members, live zod schemas, and Dates [0.38ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > findNonRoundTripSafeResultPaths: a plain JSON-serializable result reports no offenses [0.05ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > bridged fetchAgentFromDatabase: a template with a programmatic handleSteps or live zod inputSchema REJECTS naming the offending members (the child never receives a damaged AgentTemplate) [1.37ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > bridged fetchAgentFromDatabase: a round-trip-safe template (string-valued handleSteps, no live zod members) crosses verbatim; a null result passes through [0.99ms]
+(pass) bridged Date params + result round-trip safety (serialization repair) > typed dep contracts are preserved across the bridge: Date params arrive as Dates, round-trip-safe results cross verbatim, unsafe results fail closed [1.37ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > BRIDGE_METHODS carries the additive incremental stream methods (wire-safe append; the legacy full-collection entry is untouched) [0.07ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > isIncrementalStreamUnsupportedError: matches ONLY the parent structured missing-method replies for promptAiSdkStreamStart/Next (the single fallback decision) [0.08ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > createStreamTruncationErrorResult: a structured StreamTruncatedError-styled aborted PromptResult naming the per-reply budget (never a socket destroy) [0.09ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > INCREMENTAL happy path: one start + one next per chunk — the child holds exactly ONE chunk while the parent has produced exactly one (no full collection), and the final PromptResult flows back [1.63ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > INCREMENTAL early return: the caller breaking out of the loop sends the best-effort promptAiSdkStreamStop and the parent tears the provider stream down exactly like the legacy cancelStream (finally runs + signal aborted) [1.50ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > INCREMENTAL oversized single chunk: the structured StreamTruncatedError-styled aborted result flows back and the socket stays usable — never an oversized-encode socket destroy [6.37ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > ENVELOPE-OVERHEAD boundary: a chunk under the 16 MiB per-message cap but whose full reply line (envelope + {done:false,chunk}) would exceed it is probed as oversized and degrades to the structured StreamTruncatedError result — never an oversized-encode socket destroy [10.07ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > registry boundedness (in-process): the 257th start gets the structured too-many-concurrent-streams error, the cancelInFlightStreams drain empties the registry, and a finished stream is removed (stop reports stopped: false) [2.76ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > registry hygiene (in-process): an explicit stop tears the provider stream down exactly like the legacy cancelStream (abort + iterator.return), reports stopped: true once, and a second stop is a no-op [0.46ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > context-window relay (in-process): a deps table supplying resolveModelContextWindow relays the resolved route window in BOTH stream replies (incremental start + legacy full-collection), reading agentId/model off the RAW wire params [0.38ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > context-window relay back-compat (in-process): a deps table WITHOUT resolveModelContextWindow leaves contextWindowTokens absent in both stream replies (partial handler tables keep the exact old reply shape) [0.19ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > context-window relay end-to-end: the child wrapper re-applies the relayed route window to the loop-supplied onModelContextResolved callback (incremental start reply), and a non-numeric window is never applied [1.10ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > child wrapper fallback relay: the LEGACY full-collection reply carries contextWindowTokens and the wrapper re-applies it to the loop callback [0.30ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > child wrapper fallback: a partial table (no incremental methods) makes the wrapper fall back to the LEGACY full-collection call — chunks + result with BYTE-IDENTICAL semantics, and no stop is ever sent [0.20ms]
+(pass) incremental promptAiSdkStream bridging (P2-T8c) > child wrapper fail-closed: a done reply WITHOUT a result (the unknown/stale-streamId wire marker) rejects loudly instead of returning an undefined PromptResult [0.15ms]
+(pass) bridged prompt schema fidelity > legacy stream restores serialized tool input and output constraints [18.63ms]
+(pass) bridged prompt schema fidelity > all prompt handlers refuse degraded tool and template schemas before provider execution [1.66ms]
+(pass) bridged prompt schema fidelity > all prompt handlers refuse forged native markers and invalid schema types [226.60ms]
+(pass) bridged prompt schema fidelity > deep prompt schema transport > preserves the complete read_files output schema through every prompt handler [67.51ms]
+(pass) bridged prompt schema fidelity > deep prompt schema transport > preserves the complete read_docs output schema through every prompt handler [15.38ms]
+(pass) bridged prompt schema fidelity > deep prompt schema transport > preserves JSON-only schema members across repeated child transfers [0.68ms]
+(pass) bridged prompt schema fidelity > prompt handlers unwrap an AI-SDK jsonSchema() envelope tool input schema (tolerating children that did not unwrap at the sanitize boundary) [2.90ms]
+(pass) bridged prompt schema fidelity > child sanitizer carries tool schemas as plain JSON Schema across the real socket: AI-SDK envelopes unwrap, live zod output schemas serialize [17.74ms]
+(pass) bridged prompt schema fidelity > child sanitizer degrades untransportable live tool schemas to the advisory projection instead of failing the spawn (Zod UTF-16 length semantics) [12.34ms]
+(pass) bridged prompt schema fidelity > schema refusal crosses the RPC boundary and leaves a healthy following prompt usable [9.66ms]
+(pass) bridged prompt schema fidelity > incremental stream restores serialized tool constraints [5.52ms]
+(pass) bridged prompt schema fidelity > prompt handler restores serialized template input and output constraints [15.68ms]
+(pass) bridged prompt schema fidelity > parent handler: already-live zod members pass through BY REFERENCE (never double-converted) [0.44ms]
+(pass) bridged prompt schema fidelity > a failed schema conversion refuses the prompt before provider execution [0.21ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay (legacy full-collection, in-process): the deps stub awaits params.onCostCalculated(123) and the collectPromptStream reply carries providerCostCents: 123 [0.28ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay (incremental, in-process): the START reply carries no providerCostCents yet and the DONE reply carries providerCostCents: 123 (the cost fires during stream consumption, at/near the final usage chunk) [0.16ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay (promptAiSdk, in-process): the captured cost rides as an EXTRA MEMBER on the PromptResult-shaped reply [0.21ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay (promptAiSdkStructured, in-process): the captured cost rides as an EXTRA MEMBER on the reply (the re-validation flow is untouched parent-side) [1.15ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay back-compat (in-process): a stub that NEVER calls onCostCalculated leaves providerCostCents ABSENT in all four reply shapes (partial handler tables / cost-less providers keep the exact old reply shape) [0.38ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay end-to-end: the child wrapper re-applies the parent-relayed providerCostCents to the loop-supplied onCostCalculated callback (incremental path — the sanitizer dropped the callback from the wire params; the wrapper re-applied it locally) [1.28ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay end-to-end (legacy fallback via stub client): the LEGACY full-collection reply carries providerCostCents and the wrapper re-applies it to the loop callback before yielding chunks [0.31ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay end-to-end (promptAiSdk child wrapper): the extra member is STRIPPED from the reply and relayed to the loop callback; a reply without the member is returned untouched [0.18ms]
+(pass) provider-cost relay (onCostCalculated across the bridge) > cost relay end-to-end (promptAiSdkStructured child wrapper): the extra member is stripped BEFORE re-validation, relayed to the loop callback, and never part of the parsed/returned value [0.69ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay (legacy full-collection, in-process): the deps stub fires the three observational callbacks and the collectPromptStream reply carries contextTrim / cacheDebugRequestBuilt / cacheDebugUsage [0.32ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay (incremental, in-process): the START reply carries NO telemetry members yet and the DONE reply carries all three (the callbacks fire during stream consumption) [0.15ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay (promptAiSdk, in-process): the captured telemetry rides as EXTRA MEMBERS on the PromptResult-shaped reply [0.14ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay (promptAiSdkStructured, in-process): the captured telemetry rides as EXTRA MEMBERS on the reply (the re-validation flow is untouched parent-side) [0.19ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay size guard (in-process): a ~2 MB provider rawBody degrades to { provider, rawBodyDropped: true, bytes } — the giant body NEVER rides the reply (the 16 MiB per-message cap is never risked) [3.05ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay back-compat (in-process): a stub that NEVER fires the callbacks leaves ALL FOUR relay members ABSENT in every reply shape (partial handler tables / quiet providers keep the exact old reply shape) [0.66ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay end-to-end: the child wrapper re-applies the relayed contextTrim / cacheDebugRequestBuilt / cacheDebugUsage to the loop-supplied callbacks (incremental path — the sanitizer dropped the callbacks from the wire params; the wrapper re-applied them locally) [1.50ms]
+(pass) telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge) > telemetry relay end-to-end (promptAiSdk child wrapper): the relay members are STRIPPED from the reply and re-applied to the loop callbacks — no relay member on the returned object [0.30ms]
+
+3 tests failed:
+(fail) runProgrammaticStep > output schema validation > should validate output against outputSchema when using setOutput [3.11ms]
+(fail) runAgentStep - set_output tool > still hard-blocks writes to an allowlisted external path [2.34ms]
+(fail) runAgentStep - set_output tool > still hard-blocks reads of a non-allowlisted external sibling [2.24ms]
+
+ 337 pass
+ 3 fail
+ 1794 expect() calls
+Ran 340 tests across 6 files. [8.78s]

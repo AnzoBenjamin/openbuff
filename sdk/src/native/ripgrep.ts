@@ -6,6 +6,8 @@ import { getSdkEnv } from '../env'
 
 import type { SdkEnv } from '../types/env'
 
+declare const Bun: { embeddedFiles: readonly unknown[] }
+
 function isExecutableFile(candidate: string): boolean {
   try {
     if (!statSync(candidate).isFile()) return false
@@ -31,7 +33,7 @@ function findExecutableOnPath(binaryName: string, env: SdkEnv): string | null {
 
 /**
  * Get the path to the bundled ripgrep binary based on the current platform
- * @param importMetaUrl - import.meta.url from the calling module
+ * @param importMetaUrl - Optional calling-module location for compatibility
  * @returns Path to the ripgrep binary
  */
 export function getBundledRgPath(
@@ -68,10 +70,10 @@ export function getBundledRgPath(
   // Try to find the bundled binary relative to this module
   let vendorPath: string | undefined
 
-  // Use the SDK's own import.meta.url if none is provided
-  const metaUrl = importMetaUrl || import.meta.url
-
-  if (metaUrl) {
+  // Resolve the owning package first, even when an external caller supplies
+  // its own module URL. The caller's cwd need not contain the installed SDK.
+  for (const metaUrl of new Set([import.meta.url, importMetaUrl])) {
+    if (!metaUrl) continue
     // ESM context - use import.meta.url to find relative path
     const currentFile = fileURLToPath(metaUrl)
     const currentDir = dirname(currentFile)
@@ -101,18 +103,22 @@ export function getBundledRgPath(
     if (isExecutableFile(distPath)) {
       vendorPath = distPath
     }
+    if (vendorPath) break
   }
 
   // If not found via importMetaUrl, try CJS approach or other methods
   if (!vendorPath) {
     // Try from __dirname if available (CJS context)
-    const dirname = new Function(
-      `try { return __dirname; } catch (e) { return undefined; }`,
-    )()
+    // Read only fixed module metadata. Direct eval sees CommonJS's lexical
+    // __dirname and prevents bundlers from baking the build checkout's path.
+    let commonJsDir: unknown
+    try {
+      commonJsDir = eval('__dirname')
+    } catch {}
 
-    if (typeof dirname !== 'undefined') {
+    if (typeof commonJsDir === 'string') {
       const cjsPath = join(
-        dirname,
+        commonJsDir,
         '..',
         '..',
         'vendor',
@@ -124,7 +130,7 @@ export function getBundledRgPath(
         vendorPath = cjsPath
       }
       const cjsPath2 = join(
-        dirname,
+        commonJsDir,
         'vendor',
         'ripgrep',
         platformDir,
@@ -134,6 +140,13 @@ export function getBundledRgPath(
         vendorPath = cjsPath2
       }
     }
+  }
+
+  // Standalone Bun applications ship an executable sibling, rather than an
+  // on-disk SDK dist directory. Source Bun and Node keep package-local lookup.
+  if (!vendorPath && typeof Bun !== 'undefined' && Bun.embeddedFiles.length > 0) {
+    const standalonePath = join(dirname(process.execPath), binaryName)
+    if (isExecutableFile(standalonePath)) vendorPath = standalonePath
   }
 
   if (vendorPath && isExecutableFile(vendorPath)) {
@@ -149,7 +162,7 @@ export function getBundledRgPath(
   const distVendorPath = join(
     process.cwd(),
     'node_modules',
-    '@codebuff',
+    '@openbuff',
     'sdk',
     'dist',
     'vendor',

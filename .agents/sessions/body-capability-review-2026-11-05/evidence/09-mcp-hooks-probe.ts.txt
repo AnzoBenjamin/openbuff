@@ -1,0 +1,19 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { runFileChangeHooks } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/file-change-hooks.ts'
+const base='/tmp/openbuff-body-review-2026-11-05/evidence'
+const cwd=path.join(base,'09-work')
+const {Client}=await import('/home/ben/Code/CLI/openbuff/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')
+const originalConnect=Client.prototype.connect
+const originalClose=Client.prototype.close
+let connects=0,closes=0
+Client.prototype.connect=async function(){connects++}
+Client.prototype.close=async function(){closes++}
+try {
+ const {getMCPClient}=await import('/home/ben/Code/CLI/openbuff/common/src/mcp/client.ts')
+ for(let i=0;i<65;i++)await getMCPClient({type:'stdio',command:'09-NOT-SPAWNED',args:[String(i)],env:{}},{origin:'project'})
+} finally {Client.prototype.connect=originalConnect;Client.prototype.close=originalClose}
+const hook=await runFileChangeHooks({files:['09-env-child.py'],cwd,hooks:[{name:'09-harmless-one-liner',command:"python3 -c \"print('09_HOOK_SENTINEL')\""}]})
+const result={mcp:{fakeConnections:connects,closesOnEviction:closes,registryLimit:64},hook,constraints:'MCP connect was replaced before import, so no transports/stdio processes or sockets start. Only the injected harmless hook is considered; no project/private configuration is read.'}
+fs.writeFileSync(path.join(base,'09-mcp-hooks-probe.json'),JSON.stringify(result,null,2))
+console.log(JSON.stringify(result,null,2))

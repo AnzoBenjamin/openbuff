@@ -1,0 +1,24 @@
+{
+  "fixtureRoot": "/tmp/openbuff-body-review-2026-11-05/evidence/06-broker-lock-fixture-KQ7xL0",
+  "injectedDelays": "B after canRecoverLock=true, A after CAS check before staging",
+  "expectedHash": "sha256:25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218",
+  "freshOwnerAWasLive": true,
+  "resultB": {
+    "applied": true,
+    "receipt": {
+      "receiptId": "70b02a9e-bb9c-49cd-9f94-dab6f082b70d",
+      "brokerRevision": 2,
+      "authorityKind": "cooperative_cas"
+    }
+  },
+  "afterB": "writer B\n",
+  "resultA": {
+    "applied": true,
+    "receipt": {
+      "receiptId": "f4c9d7c5-7969-42e8-88a3-ac1768a4be43",
+      "brokerRevision": 1,
+      "authorityKind": "cooperative_cas"
+    }
+  },
+  "final": "writer A\n"
+}
