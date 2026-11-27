@@ -302,9 +302,121 @@
         },
         {
           "id": "N04",
-          "status": "implemented",
+          "status": "accepted",
           "prerequisites": [],
-          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N04.md"
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N04.md",
+          "acceptanceNode": {
+            "nodeId": "N04",
+            "parentCardId": null,
+            "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+            "prerequisites": [],
+            "status": "accepted",
+            "acceptedPrerequisites": [],
+            "sourceContractHashes": {
+              ".bun-version": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
+              ".node-version": "5c293036fc0a61ad76e15d85f454c3c7cec157e181e035b69f95058a2c239144",
+              "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+              "cli/knowledge.md": "bc29831656be0f632a2d814d8ddb6d41d91bf68d58baa624ed93e5c2027ce55e",
+              "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
+              "cli/scripts/preload-opentui.ts": "61321edda85e92351d5fde14a82e78c7e5a377509566c7d5fbae65aac905e283",
+              "cli/src/components/__tests__/compact-queue-status.test.tsx": "d7941cae174535ab421129abdbcfe3fee2ee85a7baf59eb0b8b32055542f1462",
+              "cli/src/components/__tests__/sweep-boxes.test.tsx": "2530379fea0d2515e087db9275c93d7536e862ff08a1afcd8d8f6fc8e52a1c33",
+              "cli/src/hooks/stream-state.ts": "426ae8ff4bf0eb0613c25834968ceebb60bd5e67e5995a30cdb1ebdecfcb2164",
+              "cli/src/utils/__tests__/n04-provider-failover-consumer.test.ts": "f32f672baebb6b0c94e066b8ca57f8084e40c9e012c63d18da230e9457786123",
+              "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "6fa5a0a5fd874854ff34ba20366629ff7457d3ab63254fcb1e10dc96361d0a2b",
+              "cli/src/utils/__tests__/tool-result-normalizer.test.ts": "27c88d5d0f6e7893f7fc547ca15f52d82e0f30d753eaff8ad4c25ff5c6c94700",
+              "cli/src/utils/message-updater.ts": "cd717a2c54f3e1a7d81de5ec1ece6438bfec200c236672a06e420e9fad4a3d98",
+              "cli/src/utils/sdk-event-handlers.ts": "f002ef0ba51215f85555b870939cc9c86b06ab0bc3e6effadc4017bbdb00e995",
+              "cli/src/utils/tool-result-normalizer.ts": "9e108810743a2883bb69e46097cfcd001cd88c42adab3090017d1dfaca9978a4",
+              "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+              "common/src/tools/params/tool/kill-job.ts": "219b87981fc03ef2cc886bcb77403ea90f762ad5653654c8f54390cd252b3447",
+              "common/src/types/print-mode.ts": "7ac1a68c110f3e364cfbb0585a231250fb525977dc077dc1b2a9007e029eb384",
+              "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+              "packages/agent-runtime/src/__tests__/pruner-output.test.ts": "4d493cd2d00d4965e623bc1da2b267e96aedad63b447c31803b322e6586d9455",
+              "packages/agent-runtime/src/llm-api/__tests__/context7-api.test.ts": "cb3185cce649f457ea26f86debca2904db17dbafa0d66bebb0d067624c68a0d5",
+              "packages/agent-runtime/src/llm-api/context7-api.ts": "63566d69d1f35efebf17d150f9c936966a484ce52e8eb48b3ce23e7e9a73891e",
+              "packages/agent-runtime/src/orchestration/__tests__/discovery-coordinator.test.ts": "4a1af08ac0b62ad815f5e3fd9504cb89ff71ea76615ebbd9f7a9c24f848e9544",
+              "packages/agent-runtime/src/orchestration/discovery-coordinator.ts": "0c48dbb7f3e32aeac0d81c324efa9d8667fe6b99f2dfe831d1888e86a47b6e70",
+              "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
+              "packages/agent-runtime/src/tools/handlers/__tests__/glob.test.ts": "19af7015489b2b6701e3089cab25174365fb006c8e7daf1477a686884dfb99d8",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/code-search-memory.test.ts": "fa7027545ea97fb6ff0c3ea0a875f1187b4c71b98bf47758d469253659db8c28",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/kill-job.test.ts": "605c3f6afdf2a5e7c1316090695b56914eb05b9fb202c970e36af7825cefac3c",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/list-directory-memory.test.ts": "fc389640e44f5556a1f09c965aaeb14330c2ef985cfe9b0eadbe5dba26d068c9",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-docs.test.ts": "29c30ece4efc401dac33f554a03c9d9ed9b45c6b21ae316eca31f5d50a319b95",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts": "666c0dd6d3c84102dff8c9f67de293afba04c793930ee831846bad414ecf511b",
+              "packages/agent-runtime/src/tools/handlers/tool/glob.ts": "ff1453b9952b4fb0d5ab58a25966de57b1f706495e144cb2ee70cb6268cc0709",
+              "packages/agent-runtime/src/tools/handlers/tool/read-docs.ts": "791439a8ebe3dd6f9b10cda3f504f293b2b8334ee7e79d5b5187c4badcb7ef7b",
+              "packages/agent-runtime/src/tools/handlers/tool/web-search-utils.ts": "0a3beb7f4eef49cd7ee5698121ae50a7158d29c6d5858b87b890c3d4e30fced5",
+              "packages/agent-runtime/src/tools/handlers/tool/web-search.ts": "c46e4f2409d3340cfea2d85773910916aac3caec77bff190a15f0effc1f08ec6",
+              "packages/agent-runtime/src/util/__tests__/programmatic-compaction-outcome.test.ts": "0a64adfcfac9c06a855ed407de2f0e2cb23c610a34aa3942eca9cdf85561baab",
+              "packages/agent-runtime/src/util/__tests__/runtime-semantic-compaction-outcome.test.ts": "274838ba55f8fd404c10691d2dfc0140c2009c6d80e72dfb336de68524099235",
+              "sdk/knowledge.md": "b5aafd7b22ae5e9a9f77d0a7bbb4e5776eca0146cbcc14d9f496bc3c34b4a001",
+              "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
+              "sdk/src/__tests__/authenticated-host-fixture.ts": "da3418cc8f04a6bf6f59946a5fe464d3ab794ae9ed4ac5b51186db03695ae565",
+              "sdk/src/__tests__/kill-job.test.ts": "03efd3e21b88cdbe87160577e77d4ea93d09a5cbbd607e487b965e3ed283d11c",
+              "sdk/src/__tests__/language-intelligence.test.ts": "6b54f4b8395c4043fedb14c0f1be4aa3b662780923b619378d94914f537d8eef",
+              "sdk/src/__tests__/n04-kill-job-owned.test.ts": "07b22d5447a51292ac6e21ef0b9cbe612967eca7a4d0e62001b6cc28669a5814",
+              "sdk/src/__tests__/n04-lsp-consumer.test.ts": "a8bcbe328f2e814b248eaab96fbe6a3bbc1eda0c486ae46254ef6788a694c021",
+              "sdk/src/__tests__/n04-typed-results-consumers.test.ts": "366be435c03dc8a26268e88df07bacf64e94a773d91f146a7103a003396df42d",
+              "sdk/src/client.ts": "e0c56f2f36d4921129f7b57e9e9ccb8523046a75b15c6242aaf09ff5945d9968",
+              "sdk/src/impl/failover.ts": "ed686c418db9cd6ddbc4cee446c425162ff1130233fcaa95a60416092a8ad2d6",
+              "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
+              "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
+              "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
+              "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
+              "sdk/src/services/execution-launch.ts": "4b33ec3ac4fd8de8d26b7d8b9e6f213cad2e1445a4293a8b32f5cabc276697d0",
+              "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
+              "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
+              "sdk/src/tools/background-jobs.ts": "f2ab1a428c648c08fa17cb6343c22fe60748c274c47a8de8e2a0a4b91af3b95d",
+              "sdk/src/tools/check-job.ts": "a0172de534c201903c6d775363799ccb729e0c9ede2981b826ee964e62bc16fa",
+              "sdk/src/tools/code-search.ts": "972344a37282dd3cc9a92f46b76eac58cc8d9834156d0d65c4cb50fbbc087bdb",
+              "sdk/src/tools/glob.ts": "6d11dded3b9c310b64031adbef986f7738ed74f4b17d111bda796f82b8e5a086",
+              "sdk/src/tools/kill-job.ts": "06bdeb0c52ee154c0aff15e712e253bea29894cfeea957cd556221211ea54072",
+              "sdk/src/tools/list-directory.ts": "d8c2fc43536e39e77b69373485a36afd3757c4d2483abef93d7140b54ae31a4b",
+              "sdk/src/tools/node-filesystem.ts": "1b0a8a77b7c245f91e7fe1f42854733c46ac9b1f4eb4c6e74ef0ca93d79560e4"
+            },
+            "backend": "ts",
+            "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+            "coverageTier": "PROD N04 only: independent source and behavior review of .tmp/r14-n04-final at R13 base 366a392ce3f5cbf196d20fd11b5edb398836e8de and the exact candidate bytes named in the R14 intake. Reviewed the frozen N04 scope, acceptance criteria and verification commands against the two original source-bound matrices, their invocation provenance, and the historical compaction regression log.",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N04/accepted/20261127T134512684784Z-manifest.json",
+            "acceptedAt": "2026-11-27T13:45:12.689976+00:00",
+            "verification": {
+              "independentReviews": [
+                {
+                  "reviewer": "r14-n04-independent-approval",
+                  "implementationOwners": [
+                    "/root",
+                    "r14-n04-fs-lsp",
+                    "r14-n04-kill-proof",
+                    "r14-n04-provider-consumer"
+                  ],
+                  "scope": "PROD N04 only: independent source and behavior review of .tmp/r14-n04-final at R13 base 366a392ce3f5cbf196d20fd11b5edb398836e8de and the exact candidate bytes named in the R14 intake. Reviewed the frozen N04 scope, acceptance criteria and verification commands against the two original source-bound matrices, their invocation provenance, and the historical compaction regression log.",
+                  "decision": "approve",
+                  "evidence": {
+                    "path": ".tmp/r14/seal-successor/implementation/N04.json",
+                    "sha256": "4cd1907ebc7ef2d6962debfc8fe6d6676ba36bd923048b15d8f6413362724e35"
+                  }
+                }
+              ],
+              "requiredCommandCount": 2
+            },
+            "risks": [
+              "This approval does not cover other roadmap nodes or a future candidate with changed bytes. All 62 declared source hashes, three frozen-plan hashes, both original command and invocation bindings, and all three declared artifacts were independently rehashed. Unchanged adjacent source inspected in the candidate is not an expansion of the declared source contract.",
+              "DuckDuckGo and provider transport use offline HTTP-response fixtures; no live provider service or credentials were used. LSP covers the cold and deliberately absent-executable paths, and process-exit evidence covers the local Linux portable and recovered-tracking cases, not other platforms or backends.",
+              "Compaction evidence covers announced root CLI passes under the existing card contract; nested live UI and deliberately suppressed, unannounced passes are not asserted. Historical red is comparative evidence, not a credited passing command."
+            ],
+            "addendumId": "PROD",
+            "contextContractHashes": {
+              ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+              ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+              "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
+            },
+            "acceptanceReceipt": {
+              "path": "docs/execution/body-roadmap/evidence/N04/accepted/20261127T134512684784Z-acceptance.json",
+              "sha256": "22db08f74cb8337773e3a7e0e26f3b53f7fcfff173f253338ff855a33e2de7d0"
+            }
+          }
         },
         {
           "id": "N05",
@@ -415,18 +527,19 @@
               ".bun-version": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
               ".github/workflows/cli-release-build.yml": "69a8ecc39eecc17e7478d5f59711732e10643f8c4caa4fc9c1e66dcea5504d57",
               ".node-version": "5c293036fc0a61ad76e15d85f454c3c7cec157e181e035b69f95058a2c239144",
-              ".tmp/r12/n09/fixtures/build-inputs.py": "4e46a63d41fc7918d1f918dda10459ec027bc68820205e3731a3b549c4215e26",
-              ".tmp/r12/n09/fixtures/consumer-guard.mjs": "0e4b7d2ad1b5190e46fcbdf23e2c55c8a51b45bdeb09292aa9733f26f460a2a8",
-              ".tmp/r12/n09/fixtures/inspect-pack.py": "862687d505e5423b1bc18a5274aabef152d53547f0e5cc2bdd02787165fe31cf",
-              ".tmp/r12/n09/fixtures/offline.py": "64bf1997f7cdb5641e46bc4284b54dcf415d5d24d00f5bc8226b859236634115",
-              ".tmp/r12/n09/fixtures/pin.py": "d7358985b43461a9c237e74d0a9d4fb6ffa94380400781bd4ceab12ebde1f856",
-              ".tmp/r12/n09/fixtures/record-n09.sh": "c27f5b329f41345e86b0ba0d8ea73538c6c171ff1691aae9006367b37751a0fc",
-              ".tmp/r12/n09/fixtures/release-guard.py": "f84014ac7fac07011e25581f8ad404e10a92ac7f434b7c722236adbd1f128c37",
-              ".tmp/r12/n09/inputs/baseline.json": "f037ae1d55d451f6f72182e9c5657bd8bf64cfabad1bc1cb53f6cf9cb45a004b",
-              ".tmp/r12/n09/inputs/cached-wasm/tree-sitter-gdscript.wasm": "42eb46aa698cb82d4bc2f0d61c8a57cdae9ec29e42c8f632430744f890879f90",
-              ".tmp/r12/n09/inputs/wasm-inputs.json": "866cfb9f147a7413a5dba638f1301c676b9b62b9fec4a529247bcbdbf21a86aa",
+              ".tmp/r14/n09/fixtures/build-inputs.py": "4e46a63d41fc7918d1f918dda10459ec027bc68820205e3731a3b549c4215e26",
+              ".tmp/r14/n09/fixtures/consumer-guard.mjs": "0e4b7d2ad1b5190e46fcbdf23e2c55c8a51b45bdeb09292aa9733f26f460a2a8",
+              ".tmp/r14/n09/fixtures/inspect-pack.py": "862687d505e5423b1bc18a5274aabef152d53547f0e5cc2bdd02787165fe31cf",
+              ".tmp/r14/n09/fixtures/offline.py": "64bf1997f7cdb5641e46bc4284b54dcf415d5d24d00f5bc8226b859236634115",
+              ".tmp/r14/n09/fixtures/pin.py": "78f37a187cd0c2eb1ff04400e1c1072ad662997ea067ad71e112b9269f4a5ce5",
+              ".tmp/r14/n09/fixtures/record-n09.sh": "bf0e831c905743b7609ce506ea648613f16b464571435ef22a94fca95d9326d6",
+              ".tmp/r14/n09/fixtures/release-guard.py": "f84014ac7fac07011e25581f8ad404e10a92ac7f434b7c722236adbd1f128c37",
+              ".tmp/r14/n09/frozen-changes.json": "6484b14238573f960fb077e894acaa097e4df39485ca076bc4ae89b8d5d78158",
+              ".tmp/r14/n09/inputs/baseline.json": "6a1383f82af38d465409d5c39aadc6c54ead8c97d60b8fdfa71f3b1e017efdd5",
+              ".tmp/r14/n09/inputs/cached-wasm/tree-sitter-gdscript.wasm": "42eb46aa698cb82d4bc2f0d61c8a57cdae9ec29e42c8f632430744f890879f90",
+              ".tmp/r14/n09/inputs/wasm-inputs.json": "31a06cdc7e1b6e32c36909426375b7197be481e2bce218536a7597ee06c2442e",
               "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
-              "cli/knowledge.md": "c92ce1b74ee9d7908eba4f6841cec06f9ad570d28426bc54ef0bfc72c32a1fbb",
+              "cli/knowledge.md": "bc29831656be0f632a2d814d8ddb6d41d91bf68d58baa624ed93e5c2027ce55e",
               "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
               "cli/release-staging/index.js": "8db7229ed85fda10b67a158ec42a2e51cecde133550d0e084311eabd04b45aec",
               "cli/release/index.js": "409dce10b7dd174f1721853ea593e9924ba1f27276fc65856d04dbd6716d4df8",
@@ -436,13 +549,19 @@
               "cli/scripts/smoke-binary.ts": "184bda3bfb20be06619549b7d25ed3b800e71e2aa0c51cda2106500aa9638d34",
               "cli/src/commands/__tests__/index-command.test.ts": "36c6fd86afd70751f475a844a4def57c0021da2eecbdc0d696e1e8508af5aede",
               "cli/src/commands/index-command.ts": "a7456fd94d553fcef35b380e0e38422288c726525eaece63aa9d5ab0f7e901b2",
+              "cli/src/utils/__tests__/n04-provider-failover-consumer.test.ts": "f32f672baebb6b0c94e066b8ca57f8084e40c9e012c63d18da230e9457786123",
+              "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "6fa5a0a5fd874854ff34ba20366629ff7457d3ab63254fcb1e10dc96361d0a2b",
               "cli/src/utils/code-map-smoke.ts": "492ac923a02ee4bb6479f8d4c01a357e6641d0ac88d20cd2ef4e02518f2eb3bc",
               "cli/src/utils/index-status.ts": "e28f53179048dc001a6ab1044e3e056ce80ba16f5daa7e2b13fbfad50a7f7c78",
+              "cli/src/utils/sdk-event-handlers.ts": "f002ef0ba51215f85555b870939cc9c86b06ab0bc3e6effadc4017bbdb00e995",
               "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
               "common/knowledge.md": "573117dbba1fe8f1590fdb6cb593db15763fa1c65b6a4854de867cdee0244f99",
               "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
               "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3",
               "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/src/llm-api/__tests__/context7-api.test.ts": "cb3185cce649f457ea26f86debca2904db17dbafa0d66bebb0d067624c68a0d5",
+              "packages/agent-runtime/src/llm-api/context7-api.ts": "63566d69d1f35efebf17d150f9c936966a484ce52e8eb48b3ce23e7e9a73891e",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-docs.test.ts": "29c30ece4efc401dac33f554a03c9d9ed9b45c6b21ae316eca31f5d50a319b95",
               "packages/code-map/__tests__/all-language-wasm.test.ts": "1caac9e602f4a19e02f73e94a474d751a33bbba3bc8e4622dc9f37d1329735f0",
               "packages/code-map/__tests__/grammar-wasm-repair.test.ts": "1404666b2dc435b9f0c0aa3c4f1b77752047e8311b813ea18981e250648a55a4",
               "packages/code-map/__tests__/import-capture-tier.test.ts": "8289d687a28b7fbdc9457396b9dcd320cd0f14550eb046dd272c4a44fb51fa76",
@@ -499,18 +618,22 @@
               "packages/indexer/src/index.ts": "0407271c9a63272b8795a24b7d57198e513b304705e0958d4a444f2cae637e44",
               "packages/indexer/src/types.ts": "2087816b16acc7a8f0c21ac2451d9df03a6d7da2e724ed3fd6663e4a392474c9",
               "scripts/__tests__/release-eval-workflows.test.ts": "057995ae6bc7b686cf28fe0f46cd3479b707d26d43b9857463a00c7ba1335096",
-              "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
+              "sdk/knowledge.md": "b5aafd7b22ae5e9a9f77d0a7bbb4e5776eca0146cbcc14d9f496bc3c34b4a001",
               "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
               "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
               "sdk/scripts/esm-export-fixup.ts": "6832995930d39fd11e115aa3866187f47f48627f164cae73871f295869edc08a",
               "sdk/scripts/fixtures/custom-tool-consumer.ts": "e3ab16aa1ed405eb67c9b140e7d0026d0ebc73255ff30b63f161c7e305d07df6",
               "sdk/scripts/verify-public-declarations.ts": "c66c4a360ac2ed930f42f00c9046dcd79758b5faa94c1b128b374ce1395f21cd",
+              "sdk/src/__tests__/n04-kill-job-owned.test.ts": "07b22d5447a51292ac6e21ef0b9cbe612967eca7a4d0e62001b6cc28669a5814",
+              "sdk/src/__tests__/n04-lsp-consumer.test.ts": "a8bcbe328f2e814b248eaab96fbe6a3bbc1eda0c486ae46254ef6788a694c021",
+              "sdk/src/__tests__/n04-typed-results-consumers.test.ts": "366be435c03dc8a26268e88df07bacf64e94a773d91f146a7103a003396df42d",
               "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
               "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
               "sdk/src/services/immutable-replay-program.ts": "11e5a3b548a6c854bc384908ee6e131dfe0ff344de038caffcddb67d4f105ccf",
               "sdk/src/services/private-replay-journal.ts": "8065f1e37e7c63e2350949fdb093650662c75c14ebe7a39b9165ed18a6a39842",
               "sdk/src/services/replay-program-store.ts": "e5177873b6c40df2da8fa92a9e3c96451f96e0d784e1d77f795bd6e645f248cc",
               "sdk/src/services/replayable-program.ts": "c5ba1c07d9808163c4bb9d190cbc702cb3da04feb6d923b7d24c89bc493dad2c",
+              "sdk/src/tools/kill-job.ts": "06bdeb0c52ee154c0aff15e712e253bea29894cfeea957cd556221211ea54072",
               "sdk/test/tree-sitter-queries/test-query-files.js": "80f16c9d9adf1d1f3bae09879da5927f98840ba08abd3dd2d40b06d62e0db49e",
               "sdk/tsconfig.build.json": "6124eaad0ab3a5195f7abc63630853b297df867c2eec0b311c949c517891490e",
               "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
@@ -519,21 +642,21 @@
             "backend": "ts",
             "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
             "coverageTier": "PROD N09, 2026-11-24 authorized practical scope: local SDK query packaging and actual isolated CJS/ESM consumers, code-map import and CLI missing-query controls, and source-count guard behavior in synthetic CLI tar layouts.",
-            "evidenceManifest": "docs/execution/body-roadmap/evidence/N09/accepted/20261127T095452498033Z-manifest.json",
-            "acceptedAt": "2026-11-27T09:54:52.524391+00:00",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N09/accepted/20261127T134512684784Z-manifest.json",
+            "acceptedAt": "2026-11-27T13:45:12.717136+00:00",
             "verification": {
               "independentReviews": [
                 {
-                  "reviewer": "r12-n09-final-approval",
+                  "reviewer": "r14-n09-renewal-approval",
                   "implementationOwners": [
                     "/root",
-                    "r12-n09-local-verification"
+                    "r14-n09-fresh-gate"
                   ],
                   "scope": "PROD N09, 2026-11-24 authorized practical scope: local SDK query packaging and actual isolated CJS/ESM consumers, code-map import and CLI missing-query controls, and source-count guard behavior in synthetic CLI tar layouts.",
                   "decision": "approve",
                   "evidence": {
-                    "path": ".tmp/r12/n09/implementation-review.json",
-                    "sha256": "696a245e8fc40a147471906f303ba08e1fa5f8e0ea38600586781bd6b252f09d"
+                    "path": ".tmp/r14/seal-successor/implementation/N09.json",
+                    "sha256": "f885d12332e555a74855626628b6b1c38a141279a89549ada21967a89ada2fe1"
                   }
                 }
               ],
@@ -549,8 +672,8 @@
               "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
             },
             "acceptanceReceipt": {
-              "path": "docs/execution/body-roadmap/evidence/N09/accepted/20261127T095452498033Z-acceptance.json",
-              "sha256": "eb02dc1e41aea404099ab15ae9ae8dfdfe8dd84a56aa8eb9400e5c0ade48cc21"
+              "path": "docs/execution/body-roadmap/evidence/N09/accepted/20261127T134512684784Z-acceptance.json",
+              "sha256": "704f6909f9c952aeeb9a9e09908f4760a9fe63544db8a7646416857f87d9da88"
             }
           }
         },
@@ -691,8 +814,8 @@
             "backend": "ts",
             "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
             "coverageTier": "PROD N12: Linux local source CLI exact plain piped schema output, fresh-process headless continuation and TUI readiness parity, ACP file-link intake, and executable SDK README examples using an owned loopback provider.",
-            "evidenceManifest": "docs/execution/body-roadmap/evidence/N12/accepted/20261127T074332254143Z-manifest.json",
-            "acceptedAt": "2026-11-27T07:43:32.280900+00:00",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N12/accepted/20261127T134512684784Z-manifest.json",
+            "acceptedAt": "2026-11-27T13:45:12.723327+00:00",
             "verification": {
               "independentReviews": [
                 {
@@ -721,8 +844,8 @@
               "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
             },
             "acceptanceReceipt": {
-              "path": "docs/execution/body-roadmap/evidence/N12/accepted/20261127T074332254143Z-acceptance.json",
-              "sha256": "5841076c6720b9593a26216d2c1161a825eb7c21d5cfc2205534f43dee6c711f"
+              "path": "docs/execution/body-roadmap/evidence/N12/accepted/20261127T134512684784Z-acceptance.json",
+              "sha256": "d1e1523288ac8cb667a79ae65c65800267cf1ca54fa651d86b0407f2abb250a5"
             }
           }
         },

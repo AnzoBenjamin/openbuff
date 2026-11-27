@@ -196,7 +196,7 @@ describe('sdk-event-handlers', () => {
     }
   })
 
-  test('a 401 failover notice persists and names the status, provider and env var', () => {
+  test.each([401, 403])('a %i failover notice persists and names the status, provider and env var', (statusCode) => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
 
@@ -205,7 +205,7 @@ describe('sdk-event-handlers', () => {
       status: 'failover',
       model: 'openrouter/anthropic/claude-sonnet-4.5',
       nextModel: 'anthropic/claude-sonnet-4-5',
-      statusCode: 401,
+      statusCode,
       providerId: 'openrouter',
       apiKeyEnv: 'OPENROUTER_API_KEY',
       degraded: true,
@@ -220,7 +220,7 @@ describe('sdk-event-handlers', () => {
       .map((block) => (block as { content: string }).content)
     const notice = contents.find((c) => c.startsWith('Provider failover'))
     expect(notice).toBe(
-      'Provider failover: openrouter/anthropic/claude-sonnet-4.5 (openrouter) returned 401; check OPENROUTER_API_KEY. Using anthropic/claude-sonnet-4-5 for the rest of this session (/provider resets it).',
+      `Provider failover: openrouter/anthropic/claude-sonnet-4.5 (openrouter) returned ${statusCode}; check OPENROUTER_API_KEY. Using anthropic/claude-sonnet-4-5 for the rest of this session (/provider resets it).`,
     )
     expect(contents.some((c) => c.includes('recovered'))).toBe(true)
   })
@@ -2495,6 +2495,70 @@ describe('sdk-event-handlers', () => {
     }
   })
 
+  test.each(['skipped', 'failed'] as const)(
+    'a mechanical trim does not hide the pruner %s outcome',
+    (outcome) => {
+      const { ctx, getMessages } = createTestContext()
+      let notice: CompactionNotice | null = null
+      ctx.streaming.setCompactionNotice = (update) => {
+        notice = update(notice)
+      }
+      const handleEvent = createEventHandler(ctx)
+      const categories = {
+        toolResults: { tokens: 10, percent: 10, messages: 1 },
+        todos: { tokens: 10, percent: 10, messages: 1 },
+        fileReads: { tokens: 20, percent: 20, messages: 2 },
+        subagents: { tokens: 20, percent: 20, messages: 2 },
+        userAssistantMessages: { tokens: 40, percent: 40, messages: 4 },
+      }
+      const correlation = { runId: 'root-run', ancestorRunIds: [] }
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction_status',
+        state: 'started',
+        contextTokens: 152_000,
+        ...correlation,
+      })
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction',
+        action: 'mechanical_trim',
+        before: { tokens: 152_000, messages: 20, categories },
+        after: { tokens: 100_000, messages: 12, categories },
+        removedCategories: [],
+        retainedKnowledgeMemory: false,
+        recovery: 'Re-gather exact constraints.',
+        compactionCount: 1,
+        fitsBudget: false,
+        ...correlation,
+      })
+      expect(notice).toMatchObject({ pending: true, pendingRunIds: ['root-run'] })
+      const reason = `Pruner ${outcome} after evaluating the captured context budget.`
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction_status',
+        state: 'settled',
+        outcome,
+        reason,
+        ...correlation,
+      })
+      const blocks = (getMessages()[0].blocks ?? []).filter(
+        (block) => block.type === 'compaction',
+      )
+      expect(blocks).toHaveLength(2)
+      expect(blocks[0]).toMatchObject({
+        action: 'semantic_compaction', status: 'declined', passOutcome: outcome, reason,
+      })
+      expect(blocks[1]).toMatchObject({
+        action: 'mechanical_trim', status: 'complete', beforeTokens: 152_000,
+        afterTokens: 100_000, fitsBudget: false,
+      })
+      expect(notice).toMatchObject({ count: 1, action: 'mechanical_trim' })
+      expect(notice).not.toHaveProperty('pending')
+      dispatchValidEvent(handleEvent, { type: 'finish', totalCost: 0 })
+      expect((getMessages()[0].blocks ?? []).filter(
+        (block) => block.type === 'compaction',
+      )).toEqual(blocks)
+    },
+  )
+
   test('a plain settle without an outcome stays an unlabelled declined pass', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
@@ -3264,11 +3328,11 @@ describe('sdk-event-handlers', () => {
       pendingRunIds: ['root-run'],
     })
 
-    // The root run's own result adopts its reported count and clears the live
-    // state, settling the root card in place.
+    // The root run's own semantic result adopts its reported count and clears
+    // the live state, settling the root card in place.
     dispatchValidEvent(handleEvent, {
       type: 'context_compaction',
-      action: 'mechanical_trim',
+      action: 'semantic_compaction',
       runId: 'root-run',
       ancestorRunIds: [],
       compactionCount: 2,
@@ -3286,11 +3350,11 @@ describe('sdk-event-handlers', () => {
     expect(blocks[0]).toMatchObject({
       status: 'complete',
       runId: 'root-run',
-      action: 'mechanical_trim',
+      action: 'semantic_compaction',
     })
     expect(notices.at(-1)).toEqual({
       count: 2,
-      action: 'mechanical_trim',
+      action: 'semantic_compaction',
       degraded: false,
     })
   })
@@ -3688,11 +3752,16 @@ describe('sdk-event-handlers', () => {
   })
 
   test('an emergency mechanical trim result is never marked transient', () => {
-    const trimmed = settledCardFor({
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, compactionResultEvent({
       action: 'mechanical_trim',
       retainedKnowledgeMemory: false,
       recovery: 'Re-gather exact constraints.',
-    })
+    }))
+    const cards = compactionCards(getMessages())
+    expect(cards).toHaveLength(1)
+    const trimmed = cards[0]
 
     expect(trimmed).toMatchObject({
       status: 'complete',

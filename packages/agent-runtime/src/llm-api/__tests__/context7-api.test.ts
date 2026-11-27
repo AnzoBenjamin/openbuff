@@ -6,6 +6,11 @@ import {
 } from '../context7-api'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
+const CONTEXT7_TEST_KEY = 'ctx7-test-fake-key'
+
+const headersOf = (call: unknown[]): Headers =>
+  new Headers((call[1] as RequestInit | undefined)?.headers)
+
 const noopLogger = {
   debug: () => {},
   info: () => {},
@@ -29,13 +34,16 @@ function makeResponse(
   } as unknown as Response
 }
 
+let savedKey: string | undefined
 beforeEach(() => {
-  // Ensure CONTEXT7_API_KEY is absent so tests that omit `context7ApiKey`
-  // exercise the no-key path deterministically.
+  // Ensure omitted keys exercise the no-key path deterministically.
+  savedKey = process.env['CONTEXT7_API_KEY']
   delete process.env['CONTEXT7_API_KEY']
 })
 
 afterEach(() => {
+  if (savedKey === undefined) delete process.env['CONTEXT7_API_KEY']
+  else process.env['CONTEXT7_API_KEY'] = savedKey
   mock.restore()
 })
 
@@ -174,9 +182,11 @@ describe('fetchContext7LibraryDocumentation', () => {
       topic: 'hooks',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
 
     expect(out).toMatchObject({
+      ok: true,
       documentation: '# React Docs\n\nUseful content.',
       selectedLibrary: { id: '/react', title: 'React' },
     })
@@ -202,7 +212,8 @@ describe('fetchContext7LibraryDocumentation', () => {
       totalSnippets: 2,
       totalPages: 1,
     }
-    const fetchMock = mock(async (url: URL | string) => {
+    process.env['CONTEXT7_API_KEY'] = `  ${CONTEXT7_TEST_KEY}\t`
+    const fetchMock = mock(async (url: URL | string, _init?: RequestInit) => {
       const parsed = new URL(url.toString())
       if (parsed.pathname === '/api/v1/search') {
         return makeResponse({
@@ -226,6 +237,12 @@ describe('fetchContext7LibraryDocumentation', () => {
     if (!out.ok) throw new Error(`expected docs, got ${out.status}`)
     expect(out.selectedLibrary.id).toBe('/facebook/react')
     expect(out.alternatives[0]?.id).toBe('/other/react-tools')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const call of fetchMock.mock.calls) {
+      expect(headersOf(call).get('authorization')).toBe(
+        `Bearer ${CONTEXT7_TEST_KEY}`,
+      )
+    }
   })
 
   test('returns not_found when no libraries are found by search', async () => {
@@ -234,6 +251,7 @@ describe('fetchContext7LibraryDocumentation', () => {
       query: 'nope',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({ ok: false, status: 'not_found' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -247,6 +265,7 @@ describe('fetchContext7LibraryDocumentation', () => {
       query: 'react',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({
       ok: false,
@@ -281,6 +300,7 @@ describe('fetchContext7LibraryDocumentation', () => {
       query: 'lib',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({ ok: false, status: 'not_found' })
   })
@@ -311,6 +331,7 @@ describe('fetchContext7LibraryDocumentation', () => {
       query: 'lib',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({
       ok: false,
@@ -346,6 +367,7 @@ describe('fetchContext7LibraryDocumentation', () => {
       query: 'lib',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({ ok: false, status: 'network_error' })
   })
@@ -364,38 +386,70 @@ describe('Context7 typed failures and key handling (N04)', () => {
     totalPages: 1,
   }
 
-  const headersOf = (call: unknown[]): Headers =>
-    new Headers((call[1] as RequestInit | undefined)?.headers)
-
-  test('no key: sends no Authorization header (never "Bearer undefined") and a 401 is auth_required', async () => {
-    const fetchMock = mock(async (_url: URL | string, _init?: RequestInit) =>
-      makeResponse('unauthorized', {
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-      }),
-    )
+  test('a missing Context7 key returns auth_required without searching', async () => {
+    const fetchMock = mock(async () => makeResponse({ results: [] }))
     const out = await fetchContext7LibraryDocumentation({
       query: 'react',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
     })
-    expect(out).toMatchObject({
+
+    expect(out).toEqual({
       ok: false,
       status: 'auth_required',
-      httpStatus: 401,
+      reason: expect.stringContaining('CONTEXT7_API_KEY is not set'),
+      nextStep: expect.stringMatching(/Set CONTEXT7_API_KEY.*web_search/),
     })
-    if (out.ok) throw new Error('expected failure')
-    expect(out.reason).toContain('CONTEXT7_API_KEY is not set')
-    expect(out.nextStep).toContain('Set CONTEXT7_API_KEY')
-    const headers = headersOf(fetchMock.mock.calls[0])
-    expect(headers.has('authorization')).toBe(false)
-    for (const call of fetchMock.mock.calls) {
-      expect(JSON.stringify(call[1] ?? {})).not.toContain('Bearer undefined')
-    }
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('blank CONTEXT7_API_KEY counts as unset', async () => {
+  test.each([
+    ['undefined', undefined],
+    ['empty', ''],
+    ['whitespace-only', ' \t\n '],
+  ] as const)(
+    'an explicit %s key does not fall back to the environment',
+    async (_label, context7ApiKey) => {
+      process.env['CONTEXT7_API_KEY'] = CONTEXT7_TEST_KEY
+      const fetchMock = mock(async () => makeResponse({ results: [] }))
+      const out = await fetchContext7LibraryDocumentation({
+        query: 'react',
+        logger: noopLogger,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        context7ApiKey,
+      })
+
+      expect(out).toMatchObject({ ok: false, status: 'auth_required' })
+      expect(fetchMock).not.toHaveBeenCalled()
+    },
+  )
+
+  test.each([
+    ['without a key', undefined],
+    ['with a key', CONTEXT7_TEST_KEY],
+  ] as const)(
+    'a pre-aborted call %s is cancelled without searching',
+    async (_label, context7ApiKey) => {
+      const fetchMock = mock(async () => makeResponse({ results: [] }))
+      const out = await fetchContext7LibraryDocumentation({
+        query: 'react',
+        logger: noopLogger,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        context7ApiKey,
+        signal: AbortSignal.abort(),
+      })
+
+      expect(out).toMatchObject({
+        ok: false,
+        status: 'cancelled',
+        reason: expect.stringContaining('was cancelled'),
+        nextStep: 'No action needed.',
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    },
+  )
+
+  test('raw search with a blank CONTEXT7_API_KEY stays anonymous', async () => {
     process.env['CONTEXT7_API_KEY'] = '   '
     const fetchMock = mock(async (_url: URL | string, _init?: RequestInit) =>
       makeResponse({ results: [] }),
@@ -408,7 +462,7 @@ describe('Context7 typed failures and key handling (N04)', () => {
     expect(headersOf(fetchMock.mock.calls[0]).has('authorization')).toBe(false)
   })
 
-  test('configured key: sends Bearer key on both requests; 403 says the key was rejected', async () => {
+  test('trims the injected key on both requests; 403 says the key was rejected', async () => {
     const fetchMock = mock(async (url: URL | string, _init?: RequestInit) => {
       const u = new URL(url.toString())
       if (u.pathname === '/api/v1/search')
@@ -419,7 +473,7 @@ describe('Context7 typed failures and key handling (N04)', () => {
       query: 'lib',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
-      context7ApiKey: 'ctx7-test-fake-key',
+      context7ApiKey: `  ${CONTEXT7_TEST_KEY}\t`,
     })
     expect(out).toMatchObject({
       ok: false,
@@ -428,9 +482,10 @@ describe('Context7 typed failures and key handling (N04)', () => {
     })
     if (out.ok) throw new Error('expected failure')
     expect(out.reason).toContain('rejected the configured CONTEXT7_API_KEY')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     for (const call of fetchMock.mock.calls) {
       expect(headersOf(call).get('authorization')).toBe(
-        'Bearer ctx7-test-fake-key',
+        `Bearer ${CONTEXT7_TEST_KEY}`,
       )
     }
   })
@@ -448,6 +503,7 @@ describe('Context7 typed failures and key handling (N04)', () => {
       query: 'react',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({
       ok: false,
@@ -465,6 +521,7 @@ describe('Context7 typed failures and key handling (N04)', () => {
       query: 'react',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({ ok: false, status: 'timeout' })
   })
@@ -475,6 +532,7 @@ describe('Context7 typed failures and key handling (N04)', () => {
       query: 'react',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
     })
     expect(out).toMatchObject({ ok: false, status: 'invalid_response' })
   })
@@ -493,6 +551,7 @@ describe('Context7 typed failures and key handling (N04)', () => {
       query: 'react',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
+      context7ApiKey: CONTEXT7_TEST_KEY,
       signal: controller.signal,
     })
     controller.abort()

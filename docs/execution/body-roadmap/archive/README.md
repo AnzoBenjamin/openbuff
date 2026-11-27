@@ -1,6 +1,26 @@
 # Roadmap evidence archive
 
-## R13: current accepted ledger
+## R14: current accepted ledger
+
+Restore **R12, then R13, then R14**. The [R14 delta](r14/manifest.json) adds
+442 paths across 374 distinct objects in 27.0 MB. It contains the N04 acceptance,
+renewed current B19/B20/B23 and N09 evidence, and updated prerequisite bindings.
+Together the three layers validate 24 accepted base nodes and seven accepted
+product tasks. The packaged SDK test artifacts are not a release.
+
+```sh
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r12 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r13 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r14 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/validate-ledger.py
+```
+
+Use a disposable checkout of the matching source. Restore verifies preserved
+bytes and never overwrites different files. It does not rerun acceptance tests.
+
+<a id="r13-current-accepted-ledger"></a>
+
+## R13: previous ledger and R14 evidence layer
 
 Restore **R12 first, then R13**. The [R13 delta](r13/manifest.json) adds 15 source
 and evidence objects for N05 without duplicating the SDK test pack in R12.

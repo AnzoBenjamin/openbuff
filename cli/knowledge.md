@@ -1,5 +1,9 @@
 # CLI Package Knowledge
 
+## Provider authentication warnings and compaction outcomes
+
+- A 401 or 403 failover keeps a persistent warning naming the configured environment variable and the replacement route, without exposing a credential. Transient recovery messages do not replace the warning. `cli/src/utils/__tests__/sdk-event-handlers.test.ts` exercises both status projections. An emergency mechanical trim is shown separately from the semantic pruner pass: it does not consume the pending card or erase a later skip/failure reason.
+
 ## Compiled child workers and headless output
 
 - `cli/src/binary-entry.ts` handles the reserved `--internal-replayable-child` worker flag before CLI initialization. The SDK verifies the private ticket and compiled Linux/Bun runtime; this is not a public continuation command or a general shell/agent replay entry point.

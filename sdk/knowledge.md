@@ -1,5 +1,12 @@
 # SDK Package Knowledge
 
+## Typed documentation and filesystem results
+
+- `read_docs` requires a dedicated `CONTEXT7_API_KEY`. An absent or blank key returns `auth_required` with a next step before any request. Authenticated empty results, rate limits, and outages remain distinct. The provider key is not used for Context7.
+- `glob` still dispatches to the scoped filesystem when verified memory has candidate paths. A memory hint does not count as an exhaustive match or replace an empty filesystem result. `sdk/src/__tests__/n04-typed-results-consumers.test.ts` checks the actual consumer behavior.
+
+- `kill_job` reports stopping until a job exit is observed. Recovery loss is not an exit, and stop guidance does not promise an escalation time across different process adapters.
+
 ## Supervised child lifetime and explicit replay
 
 - `run.ts` keeps captured run resources for a journal-owned detached agent after the caller receives a successful parent result. Caller abort and the original finite deadline still apply. The built-in journal joins the child owner before closing; the authenticated bridge records ordered, bounded events under the host-assigned child run ID, never a caller-selected sibling or root ID.

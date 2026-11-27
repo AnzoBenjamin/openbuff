@@ -355,7 +355,8 @@ export async function searchLibraries(
 }
 
 /**
- * Fetches documentation context for the best-matching library.
+ * Fetches documentation context for the best-matching library. Requires
+ * a Context7 key before searching; raw library search can remain anonymous.
  * Returns the documentation, or a typed {@link Context7Failure}.
  */
 export async function fetchContext7LibraryDocumentation(
@@ -371,8 +372,25 @@ export async function fetchContext7LibraryDocumentation(
   } & ParamsOf<typeof searchLibrariesOutcome>,
 ): Promise<Context7DocumentationOutcome> {
   const { query, tokens, topic, folders, logger, fetch, signal } = params
+  if (signal?.aborted) {
+    return failure(
+      'cancelled',
+      'Context7 library search was cancelled.',
+      'No action needed.',
+    )
+  }
+
   const apiKey =
-    'context7ApiKey' in params ? params.context7ApiKey : readContext7ApiKey()
+    'context7ApiKey' in params
+      ? params.context7ApiKey?.trim()
+      : readContext7ApiKey()
+  if (!apiKey) {
+    return failure(
+      'auth_required',
+      `Context7 requires an API key and ${CONTEXT7_API_KEY_ENV} is not set.`,
+      `Set ${CONTEXT7_API_KEY_ENV} (free key from https://context7.com/dashboard) and retry, or use web_search to read the library's docs site.`,
+    )
+  }
 
   const apiStartTime = Date.now()
   const apiContext = {

@@ -1621,9 +1621,9 @@ const isRootCompactionEvent = (event: { ancestorRunIds?: string[] }): boolean =>
 
 /**
  * Index of the newest still-running compaction block produced by `runId`, or
- * -1. Only the newest one is consumed by an arriving result: two results can
- * land in one runtime iteration (semantic then mechanical) and the second must
- * append rather than overwrite the first. Matched on the producing run so a
+ * -1. Only the newest one is consumed by an arriving semantic result. A
+ * mechanical trim may report a separate result while that pass is still live.
+ * Matched on the producing run so a
  * result from one agent loop cannot settle another loop's live card; a legacy
  * uncorrelated result (`undefined`) still pairs with an equally uncorrelated
  * block.
@@ -1768,7 +1768,7 @@ const pendingNoticeFields = (
 /**
  * Live compaction state. The pruner agent runs inline and is hidden from the
  * CLI, so `started` marks the status-bar chip live and — for the ROOT run only
- * — appends a pending compaction card that the terminal `context_compaction`
+ * — appends a pending compaction card that a semantic `context_compaction`
  * result settles in place. A non-root run gets no card: its pass is short-lived
  * and a live nested card would only flicker, but its live state is still
  * reported on the chip. `settled` is the runtime's guarantee that a pass which
@@ -2145,12 +2145,14 @@ const handleContextCompaction = (
     ? resultBlock
     : { ...resultBlock, progressPercent: 100, transient: true }
 
-  // The live pending card settles into the result in place; with no pending
-  // card for this run (e.g. a mechanical trim with no preceding start, or a
-  // subagent result while the root card is live) the result appends, which is
-  // the pre-existing behavior.
+  // A trim is independent of the semantic pass. The runtime can report an
+  // emergency trim before settling a skipped or failed pruner. Keep the live
+  // pruner card so that settlement can record its own outcome and reason.
+  const completesPrunerPass = event.action === 'semantic_compaction'
   state.message.updater.updateAiMessageBlocks((blocks) => {
-    const pendingIndex = findLastPendingCompactionIndex(blocks, event.runId)
+    const pendingIndex = completesPrunerPass
+      ? findLastPendingCompactionIndex(blocks, event.runId)
+      : -1
     if (pendingIndex === -1) return [...blocks, settledBlock]
     const next = [...blocks]
     next[pendingIndex] = settledBlock
@@ -2162,20 +2164,16 @@ const handleContextCompaction = (
   // replace the turn total; a subagent/inline result contributes one pass
   // instead of overwriting it, and never settles the root run's live pass.
   const rootScoped = isRootCompactionEvent(event)
+  const settlesRootPending = rootScoped && completesPrunerPass
   state.streaming.setCompactionNotice((previous) => {
-    // A root result consumes this run's announced pass; a nested result leaves
-    // every live pass (including the root's) exactly as it was. A legacy
-    // uncorrelated root result carries no runId, so it clears the live set the
-    // way it did before per-run tracking existed.
-    const pendingRunIds = !rootScoped
+    // Only a corresponding root semantic result consumes an announced pass.
+    // A legacy uncorrelated semantic result clears the live set as before.
+    const pendingRunIds = !settlesRootPending
       ? (previous?.pendingRunIds ?? [])
       : event.runId === undefined
         ? []
         : removePendingRunId(previous?.pendingRunIds, event.runId)
-    // A nested result changes no live state, so an uncorrelated legacy
-    // `pending: true` is carried forward; a root result consumes the announced
-    // pass that flag stands for and therefore clears it.
-    const legacyPending = !rootScoped && hasUncorrelatedPending(previous)
+    const legacyPending = !settlesRootPending && hasUncorrelatedPending(previous)
     return {
       count: rootScoped
         ? (event.compactionCount ?? (previous?.count ?? 0) + 1)

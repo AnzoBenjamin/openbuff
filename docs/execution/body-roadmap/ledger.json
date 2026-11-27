@@ -9,7 +9,7 @@
   "evidenceDirectory": "docs/execution/body-roadmap/evidence",
   "acceptanceDecisionRegistry": {
     "path": "docs/execution/body-roadmap/execution-plan.json",
-    "sha256": "2c9d45a0dacdf65117ef33778a60e019634e273109cfd8dcf02639037fc98551"
+    "sha256": "9740b4f3c3307a2296886609d903179da0aa39ad5862a08f907e8d092aba9093"
   },
   "completionGraph": {
     "schemaVersion": 2,
@@ -452,9 +452,9 @@
         "cli/src/hooks/helpers/__tests__/send-message.test.ts": "fdf10a5a3f1634f2d23bc9ad5a90270651173c5d789b2932d199a17d2335e02b",
         "cli/src/hooks/helpers/send-message.ts": "d9075e618c240dddb6fd3361593b9eb3cb76bcf64a17123949e7e16c981b0528",
         "cli/src/types/chat.ts": "d55df2e4aec9b9a37c0b22e6a60da9515857a97c6080af3a6d27c6da85245af8",
-        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "ea17a58094916fd061cf1b09a3476dba9f2aefc7aed1b43991f04e6b355b5848",
+        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "6fa5a0a5fd874854ff34ba20366629ff7457d3ab63254fcb1e10dc96361d0a2b",
         "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
-        "cli/src/utils/sdk-event-handlers.ts": "0648f587a7bf8cd1a6039b397163c29dacec6d5042cea8dac3f254fc2f16e98d",
+        "cli/src/utils/sdk-event-handlers.ts": "f002ef0ba51215f85555b870939cc9c86b06ab0bc3e6effadc4017bbdb00e995",
         "common/src/types/agent-handoff.ts": "f02d9d198e92faa11da37827c535d714174c8d92ccfa114267fe6973fd72fef9",
         "common/src/types/contracts/database.ts": "82d1532ebf1e4d9db8d423f1b97e762aaa80441ce9789b900a44c6bb1e5947a0",
         "common/src/types/dynamic-agent-template.ts": "ebf695dc78f419dd06f21a491933d3199e32953adb355ab3122ce255e743098a",
@@ -510,19 +510,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen source SDK/headless/CLI/journal and production child-receipt builder outcomes",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b16-ordinary-current-review",
+            "reviewer": "r14-b02-b03-renewals",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Current frozen source SDK/headless/CLI/journal and production child-receipt builder outcomes",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b16-final/implementation-r2/B02.json",
-              "sha256": "67b868001c83a8c963389ee1f19050282448b723ab6ffc10f4f5d228332d883a"
+              "path": ".tmp/r14/seal-successor/implementation/B02.json",
+              "sha256": "d82f3413f18d3b033d5a3bf43cb981a3cd736dcb8ef7425bcd47261a67e1dc6a"
             }
           }
         ],
@@ -531,10 +531,10 @@
       "risks": [
         "Source-local actual builder; no separate child process transport certification or paid provider."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.692141+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.431670+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "6e4c1be0ded89f3cba1287b47cdd4bc4af59068dd56865bc8e75ab7464eff5aa"
+        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "b104c68a01e6ccf3dbcccdf4e4d3cf5d548b2ec914dfd5ee8b4af695f37e0638"
       }
     },
     {
@@ -563,12 +563,12 @@
         "cli/src/utils/__tests__/completion-summary.test.ts": "1c99e3d334bf60cd87d343e7ab44c08838ec6e1d01f11474c89669a71fcf3489",
         "cli/src/utils/__tests__/implementor-helpers.test.ts": "5bdd986ce0fa09e442c301fd356fb682b49026736d102a5520077877d4fe6a94",
         "cli/src/utils/__tests__/output-outcome.test.ts": "6841d88d75227291c3a253210d85117da03cd896026fa765c3ef33c3c8ab07a4",
-        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "ea17a58094916fd061cf1b09a3476dba9f2aefc7aed1b43991f04e6b355b5848",
+        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "6fa5a0a5fd874854ff34ba20366629ff7457d3ab63254fcb1e10dc96361d0a2b",
         "cli/src/utils/__tests__/tool-result-normalizer.test.ts": "27c88d5d0f6e7893f7fc547ca15f52d82e0f30d753eaff8ad4c25ff5c6c94700",
         "cli/src/utils/completion-summary.ts": "4bab8611ffbc7437beb9dfc13d1062582d5be3d378c4ec01852f8aa4ddadf551",
         "cli/src/utils/implementor-helpers.ts": "89c1364732ccbe9ee0f7788b0a6ba27ec371aae6c93f8570cc20fa16b27f47d4",
         "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
-        "cli/src/utils/sdk-event-handlers.ts": "0648f587a7bf8cd1a6039b397163c29dacec6d5042cea8dac3f254fc2f16e98d",
+        "cli/src/utils/sdk-event-handlers.ts": "f002ef0ba51215f85555b870939cc9c86b06ab0bc3e6effadc4017bbdb00e995",
         "cli/src/utils/tool-result-normalizer.ts": "9e108810743a2883bb69e46097cfcd001cd88c42adab3090017d1dfaca9978a4",
         "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
         "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
@@ -637,19 +637,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Source SDK dispatch and CLI/headless observed mutation/recovery projection with injected adapter faults; complete frozen B03 current behavior with current local CI",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b16-ordinary-stable-io-review",
+            "reviewer": "r14-b02-b03-renewals",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Source SDK dispatch and CLI/headless observed mutation/recovery projection with injected adapter faults; complete frozen B03 current behavior with current local CI",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b16-final/implementation-r2/B03.json",
-              "sha256": "6ed4f94b56badceb5bd7b63470196a71ccac30eeb13efacec5aaaf37d9380508"
+              "path": ".tmp/r14/seal-successor/implementation/B03.json",
+              "sha256": "0f667a4c0fb04f1b59d55a81940f6eea12e118b07d101e38da6b442b61308bbc"
             }
           }
         ],
@@ -658,10 +658,10 @@
       "risks": [
         "No OS-level atomicity, installed package or native ownership claim."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.699041+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.438208+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "3ec943a529e7dc19a221b5f83ef988887ea4dbf5a755b262ad50d809ef598211"
+        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "847e4b04facb445a201bfac274a51c29d6698e1a08749038ef8ba7b447613998"
       }
     },
     {
@@ -820,7 +820,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen raw byte, mode, authenticated read-basis and bounded allocation TypeScript scope",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B05/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B05/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -846,10 +846,10 @@
         "path": "docs/execution/body-roadmap/evidence/B05/implementation/activation.json",
         "sha256": "50461c356c916b92e846e5cff496c6b32559303a1af87949dd44acf90c0bfaaa"
       },
-      "acceptedAt": "2026-11-27T07:34:10.705446+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.443957+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B05/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "9b7e387709e15252179b3b6a6185a925146d335263d44f4b59e63c9ae3d4f93a"
+        "path": "docs/execution/body-roadmap/evidence/B05/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "8ca459316a8a9cb2c24246769ee503326f478100472c7fd8eca5e69f05a66e1f"
       }
     },
     {
@@ -914,7 +914,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Pinned Bun 1.4.4/Linux x64, built-in source SDK framed WorkspaceEdit path for rename and concrete edit-only organize-imports/extract, finite contained text/create/move/delete operations through the production local broker, and the separately executed Bun definition/consumer oracle.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -937,10 +937,10 @@
         "No command-backed code actions, host confirmation flow, directory operations, true overwrite/ignore/recursive options, other encodings, or broader codemod and refactor adapters are approved.",
         "Zero writes is a preflight guarantee, not all-file atomicity or isolation from external writers. Applied byte evidence is not automatic consumer validation; whole-intent success here includes the separate fixture oracle."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.714403+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.451881+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "7dc4b7ebae836f8d1dca58e4e28ef012c44d03f6944a4b0ff7abd954e476c88c"
+        "path": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "d3ce854e66962da0c676e33c038fffe785a69bf233d7da6ab1372934a548589a"
       }
     },
     {
@@ -1004,7 +1004,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Pinned Bun 1.4.4/Linux x64, participating source SDK/runtime cooperative local broker-backed durable groups (update/create/delete/move), ownership-bound crash and lost-commit-acknowledgement recovery, and the final common/runtime/CLI distinction between proven forward effects and transaction success.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1027,10 +1027,10 @@
         "A stale workspace-broker lock is not automatically taken over; the captured in-broker crash required explicit operator repair. Missing, legacy, divergent or unproven broker state stays recovery-required, not eligible for blind rollback or replay.",
         "No atomic multi-file visibility, isolation from arbitrary writers, arbitrary custom/virtual filesystem recovery, or durable admission beyond configured log capacity. Proven forward effects do not imply a durable group acknowledgement or fresh edit authority."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.710201+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.448133+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "4d0942390673b0b70700ee763b7ce8a471ed741a8a38425676457c1e94faf270"
+        "path": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "8f65e3f5ed6fca4199945d235f8327aa16893af2d2599b35fa200285b071f1df"
       }
     },
     {
@@ -1204,7 +1204,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "R10 Linux/Bun 1.4.4 local source SDK/runtime and owner-only filesystem admission store, with credential-free HTTP/SSE fixtures and the pinned offline capability catalog. Independent rerun of both bound commands and supplemental provider-resolution and stream-finish tests; not formal acceptance.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B09/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B09/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1227,10 +1227,10 @@
         "Total loss of writable state: process-local refusal still applies, but there is no durable stop-marker guarantee across a fresh process if neither the record nor the marker could be written. Cross-process refusal is proven where a durable stop marker or exhausted record can be retained; the active/held reservation is not refunded by a failed reconciliation.",
         "No live paid-provider claim, cross-platform or universal provider/store guarantee, public release, or formal ledger/roadmap acceptance."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.724875+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.455594+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B09/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "1f94dc31c23e57a6de205693ee89a404a15442893f98d989f79caf135234daf8"
+        "path": "docs/execution/body-roadmap/evidence/B09/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "206a4df2d49d10739d6fd63b9008f39fccdc3e9cd2b6d3870fbf9867132b1ff8"
       }
     },
     {
@@ -1280,7 +1280,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "B10 only: cooperative CLI prompt and queue admission, rejection and draft/attachment recovery, and pre-admission revocation, at the Bun/OpenTUI mounted-hook and component tier with stubbed SDK/provider boundaries. The existing receipt also records the original prompt/attachment, local bisection arbitration, and mounted ask-user bridge controls.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B10/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B10/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1302,10 +1302,10 @@
         "Binds the prior R10 approval without expanding it. No tests were rerun; additional controls were confirmed in the existing log, not through a new source review.",
         "No live SDK/provider execution, end-to-end PTY coverage, claim beyond the cooperative mounted cases, or approval of other cards."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.733429+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.458202+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B10/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "5a24e1bd918437083ec5ac8bd3fae7345d1287f7b794635fec21d3b8f32c7341"
+        "path": "docs/execution/body-roadmap/evidence/B10/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "80423b7fe70fc2d5ab38100726f248407c352a7f42c344f310b3584b28315998"
       }
     },
     {
@@ -1440,7 +1440,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B12 SQLite lifecycle, reconciliation and cross-task next-prompt authoritative ranked facts/decisions/rationale",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B12/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B12/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1461,10 +1461,10 @@
       "risks": [
         "Source local actual backend and owned key-free wire; no live provider assurance."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.741143+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.461814+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B12/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "333adbf74973e5eb6a04f77911c6f4b07b8cf844a3d560fe9518f684e41ac5fe"
+        "path": "docs/execution/body-roadmap/evidence/B12/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "f0ffc101fe807bfedfb06148db3ea0d0034ea03c4c81ded802737d3bbc4b82c0"
       }
     },
     {
@@ -1519,7 +1519,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B13 actual original-result archive and durable CLI paging/restore/retention/latency on source-local Linux test fixture",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B13/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B13/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1541,10 +1541,10 @@
         "Observed page latencies, not a universal performance or provider/model-quality SLA.",
         "Source-local fixtures; no general installed/native/hosted assurance."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.748535+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.468417+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B13/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "565163a2e393c4d44b2f32e2ae992ad66c2729fe48c6fd249d9ae90c124a43b7"
+        "path": "docs/execution/body-roadmap/evidence/B13/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "32b55854bb29b1240ad8db23479f13119fdcf559c51fad255d00487a9e92847b"
       }
     },
     {
@@ -1585,7 +1585,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B14 verified procedure apply/reopen and measured exact same-source feedback across runtime gate and SDK",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B14/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B14/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1606,10 +1606,10 @@
       "risks": [
         "No modeled learning improvement, full repository applicability, or live billing claim."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.754091+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.473304+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B14/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "1bd6eb9df82ba20e406f9f6726e0e319213a39168d44815db8499dd31d1b43bf"
+        "path": "docs/execution/body-roadmap/evidence/B14/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "b45281d753715fb25871fed1d7863b97a11fe2ed4457f030cbcfa0b34e2b9bcd"
       }
     },
     {
@@ -1668,7 +1668,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Frozen B15 R10 product lane: one-shot continuation of a bounded, data-only immutable recipe from a verified private local journal on Linux x64 / Bun 1.4.4. The tested package tier is the actual npm tarball's installed ESM SDK with a credential-free loopback OpenAI-compatible JSON endpoint. The built run, source-only built-in-read fixture, crash-refusal matrix, and sealed witness are separate supporting evidence, not broader packaged replay approval.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1691,10 +1691,10 @@
         "Only bounded STEP, STEP_ALL, GENERATE_N, clock, random, and SHA-256 are supported in the immutable lane. The model interface is one explicit text-only, non-streaming OpenAI-compatible JSON route, without SDK retries or redirects. Packed evidence is ESM on the pinned Linux/Bun host and credential-free loopback HTTP, not other builds, remote provider behavior, or provider-side exactly-once delivery.",
         "The changed-bundle control changed recipe data and the changed-runtime control changed a stored digest; no actual alternate SDK binary or Bun executable was substituted. The read, crash, and sealed witness fixtures do not certify arbitrary JavaScript or production generator reconstruction, live replay of shell/custom/MCP effects, or default terminal OS enforcement."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.760135+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.478223+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "6bc2e2ead65c663952fa53ff6cb8beb4af608dafb48081e52c051fe860c2edea"
+        "path": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "3101f433fc7e9a66a00cb501df2dd1b5af36f441fe86175d785a99f803f3b045"
       }
     },
     {
@@ -1762,7 +1762,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Frozen B16 on the exact r2 successor: direct journal-owned SDK detachment through parent return and durable settlement, refusal of unsupported nested detachment, cooperative workspace lease generations, and compiled Linux/Bun child cancellation and immutable replay.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B16/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B16/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1787,10 +1787,10 @@
         "Replay covers an explicit data-only clock/random/SHA-256 recipe in an identical compiled worker under its still-live parent. Generic effectful continuation and transaction restoration are not supported by this lane. No live provider, MCP, arbitrary descendant, or native-recovery assurance.",
         "The real worker tests one nested detached entry. The whole-handler-batch refusal and inline propagation were checked in source; no claim of a separately executed mixed-batch or inline-detach fixture. This is an original independent review, not a ledger promotion."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.767271+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.484465+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B16/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "7de3b61341a26c7d4c0c0bf84bda19cd43ce1e4b209d30bf5147caecc38c4f8d"
+        "path": "docs/execution/body-roadmap/evidence/B16/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "452b9759add0051b96a7d23071018e72bdbcb24b2369b37fa78e0c99272003b2"
       }
     },
     {
@@ -2115,7 +2115,7 @@
         "cli/CHANGELOG.md": "e1cc5442702d4a2ccab14b2472514093af05c6e6247e27d7932080a4474cb154",
         "cli/README.md": "4adee74823b7347208c2d010c4f48ebfcbc70d9b49af52170ec249c4ad8976d2",
         "cli/bunfig.toml": "348689132caf5a2d2af57b3b50197ecbf884d475f4a36b5318bd3cf4712e8d1c",
-        "cli/knowledge.md": "c92ce1b74ee9d7908eba4f6841cec06f9ad570d28426bc54ef0bfc72c32a1fbb",
+        "cli/knowledge.md": "bc29831656be0f632a2d814d8ddb6d41d91bf68d58baa624ed93e5c2027ce55e",
         "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
         "cli/release-staging/README.md": "04d69986665764226a69b519de77fc0a90c624c5c7cc5f54b240676660099266",
         "cli/release-staging/http.js": "59f24f3c6270a7fd1527f7598feb741af82ac01f35ca54ee82a6cbd269489ce1",
@@ -2686,6 +2686,7 @@
         "cli/src/utils/__tests__/message-history.test.ts": "0a836a0ea8ba12ddb597ce404151f501deaf15e0fac0c10ad9799178d74723eb",
         "cli/src/utils/__tests__/message-tree-utils.test.ts": "7a6d10f8dc7ba54e81e798a662059e4f6ec3315aa00155a46fb586ec4e4ca50c",
         "cli/src/utils/__tests__/message-updater.test.ts": "e594bea643d4c03a1a6ff4ce6a42b159f6142e97eb8bd417c72380ceefb3ede1",
+        "cli/src/utils/__tests__/n04-provider-failover-consumer.test.ts": "f32f672baebb6b0c94e066b8ca57f8084e40c9e012c63d18da230e9457786123",
         "cli/src/utils/__tests__/native-reading-anchor.test.ts": "2527ca5032ce13b8d4677bbad0a333072c522f7c53826130a3073401002952cf",
         "cli/src/utils/__tests__/open-file.test.ts": "f17944c645d759ede698defeb158e007654cecc49c3e3994cce011eb42357bff",
         "cli/src/utils/__tests__/openbuff-provider.test.ts": "1ca9e9c444faec56dd173e014a0966ae3730bfc1f681e6ef4cfffcb43e0a6a44",
@@ -2717,7 +2718,7 @@
         "cli/src/utils/__tests__/run-journal-path.test.ts": "219505db35ab99dd54f5cafc6a1ae44d468b6563aece5f9ef13d174f1bdad8f4",
         "cli/src/utils/__tests__/run-state-storage.test.ts": "8360f90d8addfc3245816ba89254a2b369b533b04bdab670f29b57a562eb72f7",
         "cli/src/utils/__tests__/saved-transcript-inspection.test.ts": "2309bea16f7b8577a6df64a4b2c744e2022c4f7a651b88f7ea8404001585fef0",
-        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "ea17a58094916fd061cf1b09a3476dba9f2aefc7aed1b43991f04e6b355b5848",
+        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "6fa5a0a5fd874854ff34ba20366629ff7457d3ab63254fcb1e10dc96361d0a2b",
         "cli/src/utils/__tests__/send-message-helpers.test.ts": "aeaaa4287725a00ad1b25fab27289e90717b666197c6267af53db94d6a5fe25e",
         "cli/src/utils/__tests__/send-message-timer.test.ts": "7f253f1bc8dbf80991368ac58dd9018445355738080a578e48c5e11c6e3693d5",
         "cli/src/utils/__tests__/snapshot-preview.test.ts": "dfc1bfa890dde5720229c67ed47e655c515c799b4940dc41bb2bd09297891002",
@@ -2864,7 +2865,7 @@
         "cli/src/utils/run-state-storage.ts": "0c820ca5a625bce4b32b47161893482a3261a63f808440b96a36af8bcf66a532",
         "cli/src/utils/saved-chat-capture.ts": "ea632aa9307618889f1d866570984e031880619e00f0dcf6c7cc11b2da5107a4",
         "cli/src/utils/saved-transcript-inspection.ts": "94b4be86a44a4c83ed01239d7acd6df53ff77a4379e8d6099cb9e3ac6bc45776",
-        "cli/src/utils/sdk-event-handlers.ts": "0648f587a7bf8cd1a6039b397163c29dacec6d5042cea8dac3f254fc2f16e98d",
+        "cli/src/utils/sdk-event-handlers.ts": "f002ef0ba51215f85555b870939cc9c86b06ab0bc3e6effadc4017bbdb00e995",
         "cli/src/utils/send-message-helpers.ts": "02bf4d619476bf2b17998e5f0bb1bfeae38ea153ee851639cdd43acc0892881d",
         "cli/src/utils/send-message-timer.ts": "1c8da2937df49bce22fed8f2fe351f2109e1a7e04b45f576b4b1da630ae089f3",
         "cli/src/utils/settings.ts": "6b884f4e50605f332ffb2175ac1a31774fc74d39047fa5998d3a54e5915342dd",
@@ -3557,10 +3558,10 @@
         "packages/agent-runtime/src/find-files/request-files-prompt.ts": "18a91401771a2bc70aa2ecb6bae8506bb7de5079d34e2e677e3af76aa84856d7",
         "packages/agent-runtime/src/generate-diffs-prompt.ts": "9948680bd489f5ef934894cb9048f83896fd8b830a30be26c4089549fd421cc6",
         "packages/agent-runtime/src/get-file-reading-updates.ts": "aa658806e3d9866dae6a0da3194ce477c02df05bd8eec91eedfb31a83884850c",
-        "packages/agent-runtime/src/llm-api/__tests__/context7-api.test.ts": "19ddecdb597c92cb202acc0abbf360561af6c2ac006239c4d432312f48b41a61",
+        "packages/agent-runtime/src/llm-api/__tests__/context7-api.test.ts": "cb3185cce649f457ea26f86debca2904db17dbafa0d66bebb0d067624c68a0d5",
         "packages/agent-runtime/src/llm-api/__tests__/gemini-with-fallbacks.test.ts": "7f1c6b9224067e94736ae2b5c4c74bcf2523b239d40367d0396d86601e9984e6",
         "packages/agent-runtime/src/llm-api/claude.ts": "17d20eaac852bfb4e8f1f07a971c4f3d23867814975fd2c7be7e905bafcbefba",
-        "packages/agent-runtime/src/llm-api/context7-api.ts": "9719fbfc5ad6dac7fa836cff7d29712def5d89d6c5f3de08a7148fdf003d80c8",
+        "packages/agent-runtime/src/llm-api/context7-api.ts": "63566d69d1f35efebf17d150f9c936966a484ce52e8eb48b3ce23e7e9a73891e",
         "packages/agent-runtime/src/llm-api/gemini-with-fallbacks.ts": "ec82dbbc3536eec9ab15a1d2e2da7821a250a82d8d10fbaa25e6bca26d5a1c41",
         "packages/agent-runtime/src/main-prompt.ts": "e90f7953181a6b3e1650bf69c00524bfb5abaf5dbc6ab897d1c659e5fffbcb76",
         "packages/agent-runtime/src/mcp-constants.ts": "84bbb566bccb59b62a1b17950d077f4596bb0a2ddce4a8071f0e04bc614f2e9f",
@@ -3650,7 +3651,7 @@
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/list-directory-memory.test.ts": "fc389640e44f5556a1f09c965aaeb14330c2ef985cfe9b0eadbe5dba26d068c9",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/list-jobs.test.ts": "c10b3ffdf202ded16441621dd924f023e22623d96fc6cc96e2f0c4331e6d1c72",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/query-index.test.ts": "591eb78dbc9ce8495888cf3c51c1cea81d6b54d6c4a0b31586d1437238ef88c8",
-        "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-docs.test.ts": "e1a319e44def8462754bbcd269cdbc0189fbb37e184ff5cfec5b290baa6a2664",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-docs.test.ts": "29c30ece4efc401dac33f554a03c9d9ed9b45c6b21ae316eca31f5d50a319b95",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-logs.test.ts": "b236e2730b4d4922012700b9316ac1167ee0750043e4369ee7fd533fd2a25f8b",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/recall-context-expiry.test.ts": "1de18ccecd2099fdd740ad0f14314c63a8cd8ec4383395975b002606440e7182",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/record-decision.test.ts": "98f054cbce945f75ec5a4fccdc9da3eb46a40d2c22014cef740a0898211cf9b4",
@@ -4183,7 +4184,7 @@
         "sdk/e2e/workflows/multi-turn-conversation.e2e.test.ts": "5eafb98a62b80a97ee3d6a913979c8ebf081b474110536bb2afce38e5d8a6516",
         "sdk/examples/readme-example-1.ts": "264c25f35a63e43f5e4a05fd2df14a0d711ca42afc04c9e8aa7c935ef94f23e4",
         "sdk/examples/readme-example-2.ts": "5d108260b27ec53900c02227b2b744c5a20bd7b34428d64eb17ea0b06615e408",
-        "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
+        "sdk/knowledge.md": "b5aafd7b22ae5e9a9f77d0a7bbb4e5776eca0146cbcc14d9f496bc3c34b4a001",
         "sdk/openbuff.json": "d02ac6f0fee5cb3dca70e426d22c094d0b8a712ef8a4419157be30711434bb8c",
         "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
@@ -4366,6 +4367,9 @@
         "sdk/src/__tests__/model-capability-catalog.test.ts": "ebc58b56d96d2760555c6d174124a65de5bf51fff629dfc69e08313854c471db",
         "sdk/src/__tests__/model-provider.test.ts": "59d0069ed15fa1ea4cd5fd9e1c54082e6f20c906edd03bed6e873b4ecc7462fc",
         "sdk/src/__tests__/mutation-capabilities.test.ts": "a3734c9df4d26fa7d9f67b2d111c37a33110dac747eab83d3d2dacf5c63189fc",
+        "sdk/src/__tests__/n04-kill-job-owned.test.ts": "07b22d5447a51292ac6e21ef0b9cbe612967eca7a4d0e62001b6cc28669a5814",
+        "sdk/src/__tests__/n04-lsp-consumer.test.ts": "a8bcbe328f2e814b248eaab96fbe6a3bbc1eda0c486ae46254ef6788a694c021",
+        "sdk/src/__tests__/n04-typed-results-consumers.test.ts": "366be435c03dc8a26268e88df07bacf64e94a773d91f146a7103a003396df42d",
         "sdk/src/__tests__/native-exec.test.ts": "ad7c3a51c765e4c15f02144d442419f037dbf59cb9c74ab90bb085274a1dcb19",
         "sdk/src/__tests__/native-host-integration.test.ts": "71223520ec11a60c9d93fa10ccfb9f0156964c6f743d211fdb87e01a8009d114",
         "sdk/src/__tests__/native-tool-observation.test.ts": "71ccba1729a7197e2bbe66a733c0399a0facd2b3e838b7a4d542520a1a976a00",
@@ -4640,7 +4644,7 @@
         "sdk/src/tools/index.ts": "1571e415e1eb68903e6d24c7f70963cbf6ad57c4c8d58178bfde96eee0d81181",
         "sdk/src/tools/inspect-environment.ts": "04ebfa20e343c00228932dbf708984fef16b8a621e14aaf654541f8d9ade4338",
         "sdk/src/tools/inspect-workspace.ts": "03e6915e7f395c6ea1dd217793b6fb374160db52de126c2425e3fa1581f7e048",
-        "sdk/src/tools/kill-job.ts": "3f621f0fe299fe058794c915d1aba2a45ef0a81418a57d54c2b43d5a3d107545",
+        "sdk/src/tools/kill-job.ts": "06bdeb0c52ee154c0aff15e712e253bea29894cfeea957cd556221211ea54072",
         "sdk/src/tools/language-diagnostics.ts": "18f40cbf0180b6fbc97b54a67d572be37bceaf5e8faae4fb44182d5f3204b461",
         "sdk/src/tools/list-directory.ts": "d8c2fc43536e39e77b69373485a36afd3757c4d2483abef93d7140b54ae31a4b",
         "sdk/src/tools/list-jobs.ts": "cad725ff2fa1cf96493b7d1f2b39c3fa65f7678c89575f4f630abdec9ae63bbf",
@@ -4721,19 +4725,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T093115524485Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r11-pub-final-b19",
+            "reviewer": "r14-b19-composition-approval",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/r11-pub/implementation-B19.json",
-              "sha256": "2d1b495ba68276fb293da97bba41035ce75262a4d48e4812863bba1de2f493d6"
+              "path": ".tmp/r14/seal-successor/implementation/B19.json",
+              "sha256": "30cfde2b4d81017ed0a3f11ece4d4046b8e86d70c651d80e54ce088381a804b4"
             }
           }
         ],
@@ -4742,10 +4746,10 @@
       "risks": [
         "Selected proven local routes, no hosted CI, native execution availability or arbitrary scope containment."
       ],
-      "acceptedAt": "2026-11-27T09:31:15.692873+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.656827+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T093115524485Z-acceptance.json",
-        "sha256": "dd404d7a9d132846786437ebeb4335954a87236b604866f2ef184faa70e684e7"
+        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "97d1f4f4fda3fac0c850bad89a816973864bfbb17853dee769e5f022f4a68928"
       }
     },
     {
@@ -4960,7 +4964,7 @@
         "cli/CHANGELOG.md": "e1cc5442702d4a2ccab14b2472514093af05c6e6247e27d7932080a4474cb154",
         "cli/README.md": "4adee74823b7347208c2d010c4f48ebfcbc70d9b49af52170ec249c4ad8976d2",
         "cli/bunfig.toml": "348689132caf5a2d2af57b3b50197ecbf884d475f4a36b5318bd3cf4712e8d1c",
-        "cli/knowledge.md": "c92ce1b74ee9d7908eba4f6841cec06f9ad570d28426bc54ef0bfc72c32a1fbb",
+        "cli/knowledge.md": "bc29831656be0f632a2d814d8ddb6d41d91bf68d58baa624ed93e5c2027ce55e",
         "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
         "cli/release-staging/README.md": "04d69986665764226a69b519de77fc0a90c624c5c7cc5f54b240676660099266",
         "cli/release-staging/http.js": "59f24f3c6270a7fd1527f7598feb741af82ac01f35ca54ee82a6cbd269489ce1",
@@ -5531,6 +5535,7 @@
         "cli/src/utils/__tests__/message-history.test.ts": "0a836a0ea8ba12ddb597ce404151f501deaf15e0fac0c10ad9799178d74723eb",
         "cli/src/utils/__tests__/message-tree-utils.test.ts": "7a6d10f8dc7ba54e81e798a662059e4f6ec3315aa00155a46fb586ec4e4ca50c",
         "cli/src/utils/__tests__/message-updater.test.ts": "e594bea643d4c03a1a6ff4ce6a42b159f6142e97eb8bd417c72380ceefb3ede1",
+        "cli/src/utils/__tests__/n04-provider-failover-consumer.test.ts": "f32f672baebb6b0c94e066b8ca57f8084e40c9e012c63d18da230e9457786123",
         "cli/src/utils/__tests__/native-reading-anchor.test.ts": "2527ca5032ce13b8d4677bbad0a333072c522f7c53826130a3073401002952cf",
         "cli/src/utils/__tests__/open-file.test.ts": "f17944c645d759ede698defeb158e007654cecc49c3e3994cce011eb42357bff",
         "cli/src/utils/__tests__/openbuff-provider.test.ts": "1ca9e9c444faec56dd173e014a0966ae3730bfc1f681e6ef4cfffcb43e0a6a44",
@@ -5562,7 +5567,7 @@
         "cli/src/utils/__tests__/run-journal-path.test.ts": "219505db35ab99dd54f5cafc6a1ae44d468b6563aece5f9ef13d174f1bdad8f4",
         "cli/src/utils/__tests__/run-state-storage.test.ts": "8360f90d8addfc3245816ba89254a2b369b533b04bdab670f29b57a562eb72f7",
         "cli/src/utils/__tests__/saved-transcript-inspection.test.ts": "2309bea16f7b8577a6df64a4b2c744e2022c4f7a651b88f7ea8404001585fef0",
-        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "ea17a58094916fd061cf1b09a3476dba9f2aefc7aed1b43991f04e6b355b5848",
+        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "6fa5a0a5fd874854ff34ba20366629ff7457d3ab63254fcb1e10dc96361d0a2b",
         "cli/src/utils/__tests__/send-message-helpers.test.ts": "aeaaa4287725a00ad1b25fab27289e90717b666197c6267af53db94d6a5fe25e",
         "cli/src/utils/__tests__/send-message-timer.test.ts": "7f253f1bc8dbf80991368ac58dd9018445355738080a578e48c5e11c6e3693d5",
         "cli/src/utils/__tests__/snapshot-preview.test.ts": "dfc1bfa890dde5720229c67ed47e655c515c799b4940dc41bb2bd09297891002",
@@ -5709,7 +5714,7 @@
         "cli/src/utils/run-state-storage.ts": "0c820ca5a625bce4b32b47161893482a3261a63f808440b96a36af8bcf66a532",
         "cli/src/utils/saved-chat-capture.ts": "ea632aa9307618889f1d866570984e031880619e00f0dcf6c7cc11b2da5107a4",
         "cli/src/utils/saved-transcript-inspection.ts": "94b4be86a44a4c83ed01239d7acd6df53ff77a4379e8d6099cb9e3ac6bc45776",
-        "cli/src/utils/sdk-event-handlers.ts": "0648f587a7bf8cd1a6039b397163c29dacec6d5042cea8dac3f254fc2f16e98d",
+        "cli/src/utils/sdk-event-handlers.ts": "f002ef0ba51215f85555b870939cc9c86b06ab0bc3e6effadc4017bbdb00e995",
         "cli/src/utils/send-message-helpers.ts": "02bf4d619476bf2b17998e5f0bb1bfeae38ea153ee851639cdd43acc0892881d",
         "cli/src/utils/send-message-timer.ts": "1c8da2937df49bce22fed8f2fe351f2109e1a7e04b45f576b4b1da630ae089f3",
         "cli/src/utils/settings.ts": "6b884f4e50605f332ffb2175ac1a31774fc74d39047fa5998d3a54e5915342dd",
@@ -6403,10 +6408,10 @@
         "packages/agent-runtime/src/find-files/request-files-prompt.ts": "18a91401771a2bc70aa2ecb6bae8506bb7de5079d34e2e677e3af76aa84856d7",
         "packages/agent-runtime/src/generate-diffs-prompt.ts": "9948680bd489f5ef934894cb9048f83896fd8b830a30be26c4089549fd421cc6",
         "packages/agent-runtime/src/get-file-reading-updates.ts": "aa658806e3d9866dae6a0da3194ce477c02df05bd8eec91eedfb31a83884850c",
-        "packages/agent-runtime/src/llm-api/__tests__/context7-api.test.ts": "19ddecdb597c92cb202acc0abbf360561af6c2ac006239c4d432312f48b41a61",
+        "packages/agent-runtime/src/llm-api/__tests__/context7-api.test.ts": "cb3185cce649f457ea26f86debca2904db17dbafa0d66bebb0d067624c68a0d5",
         "packages/agent-runtime/src/llm-api/__tests__/gemini-with-fallbacks.test.ts": "7f1c6b9224067e94736ae2b5c4c74bcf2523b239d40367d0396d86601e9984e6",
         "packages/agent-runtime/src/llm-api/claude.ts": "17d20eaac852bfb4e8f1f07a971c4f3d23867814975fd2c7be7e905bafcbefba",
-        "packages/agent-runtime/src/llm-api/context7-api.ts": "9719fbfc5ad6dac7fa836cff7d29712def5d89d6c5f3de08a7148fdf003d80c8",
+        "packages/agent-runtime/src/llm-api/context7-api.ts": "63566d69d1f35efebf17d150f9c936966a484ce52e8eb48b3ce23e7e9a73891e",
         "packages/agent-runtime/src/llm-api/gemini-with-fallbacks.ts": "ec82dbbc3536eec9ab15a1d2e2da7821a250a82d8d10fbaa25e6bca26d5a1c41",
         "packages/agent-runtime/src/main-prompt.ts": "e90f7953181a6b3e1650bf69c00524bfb5abaf5dbc6ab897d1c659e5fffbcb76",
         "packages/agent-runtime/src/mcp-constants.ts": "84bbb566bccb59b62a1b17950d077f4596bb0a2ddce4a8071f0e04bc614f2e9f",
@@ -6496,7 +6501,7 @@
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/list-directory-memory.test.ts": "fc389640e44f5556a1f09c965aaeb14330c2ef985cfe9b0eadbe5dba26d068c9",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/list-jobs.test.ts": "c10b3ffdf202ded16441621dd924f023e22623d96fc6cc96e2f0c4331e6d1c72",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/query-index.test.ts": "591eb78dbc9ce8495888cf3c51c1cea81d6b54d6c4a0b31586d1437238ef88c8",
-        "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-docs.test.ts": "e1a319e44def8462754bbcd269cdbc0189fbb37e184ff5cfec5b290baa6a2664",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-docs.test.ts": "29c30ece4efc401dac33f554a03c9d9ed9b45c6b21ae316eca31f5d50a319b95",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/read-logs.test.ts": "b236e2730b4d4922012700b9316ac1167ee0750043e4369ee7fd533fd2a25f8b",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/recall-context-expiry.test.ts": "1de18ccecd2099fdd740ad0f14314c63a8cd8ec4383395975b002606440e7182",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/record-decision.test.ts": "98f054cbce945f75ec5a4fccdc9da3eb46a40d2c22014cef740a0898211cf9b4",
@@ -7029,7 +7034,7 @@
         "sdk/e2e/workflows/multi-turn-conversation.e2e.test.ts": "5eafb98a62b80a97ee3d6a913979c8ebf081b474110536bb2afce38e5d8a6516",
         "sdk/examples/readme-example-1.ts": "264c25f35a63e43f5e4a05fd2df14a0d711ca42afc04c9e8aa7c935ef94f23e4",
         "sdk/examples/readme-example-2.ts": "5d108260b27ec53900c02227b2b744c5a20bd7b34428d64eb17ea0b06615e408",
-        "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
+        "sdk/knowledge.md": "b5aafd7b22ae5e9a9f77d0a7bbb4e5776eca0146cbcc14d9f496bc3c34b4a001",
         "sdk/openbuff.json": "d02ac6f0fee5cb3dca70e426d22c094d0b8a712ef8a4419157be30711434bb8c",
         "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
@@ -7212,6 +7217,9 @@
         "sdk/src/__tests__/model-capability-catalog.test.ts": "ebc58b56d96d2760555c6d174124a65de5bf51fff629dfc69e08313854c471db",
         "sdk/src/__tests__/model-provider.test.ts": "59d0069ed15fa1ea4cd5fd9e1c54082e6f20c906edd03bed6e873b4ecc7462fc",
         "sdk/src/__tests__/mutation-capabilities.test.ts": "a3734c9df4d26fa7d9f67b2d111c37a33110dac747eab83d3d2dacf5c63189fc",
+        "sdk/src/__tests__/n04-kill-job-owned.test.ts": "07b22d5447a51292ac6e21ef0b9cbe612967eca7a4d0e62001b6cc28669a5814",
+        "sdk/src/__tests__/n04-lsp-consumer.test.ts": "a8bcbe328f2e814b248eaab96fbe6a3bbc1eda0c486ae46254ef6788a694c021",
+        "sdk/src/__tests__/n04-typed-results-consumers.test.ts": "366be435c03dc8a26268e88df07bacf64e94a773d91f146a7103a003396df42d",
         "sdk/src/__tests__/native-exec.test.ts": "ad7c3a51c765e4c15f02144d442419f037dbf59cb9c74ab90bb085274a1dcb19",
         "sdk/src/__tests__/native-host-integration.test.ts": "71223520ec11a60c9d93fa10ccfb9f0156964c6f743d211fdb87e01a8009d114",
         "sdk/src/__tests__/native-tool-observation.test.ts": "71ccba1729a7197e2bbe66a733c0399a0facd2b3e838b7a4d542520a1a976a00",
@@ -7486,7 +7494,7 @@
         "sdk/src/tools/index.ts": "1571e415e1eb68903e6d24c7f70963cbf6ad57c4c8d58178bfde96eee0d81181",
         "sdk/src/tools/inspect-environment.ts": "04ebfa20e343c00228932dbf708984fef16b8a621e14aaf654541f8d9ade4338",
         "sdk/src/tools/inspect-workspace.ts": "03e6915e7f395c6ea1dd217793b6fb374160db52de126c2425e3fa1581f7e048",
-        "sdk/src/tools/kill-job.ts": "3f621f0fe299fe058794c915d1aba2a45ef0a81418a57d54c2b43d5a3d107545",
+        "sdk/src/tools/kill-job.ts": "06bdeb0c52ee154c0aff15e712e253bea29894cfeea957cd556221211ea54072",
         "sdk/src/tools/language-diagnostics.ts": "18f40cbf0180b6fbc97b54a67d572be37bceaf5e8faae4fb44182d5f3204b461",
         "sdk/src/tools/list-directory.ts": "d8c2fc43536e39e77b69373485a36afd3757c4d2483abef93d7140b54ae31a4b",
         "sdk/src/tools/list-jobs.ts": "cad725ff2fa1cf96493b7d1f2b39c3fa65f7678c89575f4f630abdec9ae63bbf",
@@ -7567,19 +7575,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T093115524485Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r11-pub-final-b20",
+            "reviewer": "r14-b20-renewal",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/r11-pub/implementation-B20.json",
-              "sha256": "483cbd21624d8f0371a80df432bd942010ae1b7968aeddeb6a7b7a74e6f63a0e"
+              "path": ".tmp/r14/seal-successor/implementation/B20.json",
+              "sha256": "f7dbea2f58bee1b921e0f778c4ec680719824fa29d411e35b7cdad9d5c7cdca7"
             }
           }
         ],
@@ -7588,10 +7596,10 @@
       "risks": [
         "No native process fence, escape prevention, Windows/non-Linux or arbitrary descendant/malformed identity credit."
       ],
-      "acceptedAt": "2026-11-27T09:31:15.827844+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.786854+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T093115524485Z-acceptance.json",
-        "sha256": "3a69d38c6bd55ca9ab06143419c49786da877c04a6b19714d6da2bd30bb5ba65"
+        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "d439028d9cb7f06e5a0d62dcd48a1d03eb79122bb3bd153db81c777edc35de69"
       }
     },
     {
@@ -7672,7 +7680,7 @@
         "packages/indexer/src/scip-ingest.ts": "11aa0739e8d516e0429bd24a440f04e0fed087dc60b0f267cf18ca6b00e9b3f8",
         "packages/indexer/src/scip-runner.test.ts": "b40434a7ad21b097f3f122be7276ead0489b91c0c056ee6c0c42c39a112505e3",
         "packages/indexer/src/types.ts": "2087816b16acc7a8f0c21ac2451d9df03a6d7da2e724ed3fd6663e4a392474c9",
-        "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
+        "sdk/knowledge.md": "b5aafd7b22ae5e9a9f77d0a7bbb4e5776eca0146cbcc14d9f496bc3c34b4a001",
         "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
         "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
         "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
@@ -7681,19 +7689,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Frozen B23 (PLAN.md:730): source-level identity and operation availability for the finite language registry and generic fallback; framed LSP document IDs; the exercised structural call/import joins; and exact bounded SCIP symbol identity through refresh and durable storage.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T093115524485Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T134505425684Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r11-pub-final-b23",
+            "reviewer": "r14-b23-renewal",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Frozen B23 (PLAN.md:730): source-level identity and operation availability for the finite language registry and generic fallback; framed LSP document IDs; the exercised structural call/import joins; and exact bounded SCIP symbol identity through refresh and durable storage.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/r11-pub/implementation-B23.json",
-              "sha256": "20d87d5dbf5f03d38c768de4ed52262dc9c3dc906c41bb63fb182e1c7d0ea30c"
+              "path": ".tmp/r14/seal-successor/implementation/B23.json",
+              "sha256": "0cf396bf5732c8c254473d95912c22c95a8e21974d7d60a76ff94e9ac52687df"
             }
           }
         ],
@@ -7704,10 +7712,10 @@
         "SCIP evidence covers fixture dumps, the actual ingestion/graph/storage paths, and the observed local Rust storage restart. It does not certify external SCIP indexers or other native/platform behavior.",
         "Approval is limited to the exercised source-level B23 identity and operation-availability tier. It does not certify packaged assets or broader semantic operations such as navigation, refactoring, diagnostics, builds, tests, or joined validation across languages."
       ],
-      "acceptedAt": "2026-11-27T09:31:15.839856+00:00",
+      "acceptedAt": "2026-11-27T13:45:05.797392+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T093115524485Z-acceptance.json",
-        "sha256": "7a171cdbd11e4bd9ef3090e7f3895fd3ebf6292781a1bb5b52870f2e9aeb97a4"
+        "path": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T134505425684Z-acceptance.json",
+        "sha256": "cf7b79e41ca8ff8b21ea8d5d676b5fb04507ad7edd7942523369e75878f2b010"
       }
     },
     {
@@ -8263,5 +8271,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-27T09:31:15.840678+00:00"
+  "updatedAt": "2026-11-27T13:45:05.798195+00:00"
 }

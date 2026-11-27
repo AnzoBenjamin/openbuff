@@ -7,8 +7,8 @@ import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 /**
  * How long kill_job waits for the job's exit to be observed before it
- * answers. SIGTERM escalates to SIGKILL after 5 s inside background-jobs, so
- * a child that ignores SIGTERM is reported as still stopping, not killed.
+ * answers. Escalation belongs to the selected background process adapter;
+ * a delivered signal alone is not an observed exit.
  */
 export const KILL_JOB_EXIT_WAIT_MS = 3_000
 const KILL_JOB_EXIT_POLL_MS = 25
@@ -121,7 +121,7 @@ export async function killJob(params: {
         reason: `${signal} was sent but the process had not exited after ${waitedSeconds}s.`,
         nextStep:
           signal === 'SIGTERM'
-            ? 'Do not assume the process is gone (ports and files may still be held). Call check_job to confirm the exit; SIGTERM escalates to SIGKILL automatically after 5s, or call kill_job with signal SIGKILL.'
+            ? 'Do not assume the process is gone (ports and files may still be held). Call check_job to confirm the exit, or call kill_job with signal SIGKILL to request a forced stop.'
             : 'Do not assume the process is gone. Call check_job to confirm the exit before reusing its ports or files.',
       },
     },
