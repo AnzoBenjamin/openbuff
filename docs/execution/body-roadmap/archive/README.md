@@ -1,6 +1,26 @@
 # Roadmap evidence archive
 
-## R11 publication: current accepted ledger
+## R12: current accepted ledger
+
+The [R12 manifest](r12/manifest.json) preserves the exact ignored inputs for
+24 accepted base nodes and five separately accepted product tasks. It also
+preserves N09's fresh local SDK test pack, with 14 exact query files. The
+capsule contains 672 paths and 607 distinct objects in 27.6 MB of compressed
+data. It is not a release or an installation artifact for CLI users.
+
+```sh
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r12 --check
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r12 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/validate-ledger.py
+```
+
+Run these commands in a disposable checkout of the matching source. Restore
+verifies bytes without overwriting different local files; it does not rerun
+acceptance commands.
+
+<a id="r11-publication-current-accepted-ledger"></a>
+
+## R11 publication: previous accepted ledger
 
 The [publication manifest](r11-publication/manifest.json) preserves the exact
 ignored inputs for the 24 accepted base nodes and four accepted product tasks.

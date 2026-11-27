@@ -9,7 +9,7 @@
   "evidenceDirectory": "docs/execution/body-roadmap/evidence",
   "acceptanceDecisionRegistry": {
     "path": "docs/execution/body-roadmap/execution-plan.json",
-    "sha256": "33bc13e1048f46d2d3d27b9df251aa9858516a5fabd3182a24dd32979e9768f0"
+    "sha256": "25869ad764d5d0ea31f143f5466d3235f10734ef95d20860c2653de4b61979a0"
   },
   "completionGraph": {
     "schemaVersion": 2,
