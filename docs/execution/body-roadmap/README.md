@@ -10,4 +10,4 @@ The registry also includes the user-requested [product audit addendum](product-a
 
 **N01, N02, N10 and N12** are separately accepted in the registry under their documented scope. These four source-bound receipts are not part of the 39-node base count.
 
-In a fresh disposable checkout, [restore the R11 evidence capsule](archive/README.md#r11-current-accepted-ledger) before running the validator. Historical receipts, failures, and context remain in the prior snapshots. Restoration verifies preserved bytes; it does not rerun the acceptance checks.
+In a fresh disposable checkout, [restore the R11 publication evidence capsule](archive/README.md#r11-publication-current-accepted-ledger) before running the validator. Historical receipts, failures, and context remain in the prior snapshots. Restoration verifies preserved bytes; it does not rerun the acceptance checks.

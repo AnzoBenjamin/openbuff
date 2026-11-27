@@ -1,5 +1,11 @@
 # CLI Package Knowledge
 
+## Compiled child workers and headless output
+
+- `cli/src/binary-entry.ts` handles the reserved `--internal-replayable-child` worker flag before CLI initialization. The SDK verifies the private ticket and compiled Linux/Bun runtime; this is not a public continuation command or a general shell/agent replay entry point.
+- A normal SDK result can return while an owned background child is still running. With the built-in journal, requesting close keeps the connection until that child's settlement is recorded. A user abort is distinct from normal parent completion and still cancels the owned work.
+- Headless piped input with `--model` and `--output-schema` emits one validated JSON document without `--json`. `--json` still emits NDJSON events. `cli/src/__tests__/run-continue-wire.test.ts` checks both outputs using the actual CLI entry.
+
 ## Original archive and procedure continuation
 
 - `prepareUserMessage` retains canonical transcript history instead of discarding messages above 100; `use-chat-messages.ts` and `message-list-window.tsx` independently page and virtualize presentation. The real 500-send/save/fresh-process fixture and mounted earliest-message reveal controls are under `cli/src/utils/__tests__/b13-transcript-restart.test.ts` and `cli/src/hooks/__tests__/use-chat-messages-retention.test.tsx`.

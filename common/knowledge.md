@@ -1,5 +1,11 @@
 # Common Package Knowledge
 
+## Cooperative supervised child settlement
+
+- `PreparedLaunch.admit` can observe extra host-owned cancellation. The extra signal may retire a pending admission, but never grants policy permission or widens the captured request or resource lifetime. A late approval cannot dispatch a cancelled job.
+- Supervised worker requests disclose a journal capability only when the parent has the authenticated durable sink. The host-observed `childRunId` identifies the registered run; it is not supplied by an untrusted receipt. `whenCleanupConfirmed` is an in-process join: unconfirmed cleanup does not release the owned path lease or journal generation.
+- `AgentRuntimeDeps` separates a retained detached-agent settlement from an unsupported detach. A process-bound worker without an independent owner refuses a nested detached batch before launch. Ordinary child observations do not make a generic run replayable.
+
 ## Original-result, usage and procedure contracts
 
 - `types/context-archive.ts` distinguishes original/excerpt/pointer/unknown fullness and immutable recalled-text SHA-256/UTF-8 lengths from serialized message digests. `util/context-archive-body.ts` validates lossless bodies and UTF-8 byte pages (16 KiB default/64 KiB maximum); an interior-code-point cursor is an explicit error. `recall_context` supports source-run disambiguation, expected hashes and bounded byte offsets; legacy fullness is never inferred original.

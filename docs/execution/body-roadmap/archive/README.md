@@ -1,6 +1,25 @@
 # Roadmap evidence archive
 
-## R11: current accepted ledger
+## R11 publication: current accepted ledger
+
+The [publication manifest](r11-publication/manifest.json) preserves the exact
+ignored inputs for the 24 accepted base nodes and four accepted product tasks.
+It includes the fresh B19, B20, and B23 evidence bound to the CLI, common, and
+SDK package notes. The capsule contains 618 paths and 554 distinct objects in
+1.6 MB of compressed data. Accepted scopes are unchanged from R11.
+
+```sh
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r11-publication --check
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r11-publication --destination "$PWD"
+python3 -B docs/execution/body-roadmap/validate-ledger.py
+```
+
+Use a disposable checkout of the matching publication source. Restore verifies
+preserved bytes; it does not run the original tests or install any software.
+
+<a id="r11-current-accepted-ledger"></a>
+
+## R11: previous accepted ledger
 
 The [R11 manifest](r11/manifest.json) preserves the ignored inputs needed to
 validate **24 of 39 accepted base nodes through B16** and four separately

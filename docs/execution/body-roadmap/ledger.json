@@ -2115,7 +2115,7 @@
         "cli/CHANGELOG.md": "e1cc5442702d4a2ccab14b2472514093af05c6e6247e27d7932080a4474cb154",
         "cli/README.md": "4adee74823b7347208c2d010c4f48ebfcbc70d9b49af52170ec249c4ad8976d2",
         "cli/bunfig.toml": "348689132caf5a2d2af57b3b50197ecbf884d475f4a36b5318bd3cf4712e8d1c",
-        "cli/knowledge.md": "9bd6dbabd2ea5963ac443adac4fcf7cfb1265c1cccf951fdde32fe70e1b0d5dc",
+        "cli/knowledge.md": "c92ce1b74ee9d7908eba4f6841cec06f9ad570d28426bc54ef0bfc72c32a1fbb",
         "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
         "cli/release-staging/README.md": "04d69986665764226a69b519de77fc0a90c624c5c7cc5f54b240676660099266",
         "cli/release-staging/http.js": "59f24f3c6270a7fd1527f7598feb741af82ac01f35ca54ee82a6cbd269489ce1",
@@ -2903,7 +2903,7 @@
         "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
         "common/docs/list-jobs.md": "160aff6d9a01253fad084b55595da9dd4c6e25b73ad3014ebcb3c607f7ed41e1",
         "common/docs/update-plan-status.md": "fd4e7fcba915416161c4b71cf556a3a70519de627484156723787340538a1ba0",
-        "common/knowledge.md": "4099664747e7df4dbd975146b37a11490d759f712a9555dd7d0b864e2650e2a5",
+        "common/knowledge.md": "573117dbba1fe8f1590fdb6cb593db15763fa1c65b6a4854de867cdee0244f99",
         "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
         "common/src/__tests__/agent-validation.test.ts": "7ae80e88ee620a91e246d81412655bdd5e63d9e22ec43a3cb01cbb44a3ddc4fa",
         "common/src/__tests__/dynamic-agent-template-schema.test.ts": "0f534d44fca61b28554c75f60212ca87f905fdca8a436c4f7024b272e361d80e",
@@ -4183,7 +4183,7 @@
         "sdk/e2e/workflows/multi-turn-conversation.e2e.test.ts": "5eafb98a62b80a97ee3d6a913979c8ebf081b474110536bb2afce38e5d8a6516",
         "sdk/examples/readme-example-1.ts": "264c25f35a63e43f5e4a05fd2df14a0d711ca42afc04c9e8aa7c935ef94f23e4",
         "sdk/examples/readme-example-2.ts": "5d108260b27ec53900c02227b2b744c5a20bd7b34428d64eb17ea0b06615e408",
-        "sdk/knowledge.md": "89f80bbf1b543c1054a50a79a49a2b9ae5c1c771c798621f57808f5eb69028fd",
+        "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
         "sdk/openbuff.json": "d02ac6f0fee5cb3dca70e426d22c094d0b8a712ef8a4419157be30711434bb8c",
         "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
@@ -4721,19 +4721,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T093115524485Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b16-r2-b19-approval",
+            "reviewer": "r11-pub-final-b19",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b16-final/implementation-r2/B19.json",
-              "sha256": "dfc1112844b9fd953a3e968390e54cca675001d4156b41c3122c974eee182e0b"
+              "path": ".tmp/r11-pub/implementation-B19.json",
+              "sha256": "2d1b495ba68276fb293da97bba41035ce75262a4d48e4812863bba1de2f493d6"
             }
           }
         ],
@@ -4742,10 +4742,10 @@
       "risks": [
         "Selected proven local routes, no hosted CI, native execution availability or arbitrary scope containment."
       ],
-      "acceptedAt": "2026-11-27T07:34:10.944518+00:00",
+      "acceptedAt": "2026-11-27T09:31:15.692873+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "c88420d30c358c3428349cbe95ef4ca4049bcae46b84502b88dea56a9b50091e"
+        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T093115524485Z-acceptance.json",
+        "sha256": "dd404d7a9d132846786437ebeb4335954a87236b604866f2ef184faa70e684e7"
       }
     },
     {
@@ -4960,7 +4960,7 @@
         "cli/CHANGELOG.md": "e1cc5442702d4a2ccab14b2472514093af05c6e6247e27d7932080a4474cb154",
         "cli/README.md": "4adee74823b7347208c2d010c4f48ebfcbc70d9b49af52170ec249c4ad8976d2",
         "cli/bunfig.toml": "348689132caf5a2d2af57b3b50197ecbf884d475f4a36b5318bd3cf4712e8d1c",
-        "cli/knowledge.md": "9bd6dbabd2ea5963ac443adac4fcf7cfb1265c1cccf951fdde32fe70e1b0d5dc",
+        "cli/knowledge.md": "c92ce1b74ee9d7908eba4f6841cec06f9ad570d28426bc54ef0bfc72c32a1fbb",
         "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
         "cli/release-staging/README.md": "04d69986665764226a69b519de77fc0a90c624c5c7cc5f54b240676660099266",
         "cli/release-staging/http.js": "59f24f3c6270a7fd1527f7598feb741af82ac01f35ca54ee82a6cbd269489ce1",
@@ -5748,7 +5748,7 @@
         "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
         "common/docs/list-jobs.md": "160aff6d9a01253fad084b55595da9dd4c6e25b73ad3014ebcb3c607f7ed41e1",
         "common/docs/update-plan-status.md": "fd4e7fcba915416161c4b71cf556a3a70519de627484156723787340538a1ba0",
-        "common/knowledge.md": "4099664747e7df4dbd975146b37a11490d759f712a9555dd7d0b864e2650e2a5",
+        "common/knowledge.md": "573117dbba1fe8f1590fdb6cb593db15763fa1c65b6a4854de867cdee0244f99",
         "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
         "common/src/__tests__/agent-validation.test.ts": "7ae80e88ee620a91e246d81412655bdd5e63d9e22ec43a3cb01cbb44a3ddc4fa",
         "common/src/__tests__/dynamic-agent-template-schema.test.ts": "0f534d44fca61b28554c75f60212ca87f905fdca8a436c4f7024b272e361d80e",
@@ -7029,7 +7029,7 @@
         "sdk/e2e/workflows/multi-turn-conversation.e2e.test.ts": "5eafb98a62b80a97ee3d6a913979c8ebf081b474110536bb2afce38e5d8a6516",
         "sdk/examples/readme-example-1.ts": "264c25f35a63e43f5e4a05fd2df14a0d711ca42afc04c9e8aa7c935ef94f23e4",
         "sdk/examples/readme-example-2.ts": "5d108260b27ec53900c02227b2b744c5a20bd7b34428d64eb17ea0b06615e408",
-        "sdk/knowledge.md": "89f80bbf1b543c1054a50a79a49a2b9ae5c1c771c798621f57808f5eb69028fd",
+        "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
         "sdk/openbuff.json": "d02ac6f0fee5cb3dca70e426d22c094d0b8a712ef8a4419157be30711434bb8c",
         "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
@@ -7567,19 +7567,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T073410685768Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T093115524485Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b16-r2-b20-approval",
+            "reviewer": "r11-pub-final-b20",
             "implementationOwners": [
               "/root"
             ],
             "scope": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b16-final/implementation-r2/B20.json",
-              "sha256": "1828b059522b1894fafcab131fe0cf9bddb801dba7efaf7b78a13a7c70f71307"
+              "path": ".tmp/r11-pub/implementation-B20.json",
+              "sha256": "483cbd21624d8f0371a80df432bd942010ae1b7968aeddeb6a7b7a74e6f63a0e"
             }
           }
         ],
@@ -7588,10 +7588,10 @@
       "risks": [
         "No native process fence, escape prevention, Windows/non-Linux or arbitrary descendant/malformed identity credit."
       ],
-      "acceptedAt": "2026-11-27T07:34:11.071292+00:00",
+      "acceptedAt": "2026-11-27T09:31:15.827844+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T073410685768Z-acceptance.json",
-        "sha256": "c91ae0bfcecacd31cb329b93f0f1cfa0164e37561aca6e82cad51d8bf51ff8f2"
+        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T093115524485Z-acceptance.json",
+        "sha256": "3a69d38c6bd55ca9ab06143419c49786da877c04a6b19714d6da2bd30bb5ba65"
       }
     },
     {
@@ -7653,7 +7653,7 @@
         ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
         ".bun-version": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
         "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
-        "common/knowledge.md": "4099664747e7df4dbd975146b37a11490d759f712a9555dd7d0b864e2650e2a5",
+        "common/knowledge.md": "573117dbba1fe8f1590fdb6cb593db15763fa1c65b6a4854de867cdee0244f99",
         "common/src/util/__tests__/language-capability-manifest.test.ts": "0122b564a8faa4617d0937ed992d89702b93baabd6a7ec8b1c53f68b97657915",
         "common/src/util/__tests__/language-profiles.test.ts": "ec2f6374639dde67b75689c3943f84531f265089aca22bd4acedc92fbff6ea6e",
         "common/src/util/language-capability-manifest.ts": "336285d7870bbda4143f7a320ab25a2d5a2d62d30c4bfd80d5ac45c3c0edd8fe",
@@ -7672,7 +7672,7 @@
         "packages/indexer/src/scip-ingest.ts": "11aa0739e8d516e0429bd24a440f04e0fed087dc60b0f267cf18ca6b00e9b3f8",
         "packages/indexer/src/scip-runner.test.ts": "b40434a7ad21b097f3f122be7276ead0489b91c0c056ee6c0c42c39a112505e3",
         "packages/indexer/src/types.ts": "2087816b16acc7a8f0c21ac2451d9df03a6d7da2e724ed3fd6663e4a392474c9",
-        "sdk/knowledge.md": "89f80bbf1b543c1054a50a79a49a2b9ae5c1c771c798621f57808f5eb69028fd",
+        "sdk/knowledge.md": "e46fa2f99e113f9dcc2bb263476429db0f860d732e1c12d55fa32a3f5177bf44",
         "sdk/src/__tests__/lsp-multiplexer.test.ts": "07fd7c5db1925f32d11d35e4d03ae2ac39aa8f94c408859c965ee8fa1eb397b4",
         "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
         "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
@@ -7681,19 +7681,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Frozen B23 (PLAN.md:730): source-level identity and operation availability for the finite language registry and generic fallback; framed LSP document IDs; the exercised structural call/import joins; and exact bounded SCIP symbol identity through refresh and durable storage.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T021752111402Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T093115524485Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b23-language-nonauthor",
+            "reviewer": "r11-pub-final-b23",
             "implementationOwners": [
-              "b23-implementation"
+              "/root"
             ],
             "scope": "Frozen B23 (PLAN.md:730): source-level identity and operation availability for the finite language registry and generic fallback; framed LSP document IDs; the exercised structural call/import joins; and exact bounded SCIP symbol identity through refresh and durable storage.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b23-renewal/B23-implementation-review.json",
-              "sha256": "11f0e85c7474d9d0a8612835e5c53574eee20ffe075576a9f606fef2847d2a66"
+              "path": ".tmp/r11-pub/implementation-B23.json",
+              "sha256": "20d87d5dbf5f03d38c768de4ed52262dc9c3dc906c41bb63fb182e1c7d0ea30c"
             }
           }
         ],
@@ -7704,10 +7704,10 @@
         "SCIP evidence covers fixture dumps, the actual ingestion/graph/storage paths, and the observed local Rust storage restart. It does not certify external SCIP indexers or other native/platform behavior.",
         "Approval is limited to the exercised source-level B23 identity and operation-availability tier. It does not certify packaged assets or broader semantic operations such as navigation, refactoring, diagnostics, builds, tests, or joined validation across languages."
       ],
-      "acceptedAt": "2026-11-27T02:17:52.365380+00:00",
+      "acceptedAt": "2026-11-27T09:31:15.839856+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T021752111402Z-acceptance.json",
-        "sha256": "fdb57ab93a3f6cb6d33cd5d0426fd0588e1bbdf1be71ca0a6d280b690fedeb52"
+        "path": "docs/execution/body-roadmap/evidence/B23/accepted/20261127T093115524485Z-acceptance.json",
+        "sha256": "7a171cdbd11e4bd9ef3090e7f3895fd3ebf6292781a1bb5b52870f2e9aeb97a4"
       }
     },
     {
@@ -8263,5 +8263,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-27T07:34:11.095174+00:00"
+  "updatedAt": "2026-11-27T09:31:15.840678+00:00"
 }

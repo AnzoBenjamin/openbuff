@@ -1,5 +1,11 @@
 # SDK Package Knowledge
 
+## Supervised child lifetime and explicit replay
+
+- `run.ts` keeps captured run resources for a journal-owned detached agent after the caller receives a successful parent result. Caller abort and the original finite deadline still apply. The built-in journal joins the child owner before closing; the authenticated bridge records ordered, bounded events under the host-assigned child run ID, never a caller-selected sibling or root ID.
+- `runSupervisedReplayableProgram` admits only the explicit data-only clock, random, and SHA-256 recipe in an identical compiled Linux/Bun worker under its live parent. It verifies the durable prefix, reaps the killed worker before a replacement can claim it, and runs only the unrecorded suffix. Generic re-entry, unconfirmed effects, transaction restoration, and native fencing are not covered. Node refuses the compiled-only replay lane without starting a job.
+- The compiled fixture under `sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-entry.ts` exercises a real parent return, original caller abort, nested detach refusal, and reopening the retained child journal. Windows is not covered.
+
 ## Original recall, measured feedback and precise costs
 
 - `services/context-archive-reader.ts` authenticates registered actor/task identity before querying the host-selected project store, bounds UTF-8 pages and checks returned source/hash/range. Strict project-only readers have no guarded archive contract and remain refused; edited branches can disable project-wide archive hydration/lookup. The same callbacks cross supervised transport through private lineage registration.
