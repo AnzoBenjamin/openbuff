@@ -373,7 +373,7 @@ function isRestartableCrash(
   result: SettledSubagentResult,
 ): result is SettledSubagentResult & { crashReason: string } {
   // A crashed result cannot release an owned scope with unresolved cleanup.
-  if (result.cleanup && result.cleanup.status !== 'complete') return false
+  if (result.childRunId || (result.cleanup && result.cleanup.status !== 'complete')) return false
   if (
     result.outcome !== 'crashed' ||
     ('executionRefusal' in result && result.executionRefusal)
@@ -600,6 +600,8 @@ export function buildDefaultSpawnSupervised(
     // envelope below so the child sanitizer emits nonce-stamped markers the
     // parent recognizes on an EXACT match only (see bridge-protocol.ts).
     let bridgeNonce: string | undefined
+    let journalOwnership: SupervisedBridgeHandlerTable['journalOwnership']
+    let settled: SettledSubagentResult | undefined
     try {
       if (handlers) {
         // Lazy like the supervisor: the bridge module (node:net) is loaded
@@ -616,6 +618,7 @@ export function buildDefaultSpawnSupervised(
         // child sanitizer emits nonce-stamped markers. A RAW handler table
         // (no bridgeNonce) leaves the request without one: markers cross the
         // bridge as data, exactly like agent-authored values.
+        journalOwnership = (table as Partial<SupervisedBridgeHandlerTable>).journalOwnership
         const tableNonce = (table as Partial<SupervisedBridgeHandlerTable>)
           .bridgeNonce
         if (typeof tableNonce === 'string' && tableNonce.length > 0) {
@@ -631,6 +634,7 @@ export function buildDefaultSpawnSupervised(
               ...request,
               rpcSocketPath: socketPath,
               ...(bridgeNonce ? { rpcBridgeNonce: bridgeNonce } : {}),
+              ...(journalOwnership ? { rpcJournal: true as const } : {}),
             }
           : request
       // The request file carries the user prompt, the child systemPrompt, and
@@ -702,7 +706,7 @@ export function buildDefaultSpawnSupervised(
               home: seed.home,
             }
           : seed
-      return await spawnSettled({
+      settled = await spawnSettled({
         childModulePath: resolveSupervisedChildEntryPath(),
         ...(selfExec
           ? {
@@ -754,6 +758,9 @@ export function buildDefaultSpawnSupervised(
           return () => activityListeners.delete(l)
         },
       })
+      const childRunId = journalOwnership?.initialRunId()
+      if (childRunId) Object.defineProperty(settled, 'childRunId', { value: childRunId })
+      return settled
     } finally {
       // Close the bridge server unconditionally — success, spawn throw, or
       // bridge-start failure alike. Pending in-flight handlers are killed
@@ -787,7 +794,15 @@ export function buildDefaultSpawnSupervised(
       }
       // The request file lives inside the sandbox, so the recursive sandbox
       // removal cleans up both.
-      rmSync(sandboxCwd, { recursive: true, force: true })
+      try {
+        rmSync(sandboxCwd, { recursive: true, force: true })
+      } finally {
+        const ownership = journalOwnership
+        if (ownership) {
+          if (!settled?.cleanup || settled.cleanup.status === 'complete') ownership.release()
+          else void settled.whenCleanupConfirmed?.then(ownership.release).catch(() => {})
+        }
+      }
     }
   }
 

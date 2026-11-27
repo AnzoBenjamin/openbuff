@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { Database } from 'bun:sqlite'
 import { z } from 'zod/v4'
 
@@ -1554,6 +1557,121 @@ describe('spawn_agents background intent reconciliation', () => {
     expect(mainAgentState.creditsUsed).toBe(165)
   })
 
+  test('the actual detached spawn renews one generation across shortened lease periods', async () => {
+    const parent = createMockAgent('parent', ['thinker'])
+    const child = createMockAgent('thinker')
+    const { mainAgentState } = getInitialSessionState(mockFileContext)
+    let time = 10
+    let starts = 0
+    let unblock!: () => void
+    let entered!: () => void
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const barrier = new Promise<void>((resolve) => {
+      unblock = resolve
+    })
+    const ticks = new Set<() => void>()
+    spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async ({ agentState }) => {
+        starts++
+        if (starts === 1) {
+          entered()
+          await barrier
+        }
+        const history = [assistantMessage('owned lease completion')]
+        return {
+          agentState: { ...agentState, messageHistory: history },
+          output: { type: 'lastMessage', value: history },
+        }
+      },
+    )
+    const launch = (file: string, background = true) =>
+      handleSpawnAgents({
+        ...baseParams,
+        agentState: mainAgentState,
+        agentTemplate: parent,
+        localAgentTemplates: { thinker: child },
+        clock: { now: () => time },
+        workspacePathLeaseOptions: {
+          leaseMs: 30,
+          scheduleHeartbeat: (tick) => {
+            ticks.add(tick)
+            return () => {
+              ticks.delete(tick)
+            }
+          },
+        },
+        toolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: `b16-${file}`,
+          input: {
+            agents: [
+              {
+                agent_type: 'thinker',
+                prompt: 'Hold an owned scope for a local test',
+                background,
+                handoff: {
+                  schemaVersion: 1,
+                  taskId: `owned-${file}`,
+                  role: 'thinker',
+                  objective: 'Prove owned lease lifetime',
+                  requirements: [],
+                  acceptanceCriteria: [],
+                  context: [],
+                  nonGoals: [],
+                  findings: [],
+                  permissions: {
+                    readablePaths: [],
+                    writablePaths: [file],
+                    allowedTools: [],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      })
+    let running: BackgroundAgentJob | undefined
+    try {
+      await launch('src/b16-owned.ts')
+      await ready
+      running = getBackgroundAgentJob(
+        mainAgentState.backgroundAgentJobs![0]!.jobId,
+      )
+      expect(running).toBeDefined()
+      const [receipt] = mainAgentState.workspacePathLeases!
+      expect(receipt?.status).toBe('active')
+      expect(receipt?.expiresAt).toBe(40)
+      const id = receipt?.leaseId
+      for (const moment of [41, 72, 103]) {
+        time = moment
+        await expect(launch('src/b16-owned.ts', false)).rejects.toThrow(
+          'Workspace path lease conflict',
+        )
+        expect(starts).toBe(1)
+        for (const tick of ticks) tick()
+        expect(receipt).toMatchObject({
+          leaseId: id,
+          status: 'active',
+          expiresAt: moment + 30,
+        })
+      }
+      await launch('src/b16-disjoint.ts', false)
+      expect(starts).toBe(2)
+      expect(receipt?.status).toBe('active')
+      unblock()
+      await running!.promise
+      expect(receipt?.status).toBe('released')
+      expect(ticks.size).toBe(0)
+      await launch('src/b16-owned.ts', false)
+      expect(starts).toBe(3)
+    } finally {
+      unblock()
+      await running?.promise.catch(() => undefined)
+    }
+  })
+
   test('a rejected background batch terminates the spawn_started events it already emitted', async () => {
     const parentAgent = createMockAgent('parent', ['thinker'])
     const childAgent = createMockAgent('thinker')
@@ -1740,12 +1858,14 @@ describe('background agent journaling (P2-T2)', () => {
       // parent runId once its own runId is minted, so the launch-time intent
       // is identified by payload shape (backgroundLink NOT set) — never by
       // counting every parent-stream spawn event.
-      const launchIntents = parentEvents.filter(
-        (event) =>
+      const launchIntents = parentEvents.filter((event) => {
+        const launchPayload = event.payload as Record<string, unknown> | null
+        return (
           event.eventType === 'spawn' &&
-          (event.payload as Record<string, unknown> | null)?.backgroundLink !==
-            true,
-      )
+          launchPayload?.backgroundLink !== true &&
+          launchPayload?.backgroundSettled !== true
+        )
+      })
       expect(launchIntents).toHaveLength(1)
       expect(launchIntents[0]).toMatchObject({
         eventType: 'spawn',
@@ -1811,6 +1931,152 @@ describe('background agent journaling (P2-T2)', () => {
       expect(output[0]?.type).toBe('json')
     } finally {
       await journal.close()
+    }
+  })
+
+  test.each(['completed', 'cancelled'] as const)('a detached %s child retains durable terminal evidence after the parent requests journal close', async (terminal) => {
+    const root = mkdtempSync(
+      path.join(tmpdir(), 'openbuff-background-journal-'),
+    )
+    const journalPath = path.join(root, 'journal.sqlite')
+    const journal = createRunJournal({
+      path: journalPath,
+      batching: { maxBatchEvents: 32, maxBatchDelayMs: 60_000 },
+    })
+    let entered!: () => void
+    const atModel = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let allowFinish!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      allowFinish = resolve
+    })
+    const { mainAgentState } = getInitialSessionState(mockFileContext)
+    mainAgentState.runId = 'b16-retained-parent'
+    let physicalClose: Promise<void> | undefined
+    try {
+      await handleSpawnAgents({
+        ...baseParams,
+        agentState: mainAgentState,
+        agentTemplate: createMockAgent('parent', ['thinker']),
+        localAgentTemplates: { thinker: createMockAgent('thinker') },
+        journalWriter: journal,
+        journalReader: journal,
+        startAgentRun: async () => 'b16-retained-child',
+        promptAiSdkStream: async function* () {
+          entered()
+          await barrier
+          if (terminal === 'cancelled') throw new DOMException('Cancelled', 'AbortError')
+          yield { type: 'text' as const, text: 'child finished after the turn' }
+          yield createToolCallChunk('end_turn', {})
+          return promptSuccess('b16-child-final')
+        },
+        toolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: 'b16-retained-test',
+          input: {
+            agents: [
+              {
+                agent_type: 'thinker',
+                prompt: 'finish later',
+                background: true,
+              },
+            ],
+          },
+        },
+      } as unknown as Parameters<typeof handleSpawnAgents>[0])
+      await atModel
+      let closed = false
+      physicalClose = journal.close().then(() => {
+        closed = true
+      })
+      await Promise.resolve()
+      expect(closed).toBe(false)
+      expect(mainAgentState.backgroundAgentJobs?.[0]?.status).toBe('running')
+      // Simulate another same-process connection rotating the local store.
+      const maintenance = createRunJournal({ path: journalPath })
+      try {
+        maintenance.pruneRuns([])
+      } finally {
+        await maintenance.close()
+      }
+      const beforeSettlement = JSON.stringify({
+        jobId: mainAgentState.backgroundAgentJobs![0]!.jobId,
+        parentRunId: 'b16-retained-parent',
+      })
+      if (terminal === 'cancelled') {
+        expect(cancelBackgroundAgentJob(mainAgentState.backgroundAgentJobs![0]!.jobId)).toEqual({ cancelled: true, status: 'cancelled' })
+      }
+      allowFinish()
+      await physicalClose
+      expect(closed).toBe(true)
+      // A fresh runtime process has no job registry or local run object. It
+      // may hydrate a completed result from the original stream, never drive it.
+      const check = Bun.spawnSync(
+        [
+          process.execPath,
+          '--no-env-file',
+          '--no-install',
+          '-e',
+          `
+        import {createRunJournal} from ${JSON.stringify(path.resolve(import.meta.dir, '../util/run-journal.ts'))}
+        import {reconcileInterruptedBackgroundAgentIntents} from ${JSON.stringify(path.resolve(import.meta.dir, '../util/background-agent-jobs.ts'))}
+        const snapshot = JSON.parse(process.argv[2]);
+        const journal = createRunJournal({ path: process.argv[1] });
+        const job = { ...snapshot, status: 'running', agentType: 'thinker', startedAt: 1 };
+        reconcileInterruptedBackgroundAgentIntents({ runId: 'next-turn', backgroundAgentJobs: [job] }, 0, journal);
+        await journal.close();
+        console.log(JSON.stringify(job));
+      `,
+          journalPath,
+          beforeSettlement,
+        ],
+        { env: { PATH: '/usr/bin:/bin' }, timeout: 8_000 },
+      )
+      expect(check.exitCode).toBe(0)
+      expect(
+        JSON.parse(check.stdout.toString().trim().split('\n').at(-1)!),
+      ).toMatchObject({
+        status: terminal,
+        childRunId: 'b16-retained-child',
+        receipt: expect.objectContaining({ status: terminal }),
+      })
+      const reopened = createRunJournal({ path: journalPath })
+      try {
+        if (terminal === 'completed') {
+          expect(classifyChildRun(reopened, 'b16-retained-child').kind).toBe(
+            'child_completed',
+          )
+          expect(reopened.events('b16-retained-child')).toContainEqual(
+            expect.objectContaining({
+              eventType: 'llm_response',
+              payload: expect.objectContaining({
+                fullResponse: 'child finished after the turn',
+              }),
+            }),
+          )
+          expect(reopened.lastEvent('b16-retained-child')).toMatchObject({
+            eventType: 'step_boundary',
+            payload: { terminal: true, status: 'completed' },
+          })
+        }
+        expect(reopened.events('b16-retained-parent')).toContainEqual(
+          expect.objectContaining({
+            eventType: 'spawn',
+            payload: expect.objectContaining({
+              backgroundSettled: true,
+              childRunId: 'b16-retained-child',
+              receipt: expect.any(Object),
+            }),
+          }),
+        )
+      } finally {
+        await reopened.close()
+      }
+    } finally {
+      allowFinish()
+      await (physicalClose ?? journal.close())
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

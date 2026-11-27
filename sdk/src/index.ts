@@ -218,6 +218,13 @@ export {
   type ReplayableReadsOptions,
 } from './services/replayable-reads'
 export { runReplayableProgram } from './services/replayable-program'
+export {
+  handleSupervisedReplayWorker,
+  runSupervisedReplayableProgram,
+  type SupervisedProgramOptions,
+  type SupervisedProgramResult,
+  type SupervisedReplayBoundary,
+} from './services/supervised-replay-worker'
 export type {
   ReplayProgram,
   ReplayProgramModel,

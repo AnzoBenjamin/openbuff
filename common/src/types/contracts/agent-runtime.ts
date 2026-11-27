@@ -271,6 +271,8 @@ export type SupervisedSpawnRequest = {
    * content-only marker shape, which no parent recognizes (data-only).
    */
   rpcBridgeNonce?: string
+  /** Parent bridge has an authenticated durable journal sink for this attempt. */
+  rpcJournal?: true
 }
 
 /**
@@ -287,6 +289,10 @@ export type SettledSubagentResult = {
   executionRefusal?: import('./execution-context').Refusal
   /** Physical scope cleanup evidence, independent of the receipt outcome. */
   cleanup?: import('./process-scope').CleanupResult
+  /** Host-issued first child run, not a peer-supplied receipt field. */
+  childRunId?: string
+  /** Host-only join; resolves only after later physical cleanup is verified. */
+  whenCleanupConfirmed?: Promise<void>
   /** A validated `AgentReceipt` envelope; present for ok/truncated. */
   receipt?: unknown
   schemaError?: string
@@ -469,6 +475,10 @@ export type AgentRuntimeDeps = {
   journalWriter?: JournalWriter
   /** Run-journal reader for crash classification + replay short-circuit. */
   journalReader?: JournalReader
+  /** Host retains resources for a journal-owned background child until physical settlement. */
+  retainDetachedAgent?: (settled: Promise<unknown>) => void
+  /** Worker lifetime has no independent owner for a detached grandchild. */
+  detachedAgentUnavailable?: true
 
   // Procedural memory (playbooks)
   /**

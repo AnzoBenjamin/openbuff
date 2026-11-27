@@ -2,6 +2,7 @@
 """Validate plan dependencies and sealed acceptance evidence, without running it."""
 
 import argparse
+from graphlib import CycleError, TopologicalSorter
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 LEDGER = ROOT / 'docs/execution/body-roadmap/ledger.json'
 HASH = re.compile(r'^[a-f0-9]{64}$')
+REGISTRY_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]*')
+REVIEW_CONTEXT_FIELDS = ('dependencyContractHashes', 'configurationHashes', 'frozenPlanHashes')
 STATUSES = {'pending', 'in_progress', 'accepted', 'blocked', 'unavailable'}
 B21_REDUCED_DECISION_TYPE = 'body-b21-reduced-scope-acceptance'
 B21_REDUCED_DECISION_PATH = 'docs/execution/body-roadmap/B21-ACCEPTANCE-20261124.json'
@@ -398,39 +401,11 @@ def validate(ledger, root=ROOT, require_complete=False):
     if set(by_id) != set(graph_by_id):
         fail('ledger membership differs from canonical completion graph')
 
-    accepted = {node_id for node_id, node in by_id.items() if node.get('status') == 'accepted'}
-    for node_id, node in by_id.items():
-        expected = graph_by_id.get(node_id)
-        if expected is None:
-            continue
-        for field in graph.get('ledgerRequiredFields', []):
-            if field not in node:
-                fail(f'{node_id}: missing ledger field {field}')
-        prerequisites = expected.get('prerequisites', [])
-        if node.get('prerequisites') != prerequisites:
-            fail(f'{node_id}: prerequisite list differs from plan')
-        if node.get('parentCardId') != expected.get('parentCardId'):
-            fail(f'{node_id}: milestone parent differs from plan')
-        status = node.get('status')
-        if status not in STATUSES:
-            fail(f'{node_id}: invalid status {status}')
-        if node_id != 'B21' and 'acceptanceDecision' in node:
-            fail(f'{node_id}: reduced-scope acceptance decision is reserved for B21')
-        if status in {'accepted', 'in_progress'} and not set(prerequisites) <= accepted:
-            fail(f'{node_id}: started/accepted without all accepted prerequisites')
-        if not set(node.get('acceptedPrerequisites', [])) <= set(prerequisites) & accepted:
-            fail(f'{node_id}: unsupported prerequisite credit')
-        if status != 'accepted':
-            continue
-        if node.get('acceptedPrerequisites') != prerequisites:
-            fail(f'{node_id}: acceptance must name all prerequisites')
-        if node_id == 'B21' and 'acceptanceDecision' in node:
-            validate_b21_reduced_decision(node, prerequisites)
-            continue
+    def validate_strict_receipt(node_id, node, prerequisites, prerequisite_nodes, addendum_contracts=None):
         receipt_path = reference(node.get('acceptanceReceipt'), f'{node_id} acceptance receipt')
         receipt = load(receipt_path, node_id)
         if receipt is None:
-            continue
+            return
         if receipt.get('schemaVersion') != 1 or receipt.get('status') != 'accepted':
             fail(f'{node_id}: unsupported/unaccepted receipt')
         for key in ['nodeId', 'parentCardId', 'repositoryId', 'backend', 'epoch', 'coverageTier', 'sourceContractHashes']:
@@ -452,16 +427,24 @@ def validate(ledger, root=ROOT, require_complete=False):
         if manifest is None or node.get('evidenceManifest') != receipt.get('manifest', {}).get('path'):
             fail(f'{node_id}: evidence manifest is missing or differs from ledger')
         if manifest is None:
-            continue
+            return
         if (manifest.get('schemaVersion') != 1 or manifest.get('type') != 'body-acceptance-evidence'
                 or manifest.get('nodeId') != node_id or manifest.get('sourceContractHashes') != hashes):
             fail(f'{node_id}: manifest does not bind the accepted node/sources')
+        if addendum_contracts is not None:
+            addendum_id, required_context = addendum_contracts
+            contexts = node.get('contextContractHashes')
+            if not isinstance(contexts, dict) or any(contexts.get(name) != digest for name, digest in required_context.items()):
+                fail(f'{node_id}: missing frozen plan/specification/addendum context contracts')
+            for label, document in [('receipt', receipt), ('manifest', manifest)]:
+                if document.get('addendumId') != addendum_id or document.get('contextContractHashes') != contexts:
+                    fail(f'{node_id}: {label} addendum context differs from acceptance node')
         manifest_artifacts = artifact_seal(manifest, node_id + ' manifest')
         dependency_rows = receipt.get('acceptedPrerequisites', [])
         if [row.get('nodeId') for row in dependency_rows] != prerequisites:
             fail(f'{node_id}: receipt prerequisites differ from plan')
         for row in dependency_rows:
-            prerequisite = by_id.get(row.get('nodeId'), {})
+            prerequisite = prerequisite_nodes.get(row.get('nodeId'), {})
             if row.get('receipt') != prerequisite.get('acceptanceReceipt'):
                 fail(f'{node_id}: stale prerequisite receipt for {row.get("nodeId")}')
             reference(row.get('receipt'), f'{node_id} prerequisite')
@@ -469,6 +452,7 @@ def validate(ledger, root=ROOT, require_complete=False):
         if not reviews:
             fail(f'{node_id}: no independent implementation review')
         reviewed_sources = set()
+        reviewed_contexts = {}
         review_commands = set()
         reviewed_artifacts = set()
         for review in reviews:
@@ -489,8 +473,15 @@ def validate(ledger, root=ROOT, require_complete=False):
                 if review_document.get('decision') != 'approve':
                     fail(f'{node_id}: referenced review does not approve the implementation')
                 reviewed_sources |= matching_sources(review_document.get('sourceContractHashes'), hashes, node_id + ' review')
-                for field in ['dependencyContractHashes', 'configurationHashes', 'frozenPlanHashes']:
-                    current_sources(review_document.get(field, {}), node_id + ' review context')
+                for field in REVIEW_CONTEXT_FIELDS:
+                    bindings = review_document.get(field, {})
+                    current_sources(bindings, node_id + ' review context')
+                    if addendum_contracts is not None:
+                        reviewed_contexts.update(bindings)
+                if addendum_contracts is not None:
+                    frozen = review_document.get('frozenPlanHashes', {})
+                    if any(frozen.get(name) != digest for name, digest in required_context.items()):
+                        fail(f'{node_id}: review does not bind the frozen plan/specification/addendum context')
                 review_origin = load(reference(review_document.get('provenance'), node_id + ' review provenance'), node_id)
                 if review_origin is not None:
                     if (review_origin.get('schemaVersion') != 1
@@ -509,6 +500,10 @@ def validate(ledger, root=ROOT, require_complete=False):
                     declared = review_origin.get('sourceContractHashes')
                     if declared != review_document.get('sourceContractHashes'):
                         fail(f'{node_id}: reviewed sources lack original independent provenance')
+                    if addendum_contracts is not None and any(
+                            review_origin.get(field, {}) != review_document.get(field, {})
+                            for field in REVIEW_CONTEXT_FIELDS):
+                        fail(f'{node_id}: review context lacks original independent provenance')
                     current_sources(source_bindings(review_origin), node_id + ' original review source')
                     reviewed_artifacts |= artifact_seal(review_origin, node_id + ' original review')
                     if review_origin.get('commandReceipts') != review_document.get('commandReceipts'):
@@ -521,6 +516,8 @@ def validate(ledger, root=ROOT, require_complete=False):
                     review_commands.add((command.get('path'), command.get('sha256')))
         if reviewed_sources != set(hashes):
             fail(f'{node_id}: accepted sources lack current independent review coverage')
+        if addendum_contracts is not None and contexts != reviewed_contexts:
+            fail(f'{node_id}: acceptance context contracts differ from independently reviewed bindings')
         if manifest.get('reviews') != [review.get('evidence') for review in reviews]:
             fail(f'{node_id}: manifest review identities differ from acceptance')
         checks = receipt.get('requiredChecks', [])
@@ -572,6 +569,37 @@ def validate(ledger, root=ROOT, require_complete=False):
         for artifact in receipt.get('artifacts', []):
             reference(artifact, f'{node_id} sealed artifact')
 
+    accepted = {node_id for node_id, node in by_id.items() if node.get('status') == 'accepted'}
+    for node_id, node in by_id.items():
+        expected = graph_by_id.get(node_id)
+        if expected is None:
+            continue
+        for field in graph.get('ledgerRequiredFields', []):
+            if field not in node:
+                fail(f'{node_id}: missing ledger field {field}')
+        prerequisites = expected.get('prerequisites', [])
+        if node.get('prerequisites') != prerequisites:
+            fail(f'{node_id}: prerequisite list differs from plan')
+        if node.get('parentCardId') != expected.get('parentCardId'):
+            fail(f'{node_id}: milestone parent differs from plan')
+        status = node.get('status')
+        if status not in STATUSES:
+            fail(f'{node_id}: invalid status {status}')
+        if node_id != 'B21' and 'acceptanceDecision' in node:
+            fail(f'{node_id}: reduced-scope acceptance decision is reserved for B21')
+        if status in {'accepted', 'in_progress'} and not set(prerequisites) <= accepted:
+            fail(f'{node_id}: started/accepted without all accepted prerequisites')
+        if not set(node.get('acceptedPrerequisites', [])) <= set(prerequisites) & accepted:
+            fail(f'{node_id}: unsupported prerequisite credit')
+        if status != 'accepted':
+            continue
+        if node.get('acceptedPrerequisites') != prerequisites:
+            fail(f'{node_id}: acceptance must name all prerequisites')
+        if node_id == 'B21' and 'acceptanceDecision' in node:
+            validate_b21_reduced_decision(node, prerequisites)
+            continue
+        validate_strict_receipt(node_id, node, prerequisites, by_id)
+
     for parent, children in graph.get('rollups', {}).items():
         if parent not in accepted:
             continue
@@ -580,6 +608,92 @@ def validate(ledger, root=ROOT, require_complete=False):
             if any(by_id.get(child, {}).get(field) != value for field, value in identity.items()):
                 fail(f'{parent}: milestone {child} uses a different authority identity')
 
+    def validate_addenda():
+        # Older base-only ledgers and decision-only registries make no addendum claims.
+        if 'acceptanceDecisionRegistry' not in ledger:
+            return
+        label = 'execution plan registry'
+        registry = load(reference(ledger['acceptanceDecisionRegistry'], label), label)
+        if registry is None or ('addenda' not in registry and registry.get('type') != 'body-execution-plan-addenda'):
+            return
+        base_plan = {'path': ledger.get('plan'), 'sha256': ledger.get('planSha256')}
+        specification = {'path': ledger.get('specification'), 'sha256': ledger.get('specificationSha256')}
+        if (registry.get('schemaVersion') != 1 or registry.get('type') != 'body-execution-plan-addenda'
+                or registry.get('basePlan') != base_plan or registry.get('specification') != specification
+                or registry.get('baseCompletionNodeCount') != graph.get('nodeCount')):
+            fail(f'{label}: addenda must register the frozen base plan/specification and node count')
+        addenda = registry.get('addenda')
+        if not isinstance(addenda, list):
+            fail(f'{label}: invalid addenda list')
+            return
+
+        task_ids, addendum_ids = set(graph_by_id), set()
+        accepted_tasks, prerequisite_nodes = {}, dict(by_id)
+        for addendum in addenda:
+            addendum_id = addendum.get('id') if isinstance(addendum, dict) else None
+            if not isinstance(addendum_id, str) or not REGISTRY_ID.fullmatch(addendum_id) or addendum_id in addendum_ids:
+                fail(f'{label}: duplicate/invalid addendum id: {addendum_id}')
+                continue
+            addendum_ids.add(addendum_id)
+            tasks = addendum.get('tasks')
+            if not isinstance(tasks, list) or any(not isinstance(task, dict) for task in tasks):
+                fail(f'{addendum_id}: invalid addendum tasks')
+                continue
+            claimed = [task for task in tasks if task.get('status') == 'accepted']
+            if addendum.get('status') == 'accepted' and (not claimed or len(claimed) != len(tasks)):
+                fail(f'{addendum_id}: accepted addendum must have all tasks accepted')
+            required_context = {}
+            if claimed:
+                # Historical planned/implemented rows may refer to old addendum bytes, but cannot earn credit.
+                document = addendum.get('document')
+                if reference(document, f'{addendum_id} addendum document') is not None:
+                    required_context = {ref['path']: ref['sha256'] for ref in [base_plan, specification, document]}
+                    if len(required_context) != 3:
+                        fail(f'{addendum_id}: addendum requires distinct plan/specification/document bindings')
+            for task in tasks:
+                node_id = task.get('id')
+                if not isinstance(node_id, str) or not REGISTRY_ID.fullmatch(node_id) or node_id in task_ids:
+                    fail(f'{addendum_id}: duplicate/invalid addendum task id: {node_id}')
+                    continue
+                task_ids.add(node_id)
+                if task.get('status') != 'accepted':
+                    continue
+                node = task.get('acceptanceNode')
+                if not isinstance(node, dict):
+                    fail(f'{node_id}: missing addendum acceptance node')
+                    continue
+                accepted_tasks[node_id] = (task, node, (addendum_id, required_context))
+                prerequisite_nodes[node_id] = node
+
+        dependency_graph = {}
+        for node_id, (task, node, contracts) in accepted_tasks.items():
+            prerequisites = task.get('prerequisites')
+            if (not isinstance(prerequisites, list) or any(not isinstance(name, str) for name in prerequisites)
+                    or len(set(prerequisites)) != len(prerequisites)):
+                fail(f'{node_id}: invalid addendum prerequisite list')
+                continue
+            dependency_graph[node_id] = prerequisites
+            if (node.get('nodeId') != node_id or node.get('addendumId') != contracts[0]
+                    or node.get('parentCardId', '') is not None or node.get('status') != 'accepted'
+                    or node.get('prerequisites') != prerequisites or node.get('acceptedPrerequisites') != prerequisites
+                    or 'acceptanceDecision' in node):
+                fail(f'{node_id}: acceptance node differs from the registered addendum task')
+            for name in prerequisites:
+                prerequisite = prerequisite_nodes.get(name, {})
+                if prerequisite.get('status') != 'accepted':
+                    fail(f'{node_id}: accepted without all accepted prerequisites ({name})')
+                elif 'acceptanceDecision' in prerequisite or not prerequisite.get('acceptanceReceipt'):
+                    fail(f'{node_id}: prerequisite {name} has no strict acceptance receipt')
+            try:
+                validate_strict_receipt(node_id, node, prerequisites, prerequisite_nodes, contracts)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
+                fail(f'{node_id}: malformed addendum acceptance evidence: {error}')
+        try:
+            TopologicalSorter(dependency_graph).prepare()
+        except CycleError as error:
+            fail(f'addendum prerequisite cycle: {error.args[1]}')
+
+    validate_addenda()
     remaining = [node_id for node_id in graph_by_id if node_id not in accepted]
     if require_complete and remaining:
         fail('completion requested with outstanding nodes: ' + ', '.join(remaining))

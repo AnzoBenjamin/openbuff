@@ -563,25 +563,22 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
     return checkUseState(launch) ?? checkBasisAndProfile(launch) ?? checkUseState(launch)
   }
 
-  async function awaitDecision(launch: Launch): Promise<unknown> {
-    const requestSignal = launch.request.controller.signal
-    const resourceSignal = launch.resource.controller.signal
-    if (requestSignal.aborted || resourceSignal.aborted)
-      return checkRequest(launch.request) ?? checkResource(launch.resource) ??
-        refuse('cancelled', 'Execution admission cancelled')
+  async function awaitDecision(launch: Launch, cancellation?: AbortSignal): Promise<unknown> {
+    const signals = new Set([launch.request.controller.signal, launch.resource.controller.signal])
+    if (cancellation) signals.add(cancellation)
+    const refusal = () => checkRequest(launch.request) ?? checkResource(launch.resource) ??
+      refuse('cancelled', 'Execution admission cancelled')
+    for (const signal of signals) if (signal.aborted) return refusal()
     return new Promise(resolve => {
       let settled = false
       const finish = (value: unknown) => {
         if (settled) return
         settled = true
-        requestSignal.removeEventListener('abort', abort)
-        resourceSignal.removeEventListener('abort', abort)
+        for (const signal of signals) signal.removeEventListener('abort', abort)
         resolve(value)
       }
-      const abort = () => finish(checkRequest(launch.request) ?? checkResource(launch.resource) ??
-        refuse('cancelled', 'Execution admission cancelled'))
-      requestSignal.addEventListener('abort', abort, { once: true })
-      resourceSignal.addEventListener('abort', abort, { once: true })
+      const abort = () => finish(refusal())
+      for (const signal of signals) signal.addEventListener('abort', abort, { once: true })
       try {
         Promise.resolve(inputs.authorizeAsync(policyInput(launch))).then(finish,
           () => finish(refuse('unavailable', 'Execution authorizer unavailable')))
@@ -862,14 +859,16 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         if (get(prepared, this) !== launch) throw new Error('Invalid prepared launch receiver')
         return inputs.clock
       },
-      async admit() {
+      async admit(cancellation) {
         if (get(prepared, this) !== launch) return refuse('stale-authority', 'Invalid prepared launch receiver')
         if (launch.stage !== 'planned') return refuse('already-consumed', 'Launch admission already requested')
         const failure = checkLaunch(launch)
         if (failure) return noLaunch(launch, failure)
         launch.stage = 'admitting'
         try {
-          const decision = await awaitDecision(launch)
+          const decision = await awaitDecision(launch, cancellation)
+          if (cancellation?.aborted)
+            return noLaunch(launch, refuse('cancelled', 'Execution admission cancelled'))
           return issue(launch, decision, false)
         } catch {
           return noLaunch(launch, refuse('unavailable', 'Execution authorizer unavailable'))

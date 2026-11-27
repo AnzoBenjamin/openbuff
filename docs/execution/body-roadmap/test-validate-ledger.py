@@ -13,6 +13,10 @@ spec = importlib.util.spec_from_file_location('ledger_validator', Path(__file__)
 validator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validator)
 
+sealer_spec = importlib.util.spec_from_file_location('ledger_sealer', Path(__file__).with_name('seal-acceptance.py'))
+sealer = importlib.util.module_from_spec(sealer_spec)
+sealer_spec.loader.exec_module(sealer)
+
 B21_REDUCED_DECISION_TYPE = 'body-b21-reduced-scope-acceptance'
 B21_REDUCED_DECISION_PATH = 'docs/execution/body-roadmap/B21-ACCEPTANCE-20261124.json'
 B21_REDUCED_REPORT_PATH = 'docs/execution/body-roadmap/B21-LOCAL-VERIFICATION-20261124.md'
@@ -48,6 +52,7 @@ class LedgerTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='openbuff-ledger-controls-')
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        self.addendum_nodes = {}
         graph = {
             'schemaVersion': 2, 'cardCount': 3, 'nodeCount': 5,
             'dependencySemantics': 'all-of',
@@ -68,7 +73,7 @@ class LedgerTests(unittest.TestCase):
         self.ledger = {
             'schemaVersion': 1, 'plan': 'plan.md', 'planSha256': validator.sha256(self.root/'plan.md'),
             'specification': 'spec.md', 'specificationSha256': validator.sha256(self.root/'spec.md'),
-            'completionGraph': graph, 'nodes': [],
+            'completionGraph': graph, 'nodes': [], 'baselineHead': 'fixture-head',
         }
         for item in graph['nodes']:
             self.ledger['nodes'].append({
@@ -85,10 +90,13 @@ class LedgerTests(unittest.TestCase):
         return {'path': name, 'sha256': validator.sha256(path)}
 
     def node(self, name):
+        if name in self.addendum_nodes:
+            return self.addendum_nodes[name]
         return next(node for node in self.ledger['nodes'] if node['nodeId'] == name)
 
-    def accept(self, name):
+    def accept(self, name, *, contexts=None):
         node = self.node(name)
+        extra = {'addendumId': node['addendumId'], 'contextContractHashes': contexts} if contexts else {}
         source = self.write(f'source/{name}.txt', 'exact source bytes\n')
         hashes = {source['path']: source['sha256']}
         log = self.write(f'evidence/{name}/command.log', 'observed fixture pass\n')
@@ -98,7 +106,7 @@ class LedgerTests(unittest.TestCase):
         command_origin = self.write(f'evidence/{name}/original-command.json', original_command)
         command = self.write(f'evidence/{name}/command.json', {
             **original_command, 'schemaVersion': 1, 'type': 'body-acceptance-command',
-            'nodeId': name, 'provenance': command_origin,
+            'nodeId': name, 'name': 'fixture', 'provenance': command_origin,
         })
         original_review = {'schemaVersion': 1, 'type': 'body-independent-approval',
                            'nodeId': name, 'reviewer': '/root/verifier', 'independent': True,
@@ -106,6 +114,8 @@ class LedgerTests(unittest.TestCase):
                            'decision': 'approve', 'sourceContractHashes': hashes,
                            'artifacts': [oracle, log, command, command_origin],
                            'commandReceipts': [command]}
+        if contexts:
+            original_review['frozenPlanHashes'] = contexts
         review_origin = self.write(f'evidence/{name}/original-review.json', original_review)
         artifacts = [oracle, log, command, command_origin, review_origin]
         review_document = {
@@ -118,11 +128,11 @@ class LedgerTests(unittest.TestCase):
         manifest = self.write(f'evidence/{name}/manifest.json', {
             'schemaVersion': 1, 'type': 'body-acceptance-evidence', 'nodeId': name,
             'sourceContractHashes': hashes, 'reviews': [review],
-            'commandReceipts': [command], 'artifacts': artifacts,
+            'commandReceipts': [command], 'artifacts': artifacts, **extra,
         })
         node.update({'status': 'accepted', 'acceptedPrerequisites': node['prerequisites'],
                      'sourceContractHashes': hashes, 'epoch': 'fixture-source-epoch',
-                     'coverageTier': 'controlled fixture only', 'evidenceManifest': manifest['path']})
+                     'coverageTier': 'controlled fixture only', 'evidenceManifest': manifest['path'], **extra})
         receipt = {key: copy.deepcopy(node[key]) for key in ['nodeId', 'parentCardId', 'repositoryId',
                    'backend', 'epoch', 'coverageTier', 'sourceContractHashes']}
         receipt.update({
@@ -136,7 +146,7 @@ class LedgerTests(unittest.TestCase):
             'requiredChecks': [{'name': 'fixture', 'argv': ['fixture', 'check'], 'exitCode': 0,
                                 'evidence': command, 'log': log}],
             'behaviorEvidence': [{'criterion': 'refused forward preserves foreign bytes', 'evidence': [oracle]}],
-            'artifacts': artifacts,
+            'artifacts': artifacts, **extra,
         })
         self.save_receipt(name, receipt)
         return receipt
@@ -549,6 +559,187 @@ class LedgerTests(unittest.TestCase):
         bundle['command']['provenanceSourceManifest'] = detached
         self.reseal(bundle)
         self.assert_rejected('original source manifest does not bind the actual command')
+
+
+    def prepare_addendum(self):
+        plan = {'path': self.ledger['plan'], 'sha256': self.ledger['planSha256']}
+        specification = {'path': self.ledger['specification'], 'sha256': self.ledger['specificationSha256']}
+        self.addendum = {
+            'id': 'PROD', 'status': 'executing', 'document': self.write('addendum.md', 'task scope\n'),
+            'tasks': [
+                {'id': 'N01', 'status': 'implemented', 'prerequisites': ['B01'], 'receipt': 'old-notes.md'},
+                {'id': 'N02', 'status': 'planned', 'prerequisites': ['B01', 'N01']},
+            ],
+        }
+        self.registry = {
+            'schemaVersion': 1, 'type': 'body-execution-plan-addenda', 'basePlan': plan,
+            'specification': specification, 'baseCompletionNodeCount': self.ledger['completionGraph']['nodeCount'],
+            'addenda': [self.addendum],
+        }
+        self.save_registry()
+        return {ref['path']: ref['sha256'] for ref in [plan, specification, self.addendum['document']]}
+
+    def save_registry(self):
+        self.ledger['acceptanceDecisionRegistry'] = self.write('execution-plan.json', self.registry)
+
+    def accept_task(self, name, contexts):
+        task = next(task for task in self.addendum['tasks'] if task['id'] == name)
+        node = {'nodeId': name, 'parentCardId': None, 'addendumId': self.addendum['id'],
+                'prerequisites': task['prerequisites'], 'repositoryId': 'fixture', 'backend': 'ts'}
+        self.addendum_nodes[name] = node
+        self.accept(name, contexts=contexts)
+        task.update({'status': 'accepted', 'acceptanceNode': node})
+        self.save_registry()
+        return task
+
+    def test_addendum_acceptance_does_not_change_base_graph_report(self):
+        self.accept('B01')
+        baseline = self.check()
+        contexts = self.prepare_addendum()
+        self.accept_task('N01', contexts)
+        self.accept_task('N02', contexts)
+        self.assertEqual(self.check(), baseline)
+        self.assertNotIn('N01', {node['nodeId'] for node in self.ledger['nodes']})
+
+    def test_unaccepted_addendum_can_have_historical_drift_but_cannot_claim_acceptance(self):
+        self.prepare_addendum()
+        self.write('addendum.md', 'previously unbound update\n')
+        self.assertTrue(self.check()['valid'])
+        self.addendum['tasks'][0]['status'] = 'accepted'
+        self.save_registry()
+        self.assert_rejected('addendum document: hash mismatch')
+        self.assert_rejected('N01: missing addendum acceptance node')
+
+    def test_accepted_task_cannot_omit_strict_receipt(self):
+        self.accept('B01')
+        task = self.accept_task('N01', self.prepare_addendum())
+        del task['acceptanceNode']['acceptanceReceipt']
+        self.save_registry()
+        self.assert_rejected('N01 acceptance receipt: missing evidence reference')
+
+    def test_accepted_task_requires_the_current_registry_and_document(self):
+        self.accept('B01')
+        self.accept_task('N01', self.prepare_addendum())
+        self.write('execution-plan.json', {**self.registry, 'unbound': True})
+        self.assert_rejected('execution plan registry: hash mismatch')
+        self.save_registry()
+        (self.root/'addendum.md').unlink()
+        self.assert_rejected('addendum document: missing')
+        self.addendum['document'] = self.write('addendum.md', 'different scope\n')
+        self.save_registry()
+        self.assert_rejected('missing frozen plan/specification/addendum context contracts')
+
+    def test_addendum_context_cannot_be_added_only_by_the_wrapper(self):
+        self.accept('B01')
+        contexts = self.prepare_addendum()
+        self.accept_task('N01', contexts)
+        bundle = self.bundle('N01')
+        self.addendum['document'] = self.write('addendum.md', 'new contract\n')
+        contexts['addendum.md'] = self.addendum['document']['sha256']
+        bundle['review']['frozenPlanHashes'] = contexts
+        for key in ['acceptance', 'manifest']:
+            bundle[key]['contextContractHashes'] = contexts
+        self.reseal(bundle, 'N01')
+        self.save_registry()
+        self.assert_rejected('review context lacks original independent provenance')
+
+    def test_addendum_requires_live_source_and_original_command_credit(self):
+        self.accept('B01')
+        self.accept_task('N01', self.prepare_addendum())
+        self.write('source/N01.txt', 'unexercised implementation\n')
+        self.assert_rejected('N01 current source: hash mismatch')
+        self.write('source/N01.txt', 'exact source bytes\n')
+        bundle = self.bundle('N01')
+        bundle['original-command']['exitCode'] = 1
+        self.reseal(bundle, 'N01')
+        self.save_registry()
+        self.assert_rejected('N01 command: command differs from original argv/exit')
+
+    def test_addendum_requires_original_independent_behavior_seal(self):
+        self.accept('B01')
+        self.accept_task('N01', self.prepare_addendum())
+        bundle = self.bundle('N01')
+        oracle = self.write('evidence/N01/unreviewed.json', {'passed': True})
+        for key in ['review', 'manifest']:
+            bundle[key]['artifacts'].append(oracle)
+        bundle['acceptance']['behaviorEvidence'][0]['evidence'] = [oracle]
+        self.reseal(bundle, 'N01')
+        self.save_registry()
+        self.assert_rejected('N01: behavior evidence lacks an independent review seal')
+
+    def test_addendum_cannot_relabel_original_author_as_independent(self):
+        self.accept('B01')
+        self.accept_task('N01', self.prepare_addendum())
+        bundle = self.bundle('N01')
+        bundle['original-review']['implementationOwners'] = ['/root/verifier']
+        self.reseal(bundle, 'N01')
+        self.save_registry()
+        self.assert_rejected('N01: original implementation review is author-affiliated')
+
+    def test_addendum_requires_all_live_base_and_addendum_prerequisite_receipts(self):
+        self.accept('B01')
+        contexts = self.prepare_addendum()
+        prerequisite = self.accept_task('N01', contexts)
+        self.accept_task('N02', contexts)
+        for name in ['B01', 'N01']:
+            with self.subTest(name=name):
+                node = self.node(name)
+                original = node['acceptanceReceipt']
+                node['acceptanceReceipt'] = self.write(f'evidence/{name}/moved.json',
+                                                      (self.root/original['path']).read_text())
+                self.save_registry()
+                self.assert_rejected(f'N02: stale prerequisite receipt for {name}')
+                node['acceptanceReceipt'] = original
+        prerequisite['status'] = 'implemented'
+        self.save_registry()
+        self.assert_rejected('N02: accepted without all accepted prerequisites')
+
+    def test_reduced_b21_decision_is_not_a_strict_addendum_prerequisite_receipt(self):
+        self.prepare_b21_reduced_acceptance()
+        decisions = json.loads((self.root/'execution-plan.json').read_text())['acceptanceDecisions']
+        contexts = self.prepare_addendum()
+        self.registry['acceptanceDecisions'] = decisions
+        self.addendum['tasks'][0]['prerequisites'] = ['B21']
+        self.node('B21')['acceptanceReceipt'] = self.node('B21')['acceptanceDecision']
+        self.accept_task('N01', contexts)
+        self.assert_rejected('N01: prerequisite B21 has no strict acceptance receipt')
+
+    def test_addendum_sealer_stages_candidates_without_promoting_ledger_or_registry(self):
+        self.accept('B01')
+        contexts = self.prepare_addendum()
+        for name in ['N01', 'N02']:
+            task = self.accept_task(name, contexts)
+            task['status'] = 'implemented'
+            del task['acceptanceNode']
+        self.save_registry()
+        snapshot = copy.deepcopy(self.ledger)
+        self.write('ledger.json', snapshot)
+        before = (self.root/'execution-plan.json').read_bytes()
+        baseline = self.check()
+        inputs = [{'nodeId': name, 'repositoryId': 'fixture', 'coverageTier': 'controlled fixture only',
+                   'limits': ['fixture'], 'reviews': [f'evidence/{name}/review.json'],
+                   'behaviorEvidence': {'fixture oracle': [f'evidence/{name}/oracle.json']}}
+                  for name in ['N01', 'N02']]
+        candidate, report = sealer.assemble(self.ledger, inputs, root=self.root, addendum_id='PROD')
+        self.assertEqual(report, baseline)
+        self.assertEqual(self.ledger, snapshot)
+        self.assertEqual(json.loads((self.root/'ledger.json').read_text()), snapshot)
+        self.assertEqual((self.root/'execution-plan.json').read_bytes(), before)
+        candidate_ref = candidate['acceptanceDecisionRegistry']
+        self.assertNotEqual(candidate_ref, snapshot['acceptanceDecisionRegistry'])
+        candidate_tasks = json.loads((self.root/candidate_ref['path']).read_text())['addenda'][0]['tasks']
+        self.assertEqual([task['status'] for task in candidate_tasks], ['accepted', 'accepted'])
+        self.assertEqual(candidate_tasks[0]['receipt'], 'old-notes.md')
+        receipt = candidate_tasks[1]['acceptanceNode']['acceptanceReceipt']
+        self.assertIn({'nodeId': 'N01', 'receipt': candidate_tasks[0]['acceptanceNode']['acceptanceReceipt']},
+                      json.loads((self.root/receipt['path']).read_text())['acceptedPrerequisites'])
+
+    def test_addendum_sealer_will_not_rebind_a_stale_document(self):
+        self.prepare_addendum()
+        self.write('addendum.md', 'changed contract\n')
+        with self.assertRaisesRegex(ValueError, 'Addendum document drift'):
+            sealer.assemble(self.ledger, [{'nodeId': 'N01'}], root=self.root, addendum_id='PROD')
+        self.assertFalse((self.root/'docs').exists())
 
 
 if __name__ == '__main__':

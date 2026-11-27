@@ -1843,7 +1843,11 @@ export async function loopAgentSteps(
       },
     })
   }
-  reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
+  reconcileInterruptedBackgroundAgentIntents(
+    initialAgentState,
+    clock.now(),
+    params.journalReader,
+  )
   // A new turn may inspect older work without continuing it. In particular,
   // never launch an interrupted child or append its respawn marker based on
   // a retained journal suffix alone.

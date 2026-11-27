@@ -100,7 +100,7 @@
       "title": "Product audit fixes: security, cost, UX and parity with reference CLIs",
       "document": {
         "path": "docs/execution/body-roadmap/product-audit-addendum.md",
-        "sha256": "395570615c46db6106d17b9842fb65b1c3027051abad77482d5342b6e8570a4f"
+        "sha256": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
       },
       "sourceInspection": {
         "path": ".agents/sessions/product-audit-2026-11-12/REPORT.md",
@@ -148,15 +148,151 @@
       "tasks": [
         {
           "id": "N01",
-          "status": "implemented-partial",
+          "status": "accepted",
           "prerequisites": [],
-          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N01.md"
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N01.md",
+          "acceptanceNode": {
+            "nodeId": "N01",
+            "parentCardId": null,
+            "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+            "prerequisites": [],
+            "status": "accepted",
+            "acceptedPrerequisites": [],
+            "sourceContractHashes": {
+              "agents/__tests__/base2-progressive-tool-disclosure.test.ts": "99bf9175c3479925545168788b1106978b4ce9359216dd1fa0fc884c7c82d312",
+              "agents/base2/base2.ts": "ccef6d2d6000c6cdf21e99398fb06f1ad7ba9e6c2f504073c696ab23dc0c3dab",
+              "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+              "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
+              "cli/src/components/__tests__/message-block.completion.test.tsx": "5d10b177bd7a89f2ecbacb9cee0a9a2e629369be953f852adb9ef29f00af2033",
+              "cli/src/hooks/helpers/__tests__/send-message.test.ts": "fdf10a5a3f1634f2d23bc9ad5a90270651173c5d789b2932d199a17d2335e02b",
+              "cli/src/hooks/helpers/send-message.ts": "d9075e618c240dddb6fd3361593b9eb3cb76bcf64a17123949e7e16c981b0528",
+              "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+              "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+              "packages/agent-runtime/src/__tests__/cache-token-aggregation.test.ts": "40442097840fd83edeca7a6b4c11c420b1c2b13fc417ff697e00b06184c0a2e2",
+              "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts": "e8e2f3f3193ef6cbb0f935b4df0859cb1ceef9b907b396eaa869d4c445dd6b4d",
+              "packages/agent-runtime/src/__tests__/main-prompt.test.ts": "96f2bfee9fa516c90e577e0cb71e9059a3f2d5a39ee7ad8c3ae66561e5f71ea1",
+              "packages/agent-runtime/src/__tests__/plan-mode-dispatch.test.ts": "0d34f561568dd42e3f39e45b5abced2abde936c80ea473fa5c06c4412a06a9c9",
+              "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
+              "packages/agent-runtime/src/system-prompt/__tests__/prompts-ledger.test.ts": "0260ebece7991331eb18407845aff70f85ead7a77d40bdd5173716977a3f4304",
+              "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+              "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
+              "sdk/src/__tests__/llm-cache-control-wire.test.ts": "df383f129d74483051640419f1c917943e9c96f98d9581eb447c8bc5efd0cfb9",
+              "sdk/src/impl/agent-runtime.ts": "500745e9d51947176cb9614673a49064448b9dcf35ae19beef0c6443c91a2b19",
+              "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
+              "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956"
+            },
+            "backend": "ts",
+            "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+            "coverageTier": "PROD N01 (2026-11-24 practical scope): local fake-provider prompt-cache wire behavior, shipped base2 plan/execute marked tool prefixes, plan mutation refusal, and complete-usage-only CLI cache display.",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N01/accepted/20261127T074332254143Z-manifest.json",
+            "acceptedAt": "2026-11-27T07:43:32.259350+00:00",
+            "verification": {
+              "independentReviews": [
+                {
+                  "reviewer": "prod-approval-successor",
+                  "implementationOwners": [
+                    "/root",
+                    "prod-exact-wire-fixes"
+                  ],
+                  "scope": "PROD N01 (2026-11-24 practical scope): local fake-provider prompt-cache wire behavior, shipped base2 plan/execute marked tool prefixes, plan mutation refusal, and complete-usage-only CLI cache display.",
+                  "decision": "approve",
+                  "evidence": {
+                    "path": ".tmp/b16-final/implementation-r2/N01.json",
+                    "sha256": "c266b725bf605fc22e9d1cdd7f717b33073fa49d5b4a74d82ad3bbbd55f3ee52"
+                  }
+                }
+              ],
+              "requiredCommandCount": 2
+            },
+            "risks": [
+              "Local loopback and selected packet-bound source only; no claim of identical full prompts, real-provider routing, cache thresholds or real cache hits. This is an original independent opinion, not promotion."
+            ],
+            "addendumId": "PROD",
+            "contextContractHashes": {
+              ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+              ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+              "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
+            },
+            "acceptanceReceipt": {
+              "path": "docs/execution/body-roadmap/evidence/N01/accepted/20261127T074332254143Z-acceptance.json",
+              "sha256": "0381828fa0b3a629d0872c97194ad4b605965b8ba83ae5774149dd8168e6d990"
+            }
+          }
         },
         {
           "id": "N02",
-          "status": "implemented-partial",
+          "status": "accepted",
           "prerequisites": [],
-          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N02.md"
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N02.md",
+          "acceptanceNode": {
+            "nodeId": "N02",
+            "parentCardId": null,
+            "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+            "prerequisites": [],
+            "status": "accepted",
+            "acceptedPrerequisites": [],
+            "sourceContractHashes": {
+              ".tmp/b16-final/product-fixtures/n02-mount.py": "496b2252c5e6c47432f245053863527f57c4c02f87394e39474a4c2af75cc1b7",
+              ".tmp/b16-final/transport-v2/probe.py": "0f4291625b7da95a2f39e02c44908a4cd3f45595e524ad4c8c4c9956c4114a12",
+              ".tmp/n02-transport/probe.py": "eb07aa47d3b923052fdc05268c13802aa1d1b0fd83c7ab49e034a6371e402d91",
+              "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+              "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
+              "cli/src/components/__tests__/project-trust-screen.test.tsx": "05079adb994b528f2140b712b3da23b99cedac9d6e7fac1da4f0296aa8446e2b",
+              "cli/src/components/project-trust-screen.tsx": "5bfc07bf97f3950e57183553d0528cbf064aaf15c5b9e325329bcb855fcecc8c",
+              "cli/src/index.tsx": "46fd65864f0406af6e52b4115742d5d784c80861bc0bd29bf2bd8380ca2196a5",
+              "cli/src/utils/__tests__/project-trust-gate.test.ts": "95436dc1a3c261addba2d48daa142c965c052bf783770d2dea63babb15f2506b",
+              "cli/src/utils/__tests__/project-trust-launch.test.ts": "03fcc6225f486d6b8a479610ad7524423af50fb8aae537c2b7e6ee4db47cfddd",
+              "cli/src/utils/project-trust-gate.ts": "933d8ff6b6fbe8db1c0b1d19018624439d5253646b7f4fbe20931f7b67e38ba6",
+              "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+              "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+              "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
+              "sdk/src/__tests__/host-config.test.ts": "0ab364381dd0345519372da91444529c7652372d75128a797b72c8ae75ce2663",
+              "sdk/src/__tests__/project-trust-gate.test.ts": "795bd91d8b1c1a38ba60a215ab8c48201d5eee225166fdbde25e3fe76c5945d1",
+              "sdk/src/__tests__/provider-config.test.ts": "b6fcec3738b957afb6bcef3f23258d7ee3eee3dd0d09da5d168ac3a37464ed0a",
+              "sdk/src/__tests__/run-project-trust.test.ts": "67b6bc8c9bb6507e00f32b7db91bfcddd674fca6508d8b5ce4ec5250f9834822",
+              "sdk/src/host-config.ts": "ec4c1a97119ea1604066e906fa4a2a1d53cb3d76aa982511421468635e5491be",
+              "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
+              "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956"
+            },
+            "backend": "ts",
+            "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+            "coverageTier": "PROD N02: local project-trust producer and consumer gates, mounted startup and config-hash re-prompt, persisted explicit flag grants, and real headless/ACP transport behavior with synthetic credentials only.",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N02/accepted/20261127T074332254143Z-manifest.json",
+            "acceptedAt": "2026-11-27T07:43:32.263799+00:00",
+            "verification": {
+              "independentReviews": [
+                {
+                  "reviewer": "prod-approval-transport-r2",
+                  "implementationOwners": [
+                    "/root",
+                    "prod-exact-wire-fixes"
+                  ],
+                  "scope": "PROD N02: local project-trust producer and consumer gates, mounted startup and config-hash re-prompt, persisted explicit flag grants, and real headless/ACP transport behavior with synthetic credentials only.",
+                  "decision": "approve",
+                  "evidence": {
+                    "path": ".tmp/b16-final/implementation-r2/N02.json",
+                    "sha256": "d283b9e9c5d63ddbf8e925b1b85fe15ab5b0d40c3da78b34d8507b90ca2c9667"
+                  }
+                }
+              ],
+              "requiredCommandCount": 4
+            },
+            "risks": [
+              "Credential-free local fixtures with dummy canaries. The transport matrix does not exercise model-driven hook dispatch or project MCP startup; no OS sandbox or unrestricted security claim. This is an original independent opinion, not promotion."
+            ],
+            "addendumId": "PROD",
+            "contextContractHashes": {
+              ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+              ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+              "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
+            },
+            "acceptanceReceipt": {
+              "path": "docs/execution/body-roadmap/evidence/N02/accepted/20261127T074332254143Z-acceptance.json",
+              "sha256": "6e46e9d9c347d04d09cae29d147ce6e1b957b1b7c974a54043365a7256290254"
+            }
+          }
         },
         {
           "id": "N03",
@@ -206,11 +342,81 @@
         },
         {
           "id": "N10",
-          "status": "implemented-partial",
+          "status": "accepted",
           "prerequisites": [
             "B30"
           ],
-          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N10.md"
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N10.md",
+          "acceptanceNode": {
+            "nodeId": "N10",
+            "parentCardId": null,
+            "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+            "prerequisites": [
+              "B30"
+            ],
+            "status": "accepted",
+            "acceptedPrerequisites": [
+              "B30"
+            ],
+            "sourceContractHashes": {
+              ".github/workflows/eval-pr-subset.yml": "1cafd46c145b6e44d52e8c8b1cf07388878f672223b6d550942c72265cf9dee1",
+              ".github/workflows/nightly-evals.yml": "9876448f482d4d103acd19318624975c0ac7585803794ce2704a08c9968f35d4",
+              "agents/base2/base2.ts": "ccef6d2d6000c6cdf21e99398fb06f1ad7ba9e6c2f504073c696ab23dc0c3dab",
+              "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+              "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
+              "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+              "evals/__tests__/package-scripts.test.ts": "95186dceacb0908c7f47e60367ffe6cc0c0f7e562190787313a872e9d78bfde4",
+              "evals/buffbench/__tests__/main-nightly.test.ts": "1919e17113e5deb2e20d7dc74095178ee9dca168ee50ef45cd0f4585fa7c07ba",
+              "evals/buffbench/__tests__/quality-metrics.test.ts": "998f1aa846456f9801eb40dae05cd0e126a7b09bb87d79a3087ff0b6055d4e06",
+              "evals/buffbench/__tests__/regression-gate.test.ts": "d89114e5be63001c2e5ca49a6248ed10ad0f6a1346c800b1e2e92175789f67a1",
+              "evals/buffbench/main-nightly.ts": "a6ba3d2db62b9b1e460cd28910f79396ac5bf2065d3d6094bca47eef2a42cf7e",
+              "evals/buffbench/quality-metrics.ts": "491d118b8bf3ecb226f2f3f8795687fd664bc6723d6156fb93d93fcb56b48dec",
+              "evals/buffbench/regression-gate.ts": "9afd6a84598f3031cfe73eb79d6028456ba4f9476e987ae26b8263238a291bac",
+              "evals/buffbench/run-buffbench.ts": "2695223d877f97df6f8fce2255a3055e4a332fcac573a70df1c42ba8d70fcc7a",
+              "evals/buffbench/static-prompt-tokens.ts": "5087674d1b2698a3f8a5bea9bdff4683986f25579d498d770ac7d0b15baa3b6f",
+              "evals/package.json": "9e43f5008bb4383f9b8bbf04253a465642bc326b9a24660552a55d0449c26cb7",
+              "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+              "scripts/__tests__/release-eval-workflows.test.ts": "057995ae6bc7b686cf28fe0f46cd3479b707d26d43b9857463a00c7ba1335096",
+              "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e"
+            },
+            "backend": "ts",
+            "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+            "coverageTier": "PROD N10 (2026-11-24 practical scope): offline base2 nightly and exact two-task PR dry runs, injected-runner artifact/metrics and deliberate regression gate, and static package-script/workflow verification.",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N10/accepted/20261127T074332254143Z-manifest.json",
+            "acceptedAt": "2026-11-27T07:43:32.270400+00:00",
+            "verification": {
+              "independentReviews": [
+                {
+                  "reviewer": "prod-approval-successor",
+                  "implementationOwners": [
+                    "/root",
+                    "prod-exact-wire-fixes"
+                  ],
+                  "scope": "PROD N10 (2026-11-24 practical scope): offline base2 nightly and exact two-task PR dry runs, injected-runner artifact/metrics and deliberate regression gate, and static package-script/workflow verification.",
+                  "decision": "approve",
+                  "evidence": {
+                    "path": ".tmp/b16-final/implementation-r2/N10.json",
+                    "sha256": "9f93c3c53b4f2fbd4becc0e71b68eebf6ac3086923f47c59cbd7f274375bb5e7"
+                  }
+                }
+              ],
+              "requiredCommandCount": 3
+            },
+            "risks": [
+              "Offline practical scope only: no provider-backed eval, hosted workflow execution, act run or live model-quality claim. This is an original independent opinion, not promotion."
+            ],
+            "addendumId": "PROD",
+            "contextContractHashes": {
+              ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+              ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+              "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
+            },
+            "acceptanceReceipt": {
+              "path": "docs/execution/body-roadmap/evidence/N10/accepted/20261127T074332254143Z-acceptance.json",
+              "sha256": "12d85424223ca6f36add17aee7c1dcee7091b210e75be0290fb8671431502562"
+            }
+          }
         },
         {
           "id": "N11",
@@ -221,10 +427,90 @@
         },
         {
           "id": "N12",
-          "status": "planned",
+          "status": "accepted",
           "prerequisites": [
             "B02"
-          ]
+          ],
+          "receipt": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/verification.json",
+          "acceptanceNode": {
+            "nodeId": "N12",
+            "parentCardId": null,
+            "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+            "prerequisites": [
+              "B02"
+            ],
+            "status": "accepted",
+            "acceptedPrerequisites": [
+              "B02"
+            ],
+            "sourceContractHashes": {
+              "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+              "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
+              "cli/src/__tests__/cli-args.test.ts": "c01d00653a416577089e8ed710445420802be7c6e0dcad45a1d8e5fb62dc59d0",
+              "cli/src/__tests__/run-command.test.ts": "cdefafaf19a8965762097dc3cbaddcc92ae62906dbab83f37ccb7bd3d19921b3",
+              "cli/src/__tests__/run-continue-wire.test.ts": "8a64c745c8706329f0358b1c79ba0e93569c6ca78345c736275b806a10155740",
+              "cli/src/__tests__/run-output-schema.test.ts": "9be57e7cdad3dbb16577cd56e4c0be50d5bdab579cbc8775be1f2e31fd725d48",
+              "cli/src/binary-entry.ts": "d7d7f9a9fb00cf0574754842683210429364f43da27a2b4476f7f6f6e6d40273",
+              "cli/src/cli-args.ts": "73e15a22f0fef2e97a62d1f7f735ee8c9e9abd5665e9e97d58744ee21c1907d8",
+              "cli/src/commands/run-command.ts": "b9d8e889c6517b80dcf56cc0306956631fafd34e445fe6d311260aef4758ec76",
+              "cli/src/hooks/use-send-message.ts": "c8513fccabc5363a7a5eb70873ed719d2d9e894ebd2a2d7e00a10df3cedf0e40",
+              "cli/src/utils/headless-sessions.ts": "ddc2db9b96ff6cbbd732b61b53dc42963aeee1b067a5a956cc7a199c139d9ed2",
+              "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+              "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+              "sdk/README.md": "420da5e8f5e705c8c56b261687f2d5b3c856365ebd1780cfdd946af434b0b694",
+              "sdk/e2e/readme-examples.test.ts": "6300fdeb1889b421d5ee79f2672dd5e724a9e7020595efd0709fa79e63d15d87",
+              "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
+              "sdk/src/__tests__/acp-agent-p1t2.test.ts": "de99a5d386b4d11cb3bf689e1faf7282f209462bb155b0fdb141b92849e32d28",
+              "sdk/src/__tests__/acp-agent.test.ts": "164effb83c44d60395edc56021b741f7a94e15a39b05fb4f45f448a7d56fc2ce",
+              "sdk/src/__tests__/acp-client.test.ts": "df9c8111c0e80e8f52f8216473f41e559bdcac2ae593766f6bef4308e0fc7e11",
+              "sdk/src/__tests__/acp-extensions.test.ts": "d42524e546555deb024b8920f5e11fd796d58b294a30de47b3b801ba817231c3",
+              "sdk/src/__tests__/acp-outcomes.test.ts": "afef7a65bb163d70a41d95a64c0c82eac5cc1501690a498b415328740fe243e5",
+              "sdk/src/__tests__/acp-prompt-content-wire.test.ts": "356560af7d490d6f7b883014c8c470511bfb7243e610398f540337f746d815e5",
+              "sdk/src/__tests__/acp-session-data.test.ts": "1efa6c66d785b603cd1386426f938510c1e3fc3b64aeafdf00bb27ce7ce98a87",
+              "sdk/src/client.ts": "e0c56f2f36d4921129f7b57e9e9ccb8523046a75b15c6242aaf09ff5945d9968",
+              "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
+              "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
+              "sdk/src/services/acp/__tests__/ext-methods.test.ts": "f7e519b75dfe856b864722ecc1447694e4c729a4965798ce373d32bf60a77db2",
+              "sdk/src/services/acp/acp-agent.ts": "a6adb379a9252c1be7108aecf5f95de199401bffda9b63b40dcc15d7a4b2a53e"
+            },
+            "backend": "ts",
+            "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+            "coverageTier": "PROD N12: Linux local source CLI exact plain piped schema output, fresh-process headless continuation and TUI readiness parity, ACP file-link intake, and executable SDK README examples using an owned loopback provider.",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N12/accepted/20261127T074332254143Z-manifest.json",
+            "acceptedAt": "2026-11-27T07:43:32.280900+00:00",
+            "verification": {
+              "independentReviews": [
+                {
+                  "reviewer": "prod-approval-successor",
+                  "implementationOwners": [
+                    "/root",
+                    "prod-exact-wire-fixes"
+                  ],
+                  "scope": "PROD N12: Linux local source CLI exact plain piped schema output, fresh-process headless continuation and TUI readiness parity, ACP file-link intake, and executable SDK README examples using an owned loopback provider.",
+                  "decision": "approve",
+                  "evidence": {
+                    "path": ".tmp/b16-final/implementation-r2/N12.json",
+                    "sha256": "4329d5c7b76f668b4b59c018961f6078ab82a2d1ac06c74fa36f6a109b53830d"
+                  }
+                }
+              ],
+              "requiredCommandCount": 3
+            },
+            "risks": [
+              "Local Linux source execution; no live credentials, remote file dereference, platform or packaged-binary assurance, or broader continuation/restart guarantee. This is an original independent opinion, not promotion."
+            ],
+            "addendumId": "PROD",
+            "contextContractHashes": {
+              ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+              ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+              "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
+            },
+            "acceptanceReceipt": {
+              "path": "docs/execution/body-roadmap/evidence/N12/accepted/20261127T074332254143Z-acceptance.json",
+              "sha256": "5841076c6720b9593a26216d2c1161a825eb7c21d5cfc2205534f43dee6c711f"
+            }
+          }
         },
         {
           "id": "N13",

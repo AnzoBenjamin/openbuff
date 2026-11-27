@@ -1,5 +1,6 @@
 import { resolvePlaybookGateMode } from '@codebuff/agent-runtime/memory/playbook-gate'
 import { nativeToolObservationInputHash } from '@codebuff/agent-runtime/tools/tool-executor'
+import { registerJoinedSupervisedSpawn } from '@codebuff/agent-runtime/tools/handlers/tool/spawn-agent-utils'
 import { toolParams } from '@codebuff/common/tools/list'
 import {
   LOCAL_MODE_USER_EMAIL,
@@ -71,6 +72,9 @@ import type {
 } from '@codebuff/common/types/contracts/database'
 
 const databaseAgentCache: DatabaseAgentCache = new Map()
+
+const buildJoinedSpawnSupervised: typeof buildDefaultSpawnSupervised = (...args) =>
+  registerJoinedSupervisedSpawn(buildDefaultSpawnSupervised(...args))
 
 const PROCESS_SUPERVISION_ON = /^(1|true|yes|on)$/i
 const PROCESS_SUPERVISION_OFF = /^(0|false|no|off)$/i
@@ -773,6 +777,7 @@ export function getAgentRuntimeImpl(
     AgentRuntimeDeps,
     | 'journalWriter'
     | 'journalReader'
+    | 'retainDetachedAgent'
     | 'onPlaybookGateOutcome'
     | 'onNativeToolObservation'
     | 'processSupervision'
@@ -1069,6 +1074,7 @@ export function getAgentRuntimeImpl(
     // byte-identical to today.
     ...(journalWriter ? { journalWriter } : {}),
     ...(journalReader ? { journalReader } : {}),
+    ...(params.retainDetachedAgent ? { retainDetachedAgent: params.retainDetachedAgent } : {}),
 
     // Fire-and-forget playbook counter persistence; absent = no reporting.
     ...(onPlaybookGateOutcome ? { onPlaybookGateOutcome } : {}),
@@ -1110,7 +1116,7 @@ export function getAgentRuntimeImpl(
             // own apiKey/logger/trackEvent/database stubs are stamped into
             // every bridged request; scoped client deps (sendAction,
             // requestToolCall, ...) flow through unchanged.
-            buildDefaultSpawnSupervised(
+            buildJoinedSpawnSupervised(
               buildSupervisedChildEnvSeedFromSystemEnv(
                 params.hostServices?.provider.credentialEnvironment,
                 params.hostServices !== undefined,
@@ -1206,6 +1212,13 @@ export function getAgentRuntimeImpl(
                     fetch: globalThis.fetch,
                     startAgentRun:
                       executionScope?.startAgentRun ?? localStartAgentRun,
+                    ...(executionScope && journalWriter?.appendDurable && request.child && request.ancestorRunIds?.at(-1) ? {
+                      journalWriter,
+                      journalOwner: {
+                        id: `supervised:${request.child.agentId}`,
+                        parentRunId: request.ancestorRunIds.at(-1)!,
+                      },
+                    } : {}),
                     finishAgentRun: localFinishAgentRun,
                     addAgentStep: localAddAgentStep,
                     fetchAgentFromDatabase: localFetchAgentFromDatabase,

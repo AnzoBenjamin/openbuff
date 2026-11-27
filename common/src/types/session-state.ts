@@ -566,6 +566,8 @@ export type AgentState = {
     startedAt: number
     completedAt?: number
     error?: string
+    /** Original stream holding the durably joined settlement, when available. */
+    parentRunId?: string
     childRunId?: string
     receipt?: AgentReceipt
   }>

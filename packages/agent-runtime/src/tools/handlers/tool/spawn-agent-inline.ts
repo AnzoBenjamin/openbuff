@@ -22,6 +22,7 @@ import { buildCompactionArchivePointers } from '../../../util/context-archive'
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   acquireWorkspacePathLease,
+  afterSubagentCleanup,
   releaseWorkspacePathLease,
 } from '../../../util/workspace-path-leases'
 
@@ -490,12 +491,12 @@ export const handleSpawnAgentInline = (async (
     }
     throw error
   } finally {
-    // The lease must be released on EVERY path: execute throw, settle throw,
-    // and success alike.
-    releaseWorkspacePathLease(
-      parentAgentState,
-      leaseId,
-      (params.clock ?? realClock).now(),
-    )
+    afterSubagentCleanup(childAgentState, () => {
+      releaseWorkspacePathLease(
+        parentAgentState,
+        leaseId,
+        (params.clock ?? realClock).now(),
+      )
+    })
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

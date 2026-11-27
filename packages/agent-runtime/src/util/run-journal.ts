@@ -511,6 +511,34 @@ export type RunJournalBatching = {
   maxBatchDelayMs?: number
 }
 
+const liveJournalRuns = new Map<string, Map<string, number>>()
+const childJournalOwners = new WeakMap<
+  JournalWriter,
+  (owner: string, parentRunId?: string) => () => void
+>()
+const markJournalRun = (file: string, runId: string) => {
+  const runs = liveJournalRuns.get(file) ?? new Map<string, number>()
+  liveJournalRuns.set(file, runs)
+  runs.set(runId, (runs.get(runId) ?? 0) + 1)
+  return () => {
+    const readers = (runs.get(runId) ?? 1) - 1
+    if (readers === 0) runs.delete(runId)
+    else runs.set(runId, readers)
+    if (runs.size === 0) liveJournalRuns.delete(file)
+  }
+}
+
+/** A detached child's ownership is private to a built-in journal, not a serialized claim. */
+export function retainJournalForChild(
+  writer: JournalWriter | undefined,
+  owner: string,
+  parentRunId?: string,
+): (() => void) | undefined {
+  return writer
+    ? childJournalOwners.get(writer)?.(owner, parentRunId)
+    : undefined
+}
+
 const readPlanJournalOperations = new WeakMap<
   JournalWriter,
   {
@@ -1473,12 +1501,39 @@ export function createRunJournal(params: {
   // never observes a partially-applied batch.
   let pending: Array<{ runId: string; event: JournalEvent }> = []
   let flushTimer: ReturnType<typeof setTimeout> | null = null
-  // Connection-lifetime flag (P2-T7 background-children close race): once
-  // close() has run, the sqlite connection is gone. A detached background
-  // subagent launched during the closed turn can outlive it and still
-  // journal under its own runId — every post-close write must be a
-  // fail-open no-op, never a throw on the closed connection.
+  // Physical state of the connection, distinct from the parent's close request.
   let closed = false
+  const childOwners = new Set<string>()
+  const retainedRunReleases = new Map<string, () => void>()
+  const includeLiveRun = (runId: string) => {
+    if (
+      path !== ':memory:' &&
+      childOwners.size &&
+      !retainedRunReleases.has(runId)
+    )
+      retainedRunReleases.set(runId, markJournalRun(path, runId))
+  }
+  let closing:
+    | { promise: Promise<void>; resolve(): void; reject(error: unknown): void }
+    | undefined
+  let failedDrain: { error: unknown } | undefined
+  const closeIfUnowned = () => {
+    const request = closing
+    if (!request || closed || childOwners.size) return
+    try {
+      try {
+        drainPending()
+      } finally {
+        clearFlushTimer()
+        closed = true
+        db.close()
+      }
+      if (failedDrain) request.reject(failedDrain.error)
+      else request.resolve()
+    } catch (error) {
+      request.reject(error)
+    }
+  }
 
   const clearFlushTimer = (): void => {
     if (flushTimer !== null) {
@@ -1567,6 +1622,7 @@ export function createRunJournal(params: {
           'The run journal could not retain the durable effect event within its byte budget.',
         )
       }
+      includeLiveRun(runId)
       drainPending()
       const seq = insertEvent(runId, event)
       enforceRetention(runId)
@@ -1582,13 +1638,10 @@ export function createRunJournal(params: {
     },
 
     append(runId: string, event: JournalEvent): void {
-      // Fail-open after close: a detached background child that outlives the
-      // turn whose promise chain closed the journal still appends under its
-      // own runId. Dropping the event (instead of throwing on the closed
-      // connection) keeps journaling fail-open — the same contract as the
-      // unopenable-journal path — so a journaling outage can never fail the
-      // background job itself.
+      // A fully closed connection never writes. Admitted detached children
+      // prevent physical closure through their independently held interests.
       if (closed) return
+      includeLiveRun(runId)
       if (batching) {
         pending.push({ runId, event })
         if (pending.length >= batching.maxBatchEvents) {
@@ -1636,6 +1689,10 @@ export function createRunJournal(params: {
      */
     pruneRuns(keepRunIds: string[]): void {
       const keep = new Set(keepRunIds)
+      // Maintenance through another connection must not erase a detached
+      // child's stream while it can still append. Use the shared per-path
+      // process-local owner roster, not the age of the run's first event.
+      for (const run of liveJournalRuns.get(path)?.keys() ?? []) keep.add(run)
       const runIds = db
         .query('SELECT DISTINCT run_id FROM run_events')
         .all() as Array<{ run_id: string }>
@@ -1978,36 +2035,53 @@ export function createRunJournal(params: {
       return undefined
     },
 
-    /**
-     * Slice 4: flush any buffered events, cancel the pending delay timer,
-     * and close the database. Returns a promise so a batched writer can be
-     * awaited before process exit; existing callers that ignore the return
-     * value keep working unchanged.
-     *
-     * Idempotent: a second close() resolves without touching the database.
-     * After close, writes are fail-open no-ops (append drops the event,
-     * flush resolves) so a detached background child that outlives the turn
-     * which closed the journal keeps running — it just stops journaling,
-     * exactly like the unopenable-journal fail-open path.
-     */
-    async close(): Promise<void> {
-      if (closed) return
-      // try/finally (slice-4 hardening): a failing final drain (e.g. SQLITE_BUSY
-      // exhausting the bounded retries inside insertEvent) must still release
-      // the sqlite handle and clear the pending delay timer — otherwise close()
-      // leaks both on the throw path. The async body surfaces that drain
-      // failure as a REJECTED promise — the declared Promise<void> contract
-      // awaited callers and the close-on-throw test rely on — instead of a
-      // synchronous throw that would bypass .catch()/await error handling.
-      try {
-        drainPending()
-      } finally {
-        clearFlushTimer()
-        db.close()
-        closed = true
+    /** Parent close requests physical closure only after the last child settles. */
+    close(): Promise<void> {
+      if (closing) return closing.promise
+      if (closed) return Promise.resolve()
+      let resolve!: () => void
+      let reject!: (error: unknown) => void
+      const promise = new Promise<void>((ok, fail) => {
+        resolve = ok
+        reject = fail
+      })
+      // Parent close durably drains what it has already observed without
+      // closing the connection needed by the admitted child owners.
+      if (childOwners.size) {
+        try {
+          drainPending()
+        } catch (error) {
+          failedDrain = { error }
+          // Report the failed drain when closure completes; this cannot release
+          // a child that still owns the connection.
+        }
       }
+      closing = { promise, resolve, reject }
+      closeIfUnowned()
+      return promise
     },
   }
+  childJournalOwners.set(journal, (owner, parentRunId) => {
+    if (closed || (closing && childOwners.size === 0))
+      throw new Error('Cannot retain a closed run journal for a child.')
+    if (!owner || childOwners.has(owner))
+      throw new Error('Duplicate or empty child journal owner.')
+    childOwners.add(owner)
+    if (parentRunId) includeLiveRun(parentRunId)
+    let live = true
+    return () => {
+      if (!live) return
+      live = false
+      childOwners.delete(owner)
+      if (childOwners.size === 0) {
+        // Flush/close before unpinning so another connection cannot prune an
+        // older stream between a child's last write and release.
+        closeIfUnowned()
+        for (const release of retainedRunReleases.values()) release()
+        retainedRunReleases.clear()
+      }
+    }
+  })
   // Only the specific persistent journal lane can admit this adapter. A
   // generic reader/writer-shaped object cannot mint an admission.
   if (readPlanTail) {

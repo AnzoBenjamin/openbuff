@@ -257,6 +257,8 @@ export type SettledSubagentResult = {
   /** A refused dispatch is distinguishable from a runtime spawn failure. */
   executionRefusal?: Refusal
   cleanup?: CleanupResult
+  childRunId?: string
+  whenCleanupConfirmed?: Promise<void>
   /** Process-level settle outcome (transport truth). When a valid envelope
    * arrived, the child's self-declared `receipt.outcome` is preserved on
    * `receipt` untouched for downstream PR-T1 reconciliation. */
@@ -584,6 +586,12 @@ export async function spawnSettledSubagent(
   const cleanupFinished = new Promise<CleanupResult>((resolve) => {
     resolveCleanup = resolve
   })
+  const cleanupConfirmation = Promise.withResolvers<void>()
+  const withCleanupJoin = (result: SettledSubagentResult) => {
+    if (result.cleanup && result.cleanup.status !== 'complete')
+      Object.defineProperty(result, 'whenCleanupConfirmed', { value: cleanupConfirmation.promise })
+    return result
+  }
   const stdoutProgress = { kept: 0, total: 0 }
   const stderrProgress = { kept: 0, total: 0 }
   type Capture = Awaited<ReturnType<typeof captureStream>>
@@ -741,7 +749,10 @@ export async function spawnSettledSubagent(
           (signal) => signal.result === 'delivered',
         )
         clearTimers()
-        if (result.status === 'complete') managedSupervisedScopes.delete(scope!)
+        if (result.status === 'complete') {
+          managedSupervisedScopes.delete(scope!)
+          cleanupConfirmation.resolve()
+        }
         resolveCleanup(result)
       },
     })
@@ -825,13 +836,19 @@ export async function spawnSettledSubagent(
         : context.execution.prepareTarget({ target })
       if (!prepared.ok)
         return crashResult('spawn_failed', null, { executionRefusal: prepared })
-      const admitted = await prepared.value.admit()
+      const admitted = await prepared.value.admit(params.signal)
       if (!admitted.ok)
         return crashResult('spawn_failed', null, { executionRefusal: admitted })
       const dispatched = prepared.value.dispatchNow(
         admitted.value.permit,
         (input, observer) => {
-          processSignal = input.resourceSignal
+          // This is a dedicated child, not a shared process. Retain the
+          // authenticated resource lifetime and also honor the owning job's
+          // cancellation, which may be narrower than the parent action.
+          params.signal?.throwIfAborted()
+          processSignal = params.signal
+            ? AbortSignal.any([input.resourceSignal, params.signal])
+            : input.resourceSignal
           const capturedAt = processScopeClock.nowMs()
           const remainingMs = () =>
             input.resourceRemainingMs === null
@@ -880,23 +897,23 @@ export async function spawnSettledSubagent(
         const cleanup = scope
           ? await scope.requestStop('adapter-error', true)
           : undefined
-        return crashResult('spawn_failed', exitCode, {
+        return withCleanupJoin(crashResult('spawn_failed', exitCode, {
           ...(cleanup ? { cleanup } : {}),
           ...(dispatched.reason === 'dispatch-failed'
             ? {}
             : { executionRefusal: dispatched }),
-        })
+        }))
       }
     } else attach((params.spawn ?? defaultSpawnSeam)(spawnRequest), scopeId)
   } catch {
     const cleanup = scope
       ? await scope.requestStop('adapter-error', true)
       : undefined
-    return crashResult(
+    return withCleanupJoin(crashResult(
       'spawn_failed',
       exitCode,
       cleanup ? { cleanup } : undefined,
-    )
+    ))
   }
 
   const scheduleAbsolute = (
@@ -962,7 +979,8 @@ export async function spawnSettledSubagent(
       : exitCode === null || exitCode !== 0 || processSignal?.aborted
         ? 'nonzero_exit'
         : undefined
-  if (crashReason !== undefined) return crashResult(crashReason, exitCode, base)
+  if (crashReason !== undefined)
+    return withCleanupJoin(crashResult(crashReason, exitCode, base))
 
   const text = new TextDecoder().decode(stdoutCapture.bytes)
   const lines = text.split('\n')

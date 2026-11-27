@@ -37,6 +37,7 @@ import { formatValidationIssues } from '../../../util/format-validation-issues'
 import { formatValueForError } from '../../../util/format-value'
 import { getEffectiveAgentToolNames } from '../../../util/agent-tool-names'
 import { narrowFilesystemPatterns } from '../../../util/filesystem-scope'
+import { holdForSubagentCleanup } from '../../../util/workspace-path-leases'
 import { mergeAgentReceiptIntoTaskMemory } from '../../../util/task-memory'
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import {
@@ -178,6 +179,8 @@ export function extractSubagentContextParams(
     // points in run-agent-step.ts / run-programmatic-step.ts.
     journalWriter: params.journalWriter,
     journalReader: params.journalReader,
+    retainDetachedAgent: params.retainDetachedAgent,
+    detachedAgentUnavailable: params.detachedAgentUnavailable,
     // AgentRuntimeDeps - Process supervision (P2-T8): the flag plus the
     // injectable supervised-spawn seam ride the context params into
     // executeSubagent; the flag-off path is unchanged.
@@ -3881,22 +3884,26 @@ function createSupervisedCancellationError(agentType: string): Error {
   return error
 }
 
+// Host-only, by function identity: neither an injected seam nor a result or
+// flag on the wire can opt into the built-in supervisor's join contract.
+const joinedSupervisedSpawns = new WeakSet<SpawnSupervisedFn>()
+
+/** Register the SDK-owned default seam, which awaits process and bridge cleanup. */
+export function registerJoinedSupervisedSpawn(
+  spawn: SpawnSupervisedFn,
+): SpawnSupervisedFn {
+  joinedSupervisedSpawns.add(spawn)
+  return spawn
+}
+
 /**
- * Runs one subagent through the injectable supervised-spawn seam and maps
- * the settled result into the SAME `{ agentState, output }` shape (plus the
- * additive `supervisedReceipt` carry) the in-process `loopAgentSteps` path
- * returns, so the existing settle chains (buildRuntimeAgentReceipt →
- * reconcileAgentReceiptIntoParent, lease release, ledger pairing) run
- * unchanged.
+ * Runs one subagent through the supervised-spawn seam and maps the result
+ * into the same shape as `loopAgentSteps`, plus the validated receipt.
  *
- * cancel-softlock fix: `parentSignal` (the parent's own AbortSignal, read
- * off `withDefaults` in executeSubagent) gates the seam call — an
- * already-aborted signal throws BEFORE any child is spawned, otherwise the
- * signal is threaded into the seam as `{ signal }` and a local race gate
- * rejects on abort, so the await can no longer hang forever after the user
- * terminates the run. Every failure observed while the parent signal is
- * aborted is classified as cancellation (see
- * createSupervisedCancellationError).
+ * Pre-abort prevents launch, and mid-abort is forwarded to the supervisor.
+ * Join the SDK-owned seam before classifying cancellation: its promise
+ * includes the bounded process-scope cleanup and transport teardown. An
+ * injected seam might ignore abort, so only those seams use the local race.
  *
  * Receipt mapping contract (P2-T8):
  *  - settle outcome 'ok' (or 'truncated', which still carries the validated
@@ -3916,15 +3923,7 @@ async function runSupervisedSubagent(params: {
   executionIdentity?: SupervisedSpawnRequest['executionIdentity']
   executionHostOperation?: SupervisedSpawnRequest['executionHostOperation']
   spawnSupervised: SpawnSupervisedFn
-  /**
-   * cancel-softlock fix: the PARENT's AbortSignal. When supplied, the seam
-   * is called with `{ signal }` (the supervisor group-kills the child on
-   * abort) AND a local race gate rejects on abort, so this await always
-   * settles: a killed child or a bridge torn down by the kill resolves the
-   * race, and every settle that lands after the parent aborted is
-   * classified as cancellation — never as a crash outcome. Omitted ⇒
-   * byte-identical behavior for older callers.
-   */
+  /** Parent or combined parent/background-job signal; forwarded per call. */
   parentSignal?: AbortSignal
   agentState: AgentState
   logger: Logger
@@ -3971,14 +3970,8 @@ async function runSupervisedSubagent(params: {
     model: agentTemplate.model,
   })
 
-  // Live abort probe (cancel-softlock fix): every cancellation check in this
-  // body re-reads the signal at CALL time through this closure. The signal
-  // can abort at ANY point — before the spawn, during the awaited race
-  // below, or between the race settling and the gate-listener removal — so
-  // the checks must observe the live flag, not the straight-line
-  // control-flow snapshot the pre-spawn guard below would otherwise narrow
-  // `parentSignal` to (the narrowing would type the post-race re-checks as
-  // `false | undefined` and flag `=== true` as an impossible comparison).
+  // Recheck the live signal after the seam; transport failures observed after
+  // parent abort are cancellation, not a crashed child receipt.
   const isParentAborted = (): boolean => parentSignal?.aborted === true
 
   let supervisedTemplate = agentTemplate
@@ -4062,65 +4055,34 @@ async function runSupervisedSubagent(params: {
     throw createSupervisedCancellationError(agentTemplate.id)
   }
 
-  // Local race gate (cancel-softlock fix): a belt-and-braces cancellation
-  // promise so THIS await settles even if a custom seam ignores the threaded
-  // signal. The real kill is the supervisor's abort listener (the seam is
-  // called with `{ signal }` below); this gate only classifies the await.
-  // The listener is removed when the race settles so a parent signal shared
-  // across spawns never accumulates gate listeners (no leak across spawns).
+  // Only unknown seams get a logical cancellation gate. Racing the trusted
+  // seam here would let the caller release a live child's workspace lease.
   let removeCancellationGate: (() => void) | undefined
   let cancellationGate: Promise<never> | undefined
-  if (parentSignal !== undefined) {
-    // Bind the narrowed signal to a local: the executor below runs after
-    // this scope ends, so it must not rely on control-flow narrowing of the
-    // union-typed param.
-    const signal = parentSignal
+  if (parentSignal && !joinedSupervisedSpawns.has(spawnSupervised)) {
     cancellationGate = new Promise<never>((_, reject) => {
-      const onParentAbort = (): void =>
+      const onParentAbort = () =>
         reject(createSupervisedCancellationError(agentTemplate.id))
-      signal.addEventListener('abort', onParentAbort, { once: true })
+      parentSignal.addEventListener('abort', onParentAbort, { once: true })
       removeCancellationGate = () =>
-        signal.removeEventListener('abort', onParentAbort)
+        parentSignal.removeEventListener('abort', onParentAbort)
     })
-  }
-
-  const racers: Array<Promise<SettledSubagentResult>> = [
-    // The seam runs UNAWAITED inside the race: a late seam rejection after
-    // the gate won (e.g. sandbox cleanup racing the kill) must never surface
-    // as an unhandled rejection in the parent.
-    spawnSupervised(
-      request,
-      // Thread the signal as the seam's second argument: the SUPERVISOR's
-      // abort listener does the killing (SIGTERM → SIGKILL group escalation
-      // so shell grandchildren die too) — the child still never observes the
-      // parent signal internally. The options object is present ONLY when a
-      // signal exists; omitted keeps the seam call byte-identical to today.
-      parentSignal !== undefined ? { signal: parentSignal } : undefined,
-    ),
-  ]
-  racers[0].catch(() => {}) // avoid unhandled rejection when the gate wins
-  if (cancellationGate !== undefined) {
-    racers.push(cancellationGate)
-    // Same defensive branch the supervisor keeps on its killed-race promise:
-    // an abort landing in the window between the race settling and the
-    // listener removal below must never surface as an unhandled rejection.
-    cancellationGate.catch(() => {})
   }
 
   let settled: SettledSubagentResult
   try {
-    settled = await Promise.race(racers)
+    // The async closure catches a synchronous seam throw without leaving
+    // an unobserved cancellation gate behind. The race also observes late
+    // rejections after cancellation wins.
+    const spawn = async () =>
+      spawnSupervised(
+        request,
+        parentSignal ? { signal: parentSignal } : undefined,
+      )
+    settled = await (cancellationGate
+      ? Promise.race([spawn(), cancellationGate])
+      : spawn())
   } catch (error) {
-    // Drop the gate listener on EVERY settle path — including the
-    // cancellation throw below — so an aborted parent signal shared across
-    // spawns never accumulates gate listeners.
-    removeCancellationGate?.()
-    // cancel-softlock fix: when the parent signal is aborted, EVERY failure
-    // here is cancellation — the killed child surfaces as an exit-code error
-    // rather than a clean abort, and a racing seam throw during teardown is
-    // transport noise from the kill. Classification MUST win over the
-    // seam-threw degrade below, or the settle chain would record outcome
-    // 'crashed' for a cancelled run.
     if (isParentAborted()) {
       throw createSupervisedCancellationError(agentTemplate.id)
     }
@@ -4142,14 +4104,22 @@ async function runSupervisedSubagent(params: {
         message: `Subagent ${agentTemplate.id} crashed: supervised spawn seam threw: ${errorMessage}`,
       },
     }
+  } finally {
+    removeCancellationGate?.()
   }
-  removeCancellationGate?.()
 
-  // cancel-softlock fix: a settle that lands AFTER the parent aborted is
-  // cancellation regardless of its transport outcome — a killed child
-  // settles as an exit-code error and a bridge torn down by the kill as
-  // missing_output, and neither may ever reach the settle chain as outcome
-  // 'crashed'.
+  if (settled.childRunId) agentState.runId = settled.childRunId
+  if (settled.cleanup && settled.cleanup.status !== 'complete') {
+    holdForSubagentCleanup(agentState, settled.whenCleanupConfirmed)
+    const message = 'Supervised child cleanup is not verified; recovery is required before releasing its workspace scope.'
+    agentState.runOutcome = {
+      termination: 'failed',
+      cause: { code: 'supervised_cleanup_unconfirmed', message },
+    }
+    agentState.taskAcceptance = { status: 'unknown' }
+    return { agentState, output: { type: 'error', message } }
+  }
+
   if (isParentAborted()) {
     throw createSupervisedCancellationError(agentTemplate.id)
   }
@@ -4480,11 +4450,8 @@ export async function executeSubagent(
         taskAcceptance: withDefaults.agentState.taskAcceptance,
       })
       if (parentSignalAborted) {
-        // A prologue throw precedes the guarded seam call inside
-        // runSupervisedSubagent, so no child process can have started — no
-        // librarian clone exists to clean up. Register any child runId
-        // defensively (parity with the in-process abort path) and rethrow so
-        // genuine parent cancellation keeps unwinding the run.
+        // Preserve child-run correlation when cancellation unwinds the
+        // parent. The SDK-owned seam has already joined its cleanup here.
         if (withDefaults.agentState.runId) {
           parentAgentState.childRunIds.push(withDefaults.agentState.runId)
         }

@@ -1385,14 +1385,18 @@ describe('B20 owned Bun process scope', () => {
       (scope) => scope.scopeId === result.cleanup?.scopeId,
     )!
     expect(scope).toBeDefined()
+    let cleanupConfirmed = false
+    void result.whenCleanupConfirmed?.then(() => { cleanupConfirmed = true })
     recovered = true
     exited = true
     for (const resolve of probes) resolve(observation())
     await Bun.sleep(1)
     expect(scope.currentCleanup()).toBe(result.cleanup)
     expect(result.cleanup?.status).toBe('unknown')
+    expect(cleanupConfirmed).toBe(false)
     resolveExit(0)
     const recovery = await scope.retryCleanup(true)
+    expect(cleanupConfirmed).toBe(true)
     expect(recovery.status).toBe('complete')
     expect(recovery.selectedLimitSatisfied).toBe(false)
     expect(result.cleanup?.selectedLimitSatisfied).toBe(false)

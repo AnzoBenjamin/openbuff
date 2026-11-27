@@ -43,6 +43,9 @@ import { z } from 'zod/v4'
 
 import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 import { authenticateReadFilesItem } from '../util/authenticated-read-source'
+import { retainJournalForChild } from '../util/run-journal'
+import { readSupervisedJournalAppend } from './supervised-journal'
+import type { JournalWriter } from '@codebuff/common/types/contracts/agent-runtime'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 
 import {
@@ -200,6 +203,7 @@ export type ParentBridgeHandlers = Partial<
  */
 export type SupervisedBridgeHandlerTable = ParentBridgeHandlers & {
   readonly bridgeNonce: string
+  readonly journalOwnership?: { initialRunId(): string | undefined; release(): void }
   /**
    * Cancels every in-flight `promptAiSdkStream` iterator this table is
    * currently collecting: it aborts the rehydrated per-collection
@@ -475,6 +479,10 @@ export type SupervisedBridgeHandlerDeps = {
   trackEvent: TrackEventFn
   fetch: typeof globalThis.fetch
   startAgentRun: StartAgentRunFn
+  /** Only set for a parent-authenticated actor-registration scope. */
+  journalWriter?: JournalWriter
+  /** A trusted host-bound ownership key, not a wire field. */
+  journalOwner?: { id: string; parentRunId: string }
   finishAgentRun: FinishAgentRunFn
   addAgentStep: AddAgentStepFn
   fetchAgentFromDatabase: FetchAgentFromDatabaseFn
@@ -835,6 +843,23 @@ export function buildSupervisedBridgeHandlers(
   const readProjectId =
     options?.readCapabilityProjectId ?? options?.readCapabilityIssuer?.projectId
   const issuedReadRunIds = new Set<string>()
+  const writer = deps.journalWriter
+  const journalOwner = deps.journalOwner
+  const appendDurable = journalOwner && writer?.appendDurable?.bind(writer)
+  const retainedRuns: (() => void)[] = []
+  let releasedJournal = false
+  let initialRunId: string | undefined
+  if (appendDurable && journalOwner) {
+    const release = retainJournalForChild(writer, journalOwner.id, journalOwner.parentRunId)
+    if (release) retainedRuns.push(release)
+  }
+  const journalOwnership = appendDurable ? {
+    initialRunId: () => initialRunId,
+    release() {
+      releasedJournal = true
+      for (const release of retainedRuns.splice(0).reverse()) release()
+    },
+  } : undefined
   const ownsReadIssuer = (
     issuer: ReadCapabilityIssuer | undefined,
   ): issuer is ReadCapabilityIssuer =>
@@ -1648,10 +1673,25 @@ export function buildSupervisedBridgeHandlers(
         >),
         apiKey: deps.apiKey,
       } as unknown as Parameters<StartAgentRunFn>[0])
-      if (typeof runId === 'string' && runId.length > 0)
+      if (typeof runId === 'string' && runId.length > 0) {
         issuedReadRunIds.add(runId)
+        if (journalOwnership && journalOwner) {
+          if (releasedJournal) throw new Error('Supervised journal ownership has ended')
+          const release = retainJournalForChild(writer, `${journalOwner.id}:${runId}`, runId)
+          if (release) retainedRuns.push(release)
+          initialRunId ??= runId
+        }
+      }
       return runId
     },
+    ...(appendDurable ? {
+      appendRunJournal: async (raw: unknown) => {
+        const { runId, event } = readSupervisedJournalAppend(raw)
+        if (releasedJournal || !issuedReadRunIds.has(runId)) throw new Error('Supervised journal run is not owned by this bridge')
+        await appendDurable(runId, event)
+        return null
+      },
+    } : {}),
     finishAgentRun: (params) =>
       deps.finishAgentRun({
         ...(rehydrateParams(params, logger, bridgeNonce) as Record<
@@ -1723,6 +1763,7 @@ export function buildSupervisedBridgeHandlers(
   return {
     ...handlers,
     bridgeNonce,
+    ...(journalOwnership ? { journalOwnership } : {}),
     cancelInFlightStreams: () => {
       for (const cancel of activeStreamCancels) {
         try {

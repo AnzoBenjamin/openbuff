@@ -9,7 +9,7 @@
   "evidenceDirectory": "docs/execution/body-roadmap/evidence",
   "acceptanceDecisionRegistry": {
     "path": "docs/execution/body-roadmap/execution-plan.json",
-    "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095"
+    "sha256": "33bc13e1048f46d2d3d27b9df251aa9858516a5fabd3182a24dd32979e9768f0"
   },
   "completionGraph": {
     "schemaVersion": 2,
@@ -460,12 +460,12 @@
         "common/src/types/dynamic-agent-template.ts": "ebf695dc78f419dd06f21a491933d3199e32953adb355ab3122ce255e743098a",
         "common/src/types/print-mode.ts": "7ac1a68c110f3e364cfbb0585a231250fb525977dc077dc1b2a9007e029eb384",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
-        "common/src/types/session-state.ts": "ff09dcd1f68d7d42b01119d0957fddc72a64e89d632821492ffd570c65fd1274",
+        "common/src/types/session-state.ts": "f9235a261addb0bc742b8ac7fb885ea293224475909dd8f2c2470bdde11e2d01",
         "common/src/util/__tests__/action-outcomes.test.ts": "9cda1e8df37d8618ae143e0b390ebb5c72000a292d0b8814a1b8ac8386f1b5ce",
         "common/src/util/action-outcomes.ts": "c419d25977f661257ae74cb64e0b99b40a71a076ec314a5f9cd222aa3144a78d",
         "docs/execution/body-roadmap/record-renewal-checks.py": "ab2427f2dd0c2cde82cd5aa4a671128cf8d7627479dc4230cb6a6aaefe05b8b3",
         "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
-        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "e76b44fabce726d453b131288af7a6a763440a5f650f48d60d9508e1b101d85f",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "d861cf3bc9c8db9162220734cf379e1c138eaeef00a6c6fdadda1758ec845320",
         "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts": "a3318eb09907e8417f5452922ff90eee67b43c6a6bc9ceacedcf8b82449c81fb",
         "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "fb9994f0737ce5af7e68d3d586cbef0e6d7ecbb86a263ac6dcfcc7a0511f40da",
         "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts": "e8e2f3f3193ef6cbb0f935b4df0859cb1ceef9b907b396eaa869d4c445dd6b4d",
@@ -475,16 +475,16 @@
         "packages/agent-runtime/src/__tests__/spawn-agents-message-history.test.ts": "f42f81fa0e8a4147e9f3e0f64f2d17d5a37bc23bc1019c4882ee5cb9e0eac47d",
         "packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts": "8fdb2fb2a7f6cfce3fc2a23193b2553428248fc2d7e4981a91728927a58abffa",
         "packages/agent-runtime/src/main-prompt.ts": "e90f7953181a6b3e1650bf69c00524bfb5abaf5dbc6ab897d1c659e5fffbcb76",
-        "packages/agent-runtime/src/run-agent-step.ts": "4681e2b77357c8dc4f5d1c3b5498feadb9ed3167d8ca4c5eeef40e7c35c630cf",
+        "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
         "packages/agent-runtime/src/run-programmatic-step.ts": "60eaaadd15e4fc73638c4e3f9a1e687bb3c98ed0277d21bb346fbc51d53f7565",
-        "packages/agent-runtime/src/supervision/child-entry.ts": "a6529cb50e203c70dcf8fdc636d029379bae7e5f921b2768216bb0ada8576032",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "4b7ff1c5e269fc1ca174c4a52797c17f3516499295d8171bb7da72fa159787ae",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts": "9e6d17b1039e193bee3891bfa1b65323acbb3285486b11462ecef31dc6f1746c",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "00b1b4d14f89545ce257f8b10eeaf6f2dcd800055fce1a62a8a61d7af61b7036",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "3b7e63acd059f2f4122fd4d88a56851ef4f95323a90eb531802b4c18eeea9703",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "c25432c46a221a1d56d99bb97b16d3b4758e65c884c53b27dc12676f6e7284dc",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "ea7b35efad51361ab4aa5e3efb5c455107c0be0245435ee838e4fac3c236decf",
         "packages/agent-runtime/src/tools/tool-executor.ts": "9da91d15e07ee6ef13bbe3da4762d381cb9578d5167a14fbfbb64156af6578f8",
         "packages/agent-runtime/src/util/__tests__/run-outcome-replay.test.ts": "e237cfa8a75d311f69f98b58384fdc014c2aea7aa0f56ab9c2132c3a034ce8fb",
-        "packages/agent-runtime/src/util/background-agent-jobs.ts": "fd30c145fd41b7f12d6597e8877063f318f23de5f528108ae6ecba20b9beeac2",
-        "packages/agent-runtime/src/util/run-journal.ts": "613fd901bf24648c64ed99bfc7c81be2f6f30909c4e9bd5d2ab7cb88b5306a39",
+        "packages/agent-runtime/src/util/background-agent-jobs.ts": "66c2ad29faabfba9859f821b76da4ce1aeabe21f8d3713d3869cf3fda2d705f8",
+        "packages/agent-runtime/src/util/run-journal.ts": "f3f655a999e4215715101cd9718001d11399e4660ee11297cd27f9061acd9781",
         "packages/agent-runtime/src/util/run-replay-driver.ts": "e86f6bafeed30a333afb0c3f55dd3a48c0125d49cdbbde468cacda323c9c6f66",
         "scripts/body-fixtures/sdk-terminal-approval-identity.ts": "d25d625926da4ea38afbbd1ebd531aacf1e366a52ea97e8c188583bfa4102bb4",
         "sdk/src/__tests__/acp-outcomes.test.ts": "afef7a65bb163d70a41d95a64c0c82eac5cc1501690a498b415328740fe243e5",
@@ -495,7 +495,7 @@
         "sdk/src/client.ts": "e0c56f2f36d4921129f7b57e9e9ccb8523046a75b15c6242aaf09ff5945d9968",
         "sdk/src/client/acp-client.ts": "3693ba9e481d893b5b146336888f6c28d5b178f3a26cd94257ebc87d62f6158a",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
         "sdk/src/serve/event-bridge.ts": "3a0345beb36fe6d15d7471c547a447ca4fbcebd118e1dc18fab26b68a6be1391",
@@ -510,19 +510,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen source SDK/headless/CLI/journal and production child-receipt builder outcomes",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-runtime-byte-nonauthor",
+            "reviewer": "b16-ordinary-current-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen source SDK/headless/CLI/journal and production child-receipt builder outcomes",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B02-r10-wrapper.json",
-              "sha256": "5411b39827fcbe5b9ad04ea614856c2cf1c2fd5e758a6e83f6d39fc501ddf5ba"
+              "path": ".tmp/b16-final/implementation-r2/B02.json",
+              "sha256": "67b868001c83a8c963389ee1f19050282448b723ab6ffc10f4f5d228332d883a"
             }
           }
         ],
@@ -531,10 +531,10 @@
       "risks": [
         "Source-local actual builder; no separate child process transport certification or paid provider."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.181788+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.692141+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "61bbcc0ff989b0d2d1edbc833cec3ed78e6eb17e237c828d7c659e0b3f96c985"
+        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "6e4c1be0ded89f3cba1287b47cdd4bc4af59068dd56865bc8e75ab7464eff5aa"
       }
     },
     {
@@ -611,11 +611,11 @@
         "sdk/src/impl/failover.ts": "ed686c418db9cd6ddbc4cee446c425162ff1130233fcaa95a60416092a8ad2d6",
         "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
         "sdk/src/impl/model-provider.ts": "4ccb709d148a7e0e21c871a28ab66d803c68907277a4f5ad4fe1a5977fc70170",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
         "sdk/src/retry-config.ts": "37c246586f7f2cf80d0cc1f868825766d2f5a3691a7200c40d8e8c7a7bf41fc0",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
         "sdk/src/serve/event-bridge.ts": "3a0345beb36fe6d15d7471c547a447ca4fbcebd118e1dc18fab26b68a6be1391",
@@ -637,19 +637,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Source SDK dispatch and CLI/headless observed mutation/recovery projection with injected adapter faults; complete frozen B03 current behavior with current local CI",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-runtime-byte-nonauthor",
+            "reviewer": "b16-ordinary-stable-io-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Source SDK dispatch and CLI/headless observed mutation/recovery projection with injected adapter faults; complete frozen B03 current behavior with current local CI",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B03-r10-wrapper.json",
-              "sha256": "f2e136412cde4b6a5aebf0530d23f017023a583186e456f66b974b87a9d7fffa"
+              "path": ".tmp/b16-final/implementation-r2/B03.json",
+              "sha256": "6ed4f94b56badceb5bd7b63470196a71ccac30eeb13efacec5aaaf37d9380508"
             }
           }
         ],
@@ -658,10 +658,10 @@
       "risks": [
         "No OS-level atomicity, installed package or native ownership claim."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.187685+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.699041+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "afad3f2d1236881405a5a0af89c82cdfc1f7848c2fb07c45fad29ec86c7b1928"
+        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "3ec943a529e7dc19a221b5f83ef988887ea4dbf5a755b262ad50d809ef598211"
       }
     },
     {
@@ -756,7 +756,7 @@
         "common/src/tools/results/filesystem.ts": "9c59e808607c6add40e6b51816df5e8be8c6f6c066509d3c66db1a04fdfe9ef0",
         "common/src/types/contracts/client.ts": "08fc66a079222142d946ecd27f64a2b9847775dba776d1ee1a555bffdca5affd",
         "common/src/types/filesystem.ts": "d238a300a708bf5419611ffd7756d9fd4fa6c113ce7c0a1552cd234e9e057467",
-        "common/src/types/session-state.ts": "ff09dcd1f68d7d42b01119d0957fddc72a64e89d632821492ffd570c65fd1274",
+        "common/src/types/session-state.ts": "f9235a261addb0bc742b8ac7fb885ea293224475909dd8f2c2470bdde11e2d01",
         "common/src/util/__tests__/byte-text.test.ts": "2adaaa3f372d80736dd54f5accec016c505292e51bfbd67c32d741378c962085",
         "common/src/util/__tests__/content-hash.test.ts": "3fbdc50b14b00dbd177f1f0042d7897211c9ced3478030af8562a60deda7c40a",
         "common/src/util/byte-text.ts": "fc0bb810db133f64dee92e0cad932c35818287daf4d7646983f40bbed079fa80",
@@ -780,9 +780,9 @@
         "packages/agent-runtime/src/run-programmatic-step.ts": "60eaaadd15e4fc73638c4e3f9a1e687bb3c98ed0277d21bb346fbc51d53f7565",
         "packages/agent-runtime/src/structural-read.ts": "f1e13ac91b97d462a82ed1a33960fd27d5b91f41835660d71421a62950563e52",
         "packages/agent-runtime/src/supervision/__tests__/raw-read-handoff-b05.test.ts": "facf3dfb4a5cae04ddc587a258dafe294d587e99f24a39d8dacdc130a2e8aa82",
-        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "f3ddab5caf67247b4396676a0ad482e1b2c91a72238542b427c3f88aa7c1f00b",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "c08a8fb1077433723c48324aeb2275aa63023bdb05df3b51bc09e472c206947a",
         "packages/agent-runtime/src/supervision/child-bridge-client.ts": "46cbb43757aa5cdd28fbbdbe71106b30332ebad6c5fe1e828994b34b0181f95d",
-        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "da3ba6d12dbbca331aacd62d5b623bfe943fb6820b39d737832639d10a6e7993",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "e5118dcc282590263df980a593947c843bcead2a3fffc990068e81ed381b61ad",
         "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts": "f7f91de82778237e3fde7dc0dbb2b30d1d137f59c05e10876f89f1b1677688d3",
         "packages/agent-runtime/src/tools/handlers/tool/edit-read-state.ts": "3de5e7c03195d3a9b2e9ef45bebf8be956e71bb6704eeb44991998dcce0311a6",
         "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts": "130b241ea397b306590dab3089b1d7cc4546460f552ec0d6d0173aa5a78b07fa",
@@ -803,9 +803,9 @@
         "sdk/src/__tests__/read-files.test.ts": "5c819af36d26a92eebbbe5a5725602da19dc7da5ef463a0c8516e08ba6f63247",
         "sdk/src/__tests__/replace-range.test.ts": "6a4ad0a9c03f6e7ebd1615c79c487d074d454a89e20b829509d609d2fd6ef653",
         "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3f62c259a63f80db611228d47e59251fc2235f57d07bd7d386dff928ebe125de",
-        "sdk/src/impl/agent-runtime.ts": "dcf194c9921175037f4edca4fe9692554e62a33e0cc5be2a5f0b246ee2ebde37",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/impl/agent-runtime.ts": "500745e9d51947176cb9614673a49064448b9dcf35ae19beef0c6443c91a2b19",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/outbound-filter.ts": "f8586bac8a8ecc2c04009c3c8db2c526e9d2fa935dc2816bf8f215b84e805ca3",
         "sdk/src/tools/change-file.ts": "8f20ba2d375d567c61cbffcb00b8ea4bf7258ab5092c6cf2cc7c87e4022ed2ef",
         "sdk/src/tools/concurrency.ts": "d3154988c171b59da65e938c3c1539fb1a96f6fbf1795d913d23b8b1863c7560",
@@ -820,19 +820,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen raw byte, mode, authenticated read-basis and bounded allocation TypeScript scope",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B05/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B05/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-runtime-byte-nonauthor",
+            "reviewer": "b16-ordinary-stable-io-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen raw byte, mode, authenticated read-basis and bounded allocation TypeScript scope",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B05-r10-wrapper.json",
-              "sha256": "d584cee7b641c9c7b19cfe919d966a3428c3f82e60d5eff84db5320e1b742bc3"
+              "path": ".tmp/b16-final/implementation-r2/B05.json",
+              "sha256": "ee8e00b6bf853b1226c0e4ec460417217af603bf6332b13b19efcfbe6b58fe7d"
             }
           }
         ],
@@ -846,10 +846,10 @@
         "path": "docs/execution/body-roadmap/evidence/B05/implementation/activation.json",
         "sha256": "50461c356c916b92e846e5cff496c6b32559303a1af87949dd44acf90c0bfaaa"
       },
-      "acceptedAt": "2026-11-26T22:26:35.195770+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.705446+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B05/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "fbf22b8bbac2139f70d733bf255f2987a797067ae97f3761911715ff1e5fedc2"
+        "path": "docs/execution/body-roadmap/evidence/B05/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "9b7e387709e15252179b3b6a6185a925146d335263d44f4b59e63c9ae3d4f93a"
       }
     },
     {
@@ -891,7 +891,7 @@
         "sdk/src/__tests__/sdk-callback-fixture.ts": "00a18e84a7619eac5b92fb416c9a043766cd2fbfce7039893361e9040d1be4c0",
         "sdk/src/__tests__/workspace-mutation-broker.test.ts": "5b35d5c0cd0164f19079987229f272ca6f0b082e808f9d7716d32482920622bc",
         "sdk/src/client.ts": "e0c56f2f36d4921129f7b57e9e9ccb8523046a75b15c6242aaf09ff5945d9968",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/host-filesystem.ts": "eb60ad3034b3426222a380eaae90c887b21ce1c39ecea71d40f9a8a5e83ffc76",
         "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
         "sdk/src/services/lsp-install-hints.ts": "e084635695138bd77cb681a25d5d76fb58cf441fd015f207e800c443fa87355e",
@@ -914,19 +914,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Pinned Bun 1.4.4/Linux x64, built-in source SDK framed WorkspaceEdit path for rename and concrete edit-only organize-imports/extract, finite contained text/create/move/delete operations through the production local broker, and the separately executed Bun definition/consumer oracle.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T021752111402Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b23-prerequisite-nonauthor",
+            "reviewer": "b16-ordinary-stable-io-review",
             "implementationOwners": [
-              "b23-implementation"
+              "/root"
             ],
             "scope": "Pinned Bun 1.4.4/Linux x64, built-in source SDK framed WorkspaceEdit path for rename and concrete edit-only organize-imports/extract, finite contained text/create/move/delete operations through the production local broker, and the separately executed Bun definition/consumer oracle.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b23-renewal/B06-implementation-review.json",
-              "sha256": "7b8454e299294186b50651bc712f85edef88f8272bee9289540dd4c525f17672"
+              "path": ".tmp/b16-final/implementation-r2/B06.json",
+              "sha256": "eaef7688475cac9f1194a0d2896b669770051db7165654e2031250337d9bd056"
             }
           }
         ],
@@ -937,10 +937,10 @@
         "No command-backed code actions, host confirmation flow, directory operations, true overwrite/ignore/recursive options, other encodings, or broader codemod and refactor adapters are approved.",
         "Zero writes is a preflight guarantee, not all-file atomicity or isolation from external writers. Applied byte evidence is not automatic consumer validation; whole-intent success here includes the separate fixture oracle."
       ],
-      "acceptedAt": "2026-11-27T02:17:52.120581+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.714403+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T021752111402Z-acceptance.json",
-        "sha256": "ad2e2668ebcc69db513f39942962d1addff70148ad380d3bf2afa2e10fa7cedb"
+        "path": "docs/execution/body-roadmap/evidence/B06/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "7dc4b7ebae836f8d1dca58e4e28ef012c44d03f6944a4b0ff7abd954e476c88c"
       }
     },
     {
@@ -982,7 +982,7 @@
         "sdk/src/__tests__/sdk-callback-fixture.ts": "00a18e84a7619eac5b92fb416c9a043766cd2fbfce7039893361e9040d1be4c0",
         "sdk/src/__tests__/workspace-mutation-broker.test.ts": "5b35d5c0cd0164f19079987229f272ca6f0b082e808f9d7716d32482920622bc",
         "sdk/src/client.ts": "e0c56f2f36d4921129f7b57e9e9ccb8523046a75b15c6242aaf09ff5945d9968",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/host-filesystem.ts": "eb60ad3034b3426222a380eaae90c887b21ce1c39ecea71d40f9a8a5e83ffc76",
         "sdk/src/services/language-intelligence.ts": "11bcd7b8e5ab165613adf71eec02b0d51fd8fa3fdc9c1b9abbf78433749ffb16",
         "sdk/src/services/lsp-multiplexer.ts": "600679927f1b10a74ce8e5250bbfd2d182517a136bba7869bb4dcd4c06c41d52",
@@ -1004,19 +1004,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Pinned Bun 1.4.4/Linux x64, participating source SDK/runtime cooperative local broker-backed durable groups (update/create/delete/move), ownership-bound crash and lost-commit-acknowledgement recovery, and the final common/runtime/CLI distinction between proven forward effects and transaction success.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T021752111402Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b23-prerequisite-nonauthor",
+            "reviewer": "b16-ordinary-stable-io-review",
             "implementationOwners": [
-              "b23-implementation"
+              "/root"
             ],
             "scope": "Pinned Bun 1.4.4/Linux x64, participating source SDK/runtime cooperative local broker-backed durable groups (update/create/delete/move), ownership-bound crash and lost-commit-acknowledgement recovery, and the final common/runtime/CLI distinction between proven forward effects and transaction success.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b23-renewal/B07-implementation-review.json",
-              "sha256": "7f909f33ee2f1f4ed37f2beb5a09935d9519d438aebb7257b4a8ba8ca6a0c841"
+              "path": ".tmp/b16-final/implementation-r2/B07.json",
+              "sha256": "ec7fd2956845018174e21e7f1383f83e0534baf61da35766a81a3184ed6d128a"
             }
           }
         ],
@@ -1027,10 +1027,10 @@
         "A stale workspace-broker lock is not automatically taken over; the captured in-broker crash required explicit operator repair. Missing, legacy, divergent or unproven broker state stays recovery-required, not eligible for blind rollback or replay.",
         "No atomic multi-file visibility, isolation from arbitrary writers, arbitrary custom/virtual filesystem recovery, or durable admission beyond configured log capacity. Proven forward effects do not imply a durable group acknowledgement or fresh edit authority."
       ],
-      "acceptedAt": "2026-11-27T02:17:52.117394+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.710201+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T021752111402Z-acceptance.json",
-        "sha256": "deac5d29c39aa1f20674095e2d27847974b0eedff91b4dc8fc4be67e04224d78"
+        "path": "docs/execution/body-roadmap/evidence/B07/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "4d0942390673b0b70700ee763b7ce8a471ed741a8a38425676457c1e94faf270"
       }
     },
     {
@@ -1097,11 +1097,11 @@
         "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
         "sdk/src/impl/model-provider.ts": "4ccb709d148a7e0e21c871a28ab66d803c68907277a4f5ad4fe1a5977fc70170",
         "sdk/src/impl/opencode-go-responses-fetch.ts": "613beb8bfe008368aa8e68d692c0bbcace004054e2ef4f788be39d39b17040ca",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
         "sdk/src/retry-config.ts": "37c246586f7f2cf80d0cc1f868825766d2f5a3691a7200c40d8e8c7a7bf41fc0",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/tools/run-terminal-command.ts": "582bdca4f8f94762e8571ee5ace918fc4b00261a5c5aa04d7fd03e019fc8a83e",
         "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
         "test/fixtures/body/provider-retry.ts": "d306802367c40f470e9c36cca42c12793091250036dc36498b3c3ea781bad896",
@@ -1112,19 +1112,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen key-free TypeScript provider error/retry/routing scope with source-bound current local package checks",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B08/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B08/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-root-provider-eval-nonauthor",
+            "reviewer": "b16-ordinary-stable-consumer-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen key-free TypeScript provider error/retry/routing scope with source-bound current local package checks",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B08-r10-wrapper.json",
-              "sha256": "fe0e8bf1e1aadd78173fdef2e39375bdf0c05cfdbf90382e09471e97a2208f28"
+              "path": ".tmp/b16-final/implementation-r2/B08.json",
+              "sha256": "50cfe2bf65cb3bd8c4bd3a13dc3318b73d0bb26184ce57716a846dd3b32e7004"
             }
           }
         ],
@@ -1133,10 +1133,10 @@
       "risks": [
         "No live provider, billing, cross-platform or hosted CI claim."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.209011+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.719985+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B08/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "72b261db4702cc09c1f8e57e8ddef86460dcfbdb20da196ffb86b73fed3504ee"
+        "path": "docs/execution/body-roadmap/evidence/B08/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "dfc15f6c0a4d6c6789770267b39e948245801b808c47bbdbbe8817b608d28bfb"
       }
     },
     {
@@ -1167,14 +1167,14 @@
         "packages/agent-runtime/src/supervision/__fixtures__/settle-child.ts": "422423f693d344a19a77836a8ca360a373f77e1298096340c4d8b6c70d0800c0",
         "packages/agent-runtime/src/supervision/__tests__/fixtures/b05-child-network-guard.ts": "7dc5d103a56d79b0657baf1042edf709ff474ac6426bb45a20bded09dea12892",
         "packages/agent-runtime/src/supervision/__tests__/fixtures/b05-child-read-worker.ts": "45e7eb97f2b2dd693355da69ff73e64a47e8ea2add844705fd7b2d06f0300efa",
-        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "f3ddab5caf67247b4396676a0ad482e1b2c91a72238542b427c3f88aa7c1f00b",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "c08a8fb1077433723c48324aeb2275aa63023bdb05df3b51bc09e472c206947a",
         "packages/agent-runtime/src/supervision/child-bridge-client.ts": "46cbb43757aa5cdd28fbbdbe71106b30332ebad6c5fe1e828994b34b0181f95d",
-        "packages/agent-runtime/src/supervision/child-entry.ts": "a6529cb50e203c70dcf8fdc636d029379bae7e5f921b2768216bb0ada8576032",
-        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "da3ba6d12dbbca331aacd62d5b623bfe943fb6820b39d737832639d10a6e7993",
-        "packages/agent-runtime/src/supervision/process-supervisor.ts": "b9331da9c689e3a12648ec3991893727ae955283dfabf3384f4871cde8494eb9",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "4b7ff1c5e269fc1ca174c4a52797c17f3516499295d8171bb7da72fa159787ae",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "e5118dcc282590263df980a593947c843bcead2a3fffc990068e81ed381b61ad",
+        "packages/agent-runtime/src/supervision/process-supervisor.ts": "a2193b2db257c0590b1808e5d6d0bf8abb859a3bea7dc04fbbba1cc2ec9b013c",
         "packages/agent-runtime/src/supervision/self-exec-flag.ts": "510d496b6475c1d0bf743630ad50eeef7aeedcc7bf299a2044dd75ac3195568c",
         "packages/agent-runtime/src/supervision/supervised-child-env-keys.ts": "5479b918983b9b156fe0333247eb2a36f0a46a9281b9ec5f7c325e6e08410988",
-        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "43314f65f74ebffc4d923e28ca5abafceb45fd61d223dde5f95e90cdecad6bd2",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "20593239c0390119f8231a03ab21f53e8946d5d4409b63f75bf9ecfd24f1c81f",
         "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts": "0b87f3dc063f43801979b4b42bfc7295f6bdf016bc621188ea39dba663b7d701",
         "scripts/generate-model-capability-catalog.ts": "6ca9c3e8ce9ac285d90abddbc978de93ce440bac96fa23cdecf9d83bbcc15369",
         "sdk/src/__tests__/b09-anthropic-cache-wire.test.ts": "9235582b2c5c155981481d1ec34ce60714380b89b77247d684350f663a13de18",
@@ -1196,7 +1196,7 @@
         "sdk/src/model-capability-catalog.ts": "3feaf11ba46bd3f4b075fceb1cdc055e42fcfae5388c6af81bcff773337e80d2",
         "sdk/src/model-discovery.ts": "3245b215b0903780bf40d2026c5f120a5d42ee06bc1a1ef6018df3244aa05e2f",
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/request-admission-store.ts": "0089c0c904f69899ab4050656b4792408c27be087835f746421d1708bb991051",
         "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
       },
@@ -1204,19 +1204,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "R10 Linux/Bun 1.4.4 local source SDK/runtime and owner-only filesystem admission store, with credential-free HTTP/SSE fixtures and the pinned offline capability catalog. Independent rerun of both bound commands and supplemental provider-resolution and stream-finish tests; not formal acceptance.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B09/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B09/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-spend-queue-replay-nonauthor",
+            "reviewer": "b16-ordinary-current-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "R10 Linux/Bun 1.4.4 local source SDK/runtime and owner-only filesystem admission store, with credential-free HTTP/SSE fixtures and the pinned offline capability catalog. Independent rerun of both bound commands and supplemental provider-resolution and stream-finish tests; not formal acceptance.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B09-r10-wrapper.json",
-              "sha256": "fb1fe886739f18abd5d3a66d115ba0f4af1ec0c91856a29deaa734bb3023e60c"
+              "path": ".tmp/b16-final/implementation-r2/B09.json",
+              "sha256": "4b99763d5df24740a95340dec7585c1f39c985786889e4431e25f1d1f719a33f"
             }
           }
         ],
@@ -1227,10 +1227,10 @@
         "Total loss of writable state: process-local refusal still applies, but there is no durable stop-marker guarantee across a fresh process if neither the record nor the marker could be written. Cross-process refusal is proven where a durable stop marker or exhausted record can be retained; the active/held reservation is not refunded by a failed reconciliation.",
         "No live paid-provider claim, cross-platform or universal provider/store guarantee, public release, or formal ledger/roadmap acceptance."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.213762+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.724875+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B09/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "19b3d0bad5f8c04f42bb4b53a05a27c31421ad27bf2b501329d7df192913ec49"
+        "path": "docs/execution/body-roadmap/evidence/B09/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "1f94dc31c23e57a6de205693ee89a404a15442893f98d989f79caf135234daf8"
       }
     },
     {
@@ -1280,7 +1280,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "B10 only: cooperative CLI prompt and queue admission, rejection and draft/attachment recovery, and pre-admission revocation, at the Bun/OpenTUI mounted-hook and component tier with stubbed SDK/provider boundaries. The existing receipt also records the original prompt/attachment, local bisection arbitration, and mounted ask-user bridge controls.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B10/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B10/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1302,10 +1302,10 @@
         "Binds the prior R10 approval without expanding it. No tests were rerun; additional controls were confirmed in the existing log, not through a new source review.",
         "No live SDK/provider execution, end-to-end PTY coverage, claim beyond the cooperative mounted cases, or approval of other cards."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.216331+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.733429+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B10/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "ff19fd07e5e84ec737c8fbf71480b0350909f8335d8190076b6d74b1c208b2ea"
+        "path": "docs/execution/body-roadmap/evidence/B10/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "5a24e1bd918437083ec5ac8bd3fae7345d1287f7b794635fec21d3b8f32c7341"
       }
     },
     {
@@ -1324,7 +1324,7 @@
         "cli/package.json": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e",
         "cli/scripts/preload-opentui.ts": "61321edda85e92351d5fde14a82e78c7e5a377509566c7d5fbae65aac905e283",
         "cli/src/__tests__/init-command.test.ts": "0288c9257c4dd7cc5ba5e2790ffb83dd3d23ee3d6ad4bf1ee1346c4aba968b83",
-        "cli/src/binary-entry.ts": "567f0d422bc3b2ffbf05b406b91a4b7b32bda77550ef31f76f46071891e01246",
+        "cli/src/binary-entry.ts": "d7d7f9a9fb00cf0574754842683210429364f43da27a2b4476f7f6f6e6d40273",
         "cli/src/chat.tsx": "c640f4f59ad8d1ee17c47a7b82732f66380a57503b4e97361c22cd1c8cf63407",
         "cli/src/cli-args.ts": "73e15a22f0fef2e97a62d1f7f735ee8c9e9abd5665e9e97d58744ee21c1907d8",
         "cli/src/commands/__tests__/command-discovery-parity.test.ts": "f8cd68c053d1382f766542534884c594c47c607fae5830b88706859374833bd5",
@@ -1359,19 +1359,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B11 physical Linux held-descriptor plan reads and single-source command discovery/dispatch",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B11/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B11/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-cli-archive-approval-nonauthor",
+            "reviewer": "b16-ordinary-stable-consumer-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen B11 physical Linux held-descriptor plan reads and single-source command discovery/dispatch",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B11-r10-wrapper.json",
-              "sha256": "27134f8cc1bada680427364f1e7e5448be7ad3af3f9ed0139e4796f23a75c29a"
+              "path": ".tmp/b16-final/implementation-r2/B11.json",
+              "sha256": "6241a51d823b8df3e18826e323a17dae68ad9c3410c11b34afc69a1fffbda074"
             }
           }
         ],
@@ -1380,10 +1380,10 @@
       "risks": [
         "Linux /proc/self/fd; stable selected root. No same-inode snapshot isolation/non-Linux claim."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.218905+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.736855+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B11/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "b5562bd0f75bf7ea888edb4d30af0358acd466f621a2f3213f3e2b98bfb0b66c"
+        "path": "docs/execution/body-roadmap/evidence/B11/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "e79d0952aae3b6e153bed0e54a7eed37caf5d0e2f071befb631d6e46a344d6f0"
       }
     },
     {
@@ -1423,8 +1423,9 @@
         "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts": "756bee2e541adfeb364174ea0079acac4b87ffdb82a32176c83a562adfbf7a66",
         "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts": "0d2832e702f93f9a2f3f1b97dd2cf0b5ad73eed09ac2b4c3fcd877c590d53f4f",
         "packages/agent-runtime/src/util/memory-v2-context.ts": "4c37054d12c4877d25f675e8cbf4c2a06114d6caec2b9547324df28d3a3415d1",
+        "sdk/src/__tests__/memory-v2-authority-wire.test.ts": "1af01184eb55d165e4b5eb704f51c54027741a8a1c51975a6eabadb443e87221",
         "sdk/src/__tests__/memory-v2-roundtrip.test.ts": "477340d50a8fdeff5f07e5f79c5b9865213c90a456d16a6c28fa8a38a452c1ff",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/memory-v2/__tests__/coordinator.test.ts": "42e99e085b103edc47933f4755649c937cba8a26090229e78b27c56beda8102b",
         "sdk/src/services/memory-v2/coordinator.ts": "b85b04f287547999bb90125ee5c3765887f012ffa62877a7e76b8ab5e38b2ba4",
         "sdk/src/services/memory-v2/event-factory.ts": "94f9d6867d484b51d095c54cd57f64e175110081cc8c64c1dd77bb7533f030d7",
@@ -1439,32 +1440,31 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B12 SQLite lifecycle, reconciliation and cross-task next-prompt authoritative ranked facts/decisions/rationale",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B12/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B12/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r8-review-b12-b13-b14",
+            "reviewer": "b16-ordinary-stable-io-review",
             "implementationOwners": [
-              "Openbuff contributors",
-              "parent implementation session"
+              "/root"
             ],
             "scope": "Current frozen B12 SQLite lifecycle, reconciliation and cross-task next-prompt authoritative ranked facts/decisions/rationale",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/body-full-renewal.eIsiib/r8-approved-memory/B12-implementation-review.json",
-              "sha256": "ed13bed0b8137461eafad88dcef3a68ac5631ab1d0810b455b34e41026a51c40"
+              "path": ".tmp/b16-final/implementation-r2/B12.json",
+              "sha256": "fe3e0c92dc7737e18d8d183150df616a9b36f4d8c7d611d074ba9ecb5254e1b2"
             }
           }
         ],
-        "requiredCommandCount": 1
+        "requiredCommandCount": 2
       },
       "risks": [
         "Source local actual backend and owned key-free wire; no live provider assurance."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.223811+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.741143+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B12/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "7f2aea7cf2259def0b120982ce3feb580720975992ef7456c98cf2fea1a28064"
+        "path": "docs/execution/body-roadmap/evidence/B12/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "333adbf74973e5eb6a04f77911c6f4b07b8cf844a3d560fe9518f684e41ac5fe"
       }
     },
     {
@@ -1510,7 +1510,7 @@
         "packages/agent-runtime/src/util/context-archive-context.ts": "0ab445883daa380a2d02ab802bf8e9e269d44c83fb18787357653e2c12158ae8",
         "packages/agent-runtime/src/util/context-archive.ts": "88f6e228be2f4fdc84143157e8bf05a174c9e9354d1a64797a17abfea30d8aa3",
         "sdk/src/__tests__/context-archive-reader.test.ts": "a30a3f47996569ffff873ef740e5f30d7d02fa1514acd208c53c3ab4982a2256",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/context-archive-reader.ts": "e9e6a0feeb20e6497ac7492bdfa272a11ed57bc229bab91b866b072cb3bd0b9e",
         "test/fixtures/body/memory-restart.ts": "a2643932829c62f34c10d822f454e85277add7881ef0f166d39787b82f22edfb",
         "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
@@ -1519,19 +1519,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B13 actual original-result archive and durable CLI paging/restore/retention/latency on source-local Linux test fixture",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B13/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B13/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-cli-archive-approval-nonauthor",
+            "reviewer": "b16-ordinary-stable-io-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen B13 actual original-result archive and durable CLI paging/restore/retention/latency on source-local Linux test fixture",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B13-r10-wrapper.json",
-              "sha256": "f952d1043d98eeebbfa4052e8a3c98c5cd3b52433239017eb823c0d04559a621"
+              "path": ".tmp/b16-final/implementation-r2/B13.json",
+              "sha256": "312a6f5eb08a299382d58e704ade5a4e0652191864340f6e71918a2c3401aca5"
             }
           }
         ],
@@ -1541,10 +1541,10 @@
         "Observed page latencies, not a universal performance or provider/model-quality SLA.",
         "Source-local fixtures; no general installed/native/hosted assurance."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.229406+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.748535+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B13/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "b4f512d9afd98fad55c981d9ae7a84188c2e40b333b3341d55f89d99b245fac0"
+        "path": "docs/execution/body-roadmap/evidence/B13/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "565163a2e393c4d44b2f32e2ae992ad66c2729fe48c6fd249d9ae90c124a43b7"
       }
     },
     {
@@ -1576,7 +1576,7 @@
         "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts": "ec852b6915251b2084e061213f1262909c6d0215c1bb5ce817f8e6cf970eed48",
         "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts": "ca97250a56365f13855f5f2af55b55e3aaff1e58b21d8af52bd4ba246150c787",
         "sdk/src/__tests__/b14-memory-usage.test.ts": "e2d138ed51ac9e7ad260a013320172811826b65fda9d47a004633de7e07dab04",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/memory-v2/__tests__/usage-observer.test.ts": "6f16120b44010d225094e9ec7bbee60d9e6d52f0b89efcbee6dc8a5c488ffd63",
         "sdk/src/services/memory-v2/usage-observer.ts": "a551fc596ce620d2352d821f985002998096c50ad0765d44b1b98297fe302f33",
         "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
@@ -1585,20 +1585,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen B14 verified procedure apply/reopen and measured exact same-source feedback across runtime gate and SDK",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B14/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B14/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r8-review-b12-b13-b14",
+            "reviewer": "b16-ordinary-stable-consumer-review",
             "implementationOwners": [
-              "Openbuff contributors",
-              "parent implementation session"
+              "/root"
             ],
             "scope": "Current frozen B14 verified procedure apply/reopen and measured exact same-source feedback across runtime gate and SDK",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/body-full-renewal.eIsiib/r8-approved-memory/B14-implementation-review.json",
-              "sha256": "7f8181890344d0184ede4af79ca2f9b204a1b60f9eb99333890d3049d5f56f78"
+              "path": ".tmp/b16-final/implementation-r2/B14.json",
+              "sha256": "625b8abb25ab1c8d3b55db65b63c493543759a9c4e809ba10e82ddb8fc5825d4"
             }
           }
         ],
@@ -1607,10 +1606,10 @@
       "risks": [
         "No modeled learning improvement, full repository applicability, or live billing claim."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.234651+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.754091+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B14/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "6266fb6caba3f6cc23078e5d32bd78f7f8a3379d2d2e4ff231e46b7150dde0a1"
+        "path": "docs/execution/body-roadmap/evidence/B14/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "1bd6eb9df82ba20e406f9f6726e0e319213a39168d44815db8499dd31d1b43bf"
       }
     },
     {
@@ -1633,25 +1632,25 @@
         ".bun-version": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
         "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
         "bunfig.toml": "48a8b5826d7b001640f0e0f82cf8f612405c6e56080fa182d239e56d5b8a8505",
-        "common/src/types/contracts/agent-runtime.ts": "3600582d089e2898353cb8c5caee59cbfefacffe8dd8c720ffe50dcc2fd233a6",
+        "common/src/types/contracts/agent-runtime.ts": "9a5d78af80a331bc3e50c469792cb3228a7ccc13e7eef1d01c47216c98dc29ad",
         "docs/execution/body-roadmap/record-renewal-checks.py": "ab2427f2dd0c2cde82cd5aa4a671128cf8d7627479dc4230cb6a6aaefe05b8b3",
         "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
         "packages/agent-runtime/src/__tests__/b15-production-replay-proof.test.ts": "c36dbbbbf2f2b4ef906d3c57baad306a4ca38484fcd40fe63dd1e89d94218e72",
         "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts": "e8e2f3f3193ef6cbb0f935b4df0859cb1ceef9b907b396eaa869d4c445dd6b4d",
-        "packages/agent-runtime/src/run-agent-step.ts": "4681e2b77357c8dc4f5d1c3b5498feadb9ed3167d8ca4c5eeef40e7c35c630cf",
+        "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
         "packages/agent-runtime/src/run-programmatic-step.ts": "60eaaadd15e4fc73638c4e3f9a1e687bb3c98ed0277d21bb346fbc51d53f7565",
         "packages/agent-runtime/src/tools/tool-executor.ts": "9da91d15e07ee6ef13bbe3da4762d381cb9578d5167a14fbfbb64156af6578f8",
         "packages/agent-runtime/src/util/__tests__/run-journal.test.ts": "e52774454da6adce94bc0d00a94703a80059c57f016cefa13cae8094f45bd42f",
         "packages/agent-runtime/src/util/programmatic-replay-observation.ts": "1f3c3667b96089428ef6092d005ada668d8ebf9a32a7d3c7246088d48c64aa23",
         "packages/agent-runtime/src/util/read-plan-replay.ts": "8886ae95bb96e8bee97c93e73bd0cf73c9711438570fc6b53bf0a95fa138d8f8",
-        "packages/agent-runtime/src/util/run-journal.ts": "613fd901bf24648c64ed99bfc7c81be2f6f30909c4e9bd5d2ab7cb88b5306a39",
+        "packages/agent-runtime/src/util/run-journal.ts": "f3f655a999e4215715101cd9718001d11399e4660ee11297cd27f9061acd9781",
         "sdk/scripts/build.ts": "39d563fdd9526596e979d0d4179ccb8b94877e039e77d35e3a2d973b5e07681f",
         "sdk/src/__tests__/immutable-replay-program.test.ts": "eb6fce0af1bb17e62c5bc57927e034ec2654a89bf5869d1bd31748cc91540d6a",
         "sdk/src/__tests__/replayable-reads-journal.test.ts": "ab4f6a1a752509b5ec7fa0962c2cd596193e43ead2e41ea1a4663e68f48e44a9",
         "sdk/src/__tests__/run-journal-wiring.test.ts": "e9c7916b6b2b27dd90fe0210e4d63247a06ce757ab229114973c82d1c9f95cc7",
         "sdk/src/client.ts": "e0c56f2f36d4921129f7b57e9e9ccb8523046a75b15c6242aaf09ff5945d9968",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/immutable-replay-program.ts": "11e5a3b548a6c854bc384908ee6e131dfe0ff344de038caffcddb67d4f105ccf",
         "sdk/src/services/private-replay-journal.ts": "8065f1e37e7c63e2350949fdb093650662c75c14ebe7a39b9165ed18a6a39842",
         "sdk/src/services/replay-program-store.ts": "e5177873b6c40df2da8fa92a9e3c96451f96e0d784e1d77f795bd6e645f248cc",
@@ -1669,19 +1668,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Frozen B15 R10 product lane: one-shot continuation of a bounded, data-only immutable recipe from a verified private local journal on Linux x64 / Bun 1.4.4. The tested package tier is the actual npm tarball's installed ESM SDK with a credential-free loopback OpenAI-compatible JSON endpoint. The built run, source-only built-in-read fixture, crash-refusal matrix, and sealed witness are separate supporting evidence, not broader packaged replay approval.",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T021752111402Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-packaged-replay-nonauthor",
+            "reviewer": "b16-ordinary-current-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Frozen B15 R10 product lane: one-shot continuation of a bounded, data-only immutable recipe from a verified private local journal on Linux x64 / Bun 1.4.4. The tested package tier is the actual npm tarball's installed ESM SDK with a credential-free loopback OpenAI-compatible JSON endpoint. The built run, source-only built-in-read fixture, crash-refusal matrix, and sealed witness are separate supporting evidence, not broader packaged replay approval.",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B15-r10-wrapper.json",
-              "sha256": "093f7d42b9a3ed7c11950831f66bcbb48a86f1fe443b084e88b48ba84c7992fb"
+              "path": ".tmp/b16-final/implementation-r2/B15.json",
+              "sha256": "25bbc51582df7dac76634ab03674b7a03c4d834c0aa1a4b4d479236847f6d4fc"
             }
           }
         ],
@@ -1692,29 +1691,107 @@
         "Only bounded STEP, STEP_ALL, GENERATE_N, clock, random, and SHA-256 are supported in the immutable lane. The model interface is one explicit text-only, non-streaming OpenAI-compatible JSON route, without SDK retries or redirects. Packed evidence is ESM on the pinned Linux/Bun host and credential-free loopback HTTP, not other builds, remote provider behavior, or provider-side exactly-once delivery.",
         "The changed-bundle control changed recipe data and the changed-runtime control changed a stored digest; no actual alternate SDK binary or Bun executable was substituted. The read, crash, and sealed witness fixtures do not certify arbitrary JavaScript or production generator reconstruction, live replay of shell/custom/MCP effects, or default terminal OS enforcement."
       ],
-      "acceptedAt": "2026-11-27T02:17:52.124754+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.760135+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T021752111402Z-acceptance.json",
-        "sha256": "598125fd176a386fc31fd634cce0b533dd3a2d7758b5cc51d88f61a5f7203d25"
+        "path": "docs/execution/body-roadmap/evidence/B15/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "6bc2e2ead65c663952fa53ff6cb8beb4af608dafb48081e52c051fe860c2edea"
       }
     },
     {
       "nodeId": "B16",
       "parentCardId": null,
-      "status": "pending",
+      "status": "accepted",
       "prerequisites": [
         "B04",
         "B15"
       ],
-      "acceptedPrerequisites": [],
-      "sourceContractHashes": {},
+      "acceptedPrerequisites": [
+        "B04",
+        "B15"
+      ],
+      "sourceContractHashes": {
+        ".bun-version": "d03d8b268b4171328ac2458ce8ca82d69a1fde38469d4e4faae4f8fa8d8a5e35",
+        "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+        "cli/src/__tests__/run-continue-wire.test.ts": "8a64c745c8706329f0358b1c79ba0e93569c6ca78345c736275b806a10155740",
+        "cli/src/binary-entry.ts": "d7d7f9a9fb00cf0574754842683210429364f43da27a2b4476f7f6f6e6d40273",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/src/types/contracts/agent-runtime.ts": "9a5d78af80a331bc3e50c469792cb3228a7ccc13e7eef1d01c47216c98dc29ad",
+        "common/src/types/contracts/execution-context.ts": "752f50a3a011e665a7d3a5638bb28d6e42e8777f6ac2bf1df9fb033214edf4b4",
+        "common/src/types/session-state.ts": "f9235a261addb0bc742b8ac7fb885ea293224475909dd8f2c2470bdde11e2d01",
+        "common/src/util/__tests__/execution-context-oracles.test.ts": "2ea8d9ba329976c4946a5a2e54be9ee62dc2df2efb6ac28e1dfc67b20b947467",
+        "common/src/util/__tests__/execution-context.test.ts": "aabcca1f79304cbc15b0ed414b27ed2813ecd5f2ded3639c4a980a15afba827c",
+        "common/src/util/execution-context.ts": "73dc8ce4b81b4cad86b47fef36de05892611a80837c525ad91f5f65a90c0e70e",
+        "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+        "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "d861cf3bc9c8db9162220734cf379e1c138eaeef00a6c6fdadda1758ec845320",
+        "packages/agent-runtime/src/__tests__/spawn-agent-inline-nesting.test.ts": "4e1afc56d6cba6f16a6d39ba160cf9321d737ed7611fc1afccf65d9232fa2fdf",
+        "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
+        "packages/agent-runtime/src/supervision/__tests__/process-supervisor.test.ts": "97f305b7d8c3f79ab4eb481ba17b49b8609008e858968930489941d21982619f",
+        "packages/agent-runtime/src/supervision/__tests__/supervised-bridge-e2e.test.ts": "6ea15f83812ee850a4c9aeb15239145c41e66738b6508dde7441309d71fb3a3b",
+        "packages/agent-runtime/src/supervision/__tests__/supervised-journal.test.ts": "6671248b91a6e8b209926bcc3d86b05ea6d7e0d8ad1095cc1982702bae785faa",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "c08a8fb1077433723c48324aeb2275aa63023bdb05df3b51bc09e472c206947a",
+        "packages/agent-runtime/src/supervision/child-bridge-client.ts": "46cbb43757aa5cdd28fbbdbe71106b30332ebad6c5fe1e828994b34b0181f95d",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "4b7ff1c5e269fc1ca174c4a52797c17f3516499295d8171bb7da72fa159787ae",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "e5118dcc282590263df980a593947c843bcead2a3fffc990068e81ed381b61ad",
+        "packages/agent-runtime/src/supervision/process-supervisor.ts": "a2193b2db257c0590b1808e5d6d0bf8abb859a3bea7dc04fbbba1cc2ec9b013c",
+        "packages/agent-runtime/src/supervision/supervised-journal.ts": "b920a58e6fd8fa5b23ff80814fa713268a26618e28d460cf19ab4459055cc165",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "20593239c0390119f8231a03ab21f53e8946d5d4409b63f75bf9ecfd24f1c81f",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "4af319070312f5cb5a597d23a00cde2974a519af201fd2f616295715618997c7",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts": "998f538d4fb2f60b16583cb787cf14ae3caa64e9c48d80765e01ebb0ab4f61ca",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "c25432c46a221a1d56d99bb97b16d3b4758e65c884c53b27dc12676f6e7284dc",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "ea7b35efad51361ab4aa5e3efb5c455107c0be0245435ee838e4fac3c236decf",
+        "packages/agent-runtime/src/util/__tests__/background-resume.test.ts": "f527f3dda26e094a51b3582c0474afdbc30bff07a59147bdd8cd5b787081fbbd",
+        "packages/agent-runtime/src/util/__tests__/run-journal.test.ts": "e52774454da6adce94bc0d00a94703a80059c57f016cefa13cae8094f45bd42f",
+        "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts": "067747dd62952b3ac894d5436ceb4a2905c41e3c22276292f2b2832ea021da43",
+        "packages/agent-runtime/src/util/background-agent-jobs.ts": "66c2ad29faabfba9859f821b76da4ce1aeabe21f8d3713d3869cf3fda2d705f8",
+        "packages/agent-runtime/src/util/run-journal.ts": "f3f655a999e4215715101cd9718001d11399e4660ee11297cd27f9061acd9781",
+        "packages/agent-runtime/src/util/workspace-path-leases.ts": "45093c10c7c109ba840fcc1ce48664ddcad7444f690805b90644566d8076a92f",
+        "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
+        "sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-controls.ts": "ea9c2e7ebc06dc35451bf1256a5b1d3c621171987ca211e71d4f5bcc76b447d9",
+        "sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-entry.ts": "112ca5718ed7cebefa8380a54720c08b1d30f4afe86ce66e46bf9cd0f6874738",
+        "sdk/src/__tests__/llm-cache-control-wire.test.ts": "df383f129d74483051640419f1c917943e9c96f98d9581eb447c8bc5efd0cfb9",
+        "sdk/src/__tests__/supervised-abort-settlement.test.ts": "0efcfe202957141ee45e0a43c61d04bbf116744fdd6a84a8fe4887ca341b8646",
+        "sdk/src/impl/agent-runtime.ts": "500745e9d51947176cb9614673a49064448b9dcf35ae19beef0c6443c91a2b19",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
+        "sdk/src/services/supervised-replay-core.ts": "43ddbfdd188c1137a067126b60cbef1cc8ea33cdf5e323c3d79d886e055c5c10",
+        "sdk/src/services/supervised-replay-worker.ts": "ba66e08fe794a0ae335432437c10a634689ae4929b8c85a4cba45c28ee3dcefb",
+        "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
+      },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": null,
-      "coverageTier": null,
-      "evidenceManifest": null,
-      "verification": null,
-      "risks": []
+      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "coverageTier": "Frozen B16 on the exact r2 successor: direct journal-owned SDK detachment through parent return and durable settlement, refusal of unsupported nested detachment, cooperative workspace lease generations, and compiled Linux/Bun child cancellation and immutable replay.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B16/accepted/20261127T073410685768Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "b16-r2-independent-approval",
+            "implementationOwners": [
+              "/root",
+              "b16-compiled-controls"
+            ],
+            "scope": "Frozen B16 on the exact r2 successor: direct journal-owned SDK detachment through parent return and durable settlement, refusal of unsupported nested detachment, cooperative workspace lease generations, and compiled Linux/Bun child cancellation and immutable replay.",
+            "decision": "approve",
+            "evidence": {
+              "path": ".tmp/b16-final/implementation-r2/B16.json",
+              "sha256": "be0068ee314b3550cac560afcbdf19a289259d3e1a29221c9e5e8dab7fd5ef6a"
+            }
+          }
+        ],
+        "requiredCommandCount": 4
+      },
+      "risks": [
+        "Real self-exec and process observations are Linux x86-64 with Bun 1.4.4 in a compiled SDK fixture, not full CLI, macOS, or Windows execution. Windows supervision is refused by the source guard; Node is in-process for ordinary supervision fallback and does not run this replay lane.",
+        "Lease timing uses an injected clock and heartbeat in the actual spawn handler. It demonstrates participating same-process cooperative ownership, not OS exclusion, cross-backend native fencing, or M22-CHILD cutover.",
+        "Replay covers an explicit data-only clock/random/SHA-256 recipe in an identical compiled worker under its still-live parent. Generic effectful continuation and transaction restoration are not supported by this lane. No live provider, MCP, arbitrary descendant, or native-recovery assurance.",
+        "The real worker tests one nested detached entry. The whole-handler-batch refusal and inline propagation were checked in source; no claim of a separately executed mixed-batch or inline-detach fixture. This is an original independent review, not a ledger promotion."
+      ],
+      "acceptedAt": "2026-11-27T07:34:10.767271+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B16/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "7de3b61341a26c7d4c0c0bf84bda19cd43ce1e4b209d30bf5147caecc38c4f8d"
+      }
     },
     {
       "nodeId": "B17",
@@ -1777,11 +1854,11 @@
         "sdk/src/impl/failover.ts": "ed686c418db9cd6ddbc4cee446c425162ff1130233fcaa95a60416092a8ad2d6",
         "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
         "sdk/src/impl/model-provider.ts": "4ccb709d148a7e0e21c871a28ab66d803c68907277a4f5ad4fe1a5977fc70170",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
         "sdk/src/retry-config.ts": "37c246586f7f2cf80d0cc1f868825766d2f5a3691a7200c40d8e8c7a7bf41fc0",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
         "sdk/src/services/harness-enforcement.ts": "01ae7f1b9730014ee239ffbe3a3c956583dbf88474b5435ea51d424c5e12474f",
         "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
@@ -1802,19 +1879,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen TypeScript exact executable action/profile/basis identity and complete compound approval control",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B18/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B18/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-shell-tier-nonauthor",
+            "reviewer": "b16-ordinary-stable-consumer-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen TypeScript exact executable action/profile/basis identity and complete compound approval control",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B18-r10-wrapper.json",
-              "sha256": "0edf54ace2d5637d6870c983ebb10087438cd44fcd8021f133eef921e2760001"
+              "path": ".tmp/b16-final/implementation-r2/B18.json",
+              "sha256": "f998eadea6f3ee48385896380a4e9c25f29ac5261f3a1ff77cf21f6d6f4b082f"
             }
           }
         ],
@@ -1823,10 +1900,10 @@
       "risks": [
         "Owned test shims and full local CLI/SDK policy; no OS containment authority."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.246157+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.775114+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B18/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "0af3439055792d27ba40080ec51c9afd293a5c69a67e0856798dbe34bd6802eb"
+        "path": "docs/execution/body-roadmap/evidence/B18/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "5ef6297ce802f1dbe832287fc9153aa76df3861784b7bc8f4d5f0a434c373ebe"
       }
     },
     {
@@ -2095,7 +2172,7 @@
         "cli/src/__tests__/run-cli-tests.test.ts": "f9ef76236ae6e571c630224ef457f358476825e8f33919be0b5d7a96ae812030",
         "cli/src/__tests__/run-command.test.ts": "cdefafaf19a8965762097dc3cbaddcc92ae62906dbab83f37ccb7bd3d19921b3",
         "cli/src/__tests__/run-continue-sdk.test.ts": "2baef746d393990b986ae9c1cd04561577d5a8e3be228f33202de8d2c6f36cf9",
-        "cli/src/__tests__/run-continue-wire.test.ts": "c09d97b209649bbc3154f03e4d213c62b2fdd93f59bcbd27168ebca97653ca20",
+        "cli/src/__tests__/run-continue-wire.test.ts": "8a64c745c8706329f0358b1c79ba0e93569c6ca78345c736275b806a10155740",
         "cli/src/__tests__/run-continue.test.ts": "3229c083d85ece90ad29a8f9db958fc54a871b0dc0980f99f274fbd90d1a21a8",
         "cli/src/__tests__/run-model-args.test.ts": "f0dc2ce5c66e9ed9945eb321cd8a8aa2e86b079b8dcbc61fb87d7cbfda82c4f1",
         "cli/src/__tests__/run-output-schema.test.ts": "9be57e7cdad3dbb16577cd56e4c0be50d5bdab579cbc8775be1f2e31fd725d48",
@@ -2115,7 +2192,7 @@
         "cli/src/__tests__/wrapper-secondary-ui.test.ts": "ba8d1b983f38d2669304507729b7f62665775e5cfa1ceb5d09a2afa97289980c",
         "cli/src/agents/bundled-agents.generated.d.ts": "40575e0e274d7e9408409b36b2d6e253c112de25f9ffa67557251e7c97473487",
         "cli/src/app.tsx": "c5b2fd5bf21189b331eb30cba0628a3f52bfa5957e8d87e75706f3b5e3cb7673",
-        "cli/src/binary-entry.ts": "567f0d422bc3b2ffbf05b406b91a4b7b32bda77550ef31f76f46071891e01246",
+        "cli/src/binary-entry.ts": "d7d7f9a9fb00cf0574754842683210429364f43da27a2b4476f7f6f6e6d40273",
         "cli/src/chat.tsx": "c640f4f59ad8d1ee17c47a7b82732f66380a57503b4e97361c22cd1c8cf63407",
         "cli/src/cli-args.ts": "73e15a22f0fef2e97a62d1f7f735ee8c9e9abd5665e9e97d58744ee21c1907d8",
         "cli/src/commands/__tests__/bash-command.test.ts": "cd8a7d5c84956abc3fc407596bcf39533166b1ada7d45e603ea7af61269e590c",
@@ -3091,14 +3168,14 @@
         "common/src/types/context-archive.ts": "9583f1c9930893b9fff63bb7a920e85a939e3899591252ab5d209be7372d6116",
         "common/src/types/context-consolidation.ts": "447cfdcefbf0ae4d93e952f57d8a7b1a81e6faed8c9d8bf72ac9fd8d9c109da2",
         "common/src/types/contracts/__tests__/llm-contract.test.ts": "28f8521c7f588fde7d4a51e33b0833db5a9d7d6afa746710decd598b33b8d3dc",
-        "common/src/types/contracts/agent-runtime.ts": "3600582d089e2898353cb8c5caee59cbfefacffe8dd8c720ffe50dcc2fd233a6",
+        "common/src/types/contracts/agent-runtime.ts": "9a5d78af80a331bc3e50c469792cb3228a7ccc13e7eef1d01c47216c98dc29ad",
         "common/src/types/contracts/analytics.ts": "341bdd28b1c19ebb2c13648dde328c997346e9f28258deab6b02e3dc08ffb61a",
         "common/src/types/contracts/bigquery.ts": "7d8e457149a513a9ac15bc41597eeb18f863a23c9b7965f48cd69e42e934c9db",
         "common/src/types/contracts/billing.ts": "64c9a86db75045bb7dedfdf0eb4b22bc37bfb616146d87cfec99da7311bb6fc6",
         "common/src/types/contracts/client.ts": "08fc66a079222142d946ecd27f64a2b9847775dba776d1ee1a555bffdca5affd",
         "common/src/types/contracts/database.ts": "82d1532ebf1e4d9db8d423f1b97e762aaa80441ce9789b900a44c6bb1e5947a0",
         "common/src/types/contracts/env.ts": "5c5fdd7de446a170cade592bec8b67feaddd3be8a777cf243369be0b9c422a44",
-        "common/src/types/contracts/execution-context.ts": "75fccaee7eefa9f0c54a783e9923df87041c23892e4bc385b9090c8a0837abcf",
+        "common/src/types/contracts/execution-context.ts": "752f50a3a011e665a7d3a5638bb28d6e42e8777f6ac2bf1df9fb033214edf4b4",
         "common/src/types/contracts/llm.ts": "5d2b0d8d1eb43eb130dcf7548b885e5d36715f74be0f31b20b81d8b311d69500",
         "common/src/types/contracts/logger.ts": "614df59a247de3e21cb4482073140f8e3de0d1fef69303c9ee9a7268f6dff8b4",
         "common/src/types/contracts/native-execution.ts": "c4a480c8fd04588b1a64e255841996913bb2c6bccf7a6f23b32321b7ab513752",
@@ -3125,7 +3202,7 @@
         "common/src/types/publisher.ts": "053d21722ae3550795856f25e2b61e428bac1c03f26239b335bf3394fe9e956f",
         "common/src/types/request-admission.ts": "135908f520ec69f842b69061201bebf8b6cd4bd1f83e16c820b595c680611f4b",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
-        "common/src/types/session-state.ts": "ff09dcd1f68d7d42b01119d0957fddc72a64e89d632821492ffd570c65fd1274",
+        "common/src/types/session-state.ts": "f9235a261addb0bc742b8ac7fb885ea293224475909dd8f2c2470bdde11e2d01",
         "common/src/types/skill.ts": "dcb2cb5e21c724d202ab7cc0ab892973c112b5b91674259db299377b99b1ef2a",
         "common/src/types/source.ts": "33a0f04678a82643fb76838e5efaa4a4d5b6867404fcb3afcd42623feeb5d92d",
         "common/src/types/spawn.ts": "c1674839b92b9957b7e723fb64f966d9162b2ed0c250ec6f78c25c459cdec6df",
@@ -3219,7 +3296,7 @@
         "common/src/util/decision-rationale.ts": "03d349703e950f30762d7495b33d75dbab5359ed7e3847af58449f225fc90b61",
         "common/src/util/engine-profiles.ts": "efde0a781f590c4e447ff501b49b877c5eb9c9522d8a21f0316a866f2d50f5e2",
         "common/src/util/error.ts": "dd3d74dabd8f602db319dce3ba2cee93ccf7d6c46cd7098734b74ce5f6c8c9bc",
-        "common/src/util/execution-context.ts": "6cbd4f18400f8fdab55247fd446ce88f86ecbf0c3f54f82c5c2a3671c7c8b953",
+        "common/src/util/execution-context.ts": "73dc8ce4b81b4cad86b47fef36de05892611a80837c525ad91f5f65a90c0e70e",
         "common/src/util/file.ts": "f36609894118d7f541d49ffb8f18ec54e5fc353786f3d20a4ddbdc879a590618",
         "common/src/util/filesystem-sandbox.ts": "36b07b6a7d184fbc71b88c8022b890c7d67c5c69538f7e35207089352b055071",
         "common/src/util/format-code-search.ts": "805da31d53bb2b9f6c87af6fc108a37869ce33af8430f25d5739fb756e7bb36b",
@@ -3410,7 +3487,7 @@
         "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
         "packages/agent-runtime/src/__tests__/agent-handoff-boundary.test.ts": "5eb2d88b91950ae099e49b4e1bd161572d3fc873bc6a578a90956c0818541246",
         "packages/agent-runtime/src/__tests__/b15-production-replay-proof.test.ts": "c36dbbbbf2f2b4ef906d3c57baad306a4ca38484fcd40fe63dd1e89d94218e72",
-        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "e76b44fabce726d453b131288af7a6a763440a5f650f48d60d9508e1b101d85f",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "d861cf3bc9c8db9162220734cf379e1c138eaeef00a6c6fdadda1758ec845320",
         "packages/agent-runtime/src/__tests__/benchmark-tools.ts": "f58a9190d02086a3b83cecd096ae50e6638c068f01f71a788c6d4ca108895e42",
         "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts": "5a1983663b7fbf0a4e77a3dc51bbc5108f90cf93b184dd29018d881f8078c3ef",
         "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts": "a3318eb09907e8417f5452922ff90eee67b43c6a6bc9ceacedcf8b82449c81fb",
@@ -3510,7 +3587,7 @@
         "packages/agent-runtime/src/process-str-replace.ts": "90dc1a5386367bbf698b431719f328fa71dad4e0fbf22e694e5715e7b40efabc",
         "packages/agent-runtime/src/process-structured-edit.ts": "8f7b10f28b93122cabb7018c33bab97c9fab0ffea7f99e7f60cc72cf051f4fb6",
         "packages/agent-runtime/src/prompt-agent-stream.ts": "594e32933e17b02150c4313b50faec22c8f84df233fe10a84abbb95019b89fe4",
-        "packages/agent-runtime/src/run-agent-step.ts": "4681e2b77357c8dc4f5d1c3b5498feadb9ed3167d8ca4c5eeef40e7c35c630cf",
+        "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
         "packages/agent-runtime/src/run-programmatic-step.ts": "60eaaadd15e4fc73638c4e3f9a1e687bb3c98ed0277d21bb346fbc51d53f7565",
         "packages/agent-runtime/src/structural-read.ts": "f1e13ac91b97d462a82ed1a33960fd27d5b91f41835660d71421a62950563e52",
         "packages/agent-runtime/src/supervision/__fixtures__/b20-descendant.ts": "d582e5b8a33a59a40d33753c2170a9e84c1179e3029af5bd7b78011eec567657",
@@ -3520,19 +3597,21 @@
         "packages/agent-runtime/src/supervision/__tests__/execution.test.ts": "e2fb1c6caeab1df4b94cc87efdde5ae9f6557f3d3a3d3422df05441dae5c614f",
         "packages/agent-runtime/src/supervision/__tests__/fixtures/b05-child-network-guard.ts": "7dc5d103a56d79b0657baf1042edf709ff474ac6426bb45a20bded09dea12892",
         "packages/agent-runtime/src/supervision/__tests__/fixtures/b05-child-read-worker.ts": "45e7eb97f2b2dd693355da69ff73e64a47e8ea2add844705fd7b2d06f0300efa",
-        "packages/agent-runtime/src/supervision/__tests__/process-supervisor.test.ts": "3d0cf77c2ba0616eff0f048498b19d835cd8461d587e4e8e3ca4460259deb987",
+        "packages/agent-runtime/src/supervision/__tests__/process-supervisor.test.ts": "97f305b7d8c3f79ab4eb481ba17b49b8609008e858968930489941d21982619f",
         "packages/agent-runtime/src/supervision/__tests__/raw-read-handoff-b05.test.ts": "facf3dfb4a5cae04ddc587a258dafe294d587e99f24a39d8dacdc130a2e8aa82",
         "packages/agent-runtime/src/supervision/__tests__/supervised-bridge-e2e.test.ts": "6ea15f83812ee850a4c9aeb15239145c41e66738b6508dde7441309d71fb3a3b",
+        "packages/agent-runtime/src/supervision/__tests__/supervised-journal.test.ts": "6671248b91a6e8b209926bcc3d86b05ea6d7e0d8ad1095cc1982702bae785faa",
         "packages/agent-runtime/src/supervision/__tests__/supervised-restart.test.ts": "90742b2c58c7fa9a11c0368556052d4cc1143bc8ba708bdcfa97f56f24d07874",
         "packages/agent-runtime/src/supervision/__tests__/supervised-spawn-launchable.test.ts": "8605ef6923047dbe5448293fbc18958083c32b05dc56c2b87a27b3b1f1062e41",
-        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "f3ddab5caf67247b4396676a0ad482e1b2c91a72238542b427c3f88aa7c1f00b",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "c08a8fb1077433723c48324aeb2275aa63023bdb05df3b51bc09e472c206947a",
         "packages/agent-runtime/src/supervision/child-bridge-client.ts": "46cbb43757aa5cdd28fbbdbe71106b30332ebad6c5fe1e828994b34b0181f95d",
-        "packages/agent-runtime/src/supervision/child-entry.ts": "a6529cb50e203c70dcf8fdc636d029379bae7e5f921b2768216bb0ada8576032",
-        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "da3ba6d12dbbca331aacd62d5b623bfe943fb6820b39d737832639d10a6e7993",
-        "packages/agent-runtime/src/supervision/process-supervisor.ts": "b9331da9c689e3a12648ec3991893727ae955283dfabf3384f4871cde8494eb9",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "4b7ff1c5e269fc1ca174c4a52797c17f3516499295d8171bb7da72fa159787ae",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "e5118dcc282590263df980a593947c843bcead2a3fffc990068e81ed381b61ad",
+        "packages/agent-runtime/src/supervision/process-supervisor.ts": "a2193b2db257c0590b1808e5d6d0bf8abb859a3bea7dc04fbbba1cc2ec9b013c",
         "packages/agent-runtime/src/supervision/self-exec-flag.ts": "510d496b6475c1d0bf743630ad50eeef7aeedcc7bf299a2044dd75ac3195568c",
         "packages/agent-runtime/src/supervision/supervised-child-env-keys.ts": "5479b918983b9b156fe0333247eb2a36f0a46a9281b9ec5f7c325e6e08410988",
-        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "43314f65f74ebffc4d923e28ca5abafceb45fd61d223dde5f95e90cdecad6bd2",
+        "packages/agent-runtime/src/supervision/supervised-journal.ts": "b920a58e6fd8fa5b23ff80814fa713268a26618e28d460cf19ab4459055cc165",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "20593239c0390119f8231a03ab21f53e8946d5d4409b63f75bf9ecfd24f1c81f",
         "packages/agent-runtime/src/system-prompt/__tests__/prompts-ledger.test.ts": "0260ebece7991331eb18407845aff70f85ead7a77d40bdd5173716977a3f4304",
         "packages/agent-runtime/src/system-prompt/__tests__/truncate-file-tree.test.ts": "58759cb6343b932ac59a341cacd1af91fcc1a6b663841e6c89957a7ed7626bab",
         "packages/agent-runtime/src/system-prompt/prompts.ts": "6023f9fb0d3cddbbf9dcf039e0cc017a7b0399b1183aa92ee859a95517c4e88b",
@@ -3580,7 +3659,7 @@
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/runtime-path-hardening.test.ts": "aaa3efdb85143d953952b6987ba92add50635e59a5954f95aee807a2aedfbb48",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/set-output.test.ts": "4bfbc5594df50c382a4315333e31fab31200e7eef394b80f15bffa0a690e6d1e",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-evidence-merge.test.ts": "de09ed27325d56f5abce4305c42e1c1adf655f1ce1dbc0d6ae48ccb3947c0136",
-        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "3eb0db5899f46e4547ba9ebdd14c80f7a327d9a7cc047b069f61db10e4c81b1b",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "4af319070312f5cb5a597d23a00cde2974a519af201fd2f616295715618997c7",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-clone-cache.test.ts": "0ee89fe7c1e976526b4fcd6c580f2069f7d9c9f5aa2a1817efecce51c4eece27",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts": "9e6d17b1039e193bee3891bfa1b65323acbb3285486b11462ecef31dc6f1746c",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/str-replace-circuit-breaker.test.ts": "733164884ab96347db089926655e15fcd7e7e38f490d162ac111489f47fd71cb",
@@ -3645,9 +3724,9 @@
         "packages/agent-runtime/src/tools/handlers/tool/set-messages.ts": "6e19cf5817a48c52a65aac7d789b484e68d48eb89d89b9e37babba5eaef6ab05",
         "packages/agent-runtime/src/tools/handlers/tool/set-output.ts": "8cede10cfc3050403e396ea1a07087f5c85e40f756de562ac4716b38914490b6",
         "packages/agent-runtime/src/tools/handlers/tool/skill.ts": "f646d79b3a5459fb13480689430e034eb9aa420f021a4c9b6dd70a88028969db",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts": "4857b7bb70064f18f6fa218c7102fa1f5f5b66f9fb1f81f6150e85c5d7b10707",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "00b1b4d14f89545ce257f8b10eeaf6f2dcd800055fce1a62a8a61d7af61b7036",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "3b7e63acd059f2f4122fd4d88a56851ef4f95323a90eb531802b4c18eeea9703",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts": "998f538d4fb2f60b16583cb787cf14ae3caa64e9c48d80765e01ebb0ab4f61ca",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "c25432c46a221a1d56d99bb97b16d3b4758e65c884c53b27dc12676f6e7284dc",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "ea7b35efad51361ab4aa5e3efb5c455107c0be0245435ee838e4fac3c236decf",
         "packages/agent-runtime/src/tools/handlers/tool/str-replace.ts": "8a36ea4e5c1b3c139220a00b4a857c09caf67266fc5420b65b81d1941dd01439",
         "packages/agent-runtime/src/tools/handlers/tool/suggest-followups.ts": "2c1a440497843c1133ceac73f3c30d4d80efb96fca9a67b1f8d85220d239152a",
         "packages/agent-runtime/src/tools/handlers/tool/task-completed.ts": "dd9f8a435a09aaabfbe6e3bb8ba841fa92e44b5ecc81170c34fa949be2aafaa6",
@@ -3703,12 +3782,12 @@
         "packages/agent-runtime/src/util/__tests__/tool-result-eviction.test.ts": "11dc9bf4c93f6d6caf27e3265b2fca7d187b5aadfa29afb3206b119020d5325e",
         "packages/agent-runtime/src/util/__tests__/tool-result-lifecycle.test.ts": "e75bfedf5985e1f6cb8d37ac55e8665dd3a9c1846285d9124237352d71d32670",
         "packages/agent-runtime/src/util/__tests__/warn-latch.test.ts": "f3218017983fc309d15d56978d41b8a50a33c1d82ed1c0803981bff7551db611",
-        "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts": "0f91321d058bb7d8537f0d77e8b98382fbf63d72190ece326346cbf96ba7e4da",
+        "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts": "067747dd62952b3ac894d5436ceb4a2905c41e3c22276292f2b2832ea021da43",
         "packages/agent-runtime/src/util/agent-output.ts": "154bf8f932baa2f38a06a22e54df6f34be7a281aca51e4a49ecd9ea9d93739dc",
         "packages/agent-runtime/src/util/agent-tool-names.ts": "595ef50769f4b0fb16a7bde9f60795379e91c71fabaa76411ecbe9b061055f3b",
         "packages/agent-runtime/src/util/archive-recall-index.ts": "2485ddf85c951b7a69c7e51b53ad58dc2100222230db0170f46b6e033b48fb83",
         "packages/agent-runtime/src/util/authenticated-read-source.ts": "83872133a901ab39bff0693cfe96b1e14f25047ef2a003dff079f57eb144f214",
-        "packages/agent-runtime/src/util/background-agent-jobs.ts": "fd30c145fd41b7f12d6597e8877063f318f23de5f528108ae6ecba20b9beeac2",
+        "packages/agent-runtime/src/util/background-agent-jobs.ts": "66c2ad29faabfba9859f821b76da4ce1aeabe21f8d3713d3869cf3fda2d705f8",
         "packages/agent-runtime/src/util/background-resume.ts": "f9eb8565093ca4e281abb5606c3bdcae5e8483d1cec74f5c93fc8496c9ee72c5",
         "packages/agent-runtime/src/util/base2-tool-tiers.ts": "cbf7ed1c2c31fc4bfa65db4da26291d4a2679cfc2a6c234960966e5124836bae",
         "packages/agent-runtime/src/util/budget-enforcement.ts": "224bfb95b2183eb13a501121e36783c2b18d2b6237815e2428523e04607fbe05",
@@ -3744,7 +3823,7 @@
         "packages/agent-runtime/src/util/recorded-replay-prefix.ts": "3769f5b42c216b861d3e13237961aa6e84050ab7e392833b70325499f9626715",
         "packages/agent-runtime/src/util/render-read-files-result.ts": "91e5a6534140427c58f14b6e2fb8e65d8928a6aa2008561d1f2b7507a3291e0d",
         "packages/agent-runtime/src/util/reviewer-output.ts": "cec473c73470ddb2e4329ec4c35c9e96588315573581b922d0e8cbf92169ee91",
-        "packages/agent-runtime/src/util/run-journal.ts": "613fd901bf24648c64ed99bfc7c81be2f6f30909c4e9bd5d2ab7cb88b5306a39",
+        "packages/agent-runtime/src/util/run-journal.ts": "f3f655a999e4215715101cd9718001d11399e4660ee11297cd27f9061acd9781",
         "packages/agent-runtime/src/util/run-replay-driver.ts": "e86f6bafeed30a333afb0c3f55dd3a48c0125d49cdbbde468cacda323c9c6f66",
         "packages/agent-runtime/src/util/runtime-job-owner.ts": "aa66f8a61c8af16e6455bdeae49f4e2a3b1787db69ed6c672d8ec90fb8ab74c9",
         "packages/agent-runtime/src/util/runtime-semantic-compaction.ts": "a66cae9c631530b5d21347628118a466b62d29befd382fc9a81aed46f8bc451d",
@@ -3757,7 +3836,7 @@
         "packages/agent-runtime/src/util/tool-result-eviction.ts": "c7b42d665f3ce86cbafb9b2c4b0a63daf7ff0786d23c22244e132fa9920fabac",
         "packages/agent-runtime/src/util/tool-result-lifecycle.ts": "4626e40b8074fc35f99ded80623e093ebaf4d3d98e270a9fd46047f85386a459",
         "packages/agent-runtime/src/util/warn-latch.ts": "3523324838794e01d447126ffac79578efb1e057df626708f652d1de48008184",
-        "packages/agent-runtime/src/util/workspace-path-leases.ts": "90d77bf9cbdb0e5a4e5a11e077403eab48a57f4abb0ca493f02808025f1a8a69",
+        "packages/agent-runtime/src/util/workspace-path-leases.ts": "45093c10c7c109ba840fcc1ce48664ddcad7444f690805b90644566d8076a92f",
         "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
         "packages/build-tools/executors.json": "c88841d0fb3acdacc21d4b06c546a7c9c328f229f733e904c19d311eefc6d2f8",
         "packages/build-tools/executors/infisical-run/executor.ts": "2960fc36daf08646edf0f203feffd08e0b0d549778a1d374da88c9b86efacc5f",
@@ -4210,6 +4289,8 @@
         "sdk/src/__tests__/fixtures/attached-job-startup-child.ts": "cff454384f388c470e6eb69d15d0ea1c3003f56124ad91f6d045d3c4d6420e76",
         "sdk/src/__tests__/fixtures/b12-memory-agents.ts": "1ec39f21e4813f89d0d634d89d5bbad9473ef26c1bb690183227f9e383cd0b92",
         "sdk/src/__tests__/fixtures/b12-memory-reader.ts": "781346c33987310caaa0e80b412ae1a3fa1a29049010c74a43a50a7eb086ad04",
+        "sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-controls.ts": "ea9c2e7ebc06dc35451bf1256a5b1d3c621171987ca211e71d4f5bcc76b447d9",
+        "sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-entry.ts": "112ca5718ed7cebefa8380a54720c08b1d30f4afe86ce66e46bf9cd0f6874738",
         "sdk/src/__tests__/fixtures/b19-blender-sdk-branch-controls.ts": "bb2437ab8cafcff2eecf9205cce05548ed71a9ea33ae5aa6a49b610acb5d5b3d",
         "sdk/src/__tests__/fixtures/b19-chrome-sdk-branch-controls.ts": "16f8c8db667e55046b16d73eba5b27194e1263677c5f350b18942223a655f794",
         "sdk/src/__tests__/fixtures/b19-launch-oracles.ts": "035d06d2481949f61731595eca56823837f4822a8b9701d88ade79268352def4",
@@ -4262,7 +4343,7 @@
         "sdk/src/__tests__/language-tool-context.test.ts": "a6fc5d3047d1ce742bf0ccdf14c489918749be649209e2a79495972860abb976",
         "sdk/src/__tests__/list-directory.test.ts": "7a568940d395965b2bdba33e237972a12928a62af4f0bf8160173b6b242a98de",
         "sdk/src/__tests__/list-jobs.test.ts": "9044b16c676c3df2b5180162696a839c7e15fb09ad5de6fef8933c9c8dc172a0",
-        "sdk/src/__tests__/llm-cache-control-wire.test.ts": "2eb06c6fdee67737dd3f268eeceb07387687c5e979cde7519b67beda82f4e95b",
+        "sdk/src/__tests__/llm-cache-control-wire.test.ts": "df383f129d74483051640419f1c917943e9c96f98d9581eb447c8bc5efd0cfb9",
         "sdk/src/__tests__/load-agents.test.ts": "4f271388a599815e33bd913d34dff1866f207f8c3404c88ef87c8bd2040eed87",
         "sdk/src/__tests__/load-markdown-agents.test.ts": "72cb2a271a0306aa2ef98cdd4c9e8dad8ecc5972b25ed898566974e52b4fb66e",
         "sdk/src/__tests__/load-mcp-config.test.ts": "eb186e7c55ba0bba8089a6b79aad663337a6a130984364d99823d88095c6f725",
@@ -4364,6 +4445,7 @@
         "sdk/src/__tests__/strict-project-read-filesystem.test.ts": "95f3ef02f16a6fd9a4ede675b8be7c9fc9d26517571ef69adb8fa96e85a0e11c",
         "sdk/src/__tests__/strict-project-read-registry.test.ts": "40301caf917d19e81bde271814ac09718d2ccc88d0f852a0efa249eded8b5a50",
         "sdk/src/__tests__/strict-project-read-skills.test.ts": "3a0b98df2627bcbf9cbe5803b8a9cd5364b5b988a11ae40b0da57e3124030e23",
+        "sdk/src/__tests__/supervised-abort-settlement.test.ts": "0efcfe202957141ee45e0a43c61d04bbf116744fdd6a84a8fe4887ca341b8646",
         "sdk/src/__tests__/supervised-execution-identity.test.ts": "cde442da501c790df76c61df7d04b7efe9fbd8df8f4a5ff875af31f721e715d1",
         "sdk/src/__tests__/supervised-native-tool-observation.test.ts": "81c1f81818d1978a0790218458b793a808cf15bb9e545e5813a52e6d49f9dd06",
         "sdk/src/__tests__/supervised-self-exec-approval.test.ts": "547b9a9d669cc1b2e2e42dfcde647dbde6a386c9ef57567671d8d22f17829bad",
@@ -4424,7 +4506,7 @@
         "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts": "7e91de9ef8080225665efd2a69a362b1e642263e4613ccffade235a740bfd49b",
         "sdk/src/impl/__tests__/prompt-result.test.ts": "122d28e66322bbce921d70fb3551e7cb084bc0a677d5b3ee404b1bd3e8703b57",
         "sdk/src/impl/__tests__/provider-options-metadata.test.ts": "02cfe60242a6a03926cee35cec371e4a30e0837b1701128f4159d5f189753828",
-        "sdk/src/impl/agent-runtime.ts": "dcf194c9921175037f4edca4fe9692554e62a33e0cc5be2a5f0b246ee2ebde37",
+        "sdk/src/impl/agent-runtime.ts": "500745e9d51947176cb9614673a49064448b9dcf35ae19beef0c6443c91a2b19",
         "sdk/src/impl/chatgpt-backend-fetch.ts": "4fe53976e121fc76a5aa344ecf92a9ce430899ced646b08ec300d29255388a28",
         "sdk/src/impl/cost-accounting.ts": "59dd652667ad2287165dcea342a72eb590f125ee7bcf4f9978a6fd091cf0dfcd",
         "sdk/src/impl/database.ts": "082a847a82138a3d55767f45baa95a1346a7246d8e5c9e43c075e192f2a0980e",
@@ -4434,7 +4516,7 @@
         "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
         "sdk/src/impl/model-provider.ts": "4ccb709d148a7e0e21c871a28ab66d803c68907277a4f5ad4fe1a5977fc70170",
         "sdk/src/impl/opencode-go-responses-fetch.ts": "613beb8bfe008368aa8e68d692c0bbcace004054e2ef4f788be39d39b17040ca",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
         "sdk/src/instruction-files.ts": "45cd7ce611c9448d0f8d3443ff03762c53aa0bb0990fec53873f314dd5ca19fd",
         "sdk/src/job-update-forwarder.ts": "52e2dbedd50b19b21248817a3a0e4293028715214ec794d26adaa36948ea619e",
         "sdk/src/mcp/server.ts": "55e311f9c634a177b6f56defcd6911aeaaa7b58d137af7a41e3d22d9865191d8",
@@ -4445,7 +4527,7 @@
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
         "sdk/src/retry-config.ts": "37c246586f7f2cf80d0cc1f868825766d2f5a3691a7200c40d8e8c7a7bf41fc0",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/__tests__/outbound.test.ts": "e660b1b27ad44cea97d4a70176c1995a0ebbb7432ff3c8f1052aa6af2cebb753",
         "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
@@ -4511,6 +4593,8 @@
         "sdk/src/services/semgrep-baseline.ts": "8cab20d4c9e7155ce07e8c3de4141cb3a4be9329b40f88ba93f43d8b96af4632",
         "sdk/src/services/sidecar-artifact.ts": "bfa24cc138b3c8e78a7eb0ce4c60dbe28cc29c1cde3aedc6b4e782f75c7162fc",
         "sdk/src/services/sidecar-supervisor.ts": "8a7f19a42778a6ae46baa013e253f9a6f6cac45433475b43f99004ef551694df",
+        "sdk/src/services/supervised-replay-core.ts": "43ddbfdd188c1137a067126b60cbef1cc8ea33cdf5e323c3d79d886e055c5c10",
+        "sdk/src/services/supervised-replay-worker.ts": "ba66e08fe794a0ae335432437c10a634689ae4929b8c85a4cba45c28ee3dcefb",
         "sdk/src/services/symbol-enrichment.ts": "c8c439aa1a7027f96d8e460b8ab3c21c17ab57a22270eecf915559d33b4cb826",
         "sdk/src/services/task-memory-store.ts": "87faffd8f5639e4da9dbc639fdb2500fd33a9d364cae4a0539051d1b8639ae88",
         "sdk/src/services/terminal-timeout-policy.ts": "13e62e7c9e1ba39b067ecfd078d316295e7aee822b679869369ac1b662a189fc",
@@ -4637,19 +4721,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T021752111402Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b23-launch-process-nonauthor",
+            "reviewer": "b16-r2-b19-approval",
             "implementationOwners": [
-              "b23-implementation"
+              "/root"
             ],
             "scope": "Current r10 full frozen TypeScript execution context across 26 producers and 196 applicable edges, 32 control and 72 clause adjudication; packed and standalone real consumers, exact local CI",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b23-renewal/B19-implementation-review.json",
-              "sha256": "f7105ee3a52d1644ae79cc4fae0d109d9cb4389579cfea384698fd3607785e79"
+              "path": ".tmp/b16-final/implementation-r2/B19.json",
+              "sha256": "dfc1112844b9fd953a3e968390e54cca675001d4156b41c3122c974eee182e0b"
             }
           }
         ],
@@ -4658,10 +4742,10 @@
       "risks": [
         "Selected proven local routes, no hosted CI, native execution availability or arbitrary scope containment."
       ],
-      "acceptedAt": "2026-11-27T02:17:52.241770+00:00",
+      "acceptedAt": "2026-11-27T07:34:10.944518+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T021752111402Z-acceptance.json",
-        "sha256": "ec454ecbc0e7ef0aecdba326e331d6d13045e07c19c53d7f36ae8b437a6328dd"
+        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "c88420d30c358c3428349cbe95ef4ca4049bcae46b84502b88dea56a9b50091e"
       }
     },
     {
@@ -4933,7 +5017,7 @@
         "cli/src/__tests__/run-cli-tests.test.ts": "f9ef76236ae6e571c630224ef457f358476825e8f33919be0b5d7a96ae812030",
         "cli/src/__tests__/run-command.test.ts": "cdefafaf19a8965762097dc3cbaddcc92ae62906dbab83f37ccb7bd3d19921b3",
         "cli/src/__tests__/run-continue-sdk.test.ts": "2baef746d393990b986ae9c1cd04561577d5a8e3be228f33202de8d2c6f36cf9",
-        "cli/src/__tests__/run-continue-wire.test.ts": "c09d97b209649bbc3154f03e4d213c62b2fdd93f59bcbd27168ebca97653ca20",
+        "cli/src/__tests__/run-continue-wire.test.ts": "8a64c745c8706329f0358b1c79ba0e93569c6ca78345c736275b806a10155740",
         "cli/src/__tests__/run-continue.test.ts": "3229c083d85ece90ad29a8f9db958fc54a871b0dc0980f99f274fbd90d1a21a8",
         "cli/src/__tests__/run-model-args.test.ts": "f0dc2ce5c66e9ed9945eb321cd8a8aa2e86b079b8dcbc61fb87d7cbfda82c4f1",
         "cli/src/__tests__/run-output-schema.test.ts": "9be57e7cdad3dbb16577cd56e4c0be50d5bdab579cbc8775be1f2e31fd725d48",
@@ -4953,7 +5037,7 @@
         "cli/src/__tests__/wrapper-secondary-ui.test.ts": "ba8d1b983f38d2669304507729b7f62665775e5cfa1ceb5d09a2afa97289980c",
         "cli/src/agents/bundled-agents.generated.d.ts": "40575e0e274d7e9408409b36b2d6e253c112de25f9ffa67557251e7c97473487",
         "cli/src/app.tsx": "c5b2fd5bf21189b331eb30cba0628a3f52bfa5957e8d87e75706f3b5e3cb7673",
-        "cli/src/binary-entry.ts": "567f0d422bc3b2ffbf05b406b91a4b7b32bda77550ef31f76f46071891e01246",
+        "cli/src/binary-entry.ts": "d7d7f9a9fb00cf0574754842683210429364f43da27a2b4476f7f6f6e6d40273",
         "cli/src/chat.tsx": "c640f4f59ad8d1ee17c47a7b82732f66380a57503b4e97361c22cd1c8cf63407",
         "cli/src/cli-args.ts": "73e15a22f0fef2e97a62d1f7f735ee8c9e9abd5665e9e97d58744ee21c1907d8",
         "cli/src/commands/__tests__/bash-command.test.ts": "cd8a7d5c84956abc3fc407596bcf39533166b1ada7d45e603ea7af61269e590c",
@@ -5929,14 +6013,14 @@
         "common/src/types/context-archive.ts": "9583f1c9930893b9fff63bb7a920e85a939e3899591252ab5d209be7372d6116",
         "common/src/types/context-consolidation.ts": "447cfdcefbf0ae4d93e952f57d8a7b1a81e6faed8c9d8bf72ac9fd8d9c109da2",
         "common/src/types/contracts/__tests__/llm-contract.test.ts": "28f8521c7f588fde7d4a51e33b0833db5a9d7d6afa746710decd598b33b8d3dc",
-        "common/src/types/contracts/agent-runtime.ts": "3600582d089e2898353cb8c5caee59cbfefacffe8dd8c720ffe50dcc2fd233a6",
+        "common/src/types/contracts/agent-runtime.ts": "9a5d78af80a331bc3e50c469792cb3228a7ccc13e7eef1d01c47216c98dc29ad",
         "common/src/types/contracts/analytics.ts": "341bdd28b1c19ebb2c13648dde328c997346e9f28258deab6b02e3dc08ffb61a",
         "common/src/types/contracts/bigquery.ts": "7d8e457149a513a9ac15bc41597eeb18f863a23c9b7965f48cd69e42e934c9db",
         "common/src/types/contracts/billing.ts": "64c9a86db75045bb7dedfdf0eb4b22bc37bfb616146d87cfec99da7311bb6fc6",
         "common/src/types/contracts/client.ts": "08fc66a079222142d946ecd27f64a2b9847775dba776d1ee1a555bffdca5affd",
         "common/src/types/contracts/database.ts": "82d1532ebf1e4d9db8d423f1b97e762aaa80441ce9789b900a44c6bb1e5947a0",
         "common/src/types/contracts/env.ts": "5c5fdd7de446a170cade592bec8b67feaddd3be8a777cf243369be0b9c422a44",
-        "common/src/types/contracts/execution-context.ts": "75fccaee7eefa9f0c54a783e9923df87041c23892e4bc385b9090c8a0837abcf",
+        "common/src/types/contracts/execution-context.ts": "752f50a3a011e665a7d3a5638bb28d6e42e8777f6ac2bf1df9fb033214edf4b4",
         "common/src/types/contracts/llm.ts": "5d2b0d8d1eb43eb130dcf7548b885e5d36715f74be0f31b20b81d8b311d69500",
         "common/src/types/contracts/logger.ts": "614df59a247de3e21cb4482073140f8e3de0d1fef69303c9ee9a7268f6dff8b4",
         "common/src/types/contracts/native-execution.ts": "c4a480c8fd04588b1a64e255841996913bb2c6bccf7a6f23b32321b7ab513752",
@@ -5963,7 +6047,7 @@
         "common/src/types/publisher.ts": "053d21722ae3550795856f25e2b61e428bac1c03f26239b335bf3394fe9e956f",
         "common/src/types/request-admission.ts": "135908f520ec69f842b69061201bebf8b6cd4bd1f83e16c820b595c680611f4b",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
-        "common/src/types/session-state.ts": "ff09dcd1f68d7d42b01119d0957fddc72a64e89d632821492ffd570c65fd1274",
+        "common/src/types/session-state.ts": "f9235a261addb0bc742b8ac7fb885ea293224475909dd8f2c2470bdde11e2d01",
         "common/src/types/skill.ts": "dcb2cb5e21c724d202ab7cc0ab892973c112b5b91674259db299377b99b1ef2a",
         "common/src/types/source.ts": "33a0f04678a82643fb76838e5efaa4a4d5b6867404fcb3afcd42623feeb5d92d",
         "common/src/types/spawn.ts": "c1674839b92b9957b7e723fb64f966d9162b2ed0c250ec6f78c25c459cdec6df",
@@ -6057,7 +6141,7 @@
         "common/src/util/decision-rationale.ts": "03d349703e950f30762d7495b33d75dbab5359ed7e3847af58449f225fc90b61",
         "common/src/util/engine-profiles.ts": "efde0a781f590c4e447ff501b49b877c5eb9c9522d8a21f0316a866f2d50f5e2",
         "common/src/util/error.ts": "dd3d74dabd8f602db319dce3ba2cee93ccf7d6c46cd7098734b74ce5f6c8c9bc",
-        "common/src/util/execution-context.ts": "6cbd4f18400f8fdab55247fd446ce88f86ecbf0c3f54f82c5c2a3671c7c8b953",
+        "common/src/util/execution-context.ts": "73dc8ce4b81b4cad86b47fef36de05892611a80837c525ad91f5f65a90c0e70e",
         "common/src/util/file.ts": "f36609894118d7f541d49ffb8f18ec54e5fc353786f3d20a4ddbdc879a590618",
         "common/src/util/filesystem-sandbox.ts": "36b07b6a7d184fbc71b88c8022b890c7d67c5c69538f7e35207089352b055071",
         "common/src/util/format-code-search.ts": "805da31d53bb2b9f6c87af6fc108a37869ce33af8430f25d5739fb756e7bb36b",
@@ -6249,7 +6333,7 @@
         "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
         "packages/agent-runtime/src/__tests__/agent-handoff-boundary.test.ts": "5eb2d88b91950ae099e49b4e1bd161572d3fc873bc6a578a90956c0818541246",
         "packages/agent-runtime/src/__tests__/b15-production-replay-proof.test.ts": "c36dbbbbf2f2b4ef906d3c57baad306a4ca38484fcd40fe63dd1e89d94218e72",
-        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "e76b44fabce726d453b131288af7a6a763440a5f650f48d60d9508e1b101d85f",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "d861cf3bc9c8db9162220734cf379e1c138eaeef00a6c6fdadda1758ec845320",
         "packages/agent-runtime/src/__tests__/benchmark-tools.ts": "f58a9190d02086a3b83cecd096ae50e6638c068f01f71a788c6d4ca108895e42",
         "packages/agent-runtime/src/__tests__/browser-logs-policy.test.ts": "5a1983663b7fbf0a4e77a3dc51bbc5108f90cf93b184dd29018d881f8078c3ef",
         "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts": "a3318eb09907e8417f5452922ff90eee67b43c6a6bc9ceacedcf8b82449c81fb",
@@ -6349,7 +6433,7 @@
         "packages/agent-runtime/src/process-str-replace.ts": "90dc1a5386367bbf698b431719f328fa71dad4e0fbf22e694e5715e7b40efabc",
         "packages/agent-runtime/src/process-structured-edit.ts": "8f7b10f28b93122cabb7018c33bab97c9fab0ffea7f99e7f60cc72cf051f4fb6",
         "packages/agent-runtime/src/prompt-agent-stream.ts": "594e32933e17b02150c4313b50faec22c8f84df233fe10a84abbb95019b89fe4",
-        "packages/agent-runtime/src/run-agent-step.ts": "4681e2b77357c8dc4f5d1c3b5498feadb9ed3167d8ca4c5eeef40e7c35c630cf",
+        "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
         "packages/agent-runtime/src/run-programmatic-step.ts": "60eaaadd15e4fc73638c4e3f9a1e687bb3c98ed0277d21bb346fbc51d53f7565",
         "packages/agent-runtime/src/structural-read.ts": "f1e13ac91b97d462a82ed1a33960fd27d5b91f41835660d71421a62950563e52",
         "packages/agent-runtime/src/supervision/__fixtures__/b20-descendant.ts": "d582e5b8a33a59a40d33753c2170a9e84c1179e3029af5bd7b78011eec567657",
@@ -6359,19 +6443,21 @@
         "packages/agent-runtime/src/supervision/__tests__/execution.test.ts": "e2fb1c6caeab1df4b94cc87efdde5ae9f6557f3d3a3d3422df05441dae5c614f",
         "packages/agent-runtime/src/supervision/__tests__/fixtures/b05-child-network-guard.ts": "7dc5d103a56d79b0657baf1042edf709ff474ac6426bb45a20bded09dea12892",
         "packages/agent-runtime/src/supervision/__tests__/fixtures/b05-child-read-worker.ts": "45e7eb97f2b2dd693355da69ff73e64a47e8ea2add844705fd7b2d06f0300efa",
-        "packages/agent-runtime/src/supervision/__tests__/process-supervisor.test.ts": "3d0cf77c2ba0616eff0f048498b19d835cd8461d587e4e8e3ca4460259deb987",
+        "packages/agent-runtime/src/supervision/__tests__/process-supervisor.test.ts": "97f305b7d8c3f79ab4eb481ba17b49b8609008e858968930489941d21982619f",
         "packages/agent-runtime/src/supervision/__tests__/raw-read-handoff-b05.test.ts": "facf3dfb4a5cae04ddc587a258dafe294d587e99f24a39d8dacdc130a2e8aa82",
         "packages/agent-runtime/src/supervision/__tests__/supervised-bridge-e2e.test.ts": "6ea15f83812ee850a4c9aeb15239145c41e66738b6508dde7441309d71fb3a3b",
+        "packages/agent-runtime/src/supervision/__tests__/supervised-journal.test.ts": "6671248b91a6e8b209926bcc3d86b05ea6d7e0d8ad1095cc1982702bae785faa",
         "packages/agent-runtime/src/supervision/__tests__/supervised-restart.test.ts": "90742b2c58c7fa9a11c0368556052d4cc1143bc8ba708bdcfa97f56f24d07874",
         "packages/agent-runtime/src/supervision/__tests__/supervised-spawn-launchable.test.ts": "8605ef6923047dbe5448293fbc18958083c32b05dc56c2b87a27b3b1f1062e41",
-        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "f3ddab5caf67247b4396676a0ad482e1b2c91a72238542b427c3f88aa7c1f00b",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "c08a8fb1077433723c48324aeb2275aa63023bdb05df3b51bc09e472c206947a",
         "packages/agent-runtime/src/supervision/child-bridge-client.ts": "46cbb43757aa5cdd28fbbdbe71106b30332ebad6c5fe1e828994b34b0181f95d",
-        "packages/agent-runtime/src/supervision/child-entry.ts": "a6529cb50e203c70dcf8fdc636d029379bae7e5f921b2768216bb0ada8576032",
-        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "da3ba6d12dbbca331aacd62d5b623bfe943fb6820b39d737832639d10a6e7993",
-        "packages/agent-runtime/src/supervision/process-supervisor.ts": "b9331da9c689e3a12648ec3991893727ae955283dfabf3384f4871cde8494eb9",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "4b7ff1c5e269fc1ca174c4a52797c17f3516499295d8171bb7da72fa159787ae",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "e5118dcc282590263df980a593947c843bcead2a3fffc990068e81ed381b61ad",
+        "packages/agent-runtime/src/supervision/process-supervisor.ts": "a2193b2db257c0590b1808e5d6d0bf8abb859a3bea7dc04fbbba1cc2ec9b013c",
         "packages/agent-runtime/src/supervision/self-exec-flag.ts": "510d496b6475c1d0bf743630ad50eeef7aeedcc7bf299a2044dd75ac3195568c",
         "packages/agent-runtime/src/supervision/supervised-child-env-keys.ts": "5479b918983b9b156fe0333247eb2a36f0a46a9281b9ec5f7c325e6e08410988",
-        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "43314f65f74ebffc4d923e28ca5abafceb45fd61d223dde5f95e90cdecad6bd2",
+        "packages/agent-runtime/src/supervision/supervised-journal.ts": "b920a58e6fd8fa5b23ff80814fa713268a26618e28d460cf19ab4459055cc165",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "20593239c0390119f8231a03ab21f53e8946d5d4409b63f75bf9ecfd24f1c81f",
         "packages/agent-runtime/src/system-prompt/__tests__/prompts-ledger.test.ts": "0260ebece7991331eb18407845aff70f85ead7a77d40bdd5173716977a3f4304",
         "packages/agent-runtime/src/system-prompt/__tests__/truncate-file-tree.test.ts": "58759cb6343b932ac59a341cacd1af91fcc1a6b663841e6c89957a7ed7626bab",
         "packages/agent-runtime/src/system-prompt/prompts.ts": "6023f9fb0d3cddbbf9dcf039e0cc017a7b0399b1183aa92ee859a95517c4e88b",
@@ -6419,7 +6505,7 @@
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/runtime-path-hardening.test.ts": "aaa3efdb85143d953952b6987ba92add50635e59a5954f95aee807a2aedfbb48",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/set-output.test.ts": "4bfbc5594df50c382a4315333e31fab31200e7eef394b80f15bffa0a690e6d1e",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-evidence-merge.test.ts": "de09ed27325d56f5abce4305c42e1c1adf655f1ce1dbc0d6ae48ccb3947c0136",
-        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "3eb0db5899f46e4547ba9ebdd14c80f7a327d9a7cc047b069f61db10e4c81b1b",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "4af319070312f5cb5a597d23a00cde2974a519af201fd2f616295715618997c7",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-clone-cache.test.ts": "0ee89fe7c1e976526b4fcd6c580f2069f7d9c9f5aa2a1817efecce51c4eece27",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts": "9e6d17b1039e193bee3891bfa1b65323acbb3285486b11462ecef31dc6f1746c",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/str-replace-circuit-breaker.test.ts": "733164884ab96347db089926655e15fcd7e7e38f490d162ac111489f47fd71cb",
@@ -6484,9 +6570,9 @@
         "packages/agent-runtime/src/tools/handlers/tool/set-messages.ts": "6e19cf5817a48c52a65aac7d789b484e68d48eb89d89b9e37babba5eaef6ab05",
         "packages/agent-runtime/src/tools/handlers/tool/set-output.ts": "8cede10cfc3050403e396ea1a07087f5c85e40f756de562ac4716b38914490b6",
         "packages/agent-runtime/src/tools/handlers/tool/skill.ts": "f646d79b3a5459fb13480689430e034eb9aa420f021a4c9b6dd70a88028969db",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts": "4857b7bb70064f18f6fa218c7102fa1f5f5b66f9fb1f81f6150e85c5d7b10707",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "00b1b4d14f89545ce257f8b10eeaf6f2dcd800055fce1a62a8a61d7af61b7036",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "3b7e63acd059f2f4122fd4d88a56851ef4f95323a90eb531802b4c18eeea9703",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts": "998f538d4fb2f60b16583cb787cf14ae3caa64e9c48d80765e01ebb0ab4f61ca",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "c25432c46a221a1d56d99bb97b16d3b4758e65c884c53b27dc12676f6e7284dc",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "ea7b35efad51361ab4aa5e3efb5c455107c0be0245435ee838e4fac3c236decf",
         "packages/agent-runtime/src/tools/handlers/tool/str-replace.ts": "8a36ea4e5c1b3c139220a00b4a857c09caf67266fc5420b65b81d1941dd01439",
         "packages/agent-runtime/src/tools/handlers/tool/suggest-followups.ts": "2c1a440497843c1133ceac73f3c30d4d80efb96fca9a67b1f8d85220d239152a",
         "packages/agent-runtime/src/tools/handlers/tool/task-completed.ts": "dd9f8a435a09aaabfbe6e3bb8ba841fa92e44b5ecc81170c34fa949be2aafaa6",
@@ -6542,12 +6628,12 @@
         "packages/agent-runtime/src/util/__tests__/tool-result-eviction.test.ts": "11dc9bf4c93f6d6caf27e3265b2fca7d187b5aadfa29afb3206b119020d5325e",
         "packages/agent-runtime/src/util/__tests__/tool-result-lifecycle.test.ts": "e75bfedf5985e1f6cb8d37ac55e8665dd3a9c1846285d9124237352d71d32670",
         "packages/agent-runtime/src/util/__tests__/warn-latch.test.ts": "f3218017983fc309d15d56978d41b8a50a33c1d82ed1c0803981bff7551db611",
-        "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts": "0f91321d058bb7d8537f0d77e8b98382fbf63d72190ece326346cbf96ba7e4da",
+        "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts": "067747dd62952b3ac894d5436ceb4a2905c41e3c22276292f2b2832ea021da43",
         "packages/agent-runtime/src/util/agent-output.ts": "154bf8f932baa2f38a06a22e54df6f34be7a281aca51e4a49ecd9ea9d93739dc",
         "packages/agent-runtime/src/util/agent-tool-names.ts": "595ef50769f4b0fb16a7bde9f60795379e91c71fabaa76411ecbe9b061055f3b",
         "packages/agent-runtime/src/util/archive-recall-index.ts": "2485ddf85c951b7a69c7e51b53ad58dc2100222230db0170f46b6e033b48fb83",
         "packages/agent-runtime/src/util/authenticated-read-source.ts": "83872133a901ab39bff0693cfe96b1e14f25047ef2a003dff079f57eb144f214",
-        "packages/agent-runtime/src/util/background-agent-jobs.ts": "fd30c145fd41b7f12d6597e8877063f318f23de5f528108ae6ecba20b9beeac2",
+        "packages/agent-runtime/src/util/background-agent-jobs.ts": "66c2ad29faabfba9859f821b76da4ce1aeabe21f8d3713d3869cf3fda2d705f8",
         "packages/agent-runtime/src/util/background-resume.ts": "f9eb8565093ca4e281abb5606c3bdcae5e8483d1cec74f5c93fc8496c9ee72c5",
         "packages/agent-runtime/src/util/base2-tool-tiers.ts": "cbf7ed1c2c31fc4bfa65db4da26291d4a2679cfc2a6c234960966e5124836bae",
         "packages/agent-runtime/src/util/budget-enforcement.ts": "224bfb95b2183eb13a501121e36783c2b18d2b6237815e2428523e04607fbe05",
@@ -6583,7 +6669,7 @@
         "packages/agent-runtime/src/util/recorded-replay-prefix.ts": "3769f5b42c216b861d3e13237961aa6e84050ab7e392833b70325499f9626715",
         "packages/agent-runtime/src/util/render-read-files-result.ts": "91e5a6534140427c58f14b6e2fb8e65d8928a6aa2008561d1f2b7507a3291e0d",
         "packages/agent-runtime/src/util/reviewer-output.ts": "cec473c73470ddb2e4329ec4c35c9e96588315573581b922d0e8cbf92169ee91",
-        "packages/agent-runtime/src/util/run-journal.ts": "613fd901bf24648c64ed99bfc7c81be2f6f30909c4e9bd5d2ab7cb88b5306a39",
+        "packages/agent-runtime/src/util/run-journal.ts": "f3f655a999e4215715101cd9718001d11399e4660ee11297cd27f9061acd9781",
         "packages/agent-runtime/src/util/run-replay-driver.ts": "e86f6bafeed30a333afb0c3f55dd3a48c0125d49cdbbde468cacda323c9c6f66",
         "packages/agent-runtime/src/util/runtime-job-owner.ts": "aa66f8a61c8af16e6455bdeae49f4e2a3b1787db69ed6c672d8ec90fb8ab74c9",
         "packages/agent-runtime/src/util/runtime-semantic-compaction.ts": "a66cae9c631530b5d21347628118a466b62d29befd382fc9a81aed46f8bc451d",
@@ -6596,7 +6682,7 @@
         "packages/agent-runtime/src/util/tool-result-eviction.ts": "c7b42d665f3ce86cbafb9b2c4b0a63daf7ff0786d23c22244e132fa9920fabac",
         "packages/agent-runtime/src/util/tool-result-lifecycle.ts": "4626e40b8074fc35f99ded80623e093ebaf4d3d98e270a9fd46047f85386a459",
         "packages/agent-runtime/src/util/warn-latch.ts": "3523324838794e01d447126ffac79578efb1e057df626708f652d1de48008184",
-        "packages/agent-runtime/src/util/workspace-path-leases.ts": "90d77bf9cbdb0e5a4e5a11e077403eab48a57f4abb0ca493f02808025f1a8a69",
+        "packages/agent-runtime/src/util/workspace-path-leases.ts": "45093c10c7c109ba840fcc1ce48664ddcad7444f690805b90644566d8076a92f",
         "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
         "packages/build-tools/executors.json": "c88841d0fb3acdacc21d4b06c546a7c9c328f229f733e904c19d311eefc6d2f8",
         "packages/build-tools/executors/infisical-run/executor.ts": "2960fc36daf08646edf0f203feffd08e0b0d549778a1d374da88c9b86efacc5f",
@@ -7049,6 +7135,8 @@
         "sdk/src/__tests__/fixtures/attached-job-startup-child.ts": "cff454384f388c470e6eb69d15d0ea1c3003f56124ad91f6d045d3c4d6420e76",
         "sdk/src/__tests__/fixtures/b12-memory-agents.ts": "1ec39f21e4813f89d0d634d89d5bbad9473ef26c1bb690183227f9e383cd0b92",
         "sdk/src/__tests__/fixtures/b12-memory-reader.ts": "781346c33987310caaa0e80b412ae1a3fa1a29049010c74a43a50a7eb086ad04",
+        "sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-controls.ts": "ea9c2e7ebc06dc35451bf1256a5b1d3c621171987ca211e71d4f5bcc76b447d9",
+        "sdk/src/__tests__/fixtures/b16-supervision-sdk-compiled-entry.ts": "112ca5718ed7cebefa8380a54720c08b1d30f4afe86ce66e46bf9cd0f6874738",
         "sdk/src/__tests__/fixtures/b19-blender-sdk-branch-controls.ts": "bb2437ab8cafcff2eecf9205cce05548ed71a9ea33ae5aa6a49b610acb5d5b3d",
         "sdk/src/__tests__/fixtures/b19-chrome-sdk-branch-controls.ts": "16f8c8db667e55046b16d73eba5b27194e1263677c5f350b18942223a655f794",
         "sdk/src/__tests__/fixtures/b19-launch-oracles.ts": "035d06d2481949f61731595eca56823837f4822a8b9701d88ade79268352def4",
@@ -7101,7 +7189,7 @@
         "sdk/src/__tests__/language-tool-context.test.ts": "a6fc5d3047d1ce742bf0ccdf14c489918749be649209e2a79495972860abb976",
         "sdk/src/__tests__/list-directory.test.ts": "7a568940d395965b2bdba33e237972a12928a62af4f0bf8160173b6b242a98de",
         "sdk/src/__tests__/list-jobs.test.ts": "9044b16c676c3df2b5180162696a839c7e15fb09ad5de6fef8933c9c8dc172a0",
-        "sdk/src/__tests__/llm-cache-control-wire.test.ts": "2eb06c6fdee67737dd3f268eeceb07387687c5e979cde7519b67beda82f4e95b",
+        "sdk/src/__tests__/llm-cache-control-wire.test.ts": "df383f129d74483051640419f1c917943e9c96f98d9581eb447c8bc5efd0cfb9",
         "sdk/src/__tests__/load-agents.test.ts": "4f271388a599815e33bd913d34dff1866f207f8c3404c88ef87c8bd2040eed87",
         "sdk/src/__tests__/load-markdown-agents.test.ts": "72cb2a271a0306aa2ef98cdd4c9e8dad8ecc5972b25ed898566974e52b4fb66e",
         "sdk/src/__tests__/load-mcp-config.test.ts": "eb186e7c55ba0bba8089a6b79aad663337a6a130984364d99823d88095c6f725",
@@ -7203,6 +7291,7 @@
         "sdk/src/__tests__/strict-project-read-filesystem.test.ts": "95f3ef02f16a6fd9a4ede675b8be7c9fc9d26517571ef69adb8fa96e85a0e11c",
         "sdk/src/__tests__/strict-project-read-registry.test.ts": "40301caf917d19e81bde271814ac09718d2ccc88d0f852a0efa249eded8b5a50",
         "sdk/src/__tests__/strict-project-read-skills.test.ts": "3a0b98df2627bcbf9cbe5803b8a9cd5364b5b988a11ae40b0da57e3124030e23",
+        "sdk/src/__tests__/supervised-abort-settlement.test.ts": "0efcfe202957141ee45e0a43c61d04bbf116744fdd6a84a8fe4887ca341b8646",
         "sdk/src/__tests__/supervised-execution-identity.test.ts": "cde442da501c790df76c61df7d04b7efe9fbd8df8f4a5ff875af31f721e715d1",
         "sdk/src/__tests__/supervised-native-tool-observation.test.ts": "81c1f81818d1978a0790218458b793a808cf15bb9e545e5813a52e6d49f9dd06",
         "sdk/src/__tests__/supervised-self-exec-approval.test.ts": "547b9a9d669cc1b2e2e42dfcde647dbde6a386c9ef57567671d8d22f17829bad",
@@ -7263,7 +7352,7 @@
         "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts": "7e91de9ef8080225665efd2a69a362b1e642263e4613ccffade235a740bfd49b",
         "sdk/src/impl/__tests__/prompt-result.test.ts": "122d28e66322bbce921d70fb3551e7cb084bc0a677d5b3ee404b1bd3e8703b57",
         "sdk/src/impl/__tests__/provider-options-metadata.test.ts": "02cfe60242a6a03926cee35cec371e4a30e0837b1701128f4159d5f189753828",
-        "sdk/src/impl/agent-runtime.ts": "dcf194c9921175037f4edca4fe9692554e62a33e0cc5be2a5f0b246ee2ebde37",
+        "sdk/src/impl/agent-runtime.ts": "500745e9d51947176cb9614673a49064448b9dcf35ae19beef0c6443c91a2b19",
         "sdk/src/impl/chatgpt-backend-fetch.ts": "4fe53976e121fc76a5aa344ecf92a9ce430899ced646b08ec300d29255388a28",
         "sdk/src/impl/cost-accounting.ts": "59dd652667ad2287165dcea342a72eb590f125ee7bcf4f9978a6fd091cf0dfcd",
         "sdk/src/impl/database.ts": "082a847a82138a3d55767f45baa95a1346a7246d8e5c9e43c075e192f2a0980e",
@@ -7273,7 +7362,7 @@
         "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
         "sdk/src/impl/model-provider.ts": "4ccb709d148a7e0e21c871a28ab66d803c68907277a4f5ad4fe1a5977fc70170",
         "sdk/src/impl/opencode-go-responses-fetch.ts": "613beb8bfe008368aa8e68d692c0bbcace004054e2ef4f788be39d39b17040ca",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
         "sdk/src/instruction-files.ts": "45cd7ce611c9448d0f8d3443ff03762c53aa0bb0990fec53873f314dd5ca19fd",
         "sdk/src/job-update-forwarder.ts": "52e2dbedd50b19b21248817a3a0e4293028715214ec794d26adaa36948ea619e",
         "sdk/src/mcp/server.ts": "55e311f9c634a177b6f56defcd6911aeaaa7b58d137af7a41e3d22d9865191d8",
@@ -7284,7 +7373,7 @@
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
         "sdk/src/retry-config.ts": "37c246586f7f2cf80d0cc1f868825766d2f5a3691a7200c40d8e8c7a7bf41fc0",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/__tests__/outbound.test.ts": "e660b1b27ad44cea97d4a70176c1995a0ebbb7432ff3c8f1052aa6af2cebb753",
         "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
@@ -7350,6 +7439,8 @@
         "sdk/src/services/semgrep-baseline.ts": "8cab20d4c9e7155ce07e8c3de4141cb3a4be9329b40f88ba93f43d8b96af4632",
         "sdk/src/services/sidecar-artifact.ts": "bfa24cc138b3c8e78a7eb0ce4c60dbe28cc29c1cde3aedc6b4e782f75c7162fc",
         "sdk/src/services/sidecar-supervisor.ts": "8a7f19a42778a6ae46baa013e253f9a6f6cac45433475b43f99004ef551694df",
+        "sdk/src/services/supervised-replay-core.ts": "43ddbfdd188c1137a067126b60cbef1cc8ea33cdf5e323c3d79d886e055c5c10",
+        "sdk/src/services/supervised-replay-worker.ts": "ba66e08fe794a0ae335432437c10a634689ae4929b8c85a4cba45c28ee3dcefb",
         "sdk/src/services/symbol-enrichment.ts": "c8c439aa1a7027f96d8e460b8ab3c21c17ab57a22270eecf915559d33b4cb826",
         "sdk/src/services/task-memory-store.ts": "87faffd8f5639e4da9dbc639fdb2500fd33a9d364cae4a0539051d1b8639ae88",
         "sdk/src/services/terminal-timeout-policy.ts": "13e62e7c9e1ba39b067ecfd078d316295e7aee822b679869369ac1b662a189fc",
@@ -7476,19 +7567,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T021752111402Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "b23-launch-process-nonauthor",
+            "reviewer": "b16-r2-b20-approval",
             "implementationOwners": [
-              "b23-implementation"
+              "/root"
             ],
             "scope": "Current r10 full frozen cooperative Linux process scope cleanup B20 behaviors and four actual packed Node consumers",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/b23-renewal/B20-implementation-review.json",
-              "sha256": "38c1e818a30510754fd01b2c18db09269c9812149396d9953cee23d0bd3934cf"
+              "path": ".tmp/b16-final/implementation-r2/B20.json",
+              "sha256": "1828b059522b1894fafcab131fe0cf9bddb801dba7efaf7b78a13a7c70f71307"
             }
           }
         ],
@@ -7497,10 +7588,10 @@
       "risks": [
         "No native process fence, escape prevention, Windows/non-Linux or arbitrary descendant/malformed identity credit."
       ],
-      "acceptedAt": "2026-11-27T02:17:52.359642+00:00",
+      "acceptedAt": "2026-11-27T07:34:11.071292+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T021752111402Z-acceptance.json",
-        "sha256": "e07bd41b3bc17c5019bdfdd9ad1fc78bf506efb72c69765935e4078c87321dad"
+        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "c91ae0bfcecacd31cb329b93f0f1cfa0164e37561aca6e82cad51d8bf51ff8f2"
       }
     },
     {
@@ -7747,7 +7838,7 @@
         "common/src/util/messages.ts": "f1bc5135c04d01c3479d215c174d9ebbaaf6736bd74cc0fbd68dd97fc922d63e",
         "docs/execution/body-roadmap/record-renewal-checks.py": "ab2427f2dd0c2cde82cd5aa4a671128cf8d7627479dc4230cb6a6aaefe05b8b3",
         "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
-        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "e76b44fabce726d453b131288af7a6a763440a5f650f48d60d9508e1b101d85f",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "d861cf3bc9c8db9162220734cf379e1c138eaeef00a6c6fdadda1758ec845320",
         "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "fb9994f0737ce5af7e68d3d586cbef0e6d7ecbb86a263ac6dcfcc7a0511f40da",
         "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts": "25648a86f71e279f0ebce69427f9cd6a1018b4725cbaa341e962adba8374518c",
         "packages/agent-runtime/src/__tests__/prompts-schema-handling.test.ts": "064d87501cfe29e40e58c21b86310bb968151453890be619fdf588a922be3771",
@@ -7760,16 +7851,16 @@
         "packages/agent-runtime/src/__tests__/subagent-streaming.test.ts": "366d0785d9527024e19972d572527310e3607b9c3fc437e912d3803ee824bd61",
         "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "2bb2e3b3d61fa1811822f00cafe25eef6c219ba74f1840fdd1d88cd02fbb913b",
         "packages/agent-runtime/src/mcp.ts": "998db2688c974c0be6aef1bc9a422322477e24c2d91a66efe73ffca77b9b789f",
-        "packages/agent-runtime/src/run-agent-step.ts": "4681e2b77357c8dc4f5d1c3b5498feadb9ed3167d8ca4c5eeef40e7c35c630cf",
+        "packages/agent-runtime/src/run-agent-step.ts": "3091d937fcbf7a42dc00e58f4bab13e68b82c9e1b6b699197e134c35f954fcf0",
         "packages/agent-runtime/src/run-programmatic-step.ts": "60eaaadd15e4fc73638c4e3f9a1e687bb3c98ed0277d21bb346fbc51d53f7565",
         "packages/agent-runtime/src/supervision/__tests__/bridge.test.ts": "9d75eeb1d3bf88ad4419203d1c660efeb9ed8ed0257a490925e8e780f75e911e",
         "packages/agent-runtime/src/supervision/__tests__/child-entry.test.ts": "dc4d6ddd1a5534711e0d103af0b119964e49ec07b1348ac3efc64e0d38b794a4",
-        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "da3ba6d12dbbca331aacd62d5b623bfe943fb6820b39d737832639d10a6e7993",
-        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "43314f65f74ebffc4d923e28ca5abafceb45fd61d223dde5f95e90cdecad6bd2",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "e5118dcc282590263df980a593947c843bcead2a3fffc990068e81ed381b61ad",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "20593239c0390119f8231a03ab21f53e8946d5d4409b63f75bf9ecfd24f1c81f",
         "packages/agent-runtime/src/templates/__tests__/agent-registry.test.ts": "4c5b006746836cdd1957aff5d53e583f9917b1bf6fccf29d861b4100d5d64c1e",
         "packages/agent-runtime/src/templates/agent-registry.ts": "1548265b451c6628524b2d6cde7c8a50753b381b37ba7945e4955e1f3bb2dbd3",
-        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "3eb0db5899f46e4547ba9ebdd14c80f7a327d9a7cc047b069f61db10e4c81b1b",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "00b1b4d14f89545ce257f8b10eeaf6f2dcd800055fce1a62a8a61d7af61b7036",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "4af319070312f5cb5a597d23a00cde2974a519af201fd2f616295715618997c7",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "c25432c46a221a1d56d99bb97b16d3b4758e65c884c53b27dc12676f6e7284dc",
         "packages/agent-runtime/src/tools/prompts.ts": "5364bbc1ccea5b0a2466c2e488a63cd8c50e130c3633e46f7c66ea2d03338fab",
         "packages/agent-runtime/src/tools/tool-executor.ts": "9da91d15e07ee6ef13bbe3da4762d381cb9578d5167a14fbfbb64156af6578f8",
         "scripts/__tests__/ci-workflow.test.ts": "53fe33811a7095526b89e84aebafe54b895761e79ece0809c29cf54f73fe2dd8",
@@ -7788,10 +7879,10 @@
         "sdk/src/__tests__/mcp-server.test.ts": "d49be61f7db3f9030665901682d55062f09a3aa64ae472ef871fedb418817a31",
         "sdk/src/__tests__/run-mcp-tool-filter.test.ts": "9e0012a1366e0687e220b52f2c4d05474c4374065bf52141a08b242d6eaaa349",
         "sdk/src/custom-tool.ts": "3ebb3190fc42d9c8e044c5fa5a6cb95a225195420c7a33c7d723174a0f27bd1b",
-        "sdk/src/impl/agent-runtime.ts": "dcf194c9921175037f4edca4fe9692554e62a33e0cc5be2a5f0b246ee2ebde37",
+        "sdk/src/impl/agent-runtime.ts": "500745e9d51947176cb9614673a49064448b9dcf35ae19beef0c6443c91a2b19",
         "sdk/src/mcp/server.ts": "55e311f9c634a177b6f56defcd6911aeaaa7b58d137af7a41e3d22d9865191d8",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/event-bridge.ts": "3a0345beb36fe6d15d7471c547a447ca4fbcebd118e1dc18fab26b68a6be1391",
         "test/fixtures/body/toolchain-manifest.json": "5ad9d62bc535e64e3394401dcc728aab6bedcf034e25ae8ba0a2442236104fc0"
@@ -7800,19 +7891,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen immediate TypeScript MCP/custom tools schema/result/catalog/origin producers and consumers with current local package checks",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B28/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B28/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-launch-interface-nonauthor",
+            "reviewer": "b16-ordinary-current-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen immediate TypeScript MCP/custom tools schema/result/catalog/origin producers and consumers with current local package checks",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B28-r10-wrapper.json",
-              "sha256": "d8abbc8bdd7dbab1d7aab1cfdab325657de08f3553795de931877f9060d09e25"
+              "path": ".tmp/b16-final/implementation-r2/B28.json",
+              "sha256": "4f8752b71d0989239349002c70783ef7f44d5d8bf83ac6e1a8017869219d366c"
             }
           }
         ],
@@ -7821,10 +7912,10 @@
       "risks": [
         "No installed/OS or provider scope; CLI does not persist raw media bytes."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.504485+00:00",
+      "acceptedAt": "2026-11-27T07:34:11.084610+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B28/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "12bdd6a5a4bdc625dda66c7b4b77082700191cfe4e5d529bf356367eb6cbcb8e"
+        "path": "docs/execution/body-roadmap/evidence/B28/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "daccd3939e0e10a70cefe77952292072d4a4e25ce36c0729a692dc18a8e8bd16"
       }
     },
     {
@@ -7906,11 +7997,11 @@
         "sdk/src/impl/failover.ts": "ed686c418db9cd6ddbc4cee446c425162ff1130233fcaa95a60416092a8ad2d6",
         "sdk/src/impl/llm.ts": "ebaecf5fb45f4c81847ddc38c689036d18ed0c82323463424cf8d4b5616974ce",
         "sdk/src/impl/model-provider.ts": "4ccb709d148a7e0e21c871a28ab66d803c68907277a4f5ad4fe1a5977fc70170",
-        "sdk/src/index.ts": "afc91d793347f1f931abd06431ec1e0d5b3e12e1db3e9f801e0c24c4f02509c6",
+        "sdk/src/index.ts": "016043249f4973d3950ff0274ca8c6f6423c1f8173496af831f5da7cfb83294d",
         "sdk/src/provider-config.ts": "9a84d5084e61058d47c83ecb30d33b34ffa7fd70ef34b13391600d03767ea44f",
         "sdk/src/retry-config.ts": "37c246586f7f2cf80d0cc1f868825766d2f5a3691a7200c40d8e8c7a7bf41fc0",
         "sdk/src/run-state.ts": "d9318cbdb9ea571996f15f8e3808ed9ec5311de2f6bdc1f9a9dd86f6686821e1",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/serve/bridge.ts": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93",
         "sdk/src/serve/event-bridge.ts": "3a0345beb36fe6d15d7471c547a447ca4fbcebd118e1dc18fab26b68a6be1391",
         "sdk/src/services/harness-enforcement.ts": "01ae7f1b9730014ee239ffbe3a3c956583dbf88474b5435ea51d424c5e12474f",
@@ -7924,19 +8015,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen typed evaluator populations/sinks, current real comparison and initial/worker/final-check isolation; key-free and separately marked trusted scope",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B30/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B30/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-root-provider-eval-nonauthor",
+            "reviewer": "b16-ordinary-stable-consumer-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen typed evaluator populations/sinks, current real comparison and initial/worker/final-check isolation; key-free and separately marked trusted scope",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B30-r10-wrapper.json",
-              "sha256": "54d7406f3bdd186496ecf918e08e1a36d8f008807086a9a5e5028a2812b73a22"
+              "path": ".tmp/b16-final/implementation-r2/B30.json",
+              "sha256": "5e6758b4153185c7c6a499be6bac449edb9a0a36464ab3104dc86befc7443404"
             }
           }
         ],
@@ -7945,10 +8036,10 @@
       "risks": [
         "No OS/network confinement or paid provider quality/cost completeness claim."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.509471+00:00",
+      "acceptedAt": "2026-11-27T07:34:11.089978+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "e05a87310598a9bfb0818b5e0077dc86ae0519662429a903dca4d87fdf0924be"
+        "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "eaeff3cf2be142cad37c5f2037885c78f54e926c5049a3b14c1c960247a585a4"
       }
     },
     {
@@ -8074,7 +8165,7 @@
         "sdk/src/__tests__/language-diagnostics.test.ts": "31dd6282a75b2e6c4caaa47f7fe2be7393bc85c6694335e706da45eadcf44dc2",
         "sdk/src/__tests__/node-filesystem.test.ts": "cda237b1ce384d0d7cb90deb3b2038e6d168e4080d3373057f58305ed2a4a1b9",
         "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3f62c259a63f80db611228d47e59251fc2235f57d07bd7d386dff928ebe125de",
-        "sdk/src/run.ts": "7f8d8654babebba7c0eae390d6cc2bf7e3c82525eee5d7baf1b0f33cc432e59e",
+        "sdk/src/run.ts": "27b7ba1a76b0f0e0cd0108ba7f169f920e5c3e892a8b533d4267e76dda78c956",
         "sdk/src/services/diagnostic-baseline.ts": "a4b1a4c3447dfb315b0fae4ebcd2eb12140619a41ce1aa9685d9db82a1c49015",
         "sdk/src/services/diagnostic-delta-runner.ts": "73059ae11a43b927450af61598520aaa81acf51edaf981d0d5cb4d70156aba5e",
         "sdk/src/services/diagnostic-delta.ts": "9f3633b1e4b4d88ff9e9b7d7d9b332a8dda0c1a1cbb96538233c57615577cbd5",
@@ -8087,19 +8178,19 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Current frozen TypeScript diagnostic truth from actual delta/hook/SDK JSON and CLI classifier",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261126T222635169968Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261127T073410685768Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "r10-launch-interface-nonauthor",
+            "reviewer": "b16-ordinary-stable-consumer-review",
             "implementationOwners": [
-              "partial-closeout-implementation"
+              "/root"
             ],
             "scope": "Current frozen TypeScript diagnostic truth from actual delta/hook/SDK JSON and CLI classifier",
             "decision": "approve",
             "evidence": {
-              "path": ".tmp/verified-command-renewal/B36-r10-wrapper.json",
-              "sha256": "bfc4494976b1e22737a898a1a11f76088fd39d5a891f17b2e26019419a11f4f8"
+              "path": ".tmp/b16-final/implementation-r2/B36.json",
+              "sha256": "77c16ed5ca96df657b4dbdd1e3f148ac8adcd3eabe9b840e70933dc48a896ebd"
             }
           }
         ],
@@ -8108,10 +8199,10 @@
       "risks": [
         "No B20 descendant-enforcement or native containment claim."
       ],
-      "acceptedAt": "2026-11-26T22:26:35.514017+00:00",
+      "acceptedAt": "2026-11-27T07:34:11.093942+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261126T222635169968Z-acceptance.json",
-        "sha256": "56ab2b52431418f462d3138709c8ae0e02daa36040e6fff6c7e3642d2fa29a7d"
+        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261127T073410685768Z-acceptance.json",
+        "sha256": "3a712b17ac06c55c1d0bf049c8dc30f2da578d3f43d715a53c05a797ad324d2d"
       }
     },
     {
@@ -8172,5 +8263,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-27T02:17:52.365945+00:00"
+  "updatedAt": "2026-11-27T07:34:11.095174+00:00"
 }

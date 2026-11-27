@@ -1,8 +1,31 @@
 # Roadmap evidence archive
 
-## R10: current accepted ledger
+## R11: current accepted ledger
 
-[The current manifest](r10/manifest.json) preserves all 325 ignored inputs needed to
+The [R11 manifest](r11/manifest.json) preserves the ignored inputs needed to
+validate **24 of 39 accepted base nodes through B16** and four separately
+accepted product tasks (**N01, N02, N10, N12**). The file inventory includes
+621 paths and 557 distinct objects in 1.7 MB of compressed data. This is an
+evidence archive, not an installer: it does not contain dependencies or the
+original compiled executables and SDK tarballs.
+
+From a disposable checkout of the matching source snapshot:
+
+```sh
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r11 --check
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r11 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/validate-ledger.py
+```
+
+Restoration verifies the preserved bytes without overwriting different files.
+The validator checks the current source, receipt, prerequisite and independent
+review bindings; it does not rerun the original tests.
+
+<a id="r10-current-accepted-ledger"></a>
+
+## R10: previous accepted ledger
+
+[The R10 manifest](r10/manifest.json) preserves all 325 ignored inputs needed to
 validate the 23 accepted nodes through B23 and selected original text records needed to
 inspect the results. The archive contains 1,868 paths and 1,787 content objects
 in an 11.8 MB compressed part. It does not contain installed dependencies,

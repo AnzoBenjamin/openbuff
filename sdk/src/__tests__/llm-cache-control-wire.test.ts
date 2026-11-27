@@ -7,7 +7,8 @@
  * route (providers-sdk-01, verification/runtime.md item 7).
  */
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { jsonSchema, tool } from 'ai'
 import type { ToolSet } from 'ai'
 
@@ -21,24 +22,25 @@ import {
   userMessage,
 } from '@codebuff/common/util/messages'
 
-import {
-  promptAiSdkStream,
-  withToolsCacheBreakpoint,
-} from '../impl/llm'
+import plan from '../../../agents/base2/base2-plan'
+import executePlan from '../../../agents/base2/base2-execute-plan'
+import { createBase2 } from '../../../agents/base2/base2'
+import { OpenbuffClient } from '../client'
+import * as llm from '../impl/llm'
+import { withToolsCacheBreakpoint } from '../impl/llm'
 import { getModelForRequest } from '../impl/model-provider'
 import {
   OPENBUFF_PROVIDER_PRESETS,
   providerConfigFileSchema,
   resolveConfiguredProviderModelMetadata,
 } from '../provider-config'
-import { createBase2 } from '../../../agents/base2/base2'
 import {
   providerContextFor,
   silentLogger,
   startFakeLlmServer,
 } from './fixtures/fake-llm-server'
 
-import type { FakeLlmServer } from './fixtures/fake-llm-server'
+import type { CapturedRequest, FakeLlmServer } from './fixtures/fake-llm-server'
 import type { LlmHostDeps } from '../impl/llm'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 
@@ -78,7 +80,7 @@ async function runStream(params: {
   }) => void
 }) {
   const chunks: unknown[] = []
-  for await (const chunk of promptAiSdkStream(
+  for await (const chunk of llm.promptAiSdkStream(
     {
       apiKey: 'fixture-key', runId: 'n01', clientSessionId: 'n01', fingerprintId: 'n01', userInputId: 'n01',
       userId: undefined, agentId: 'fixture', model: params.model,
@@ -426,109 +428,173 @@ describe('N01: streaming request carries prompt-cache markers', () => {
   })
 
   test('base2 plan and execute reuse only their identical marked provider-schema prefix', async () => {
-    server = startFakeLlmServer()
-    const providerContext = contextFor({
+    const provider = startFakeLlmServer()
+    server = provider
+    const { inputs } = contextFor({
       defaultModel: 'fakeanth/claude-fake',
+      indexing: { enabled: false },
       providers: {
         fakeanth: {
           type: 'anthropic-compatible',
-          baseURL: server.baseURL,
+          baseURL: provider.baseURL,
           models: ['claude-fake'],
         },
       },
+    }).snapshot
+    const client = new OpenbuffClient({
+      apiKey: 'fixture-key',
+      cwd: inputs.projectRoot,
+      projectFiles: {},
+      knowledgeFiles: {},
+      userKnowledgeFiles: {},
+      repositoryIntelligence: false,
+      harnessStateDir: join(inputs.projectRoot, '..', 'harness'),
+      runTimeoutMs: 10_000,
+      logger: silentLogger,
+      handleEvent() {},
+      hostConfiguration: {
+        ...inputs,
+        environment: {
+          OPENBUFF_PROCESS_SUPERVISION: '0',
+          OPENBUFF_TELEMETRY: '0',
+          DO_NOT_TRACK: '1',
+        },
+      },
     })
-    const plan = createBase2('default', { planOnly: true })
-    const execute = createBase2('default', { executePlan: true })
-    const [planTools, executeTools] = await Promise.all([
-      base2ProviderTools(plan),
-      base2ProviderTools(execute),
-    ])
+    // A fresh greeting takes base2's real one-step path without a review gate.
+    const prompt = 'Hello!'
+    const runMode = async (agent: typeof plan | typeof executePlan) => {
+      const before = provider.requests.length
+      const result = await client.run({ agent, prompt })
+      expect(result.runOutcome?.termination, JSON.stringify(result.output)).toBe(
+        'completed',
+      )
+      expect(provider.requests).toHaveLength(before + 1)
+      const request = provider.requests[before]!
+      expect(request.path).toBe('/v1/messages')
+      expect(request.body.model).toBe('claude-fake')
+      return request
+    }
+
     const planBreakpoint = plan.programmaticConfig?.cacheControlToolBreakpoint
-    const executeBreakpoint =
-      execute.programmaticConfig?.cacheControlToolBreakpoint
-
     expect(typeof planBreakpoint).toBe('string')
-    expect(executeBreakpoint).toBe(planBreakpoint)
-    await runStream({
-      deps: { providerContext },
-      messages: agentHistory('Plan-only instructions.', 0),
-      tools: planTools,
-      cacheControlToolBreakpoint: planBreakpoint as string,
-    })
-    await runStream({
-      deps: { providerContext },
-      messages: agentHistory('Execute-plan instructions.', 0),
-      tools: executeTools,
-      cacheControlToolBreakpoint: executeBreakpoint as string,
-    })
-
-    expect(server.requests).toHaveLength(2)
-    const planDefinitions = server.requests[0]!.body.tools as Array<
-      Record<string, unknown>
-    >
-    const executeDefinitions = server.requests[1]!.body.tools as Array<
-      Record<string, unknown>
-    >
+    expect(executePlan.programmaticConfig?.cacheControlToolBreakpoint).toBe(
+      planBreakpoint,
+    )
+    const planRequest = await runMode(plan)
+    const executeRequest = await runMode(executePlan)
+    const definitions = (request: CapturedRequest) =>
+      request.body.tools as Array<Record<string, unknown>>
+    const planDefinitions = definitions(planRequest)
+    const executeDefinitions = definitions(executeRequest)
     const breakpointIndex = planDefinitions.findIndex(
       (definition) => definition.name === planBreakpoint,
     )
-    const spawnIndex = planDefinitions.findIndex(
-      (definition) => definition.name === 'spawn_agents',
-    )
+    const spawnIndex = (tools: Array<Record<string, unknown>>) =>
+      tools.findIndex((definition) => definition.name === 'spawn_agents')
 
     expect(breakpointIndex).toBeGreaterThanOrEqual(0)
-    expect(spawnIndex).toBeGreaterThan(breakpointIndex)
-    expect(planDefinitions[breakpointIndex]?.cache_control).toEqual({
-      type: 'ephemeral',
-    })
-    expect(executeDefinitions[breakpointIndex]?.cache_control).toEqual({
-      type: 'ephemeral',
-    })
-    expect(planDefinitions.slice(0, breakpointIndex + 1)).toEqual(
-      executeDefinitions.slice(0, breakpointIndex + 1),
+    for (const tools of [planDefinitions, executeDefinitions]) {
+      expect(spawnIndex(tools)).toBeGreaterThan(breakpointIndex)
+      expect(tools.filter((definition) => 'cache_control' in definition)).toEqual([
+        expect.objectContaining({
+          name: planBreakpoint,
+          cache_control: { type: 'ephemeral' },
+        }),
+      ])
+    }
+    expect(planDefinitions.slice(breakpointIndex + 1)).not.toEqual(
+      executeDefinitions.slice(breakpointIndex + 1),
     )
-    expect(planDefinitions[spawnIndex]).not.toEqual(
-      executeDefinitions[spawnIndex],
+    expect(planDefinitions[spawnIndex(planDefinitions)]).not.toEqual(
+      executeDefinitions[spawnIndex(executeDefinitions)],
     )
+    const wirePrefix = (request: CapturedRequest) => {
+      const tools = definitions(request)
+      const encodedTools = `"tools":${JSON.stringify(tools)}`
+      const start = request.text.indexOf(encodedTools)
+      // Check the compact encoding against the raw request before slicing, so
+      // key order and byte equality are tested, not just parsed schema equality.
+      expect(start).toBeGreaterThanOrEqual(0)
+      const end = JSON.stringify(tools.slice(0, breakpointIndex + 1)).length - 1
+      const arrayStart = start + '"tools":'.length
+      return request.text.slice(arrayStart, arrayStart + end)
+    }
+    const hash = (bytes: string) =>
+      createHash('sha256').update(bytes, 'utf8').digest('hex')
+    const planPrefix = wirePrefix(planRequest)
+    const executePrefix = wirePrefix(executeRequest)
+    const planPrefixHash = hash(planPrefix)
+    expect(executePrefix).toBe(planPrefix)
+    expect(hash(executePrefix)).toBe(planPrefixHash)
 
-    const hashPrefix = (definitions: Array<Record<string, unknown>>) =>
-      createHash('sha256')
-        .update(JSON.stringify(definitions.slice(0, breakpointIndex + 1)))
-        .digest('hex')
-    const planPrefixHash = hashPrefix(planDefinitions)
-    expect(hashPrefix(executeDefinitions)).toBe(planPrefixHash)
-    expect(server.cacheReads[1]).toBeGreaterThan(0)
+    // Inspect the shipped instructions as rendered by the runtime, not a
+    // fixture-supplied mode banner. They travel as user-role content blocks.
+    const instructions = (request: CapturedRequest) => {
+      const messages = request.body.messages as Array<{
+        role: string
+        content: Array<{ type: string; text?: string }>
+      }>
+      return messages
+        .filter((message) => message.role === 'user')
+        .flatMap((message) => message.content)
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n')
+    }
+    const planInstructions = 'Plan mode must not edit project source or perform implementation work.'
+    const executeInstructions = 'You are in EXECUTE_PLAN mode. Your job is to execute or resume durable plan artifacts, not merely revise them.'
+    expect(instructions(planRequest)).toContain(planInstructions)
+    expect(instructions(planRequest)).not.toContain(executeInstructions)
+    expect(instructions(executeRequest)).toContain(executeInstructions)
+    expect(instructions(executeRequest)).not.toContain(planInstructions)
+    expect(provider.cacheReads[0]).toBe(0)
+    expect(provider.cacheReads[1]).toBeGreaterThan(0)
 
     const firstSharedToolName = planDefinitions[0]?.name
-    expect(typeof firstSharedToolName).toBe('string')
     if (typeof firstSharedToolName !== 'string') {
       throw new Error('Expected a tool in the shared provider-schema prefix')
     }
-    const firstSharedTool = planTools[firstSharedToolName]
-    expect(firstSharedTool).toBeDefined()
-    const changedPlanTools = {
-      ...planTools,
-      [firstSharedToolName]: {
-        ...firstSharedTool,
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: { cacheMissControl: { type: 'string' } },
-        }),
+    const changedSchema = {
+      type: 'object',
+      properties: { cacheMissControl: { type: 'string' } },
+    } as const
+    // Mutate only the negative control, before the real serializer/marker logic.
+    // The generator, instructions, route, and loopback cache are unchanged.
+    const stream = llm.promptAiSdkStream
+    const changeSchema = spyOn(llm, 'promptAiSdkStream').mockImplementation(
+      (params, deps) => {
+        const tools = params.tools
+        const original = tools?.[firstSharedToolName]
+        if (!original) throw new Error('Expected the shared tool from base2')
+        return stream({
+          ...params,
+          tools: {
+            ...tools,
+            [firstSharedToolName]: {
+              ...original,
+              inputSchema: jsonSchema(changedSchema),
+            },
+          },
+        }, deps)
       },
+    )
+    let changedRequest: CapturedRequest
+    try {
+      changedRequest = await runMode(plan)
+    } finally {
+      changeSchema.mockRestore()
     }
-    await runStream({
-      deps: { providerContext },
-      messages: agentHistory('Plan-only instructions.', 0),
-      tools: changedPlanTools,
-      cacheControlToolBreakpoint: planBreakpoint as string,
-    })
-
-    const changedDefinitions = server.requests[2]!.body.tools as Array<
-      Record<string, unknown>
-    >
-    expect(hashPrefix(changedDefinitions)).not.toBe(planPrefixHash)
-    expect(server.cacheReads[2]).toBe(0)
-  })
+    const changedDefinitions = definitions(changedRequest)
+    expect(changedDefinitions).toEqual([
+      { ...planDefinitions[0], input_schema: changedSchema },
+      ...planDefinitions.slice(1),
+    ])
+    expect(instructions(changedRequest)).toContain(planInstructions)
+    expect(hash(wirePrefix(changedRequest))).not.toBe(planPrefixHash)
+    expect(provider.cacheReads).toHaveLength(3)
+    expect(provider.cacheReads[2]).toBe(0)
+  }, 35_000)
 
   test('does not move a missing configured breakpoint to a later tool', () => {
     expect(withToolsCacheBreakpoint(tools, 'missing_shared_tool')).toBe(tools)

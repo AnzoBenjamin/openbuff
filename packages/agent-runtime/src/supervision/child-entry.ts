@@ -141,6 +141,7 @@ import { readFileSync } from 'node:fs'
 import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 
 import { createBridgeStderrLogger } from './bridge-protocol'
+import { createSupervisedJournalWriter } from './supervised-journal'
 import type { SessionEvidenceLog } from '../memory/session-evidence-log'
 import type { SupervisedSpawnRequest } from './process-supervisor'
 import type { ChildBridgeClient } from './child-bridge-client'
@@ -934,9 +935,14 @@ async function runChildWithDeps(
     // socket close actually stops the child's work instead of leaving the
     // losing loop promise running unobserved until process exit.
     const loopAbortController = new AbortController()
+    const journal = request.rpcJournal === true
+      ? createSupervisedJournalWriter(append => client.call('appendRunJournal', append))
+      : undefined
     const loopParams = {
       ...bridgedDeps,
       ...buildLocalChildDeps(),
+      ...(journal ? { journalWriter: journal } : {}),
+      detachedAgentUnavailable: true as const,
       agentState: childState,
       agentType: request.agentType,
       prompt: request.prompt,
@@ -1037,6 +1043,7 @@ async function runChildWithDeps(
       agentState: loopResult.agentState,
       buildRuntimeAgentReceipt: buildRuntimeAgentReceiptFn,
     })
+    await journal?.flush()
     await flushArtifactWrites(agentId)
     return receipt
   } catch (error) {

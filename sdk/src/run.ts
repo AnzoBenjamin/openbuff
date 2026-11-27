@@ -1198,6 +1198,12 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   let cancellationReady = false
   const completion = new AbortController()
   let disposeMcp: (() => Promise<void>) | undefined
+  const detachedSettlements = new Set<Promise<unknown>>()
+  const retainDetachedAgent = (settled: Promise<unknown>) => {
+    detachedSettlements.add(settled)
+    const release = () => { detachedSettlements.delete(settled) }
+    void settled.then(release, release)
+  }
   const services = createHostExecutionServices({
     snapshot,
     clock,
@@ -1291,8 +1297,39 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
     env: options.env ? { ...options.env } : undefined,
     signal: hostServices.rootSignal,
   }
-  let result: RunState
+  let result: RunState | undefined
   let executionCleanup: NonNullable<RunState['executionCleanup']> = []
+  const finishResources = async () => {
+    completion.abort(new Error('Run execution scope completed'))
+    const firstEvent = hostServices.events[0]
+    const hostContextId = firstEvent
+      ? 'facts' in firstEvent
+        ? firstEvent.facts.hostContextId
+        : firstEvent.hostContextId
+      : ''
+    const cleanup = (
+      await Promise.all([
+        joinNodeScopeCleanup(hostContextId),
+        joinNativeScopeCleanup(hostContextId),
+      ])
+    ).flat()
+    executionCleanup = Object.freeze([
+      ...configuredExecution.cleanup,
+      ...cleanup,
+    ])
+    configuredExecution.close()
+    if (cleanup.some((result) => result.status !== 'complete')) {
+      options.logger?.warn(
+        { cleanup },
+        'Run-owned process cleanup remains unconfirmed',
+      )
+    }
+    try {
+      await disposeMcp?.()
+    } catch (error) {
+      options.logger?.warn({ error }, 'Run-owned MCP cleanup failed')
+    }
+  }
   try {
     const execution = withFilesystemSandbox(
       snapshot.sandboxPolicy,
@@ -1327,6 +1364,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
           onMcpReady: (value) => {
             disposeMcp = value
           },
+          retainDetachedAgent,
           resolveRunOutcome: ({ ancestorRunIds, outcome }) =>
             ancestorRunIds.length === 0 ? resolveRootOutcome(outcome) : outcome,
         }),
@@ -1394,36 +1432,17 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
       activeSession,
     )
   } finally {
-    // End the authenticated root lifetime on every terminal path. Explicitly
-    // transferred resources retain their receiver lifetime and finite cap.
-    completion.abort(new Error('Run execution scope completed'))
-    const firstEvent = hostServices.events[0]
-    const hostContextId = firstEvent
-      ? 'facts' in firstEvent
-        ? firstEvent.facts.hostContextId
-        : firstEvent.hostContextId
-      : ''
-    const cleanup = (
-      await Promise.all([
-        joinNodeScopeCleanup(hostContextId),
-        joinNativeScopeCleanup(hostContextId),
-      ])
-    ).flat()
-    executionCleanup = Object.freeze([
-      ...configuredExecution.cleanup,
-      ...cleanup,
-    ])
-    configuredExecution.close()
-    if (cleanup.some((result) => result.status !== 'complete')) {
-      options.logger?.warn(
-        { cleanup },
-        'Run-owned process cleanup remains unconfirmed',
-      )
-    }
-    try {
-      await disposeMcp?.()
-    } catch (error) {
-      options.logger?.warn({ error }, 'Run-owned MCP cleanup failed')
+    if (result?.runOutcome?.termination === 'completed' && !hostServices.rootSignal.aborted && detachedSettlements.size) {
+      // The turn and its journal caller may finish, but a journal-owned child
+      // still uses the captured host resources. The original caller signal
+      // and deadline remain effective; normal completion is not cancellation.
+      executionCleanup = Object.freeze([...configuredExecution.cleanup])
+      void (async () => {
+        while (detachedSettlements.size) await Promise.allSettled([...detachedSettlements])
+        await finishResources()
+      })().catch(error => options.logger?.warn({ error }, 'Detached agent resources failed to close'))
+    } else {
+      await finishResources()
     }
   }
   if (activeRequestAdmission) {
@@ -1459,6 +1478,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
 type RunHostBootstrap = {
   readPlan?: ReadPlanExecution
   memoryAuthorityMode?: MemoryAuthorityMode
+  retainDetachedAgent: NonNullable<AgentRuntimeDeps['retainDetachedAgent']>
   resolveRunOutcome: NonNullable<AgentRuntimeDeps['resolveRunOutcome']>
   snapshot: HostConfigSnapshot
   hostServices: RunHostServices
@@ -3151,6 +3171,7 @@ async function runOnce(
       classifyPlaybookTerminalActions: async (command) =>
         classifyTerminalProcedureActions(command),
       logger,
+      retainDetachedAgent: host.retainDetachedAgent,
       resolveRunOutcome: host.resolveRunOutcome,
       registerExecutionActor,
       readPlanStepOffset: host.readPlan?.original ? runId =>

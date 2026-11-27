@@ -157,6 +157,7 @@ export const BRIDGE_METHODS = [
   'trackEvent',
   'fetch',
   'startAgentRun',
+  'appendRunJournal',
   'finishAgentRun',
   'addAgentStep',
   'fetchAgentFromDatabase',

@@ -46,7 +46,11 @@ import {
   runOutcomeSchema,
   runStatusFromOutcome,
 } from '@codebuff/common/types/run-outcome'
-import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import {
+  agentReceiptSchema,
+  type AgentReceipt,
+} from '@codebuff/common/types/agent-handoff'
+import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
 
 import type {
   AssertOwnedResult,
@@ -656,9 +660,80 @@ export function getBackgroundAgentJob(
 export function reconcileInterruptedBackgroundAgentIntents(
   state: AgentState,
   now?: number,
+  reader?: JournalReader,
 ): void {
-  for (const job of state.backgroundAgentJobs ?? []) {
-    if (job.status === 'running' && !getBackgroundAgentJob(job.jobId)) {
+  const jobs = state.backgroundAgentJobs
+  if (!jobs?.length) return
+  const recentRunRows = new Map<
+    string,
+    Map<string, { receipt: AgentReceipt; childRunId?: string; atMs?: number }>
+  >()
+  const readSettled = (parentRunId: string) => {
+    const seen = new Map<
+      string,
+      { receipt: AgentReceipt; childRunId?: string; atMs?: number }
+    >()
+    if (!reader) return seen
+    try {
+      for (const row of reader.events(parentRunId)) {
+        if (
+          row.eventType !== 'spawn' ||
+          typeof row.correlation !== 'string' ||
+          !row.payload ||
+          typeof row.payload !== 'object'
+        )
+          continue
+        const p = row.payload as Record<string, unknown>
+        if (p.backgroundSettled !== true || p.jobId !== row.correlation)
+          continue
+        const validated = agentReceiptSchema.safeParse(p.receipt)
+        if (!validated.success) continue
+        seen.set(row.correlation, {
+          receipt: validated.data,
+          childRunId:
+            typeof p.childRunId === 'string' && p.childRunId
+              ? p.childRunId
+              : undefined,
+          atMs: row.createdAt,
+        })
+      }
+    } catch {
+      /* an unreadable journal confers no settlement or replay authority */
+    }
+    return seen
+  }
+  for (const job of jobs) {
+    if (job.status !== 'running' && job.status !== 'interrupted') continue
+    const live = getBackgroundAgentJob(job.jobId)
+    const parent = job.parentRunId ?? state.runId
+    if (parent && reader) {
+      let rows = recentRunRows.get(parent)
+      if (!rows) {
+        rows = readSettled(parent)
+        recentRunRows.set(parent, rows)
+      }
+      const observed = rows.get(job.jobId)
+      if (observed) {
+        job.receipt = observed.receipt
+        job.childRunId = observed.childRunId ?? job.childRunId
+        const termination = observed.receipt.runOutcome?.termination
+        job.status =
+          termination === 'cancelled' || observed.receipt.status === 'cancelled'
+            ? 'cancelled'
+            : termination === 'completed' ||
+                (!termination && observed.receipt.status === 'completed')
+              ? 'completed'
+              : 'error'
+        job.completedAt = observed.atMs ?? now ?? realClock.now()
+        if (job.status === 'completed') delete job.error
+        else
+          job.error =
+            observed.receipt.runOutcome?.cause?.message ??
+            observed.receipt.errors[0]?.message
+        continue
+      }
+    }
+    if (job.status === 'running' && !live) {
       job.status = 'interrupted'
       // P2-T1b: interrupted timestamps use the injected clock when threaded.
       job.completedAt = now ?? realClock.now()

@@ -258,7 +258,8 @@ export interface PreparedLaunch {
   facts(): LaunchFacts
   /** Captured in-process clock for local deadline observation; never serialize. */
   clock(): Clock
-  admit(): Promise<Admission>
+  /** Optional additional host-owned cancellation; never widens launch authority. */
+  admit(cancellation?: AbortSignal): Promise<Admission>
   // No async callback invoked, waited upon, or treated optimistically here.
   // No sync policy / requires async approval / unsupported capability =>
   // unavailable, synchronously, with zero spawnSync calls.

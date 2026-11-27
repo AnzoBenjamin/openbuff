@@ -229,6 +229,28 @@ describe('supervised spawn parent-abort cancellation (cancel-softlock fix)', () 
     expect(parentAgentState.childRunIds).toContain('cancel-child-run-1')
   })
 
+  test('custom supervision that ignores abort does not block cancellation', async () => {
+    expectLoopUntouched()
+    const controller = new AbortController()
+    const seamStarted = Promise.withResolvers<void>()
+    const pending = Promise.withResolvers<SettledSubagentResult>()
+    const execution = executeSubagent(
+      buildExecuteParams({
+        signal: controller.signal,
+        spawnSupervised: () => {
+          seamStarted.resolve()
+          return pending.promise
+        },
+      }),
+    )
+    await seamStarted.promise
+    controller.abort()
+    await expect(execution).rejects.toMatchObject({ name: 'AbortError' })
+    // A late transport failure must still be observed by the losing race.
+    pending.reject(new Error('late custom supervisor failure'))
+    await Bun.sleep(0)
+  }, 1_000)
+
   test('an already-aborted parent signal throws cancellation before any child is spawned', async () => {
     expectLoopUntouched()
     const controller = new AbortController()

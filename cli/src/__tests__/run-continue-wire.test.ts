@@ -204,6 +204,21 @@ const runArgs = (prompt: string) => [
 // Every provider response is owned/fake. The oracle is actual request context,
 // valid JSON delivery and durable bytes, not an empirical model-memory claim.
 describe('actual headless continuation consumer', () => {
+  test('plain stdin with --model and --output-schema emits exactly one schema-valid JSON result', async () => {
+    const result = await execute(
+      ['run', '--model', 'fixture/selected', '--output-schema', schemaFile],
+      `${canary}\n`,
+    )
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.signal).toBeNull()
+    // Parse the entire stdout, not an event line or an extracted substring.
+    expect(JSON.parse(result.stdout)).toEqual(expected)
+    expect(result.stdout.trim().split('\n')).toHaveLength(1)
+    expect(requests.length).toBeGreaterThan(0)
+    expect(requests.every((request) => request.model === 'selected')).toBe(true)
+    expect(JSON.stringify(requests[0]!.messages)).toContain(canary)
+  }, 25_000)
+
   test('stdin/model/schema run persists; a new process continues all prior context without inheriting the model override', async () => {
     const first = await execute(
       [
