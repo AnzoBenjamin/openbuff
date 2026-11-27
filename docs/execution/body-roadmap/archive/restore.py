@@ -18,6 +18,7 @@ SNAPSHOTS = {
     'r11': (BASE / 'r11', '8be33adffbfd353b859495775dcc91948de7d9175b359f90f377121d3168b48d'),
     'r11-publication': (BASE / 'r11-publication', '0dcdec12fa74054792f3f51e7fd8446a40c49c997bf9551f3773bf183f23b896'),
     'r12': (BASE / 'r12', 'dd333ca071777d3170b01685ed3a0a659eafdd814b29449f9b210405c68f2998'),
+    'r13': (BASE / 'r13', '2b00187f31778e871b3c3cc8fbd5671e65ae6943032dd66f15f38fd06a8c8a7c'),
 }
 CHUNK_SIZE = 1024 * 1024
 

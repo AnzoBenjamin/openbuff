@@ -8,6 +8,6 @@ The [execution registry](execution-plan.json) includes the user-requested [resea
 
 The registry also includes the user-requested [product audit addendum](product-audit-addendum.md) (PROD, 2026-11-12). It adds acceptance clauses to 13 pending cards, 32 new tasks (N01–N32) and a dispatch order. Wave 1 covers confirmed security issues: project-config credential exfiltration, plan-mode writes, SSRF and project `allow-all`. It also covers silent wrong results, command hangs and orphaned jobs, and missing prompt caching. The addendum does not alter the frozen base plan or graph.
 
-**N01, N02, N09, N10 and N12** are separately accepted in the registry under their documented scope. These five source-bound receipts are not part of the 39-node base count. N09 closes the local packaging prerequisite; it does not accept B24's broader language matrix.
+**N01, N02, N05, N09, N10 and N12** are separately accepted in the registry under their documented scope. These six source-bound receipts are not part of the 39-node base count. N09 closes the local packaging prerequisite; it does not accept B24's broader language matrix.
 
-In a fresh disposable checkout, [restore the R12 evidence capsule](archive/README.md#r12-current-accepted-ledger) before running the validator. Historical receipts, failures, and context remain in the prior snapshots. Restoration verifies preserved bytes; it does not rerun the acceptance checks.
+In a fresh disposable checkout, [restore R12 and its R13 evidence delta](archive/README.md#r13-current-accepted-ledger) before running the validator. Historical receipts, failures, and context remain in the prior snapshots. Restoration verifies preserved bytes; it does not rerun the acceptance checks.

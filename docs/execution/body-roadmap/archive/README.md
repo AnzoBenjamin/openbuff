@@ -1,6 +1,24 @@
 # Roadmap evidence archive
 
-## R12: current accepted ledger
+## R13: current accepted ledger
+
+Restore **R12 first, then R13**. The [R13 delta](r13/manifest.json) adds 15 source
+and evidence objects for N05 without duplicating the SDK test pack in R12.
+Together the two snapshots validate 24 accepted base nodes and six accepted
+product tasks.
+
+```sh
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r12 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/archive/restore.py --snapshot r13 --destination "$PWD"
+python3 -B docs/execution/body-roadmap/validate-ledger.py
+```
+
+Restore checks the original bytes and refuses to overwrite different files. It
+does not rerun tests or install a product.
+
+<a id="r12-current-accepted-ledger"></a>
+
+## R12: previous ledger and R13 base snapshot
 
 The [R12 manifest](r12/manifest.json) preserves the exact ignored inputs for
 24 accepted base nodes and five separately accepted product tasks. It also

@@ -308,9 +308,74 @@
         },
         {
           "id": "N05",
-          "status": "implemented",
+          "status": "accepted",
           "prerequisites": [],
-          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N05.md"
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N05.md",
+          "acceptanceNode": {
+            "nodeId": "N05",
+            "parentCardId": null,
+            "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+            "prerequisites": [],
+            "status": "accepted",
+            "acceptedPrerequisites": [],
+            "sourceContractHashes": {
+              ".tmp/r13/n05/transport-witness.ts": "ee0420ac5f8f65b16ab093cc79fb755f7f97beff5110ddc476acb39a17541853",
+              "bun.lock": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a",
+              "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+              "common/src/mcp/__tests__/dns-pinning.test.ts": "d677a27e9b547f68ece306a5c47b75c8c0505c38a13a4bca0cc0ab6761893cd8",
+              "common/src/mcp/client.ts": "a7a282a21c01d8435c465976c64462492eda52ab13b220379c50c5b6b83fa3cc",
+              "common/src/mcp/dns-pinning.ts": "531ad3dd3eedbf1439d55b105c4674cfff56c751d5f01c5d4589470c2eb08f6f",
+              "common/src/types/mcp.ts": "508f214feb3c32cebed9160f8f0649b0aa367d6e1d4f137c084f0f45ec2527a3",
+              "common/src/util/__tests__/ip-address-policy.test.ts": "c5f7167c1a137fb5c388d999d56fe4ad608fe7a951a0884de73fea601fa92cd2",
+              "common/src/util/__tests__/pinned-fetch.test.ts": "08ab11411707ed8bfd6322341bc2262d13524643de493598ee9c205a847a9536",
+              "common/src/util/ip-address-policy.ts": "d857c92d34c785005258fdc591787234f04271dbb911229e36b9275cf0b84bb6",
+              "common/src/util/pinned-fetch.ts": "3b17fc852136f12c1e6ff8fa504fe7d5d1982732553f54eae8b9c53b01f7a35c",
+              "package.json": "0d34ad47da7e51f751c0eec306299b39ddf129732323676e6dc22728a6b48b3f",
+              "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search-utils.test.ts": "14cd4f9831b257b29387ad7dd2d77dbb0224a83354210b7bbbc20135533b46ca",
+              "packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts": "666c0dd6d3c84102dff8c9f67de293afba04c793930ee831846bad414ecf511b",
+              "packages/agent-runtime/src/tools/handlers/tool/web-search-utils.ts": "0a3beb7f4eef49cd7ee5698121ae50a7158d29c6d5858b87b890c3d4e30fced5",
+              "packages/agent-runtime/src/tools/handlers/tool/web-search.ts": "c46e4f2409d3340cfea2d85773910916aac3caec77bff190a15f0effc1f08ec6",
+              "sdk/package.json": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e",
+              "sdk/src/__tests__/mcp-address-policy.test.ts": "aefc7b60da3adf041878fb8bf55fcce5f846d91d9d0670a2ac141be710077a1f"
+            },
+            "backend": "ts",
+            "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+            "coverageTier": "Frozen N05 web egress clauses on published R12 (3783f6da50beb677f61948834fa88ecd15b0b68c): the shipped web handler and public fetch policy, and client-origin MCP Streamable HTTP/SSE on the bound source. This review adjudicates the original local run records, not a live Internet or packaged deployment.",
+            "evidenceManifest": "docs/execution/body-roadmap/evidence/N05/accepted/20261127T103417773642Z-manifest.json",
+            "acceptedAt": "2026-11-27T10:34:17.777804+00:00",
+            "verification": {
+              "independentReviews": [
+                {
+                  "reviewer": "r13-n05-independent-approval",
+                  "implementationOwners": [
+                    "/root"
+                  ],
+                  "scope": "Frozen N05 web egress clauses on published R12 (3783f6da50beb677f61948834fa88ecd15b0b68c): the shipped web handler and public fetch policy, and client-origin MCP Streamable HTTP/SSE on the bound source. This review adjudicates the original local run records, not a live Internet or packaged deployment.",
+                  "decision": "approve",
+                  "evidence": {
+                    "path": ".tmp/r13/n05/implementation-review.json",
+                    "sha256": "61c934eff94546ba447365d27581756d3aee4d952be385aa1697215d00600b9b"
+                  }
+                }
+              ],
+              "requiredCommandCount": 3
+            },
+            "risks": [
+              "Public positives and the DNS answer changes use injected fixtures. Actual network observations are from owned loopback HTTP only; the redirect observations count fixture requests, not raw TCP handshakes. No successful SSE catalog or live TLS handshake is asserted.",
+              "No browser, proxy, trusted-origin MCP, remote live service, or rebuilt package coverage is credited. Node MCP HTTPS fail-closed behavior is adjacent injected evidence, not a live connection claim. No network commands were rerun for this review."
+            ],
+            "addendumId": "PROD",
+            "contextContractHashes": {
+              ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+              ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+              "docs/execution/body-roadmap/product-audit-addendum.md": "2ffe21b824ed050a15f967098d65574d41fe1b05958565b00fe5279bb67a65d3"
+            },
+            "acceptanceReceipt": {
+              "path": "docs/execution/body-roadmap/evidence/N05/accepted/20261127T103417773642Z-acceptance.json",
+              "sha256": "db7c40071c7a22d305553d47644c88270fea5ead1deef64f72af5adead8d077d"
+            }
+          }
         },
         {
           "id": "N06",
